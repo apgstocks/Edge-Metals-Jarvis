@@ -1,0 +1,29 @@
+{
+  "name": "jarvis",
+  "version": "3.0.0",
+  "description": "Jarvis — Edge Metals freight operations AI. Single-process, single-VM, zero paid cloud services.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "pm2": "pm2 start index.js --name jarvis --update-env"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "googleapis": "^140.0.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.14",
+    "pdf-parse": "^1.1.1",
+    "proper-lockfile": "^4.1.2",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0 <25.0.0"
+  }
+}

@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis — Booking Scoreboard</title>
+<style>
+  /* ── Design tokens (inlined — no external stylesheets on the VM) ─────────── */
+  :root {
+    --steel-100:#EBEDEF; --steel-150:#DFE2E6; --steel-200:#CBD0D6; --steel-300:#A9B0B9;
+    --steel-400:#7E8793; --steel-600:#4C545F; --steel-900:#1C2026; --steel-950:#12151A;
+    --copper-50:#FBF1EA; --copper-200:#EBC7AC; --copper-400:#D98A4B; --copper-600:#C25E22; --copper-700:#A34D1B;
+    --leaf-50:#EAF4EC; --leaf-400:#5CB876; --leaf-500:#3F9E5C; --leaf-600:#2F8449; --leaf-700:#256B3B;
+    --danger:#B3362A; --danger-bg:#FAE2DE; --danger-text:#9A2C1F;
+    --warning:#C98A1B; --warning-bg:#FBEFD6; --warning-text:#8A6212;
+    --card:#FFFFFF; --border:#E2E5E9; --border-mid:#CBD0D6;
+    --text-strong:#181C22; --text-body:#3C434D; --text-muted:#6B7380; --text-faint:#98A0AB;
+    --inv-muted:#B9C0CA;
+    --radius-xs:3px; --radius-sm:6px; --radius-md:10px; --radius-pill:999px;
+    --shadow-sm:0 1px 3px rgba(18,21,26,.08); --shadow-md:0 6px 18px rgba(18,21,26,.12);
+    --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; }
+  ::-webkit-scrollbar { height:8px; width:8px; }
+  ::-webkit-scrollbar-thumb { background:var(--steel-300); border-radius:4px; }
+  body { background:var(--steel-100); font-family:var(--sans); color:var(--text-body); min-height:100vh; }
+  button { font:inherit; cursor:pointer; }
+  .mono { font-family:var(--mono); }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────────── */
+  .topbar { position:relative; background:linear-gradient(135deg,var(--steel-950),var(--steel-900));
+    padding:26px 40px; display:flex; align-items:center; justify-content:space-between;
+    overflow:hidden; border-bottom:2px solid var(--copper-700); }
+  .topbar::before { content:''; position:absolute; inset:0; opacity:.06; pointer-events:none;
+    background-image:repeating-linear-gradient(-45deg,var(--copper-400) 0,var(--copper-400) 2px,transparent 2px,transparent 14px); }
+  .brand { position:relative; display:flex; align-items:center; gap:16px; }
+  .brand-mark { width:44px; height:44px; border-radius:var(--radius-sm); background:var(--steel-900);
+    border:1px solid var(--copper-600); display:flex; align-items:center; justify-content:center;
+    box-shadow:0 0 18px rgba(194,94,34,.4), inset 0 0 0 1px rgba(255,255,255,.03);
+    font-family:var(--mono); font-weight:900; font-size:18px; color:var(--copper-400); }
+  .brand-eyebrow { font-family:var(--mono); font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-400); margin-bottom:3px; }
+  .brand-title { font-weight:800; font-size:19px; letter-spacing:.08em; text-transform:uppercase; color:#fff; line-height:1; }
+  .live { display:flex; align-items:center; gap:7px; margin-top:8px; }
+  .live-dot { width:6px; height:6px; border-radius:50%; background:var(--leaf-400); box-shadow:0 0 6px var(--leaf-400); }
+  .live-dot.stale { background:var(--danger); box-shadow:0 0 6px var(--danger); }
+  .live-label { font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--inv-muted); }
+  .topbar-right { position:relative; text-align:right; }
+  .topbar-date { font-family:var(--mono); font-size:11.5px; color:var(--inv-muted); }
+  .topbar-count { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--steel-600); margin-top:4px; }
+
+  .container { max-width:1200px; margin:0 auto; padding:40px 32px 64px; }
+
+  /* ── KPI cards ───────────────────────────────────────────────────────────── */
+  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:36px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-top:3px solid var(--steel-300);
+    border-radius:var(--radius-md); padding:20px 22px; cursor:pointer; box-shadow:var(--shadow-sm);
+    transition:box-shadow .15s ease, transform .15s ease; text-align:left; }
+  .kpi:hover { box-shadow:var(--shadow-md); transform:translateY(-3px); }
+  .kpi-count { font-family:var(--mono); font-size:34px; font-weight:700; color:var(--text-strong); line-height:1; }
+  .kpi-label { font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; margin-top:10px; }
+
+  /* ── Alerts rail ─────────────────────────────────────────────────────────── */
+  .rail-head { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+  .rail-title { font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-600); font-weight:700; }
+  .rail-line { flex:1; height:1px; background:var(--border); }
+  .rail-count { font-family:var(--mono); font-size:11px; color:var(--text-faint); }
+  .alerts { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin-bottom:40px; }
+  .alert-card { background:linear-gradient(180deg,var(--copper-50),var(--card) 40%);
+    border:1px solid var(--copper-200); border-left:4px solid var(--copper-600);
+    border-radius:var(--radius-sm); padding:18px 20px; box-shadow:var(--shadow-sm); }
+  .alert-top { display:flex; justify-content:space-between; align-items:center; }
+  .alert-bkg { font-family:var(--mono); font-size:13.5px; font-weight:700; color:var(--text-strong); }
+  .alert-deadline { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; color:#fff; background:var(--danger); padding:3px 9px; border-radius:var(--radius-xs); }
+  .alert-issue { font-size:13.5px; color:var(--text-body); margin-top:9px; line-height:1.4; }
+
+  /* ── Filter chips ────────────────────────────────────────────────────────── */
+  .filters { display:flex; align-items:center; gap:8px; margin-bottom:22px; flex-wrap:wrap; }
+  .chip { padding:9px 20px; border-radius:var(--radius-pill); border:1px solid var(--border-mid);
+    background:var(--card); color:var(--text-body); font-family:var(--mono); font-size:11px;
+    letter-spacing:.08em; text-transform:uppercase; font-weight:600; }
+  .chip.active { background:var(--steel-950); color:#fff; border-color:var(--steel-950); box-shadow:var(--shadow-sm); }
+
+  /* ── Scoreboard rows ─────────────────────────────────────────────────────── */
+  .rows { display:flex; flex-direction:column; gap:12px; }
+  .row { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--steel-300);
+    border-radius:var(--radius-md); padding:22px 26px; display:grid;
+    grid-template-columns:170px 1fr 200px 120px; align-items:center;
+    box-shadow:var(--shadow-sm); transition:box-shadow .15s ease, transform .15s ease; }
+  .row:hover { box-shadow:var(--shadow-md); transform:translateY(-3px); }
+  .cell-id { padding-right:24px; border-right:1px solid var(--border); }
+  .cell-eyebrow { font-family:var(--mono); font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px; }
+  .cell-bkg { font-family:var(--mono); font-size:15px; font-weight:700; color:var(--text-strong); }
+  .cell-buyer { font-size:12.5px; color:var(--text-body); margin-top:5px; }
+  .cell-container { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:2px; }
+  .cell-stage { padding:0 28px; border-right:1px solid var(--border); }
+  .track { position:relative; height:4px; background:var(--steel-150); border-radius:2px; margin:2px 6px 12px; }
+  .track-fill { position:absolute; top:0; left:0; height:100%; background:var(--steel-400); border-radius:2px; }
+  .dot { position:absolute; top:50%; transform:translate(-50%,-50%); border-radius:50%; border:2px solid var(--card); }
+  .stage-line { display:flex; align-items:baseline; gap:8px; }
+  .stage-name { font-family:var(--mono); font-size:12.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-strong); }
+  .stage-sub { font-size:11.5px; color:var(--text-muted); }
+  .cell-status { padding:0 28px; border-right:1px solid var(--border); }
+  .status-pending { font-size:13px; line-height:1.4; }
+  .status-owner { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:5px; letter-spacing:.08em; text-transform:uppercase; }
+  .cell-deadline { text-align:right; padding-left:24px; }
+  .deadline { font-family:var(--mono); font-size:13px; font-weight:600; white-space:nowrap; }
+  .risk-pill { display:inline-block; font-family:var(--mono); font-size:10px; font-weight:700;
+    letter-spacing:.08em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); margin-top:8px; }
+
+  .empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:13px; }
+
+  @media (max-width: 900px) {
+    .container { padding:24px 14px 48px; }
+    .kpis { grid-template-columns:repeat(2,1fr); }
+    .row { grid-template-columns:1fr; row-gap:16px; }
+    .cell-id, .cell-stage, .cell-status { border-right:none; padding:0; }
+    .cell-deadline { text-align:left; padding-left:0; }
+    .topbar { padding:20px 18px; }
+    .form-grid { grid-template-columns:1fr; }
+    .tabnav { padding:0 14px; overflow-x:auto; }
+  }
+
+  /* ── Tab nav ─────────────────────────────────────────────────────────────── */
+  .tabnav { max-width:1200px; margin:0 auto; padding:0 32px; display:flex; gap:6px; border-bottom:1px solid var(--border); background:var(--steel-100); position:sticky; top:0; z-index:10; }
+  .tab { background:transparent; border:none; font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; color:var(--text-muted); padding:16px 20px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s ease, border-color .15s ease; }
+  .tab:hover { color:var(--text-strong); }
+  .tab.active { color:var(--copper-700); border-bottom-color:var(--copper-600); }
+  .tab-signout { margin-left:auto; align-self:center; }
+  .tab-signout button { background:transparent; border:1px solid var(--border-mid); color:var(--text-muted); font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; padding:7px 12px; border-radius:var(--radius-xs); cursor:pointer; }
+  .tab-signout button:hover { border-color:var(--danger); color:var(--danger); }
+  .tabpanel { display:none; }
+  .tabpanel.active { display:block; }
+
+  /* ── Bookings tab ────────────────────────────────────────────────────────── */
+  .bk-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:16px; flex-wrap:wrap; }
+  .bk-head h2 { font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-600); font-weight:700; }
+  .btn-primary { background:var(--copper-600); color:#fff; border:none; padding:10px 18px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; cursor:pointer; transition:background .15s; }
+  .btn-primary:hover:not(:disabled) { background:var(--copper-700); }
+  .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-secondary { background:var(--card); color:var(--text-body); border:1px solid var(--border-mid); padding:10px 18px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; cursor:pointer; transition:border-color .15s; }
+  .btn-secondary:hover { border-color:var(--steel-600); }
+  .modal-back { position:fixed; inset:0; background:rgba(18,21,26,.55); z-index:50; display:flex; align-items:flex-start; justify-content:center; padding:60px 20px; overflow-y:auto; }
+  .modal { background:var(--card); border-radius:var(--radius-md); width:100%; max-width:720px; box-shadow:var(--shadow-md); }
+  .modal-head { display:flex; align-items:center; justify-content:space-between; padding:22px 26px; border-bottom:1px solid var(--border); }
+  .modal-head h3 { font-size:15px; font-weight:700; color:var(--text-strong); font-family:var(--mono); letter-spacing:.08em; text-transform:uppercase; }
+  .modal-close { background:none; border:none; font-size:24px; color:var(--text-faint); cursor:pointer; line-height:1; padding:0; }
+  .modal-body { padding:24px 26px; }
+  .modal-foot { padding:16px 26px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; background:var(--steel-100); border-radius:0 0 var(--radius-md) var(--radius-md); }
+  .drop { border:2px dashed var(--border-mid); border-radius:var(--radius-md); padding:26px 20px; text-align:center; background:var(--steel-100); cursor:pointer; transition:border-color .15s, background .15s; }
+  .drop.drag { border-color:var(--copper-600); background:#FBF1EA; }
+  .drop.has-file { border-style:solid; border-color:#5CB876; background:#EAF4EC; cursor:default; }
+  .drop-label { font-size:13px; color:var(--text-body); font-weight:500; }
+  .drop-sub { font-size:11px; color:var(--text-faint); margin-top:4px; }
+  .file-info { display:flex; align-items:center; gap:12px; justify-content:center; text-align:left; }
+  .file-name { font-family:var(--mono); font-size:12px; font-weight:700; color:#256B3B; }
+  .file-size { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); }
+  .file-remove { background:transparent; border:1px solid var(--border-mid); color:var(--danger); font-family:var(--mono); font-size:10px; padding:4px 8px; border-radius:var(--radius-xs); cursor:pointer; }
+  .scan-btn { margin-top:10px; width:100%; padding:11px; background:var(--steel-950); color:#fff; border:none; border-radius:var(--radius-sm); font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; transition:background .15s; }
+  .scan-btn:hover:not(:disabled) { background:var(--steel-900); }
+  .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .scanned-banner { margin-top:10px; padding:10px 14px; background:#EAF4EC; border:1px solid #5CB876; border-radius:var(--radius-sm); font-size:12.5px; color:#256B3B; font-weight:600; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px; }
+  .form-grid .full { grid-column:1/-1; }
+  label { display:block; font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); font-weight:600; margin-bottom:5px; }
+  input, select, textarea { width:100%; padding:9px 12px; background:var(--card); border:1px solid var(--border-mid); border-radius:var(--radius-sm); font-size:13px; font-family:var(--sans); color:var(--text-strong); outline:none; transition:border-color .15s; box-sizing:border-box; }
+  input:focus, select:focus, textarea:focus { border-color:var(--copper-600); }
+  .form-err { padding:10px 14px; background:#FAE2DE; border:1px solid var(--danger); border-radius:var(--radius-sm); color:var(--danger-text); font-size:12.5px; margin-top:14px; }
+  .spinner { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; margin-right:8px; vertical-align:middle; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .bk-list-empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:12.5px; background:var(--card); border-radius:var(--radius-md); border:1px dashed var(--border-mid); }
+  .bk-table { background:var(--card); border-radius:var(--radius-md); border:1px solid var(--border); overflow:hidden; }
+  .bk-row { display:grid; grid-template-columns:130px 1fr 100px 90px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border); align-items:center; }
+  .bk-row:last-child { border-bottom:none; }
+  .bk-row:hover { background:var(--steel-100); }
+  .bk-hdr { background:var(--steel-100); font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); font-weight:700; padding:12px 18px; display:grid; grid-template-columns:130px 1fr 100px 90px 130px; gap:14px; }
+  .bk-cell-bkg { font-family:var(--mono); font-size:12.5px; font-weight:700; color:var(--text-strong); }
+  .bk-cell-sub { font-size:12px; color:var(--text-body); }
+  .bk-cell-mono { font-family:var(--mono); font-size:11px; color:var(--text-muted); }
+  .bk-cell-pill { display:inline-block; font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:var(--radius-xs); background:var(--steel-150); color:var(--text-body); }
+  @media (max-width: 900px) {
+    .bk-hdr { display:none; }
+    .bk-row { grid-template-columns:1fr; gap:6px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-mark">J</div>
+    <div>
+      <div class="brand-eyebrow">Edge Metals Inc</div>
+      <div class="brand-title">Jarvis — Booking Scoreboard</div>
+      <div class="live">
+        <span class="live-dot" id="liveDot"></span>
+        <span class="live-label" id="liveLabel">Connecting…</span>
+      </div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="topbar-date mono" id="todayLabel"></div>
+    <div class="topbar-count" id="trackedCount"></div>
+  </div>
+</div>
+
+<div class="tabnav">
+  <button class="tab active" data-tab="board" type="button">Board</button>
+  <button class="tab" data-tab="bookings" type="button">Bookings</button>
+  <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
+</div>
+
+<div class="tabpanel active" id="panel-board">
+<div class="container">
+  <div class="kpis" id="kpis"></div>
+
+  <div id="alertsSection">
+    <div class="rail-head">
+      <span class="rail-title">Needs Attention</span>
+      <span class="rail-line"></span>
+      <span class="rail-count" id="alertCount">0</span>
+    </div>
+    <div class="alerts" id="alerts"></div>
+  </div>
+
+  <div class="filters" id="filters"></div>
+  <div class="rows" id="rows"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-bookings">
+<div class="container">
+  <div class="bk-head">
+    <h2>Bookings</h2>
+    <button class="btn-primary" id="btnAddBooking" type="button">+ Add booking</button>
+  </div>
+  <div id="bkList"></div>
+</div>
+</div>
+
+<!-- Add/Edit modal (hidden until btnAddBooking clicked) -->
+<div class="modal-back" id="modalBack" style="display:none">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="modalTitle">New booking</h3>
+      <button class="modal-close" id="modalClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="drop" id="dropZone">
+        <div class="drop-label">Drop booking PDF here or click to upload</div>
+        <div class="drop-sub">Jarvis will extract the fields automatically</div>
+        <input type="file" id="fileInput" accept="application/pdf" style="display:none">
+      </div>
+      <button class="scan-btn" id="scanBtn" type="button" style="display:none" disabled>Scan &amp; auto-fill fields</button>
+      <div class="scanned-banner" id="scannedBanner" style="display:none">Fields extracted — review and edit below</div>
+
+      <div class="form-grid">
+        <div class="full">
+          <label for="f_bkg">Booking number *</label>
+          <input id="f_bkg" type="text" placeholder="e.g. BK-2602" required>
+        </div>
+        <div>
+          <label for="f_carrier">Carrier</label>
+          <input id="f_carrier" type="text" placeholder="MSC, Maersk…">
+        </div>
+        <div>
+          <label for="f_size">Container size</label>
+          <select id="f_size">
+            <option value="">—</option>
+            <option>20GP</option><option>40GP</option><option selected>40HC</option>
+            <option>20RF</option><option>40RF</option><option>45HC</option>
+          </select>
+        </div>
+        <div>
+          <label for="f_pol">Port of loading</label>
+          <input id="f_pol" type="text" placeholder="Houston">
+        </div>
+        <div>
+          <label for="f_pod">Port of discharge</label>
+          <input id="f_pod" type="text" placeholder="Busan">
+        </div>
+        <div>
+          <label for="f_erd">ERD date</label>
+          <input id="f_erd" type="text" placeholder="MM/DD/YYYY">
+        </div>
+        <div>
+          <label for="f_cutoff">Cutoff date</label>
+          <input id="f_cutoff" type="text" placeholder="MM/DD/YYYY">
+        </div>
+        <div class="full">
+          <label for="f_vessel">Vessel / voyage</label>
+          <input id="f_vessel" type="text" placeholder="MSC AURORA 226E">
+        </div>
+        <div>
+          <label for="f_container">Container number</label>
+          <input id="f_container" type="text" placeholder="TCLU8841207">
+        </div>
+        <div>
+          <label for="f_buyer">Buyer</label>
+          <input id="f_buyer" type="text">
+        </div>
+      </div>
+
+      <div class="form-err" id="formErr" style="display:none"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" id="btnCancel" type="button">Cancel</button>
+      <button class="btn-primary" id="btnSave" type="button">Save booking</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const RISK = {
+    high:   { label:'At Risk',  color:'var(--danger)',     bg:'var(--danger-bg)',  text:'var(--danger-text)'  },
+    medium: { label:'Watch',    color:'var(--warning)',    bg:'var(--warning-bg)', text:'var(--warning-text)' },
+    low:    { label:'On Track', color:'var(--leaf-600)',   bg:'var(--leaf-50)',    text:'var(--leaf-700)'     },
+    done:   { label:'Complete', color:'var(--steel-300)',  bg:'var(--steel-100)',  text:'var(--text-muted)'   },
+  };
+  const FILTERS = [
+    { key:'all',    label:'All' },
+    { key:'high',   label:'At Risk' },
+    { key:'medium', label:'Watch' },
+    { key:'low',    label:'On Track' },
+    { key:'done',   label:'Complete' },
+  ];
+
+  let state = { filter:'all', data:null };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function deadlineColor(b) {
+    if (b.risk === 'done') return 'var(--text-faint)';
+    if (b.risk === 'high') return 'var(--danger)';
+    if (b.risk === 'medium') return 'var(--warning)';
+    return 'var(--text-muted)';
+  }
+
+  function renderKpis(counts) {
+    $('kpis').innerHTML = ['high','medium','low','done'].map(k => {
+      const r = RISK[k];
+      return `<button class="kpi" style="border-top-color:${r.color}" data-filter="${k}">
+        <div class="kpi-count">${counts[k] ?? 0}</div>
+        <div class="kpi-label" style="color:${r.color}">${r.label}</div>
+      </button>`;
+    }).join('');
+  }
+
+  function renderAlerts(alerts) {
+    $('alertCount').textContent = alerts.length;
+    $('alertsSection').style.display = alerts.length ? '' : 'none';
+    $('alerts').innerHTML = alerts.map(a => `
+      <div class="alert-card">
+        <div class="alert-top">
+          <span class="alert-bkg">${esc(a.bookingNo)}</span>
+          <span class="alert-deadline">${esc(a.deadlineLabel)}</span>
+        </div>
+        <div class="alert-issue">${esc(a.issue || 'Needs review')}</div>
+      </div>`).join('');
+  }
+
+  function renderFilters() {
+    $('filters').innerHTML = FILTERS.map(f =>
+      `<button class="chip ${state.filter === f.key ? 'active' : ''}" data-filter="${f.key}">${f.label}</button>`
+    ).join('');
+  }
+
+  function renderDots(b, stages) {
+    const last = stages.length - 1;
+    const pct  = (b.stageIndex / last) * 100;
+    const dots = stages.map((label, i) => {
+      const size  = i === b.stageIndex ? 13 : 8;
+      const color = i < b.stageIndex ? 'var(--steel-400)' : i === b.stageIndex ? 'var(--copper-600)' : 'var(--steel-200)';
+      return `<div class="dot" title="${esc(label)}" style="left:${(i/last)*100}%;width:${size}px;height:${size}px;background:${color}"></div>`;
+    }).join('');
+    return `<div class="track"><div class="track-fill" style="width:${pct}%"></div>${dots}</div>`;
+  }
+
+  function renderRows() {
+    const d = state.data;
+    if (!d) return;
+    const list = state.filter === 'all' ? d.bookings : d.bookings.filter(b => b.risk === state.filter);
+
+    if (!list.length) {
+      $('rows').innerHTML = `<div class="empty">No bookings in this view. New bookings appear here as Jarvis picks them up from WhatsApp.</div>`;
+      return;
+    }
+
+    $('rows').innerHTML = list.map(b => {
+      const r = RISK[b.risk];
+      return `<div class="row" style="border-left-color:${b.risk==='done' ? 'var(--steel-300)' : r.color}">
+        <div class="cell-id">
+          <div class="cell-eyebrow">Booking</div>
+          <div class="cell-bkg">${esc(b.bookingNo)}</div>
+          <div class="cell-buyer">${esc(b.buyer)}</div>
+          <div class="cell-container">${esc(b.container)}</div>
+        </div>
+        <div class="cell-stage">
+          ${renderDots(b, d.stages)}
+          <div class="stage-line">
+            <span class="stage-name">${esc(b.stageName)}</span>
+            ${b.subBranch ? `<span class="stage-sub">· ${esc(b.subBranch)}</span>` : ''}
+          </div>
+        </div>
+        <div class="cell-status">
+          <div class="status-pending" style="color:${b.pending ? 'var(--text-body)' : 'var(--text-faint)'}">${esc(b.pending || 'No open items')}</div>
+          <div class="status-owner">${esc(b.owner)}</div>
+        </div>
+        <div class="cell-deadline">
+          <div class="deadline" style="color:${deadlineColor(b)}">${esc(b.deadlineLabel)}</div>
+          <span class="risk-pill" style="background:${r.bg};color:${r.text}">${r.label}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderAll() {
+    const d = state.data;
+    renderKpis(d.counts);
+    renderAlerts(d.alerts);
+    renderFilters();
+    renderRows();
+    $('trackedCount').textContent = `${d.bookings.length} booking${d.bookings.length === 1 ? '' : 's'} tracked`;
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/api/dashboard');
+      if (!res.ok) throw new Error(res.status);
+      state.data = await res.json();
+      $('liveDot').classList.remove('stale');
+      $('liveLabel').textContent = 'Live · synced from WhatsApp';
+      renderAll();
+    } catch (e) {
+      $('liveDot').classList.add('stale');
+      $('liveLabel').textContent = 'Connection lost — retrying';
+    }
+  }
+
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-filter]');
+    if (!btn) return;
+    state.filter = btn.dataset.filter;
+    renderFilters();
+    renderRows();
+  });
+
+  $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
+  load();
+  setInterval(load, 30000);
+
+  // ── Tabs ────────────────────────────────────────────────────────────────
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      const target = t.dataset.tab;
+      document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+      document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
+      if (target === 'bookings') loadBookings();
+    });
+  });
+
+  // ── Sign out ────────────────────────────────────────────────────────────
+  $('btnSignout').addEventListener('click', async () => {
+    try { await fetch('/logout', { method: 'POST' }); } catch {}
+    location.href = '/login';
+  });
+
+  // ── Bookings tab: list ──────────────────────────────────────────────────
+  async function loadBookings() {
+    try {
+      const [bkRes, wfRes] = await Promise.all([fetch('/api/bookings'), fetch('/api/workflow')]);
+      const bookings = await bkRes.json();
+      const workflow = await wfRes.json();
+      renderBookingsList(bookings, workflow);
+    } catch { renderBookingsList({}, {}); }
+  }
+
+  function renderBookingsList(bookings, workflow) {
+    const list = Object.values(bookings);
+    if (!list.length) {
+      $('bkList').innerHTML = `<div class="bk-list-empty">No bookings yet. Click "Add booking" to upload a PDF and let Jarvis extract the fields.</div>`;
+      return;
+    }
+    const rows = list.map(b => {
+      const wf = workflow[b.booking_number] || {};
+      const step = (wf.step || 'not_started').replace(/_/g, ' ');
+      return `<div class="bk-row">
+        <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
+        <div class="bk-cell-sub">${esc(b.buyer || b.consignee || wf.supplier || b.supplier || '—')}<br><span class="bk-cell-mono">${esc(b.container_number || '')}</span></div>
+        <div class="bk-cell-mono">${esc(b.carrier || '—')}</div>
+        <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
+        <div><span class="bk-cell-pill">${esc(step)}</span></div>
+      </div>`;
+    }).join('');
+    $('bkList').innerHTML =
+      `<div class="bk-table">
+        <div class="bk-hdr"><div>Booking</div><div>Buyer / Container</div><div>Carrier</div><div>Cutoff</div><div>Stage</div></div>
+        ${rows}
+      </div>`;
+  }
+
+  // ── Bookings tab: modal ─────────────────────────────────────────────────
+  const modal = {
+    back: $('modalBack'),
+    open() { modal.reset(); modal.back.style.display = 'flex'; },
+    close() { modal.back.style.display = 'none'; },
+    reset() {
+      modalPdfBase64 = null;
+      modalPdfFile   = null;
+      ['f_bkg','f_carrier','f_pol','f_pod','f_erd','f_cutoff','f_vessel','f_container','f_buyer'].forEach(id => { $(id).value = ''; });
+      $('f_size').value = '40HC';
+      $('formErr').style.display = 'none';
+      $('scannedBanner').style.display = 'none';
+      $('scanBtn').style.display = 'none';
+      $('scanBtn').disabled = true;
+      renderDrop();
+    },
+  };
+  let modalPdfBase64 = null, modalPdfFile = null;
+
+  function renderDrop() {
+    const dz = $('dropZone');
+    if (modalPdfFile) {
+      dz.classList.add('has-file');
+      dz.innerHTML = `<div class="file-info">
+        <div>
+          <div class="file-name">${esc(modalPdfFile.name)}</div>
+          <div class="file-size">${(modalPdfFile.size/1024).toFixed(1)} KB · ready to scan</div>
+        </div>
+        <button type="button" class="file-remove" id="fileRemove">Remove</button>
+      </div>`;
+      $('fileRemove').addEventListener('click', (e) => { e.stopPropagation(); clearFile(); });
+    } else {
+      dz.classList.remove('has-file');
+      dz.innerHTML = `<div class="drop-label">Drop booking PDF here or click to upload</div>
+        <div class="drop-sub">Jarvis will extract the fields automatically</div>
+        <input type="file" id="fileInput" accept="application/pdf" style="display:none">`;
+      $('fileInput').addEventListener('change', (e) => handleFile(e.target.files[0]));
+    }
+  }
+
+  function clearFile() {
+    modalPdfFile = null; modalPdfBase64 = null;
+    $('scanBtn').style.display = 'none';
+    $('scannedBanner').style.display = 'none';
+    renderDrop();
+  }
+
+  function handleFile(f) {
+    if (!f || f.type !== 'application/pdf') return;
+    modalPdfFile = f;
+    const reader = new FileReader();
+    reader.onload = () => {
+      modalPdfBase64 = reader.result.split(',')[1];
+      $('scanBtn').style.display = 'block';
+      $('scanBtn').disabled = false;
+      $('scannedBanner').style.display = 'none';
+      renderDrop();
+    };
+    reader.readAsDataURL(f);
+  }
+
+  $('btnAddBooking').addEventListener('click', modal.open);
+  $('modalClose').addEventListener('click', modal.close);
+  $('btnCancel').addEventListener('click', modal.close);
+  modal.back.addEventListener('click', (e) => { if (e.target === modal.back) modal.close(); });
+
+  $('dropZone').addEventListener('click', () => { if (!modalPdfFile) document.getElementById('fileInput')?.click(); });
+  $('dropZone').addEventListener('dragover', (e) => { e.preventDefault(); $('dropZone').classList.add('drag'); });
+  $('dropZone').addEventListener('dragleave', () => $('dropZone').classList.remove('drag'));
+  $('dropZone').addEventListener('drop', (e) => {
+    e.preventDefault();
+    $('dropZone').classList.remove('drag');
+    if (modalPdfFile) return; // already have one — click Remove first
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  $('scanBtn').addEventListener('click', async () => {
+    if (!modalPdfBase64) return;
+    const btn = $('scanBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scanning document…';
+    try {
+      const r = await fetch('/api/documents/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_base64: modalPdfBase64 }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'scan failed');
+      const f = d.fields || {};
+      if (f.booking_number)   $('f_bkg').value       = f.booking_number;
+      if (f.carrier)          $('f_carrier').value   = f.carrier;
+      if (f.port_of_loading)  $('f_pol').value       = f.port_of_loading;
+      if (f.port_of_discharge)$('f_pod').value       = f.port_of_discharge;
+      if (f.erd_date)         $('f_erd').value       = f.erd_date;
+      if (f.cutoff_date)      $('f_cutoff').value    = f.cutoff_date;
+      if (f.vessel_voyage)    $('f_vessel').value    = f.vessel_voyage;
+      if (f.container_number) $('f_container').value = f.container_number;
+      if (f.buyer)            $('f_buyer').value     = f.buyer;
+      else if (f.consignee)   $('f_buyer').value     = f.consignee;
+      if (f.container_size)   $('f_size').value      = f.container_size;
+      $('scannedBanner').style.display = 'block';
+      $('scanBtn').style.display = 'none';
+    } catch (err) {
+      $('formErr').textContent = 'Scan failed: ' + err.message;
+      $('formErr').style.display = 'block';
+      btn.disabled = false;
+      btn.innerHTML = 'Scan &amp; auto-fill fields';
+    }
+  });
+
+  $('btnSave').addEventListener('click', async () => {
+    const bkg = $('f_bkg').value.trim().toUpperCase();
+    if (!bkg) {
+      $('formErr').textContent = 'Booking number is required.';
+      $('formErr').style.display = 'block';
+      return;
+    }
+    $('formErr').style.display = 'none';
+    const save = $('btnSave');
+    save.disabled = true;
+    save.innerHTML = '<span class="spinner"></span>Saving…';
+    try {
+      // 1. Save booking data
+      const payload = {
+        booking_number   : bkg,
+        carrier          : $('f_carrier').value.trim()  || null,
+        container_size   : $('f_size').value            || null,
+        port_of_loading  : $('f_pol').value.trim()      || null,
+        port_of_discharge: $('f_pod').value.trim()      || null,
+        erd_date         : $('f_erd').value.trim()      || null,
+        cutoff_date      : $('f_cutoff').value.trim()   || null,
+        vessel_voyage    : $('f_vessel').value.trim()   || null,
+        container_number : $('f_container').value.trim()|| null,
+        buyer            : $('f_buyer').value.trim()    || null,
+      };
+      const bkRes = await fetch('/api/bookings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!bkRes.ok) throw new Error((await bkRes.json()).error || 'save failed');
+
+      // 2. Upload PDF to Drive (best-effort; booking saved either way)
+      if (modalPdfBase64) {
+        try {
+          const up = await fetch('/api/bookings/upload-pdf', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ booking_number: bkg, pdf_base64: modalPdfBase64, original_filename: modalPdfFile?.name }),
+          });
+          if (!up.ok) {
+            const e = await up.json();
+            console.warn('[UPLOAD]', e.error);
+            // Booking saved but PDF failed — surface as warning, not blocker
+            $('formErr').textContent = 'Booking saved. PDF upload to Drive failed: ' + (e.error || 'unknown');
+            $('formErr').style.display = 'block';
+            save.disabled = false; save.textContent = 'Save booking';
+            await loadBookings(); await load();
+            return;
+          }
+        } catch (e) { console.warn('[UPLOAD]', e); }
+      }
+
+      modal.close();
+      await loadBookings();
+      await load(); // refresh the Board too
+    } catch (err) {
+      $('formErr').textContent = err.message;
+      $('formErr').style.display = 'block';
+      save.disabled = false; save.textContent = 'Save booking';
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
