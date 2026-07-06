@@ -4,8 +4,12 @@
 // as a text card if the PDF can't be found.
 //
 // SCOPE NOTE: drive.file scope means the SA can only read/write files IT created
-// or that were explicitly shared with it. So existing bookings uploaded outside
-// this app need the SA email added as an editor on the parent folder.
+// or that were explicitly shared with it. Combined with SHARED DRIVE usage below.
+//
+// SHARED DRIVE: Service accounts have NO personal storage quota. Files must live
+// in a Shared Drive (owned by the Workspace org, not by any user). Every API call
+// therefore needs `supportsAllDrives: true`; `files.list` also needs `corpora:
+// 'drive'` and the `driveId` to search inside the Shared Drive.
 
 const fs  = require('fs');
 const cfg = require('../config');
@@ -28,17 +32,23 @@ function getDrive() {
     return driveClient;
 }
 
-// Find a PDF whose name contains the booking number (inside the booking folder)
+// Find a PDF whose name contains the booking number (inside the Shared Drive)
 async function findPdfByBooking(bkgNo) {
     const drive = getDrive();
-    const parts = [`name contains '${bkgNo}'`, `mimeType = 'application/pdf'`, 'trashed = false'];
-    if (cfg.GDRIVE_FOLDER_ID) parts.push(`'${cfg.GDRIVE_FOLDER_ID}' in parents`);
+    if (!cfg.GDRIVE_FOLDER_ID) return null;
+
+    const q = [`name contains '${bkgNo}'`, `mimeType = 'application/pdf'`, 'trashed = false'].join(' and ');
 
     const res = await drive.files.list({
-        q: parts.join(' and '),
+        q,
         fields: 'files(id, name)',
         pageSize: 5,
         orderBy: 'modifiedTime desc',
+        // Shared Drive support
+        supportsAllDrives      : true,
+        includeItemsFromAllDrives: true,
+        corpora                : 'drive',
+        driveId                : cfg.GDRIVE_FOLDER_ID,
     });
     return res.data.files?.[0] || null;
 }
@@ -53,7 +63,7 @@ async function fetchPdfFromDrive(bkgNo) {
         }
         const drive = getDrive();
         const res = await drive.files.get(
-            { fileId: file.id, alt: 'media' },
+            { fileId: file.id, alt: 'media', supportsAllDrives: true },
             { responseType: 'arraybuffer' }
         );
         console.log(`[DRIVE] Fetched ${file.name} for ${bkgNo}`);
@@ -68,7 +78,7 @@ async function fetchPdfFromDrive(bkgNo) {
     }
 }
 
-// ── Upload a booking PDF to Drive (used by the Bookings tab) ─────────────────
+// ── Upload a booking PDF to Shared Drive (used by the Bookings tab) ──────────
 // Naming convention: <BKG_NO>.pdf so findPdfByBooking() locates it later.
 // If a PDF with the same booking number already exists, we update it in-place
 // so the booking never has two PDFs (last-upload-wins matches user expectation).
@@ -92,15 +102,25 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
             fileId: existing.id,
             media,
             fields: 'id, name, webViewLink',
+            supportsAllDrives: true,
         });
         console.log(`[DRIVE] Updated ${name} (${updated.data.id})`);
         return updated.data;
     }
 
+    // First upload — place inside the target folder.
+    // GDRIVE_UPLOAD_FOLDER_ID (a real folder inside the Shared Drive) is used
+    // as the parent. Do NOT use the Shared Drive root ID as a parent — Drive
+    // rejects that with "File not found" because a drive root isn't a file.
+    const parentId = cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) {
+        throw new Error('GDRIVE_UPLOAD_FOLDER_ID not configured (folder ID inside the Shared Drive)');
+    }
     const created = await drive.files.create({
-        requestBody: { name, parents: [cfg.GDRIVE_FOLDER_ID] },
+        requestBody: { name, parents: [parentId] },
         media,
         fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
     });
     console.log(`[DRIVE] Uploaded ${name} (${created.data.id})`);
     return created.data;

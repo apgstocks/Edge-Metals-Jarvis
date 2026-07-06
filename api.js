@@ -315,6 +315,44 @@ function createApi() {
         res.json({ ok: true });
     });
 
+    // ── WhatsApp status + re-scan ──────────────────────────────────────────────
+    // Status is read from a shared in-memory module (helpers/wa-state), which is
+    // written by index.js on every WA client event. Poll-friendly.
+    app.get('/api/whatsapp/status', (req, res) => {
+        const waState = require('./helpers/wa-state');
+        res.json(waState.get());
+    });
+
+    // Trigger a re-scan: logs out, wipes session cache, forces new QR.
+    // SECURITY NOTE: this is a hijack vector on a public dashboard. Anyone with
+    // dashboard access can scan a QR with their OWN phone and take over Jarvis's
+    // WhatsApp identity. Change APP_PASSWORD to something strong before exposing.
+    app.post('/api/whatsapp/reset', async (req, res) => {
+        try {
+            const waState = require('./helpers/wa-state');
+            await waState.triggerLogout();
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] whatsapp/reset failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Find groups by name (used by the Settings tab to help pick a team_group_id).
+    // Only returns groups Jarvis is a member of — you cannot validate a group
+    // Jarvis hasn't been added to yet. Prerequisite: user adds Jarvis to the
+    // group on their phone BEFORE clicking Validate here.
+    app.post('/api/whatsapp/find-groups', async (req, res) => {
+        try {
+            const waState = require('./helpers/wa-state');
+            const groups = await waState.findGroups(req.body?.name || '');
+            res.json({ ok: true, groups });
+        } catch (err) {
+            console.error('[API] whatsapp/find-groups failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // ── Static dashboard ──────────────────────────────────────────────────────
     app.use('/', express.static(path.join(cfg.ROOT, 'dashboard')));
 

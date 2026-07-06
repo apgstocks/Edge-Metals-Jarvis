@@ -10,6 +10,7 @@ const cfg  = require('./config');
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const waState = require('./helpers/wa-state');
 
 const brain     = require('./workflow/brain');
 const actions   = require('./workflow/actions');
@@ -83,20 +84,59 @@ app.listen(cfg.API_PORT, () => console.log(`[BOOT] API + dashboard on :${cfg.API
 
 // ── WhatsApp events ────────────────────────────────────────────────────────────
 client.on('qr', (qr) => {
-    console.log('[WA] Scan this QR:');
+    console.log('[WA] Scan this QR (or use the WhatsApp tab in the dashboard):');
     qrcode.generate(qr, { small: true });
+    waState.setStatus('qr', { qr });
 });
 
 client.on('ready', () => {
     waReady = true;
     console.log('[WA] Client ready');
+    waState.setStatus('ready');
     scheduler.start();
 });
 
 client.on('disconnected', (reason) => {
     waReady = false;
+    waState.setStatus('disconnected', { error: String(reason) });
     console.error('[WA] Disconnected:', reason, '— reinitializing in 10s');
     setTimeout(() => client.initialize().catch(e => console.error('[WA] Reinit failed:', e.message)), 10000);
+});
+
+client.on('auth_failure', (msg) => {
+    waReady = false;
+    waState.setStatus('auth_failure', { error: String(msg) });
+    console.error('[WA] Auth failure:', msg);
+});
+
+// Called by POST /api/whatsapp/find-groups — case-insensitive substring match on group names.
+// Only returns groups where Jarvis is currently a member (getChats returns only member chats).
+waState.setGroupsLookupHandler(async (nameFragment) => {
+    if (!waReady) throw new Error('WhatsApp not ready');
+    const q = String(nameFragment || '').toLowerCase().trim();
+    if (!q) return [];
+    const chats = await client.getChats();
+    const groups = chats
+        .filter(c => c.isGroup && (c.name || '').toLowerCase().includes(q))
+        .map(c => ({ id: c.id?._serialized, name: c.name, participants: c.groupMetadata?.participants?.length || null }))
+        .slice(0, 20); // safety cap; a real workspace can have hundreds of groups
+    return groups;
+});
+
+// Called by POST /api/whatsapp/reset — logs out, wipes session cache, reinitializes
+waState.setLogoutHandler(async () => {
+    console.log('[WA] Logout requested — resetting session');
+    waReady = false;
+    waState.setStatus('initializing');
+    try { await client.logout(); } catch (e) { console.warn('[WA] Logout error (ignoring):', e.message); }
+    try { await client.destroy(); } catch (e) { console.warn('[WA] Destroy error (ignoring):', e.message); }
+    // Wipe the LocalAuth cache so the next initialize forces a fresh QR
+    try {
+        const rimraf = require('fs').rmSync;
+        rimraf(cfg.SESSION_PATH, { recursive: true, force: true });
+    } catch (e) { console.warn('[WA] Cache wipe error (ignoring):', e.message); }
+    setTimeout(() => client.initialize().catch(e => console.error('[WA] Reinit after reset failed:', e.message)), 1500);
+    return { ok: true };
 });
 
 client.on('message', async (msg) => {
@@ -104,7 +144,7 @@ client.on('message', async (msg) => {
         if (msg.fromMe) return;
         const chat    = await msg.getChat();
         const contact = await msg.getContact();
-        console.log('[DEBUG] from:', msg.from, '| author:', msg.author, '| contact.number:', contact.number, '| contact.id:', JSON.stringify(contact.id));
+
         await brain.process({
             messageId   : msg.id?._serialized,
             chatId      : chat.id?._serialized,

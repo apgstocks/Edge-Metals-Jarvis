@@ -31,7 +31,12 @@ function normalize(raw) {
     const digits   = (v) => String(v || '').replace(/\D/g, '');
 
     const managerNum = digits(settings.manager_number);
-    const teamNums   = (settings.internal_team || []).map(digits);
+    // internal_team supports two formats for backward compat:
+    //   legacy: ['14155551111', '14155552222']
+    //   new:    [{name, whatsapp, role}, ...]
+    const teamNums   = (settings.internal_team || [])
+        .map(x => digits(typeof x === 'string' ? x : (x?.whatsapp || '')))
+        .filter(Boolean);
     const senderNum  = digits(raw.senderNumber);
 
     const isManager = !!managerNum && senderNum === managerNum;
@@ -127,7 +132,7 @@ function policyDecide(ctx) {
     if (ctx.isTrucker && ctx.activeBooking) {
         const step = ctx.workflow?.step;
         if (ctx.hasMedia) {
-            if (['forwarded', 'waiting_empty_drop'].includes(step))
+            if (step === 'forwarded')
                 return { intent: 'empty_drop_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
             if (step === 'load_ready')
                 return { intent: 'picked_up_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, scale_ticket: true } };
@@ -136,7 +141,7 @@ function policyDecide(ctx) {
             if (step === 'picked_up')
                 return { intent: 'ingate_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         }
-        if (/(empty|dropped)/.test(t) && ['forwarded', 'waiting_empty_drop'].includes(step))
+        if (/(empty|dropped)/.test(t) && step === 'forwarded')
             return { intent: 'empty_drop_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         if (/(picked\s*up|loaded)/.test(t) && step === 'load_ready')
             return { intent: 'picked_up_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, scale_ticket: false } };

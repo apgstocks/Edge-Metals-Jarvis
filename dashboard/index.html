@@ -184,6 +184,7 @@
     .bk-row { grid-template-columns:1fr; gap:6px; }
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -208,7 +209,16 @@
 <div class="tabnav">
   <button class="tab active" data-tab="board" type="button">Board</button>
   <button class="tab" data-tab="bookings" type="button">Bookings</button>
+  <button class="tab" data-tab="truckers" type="button">Truckers</button>
+  <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
+  <button class="tab" data-tab="whatsapp" type="button">WhatsApp</button>
+  <button class="tab" data-tab="settings" type="button">Settings</button>
   <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
+</div>
+
+<div id="waBanner" style="display:none; padding:9px 32px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-align:center; cursor:pointer;" title="Click to open the WhatsApp tab">
+  <span id="waBannerDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle;"></span>
+  <span id="waBannerText"></span>
 </div>
 
 <div class="tabpanel active" id="panel-board">
@@ -237,6 +247,166 @@
   </div>
   <div id="bkList"></div>
 </div>
+</div>
+
+<div class="tabpanel" id="panel-truckers">
+<div class="container">
+  <div class="bk-head">
+    <h2>Truckers</h2>
+    <button class="btn-primary" id="btnAddTrucker" type="button">+ Add trucker</button>
+  </div>
+  <div id="truckerList"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-suppliers">
+<div class="container">
+  <div class="bk-head">
+    <h2>Suppliers</h2>
+    <button class="btn-primary" id="btnAddSupplier" type="button">+ Add supplier</button>
+  </div>
+  <div id="supplierList"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-whatsapp">
+<div class="container">
+  <div class="bk-head">
+    <h2>WhatsApp connection</h2>
+    <button class="btn-secondary" id="btnWaReset" type="button">Sign out &amp; re-scan</button>
+  </div>
+
+  <div id="waState" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:32px 28px; text-align:center;">
+    <div id="waStateIcon" style="font-size:32px; margin-bottom:14px;">…</div>
+    <div id="waStateTitle" style="font-family:var(--mono); font-size:14px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin-bottom:6px; color:var(--text-strong);">Loading</div>
+    <div id="waStateSub" style="font-size:12.5px; color:var(--text-muted);">Checking WhatsApp status…</div>
+    <div id="waQrHolder" style="margin-top:22px; display:none;">
+      <div id="waQr" style="display:inline-block; padding:16px; background:#fff; border:1px solid var(--border); border-radius:var(--radius-sm);"></div>
+      <div style="margin-top:14px; font-size:12px; color:var(--text-muted);">
+        On the phone that will be Jarvis: WhatsApp &rarr; Settings &rarr; Linked Devices &rarr; Link a Device &rarr; scan.
+      </div>
+    </div>
+    <div id="waMetaLine" style="margin-top:18px; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); letter-spacing:.06em;"></div>
+  </div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-settings">
+<div class="container">
+  <div class="bk-head">
+    <h2>Settings</h2>
+    <button class="btn-primary" id="btnSaveSettings" type="button">Save changes</button>
+  </div>
+
+  <div id="settingsError" class="form-err" style="display:none; margin-bottom:20px;"></div>
+  <div id="settingsSaved" style="display:none; margin-bottom:20px; padding:10px 14px; background:#EAF4EC; border:1px solid #5CB876; border-radius:var(--radius-sm); font-size:12.5px; color:#256B3B; font-weight:600;">Saved.</div>
+
+  <!-- ── Manager number ─────────────────────────────────────────────── -->
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
+    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Manager</h3>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
+    <div class="form-grid">
+      <div class="full">
+        <label for="s_manager_number">Manager WhatsApp number</label>
+        <input id="s_manager_number" type="text" placeholder="e.g. 918056944193 (country code + number, no + or spaces)">
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Internal team ──────────────────────────────────────────────── -->
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
+      <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</h3>
+      <button class="btn-secondary" id="btnAddTeamMember" type="button" style="padding:6px 14px; font-size:10px;">+ Add member</button>
+    </div>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">People who can send commands and receive alerts. Role is a free-text label — not enforced by routing yet.</div>
+    <div id="teamList"></div>
+  </div>
+
+  <!-- ── Team group ─────────────────────────────────────────────────── -->
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px;">
+    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Team WhatsApp group</h3>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">
+      Alerts and team messages go here.
+      <strong style="color:var(--text-body);">Prerequisite:</strong> add the Jarvis phone to the group first — Validate can only find groups Jarvis is already a member of.
+    </div>
+    <div class="form-grid">
+      <div class="full">
+        <label for="s_group_name">Group name (partial match)</label>
+        <div style="display:flex; gap:8px;">
+          <input id="s_group_name" type="text" placeholder="e.g. Ops Team" style="flex:1;">
+          <button class="btn-secondary" id="btnValidateGroup" type="button" style="white-space:nowrap;">Validate</button>
+        </div>
+      </div>
+      <div class="full">
+        <div id="groupPicker" style="display:none; margin-top:10px; padding:14px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+          <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Matches — pick one:</div>
+          <div id="groupPickerList"></div>
+        </div>
+      </div>
+      <div class="full">
+        <label for="s_group_id">Team group ID (auto-filled by Validate, or paste manually)</label>
+        <input id="s_group_id" type="text" placeholder="e.g. 120363123456789012@g.us" style="font-family:var(--mono);">
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- Contact modal (shared between Trucker/Supplier add/edit) -->
+<div class="modal-back" id="contactModal" style="display:none">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="contactModalTitle">New contact</h3>
+      <button class="modal-close" id="contactModalClose" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="full">
+          <label for="c_name">Name *</label>
+          <input id="c_name" type="text" placeholder="e.g. Dave R." required>
+        </div>
+        <div>
+          <label for="c_whatsapp">WhatsApp number</label>
+          <input id="c_whatsapp" type="text" placeholder="e.g. 14155551234 (no + or spaces)">
+        </div>
+        <div>
+          <label for="c_email">Email</label>
+          <input id="c_email" type="email" placeholder="dave@example.com">
+        </div>
+        <div class="full">
+          <label for="c_group_search">WhatsApp group (optional — search Jarvis's groups)</label>
+          <div style="display:flex; gap:8px;">
+            <input id="c_group_search" type="text" placeholder="Type part of the group name (Jarvis must already be a member)" style="flex:1;">
+            <button class="btn-secondary" id="c_group_validate" type="button" style="white-space:nowrap;">Validate</button>
+          </div>
+          <div id="c_group_picker" style="display:none; margin-top:10px; padding:12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+            <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Matches — pick one:</div>
+            <div id="c_group_picker_list"></div>
+          </div>
+        </div>
+        <div class="full">
+          <label for="c_group">Group ID (auto-filled by Validate, or paste manually)</label>
+          <input id="c_group" type="text" placeholder="e.g. 120363123456@g.us" style="font-family:var(--mono);">
+        </div>
+        <div>
+          <label for="c_mode">Preferred contact mode</label>
+          <select id="c_mode">
+            <option value="whatsapp" selected>WhatsApp</option>
+            <option value="email">Email (routing not yet wired)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-err" id="contactErr" style="display:none"></div>
+      <div style="margin-top:14px; font-size:11.5px; color:var(--text-faint); font-family:var(--mono);">
+        Note: WhatsApp routing uses group ID first, else the number. Email routing is stored but not yet used by the forward flow.
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" id="contactCancel" type="button">Cancel</button>
+      <button class="btn-primary" id="contactSave" type="button">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- Add/Edit modal (hidden until btnAddBooking clicked) -->
@@ -459,7 +629,11 @@
       const target = t.dataset.tab;
       document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
       document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
-      if (target === 'bookings') loadBookings();
+      if (target === 'bookings')  loadBookings();
+      if (target === 'truckers')  loadContacts('truckers');
+      if (target === 'suppliers') loadContacts('suppliers');
+      if (target === 'whatsapp')  loadWhatsappStatus();
+      if (target === 'settings')  loadSettings();
     });
   });
 
@@ -672,6 +846,397 @@
       $('formErr').textContent = err.message;
       $('formErr').style.display = 'block';
       save.disabled = false; save.textContent = 'Save booking';
+    }
+  });
+
+  // ── Contacts: shared CRUD for truckers + suppliers ──────────────────────
+  // Same shape, same endpoints (POST /api/{kind}, DELETE /api/{kind}/:name).
+  // Backend accepts arbitrary JSON so schema changes are additive.
+  let contactKind = null; // 'truckers' | 'suppliers' — set when modal opens
+
+  async function loadContacts(kind) {
+    try {
+      const r = await fetch('/api/' + kind);
+      const list = await r.json();
+      renderContactList(kind, Array.isArray(list) ? list : []);
+    } catch { renderContactList(kind, []); }
+  }
+
+  function renderContactList(kind, list) {
+    const wrap = $(kind === 'truckers' ? 'truckerList' : 'supplierList');
+    if (!list.length) {
+      wrap.innerHTML = `<div class="bk-list-empty">No ${kind} yet. Click "Add ${kind.slice(0,-1)}" to add one.</div>`;
+      return;
+    }
+    const rows = list.map(c => {
+      const modeLabel = (c.preferred_mode === 'email') ? 'Email' : 'WhatsApp';
+      const modeColor = (c.preferred_mode === 'email') ? 'var(--text-muted)' : 'var(--copper-700)';
+      const dest = c.group_id ? `Group: ${c.group_id}` : (c.whatsapp ? c.whatsapp : '(no WhatsApp)');
+      return `<div class="bk-row">
+        <div class="bk-cell-bkg">${esc(c.name)}</div>
+        <div class="bk-cell-sub">${esc(c.email || '—')}<br><span class="bk-cell-mono">${esc(dest)}</span></div>
+        <div class="bk-cell-mono" style="color:${modeColor}">${modeLabel}</div>
+        <div>
+          <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:10px;" data-edit="${esc(c.name)}">Edit</button>
+          <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger); margin-left:4px;" data-delete="${esc(c.name)}">Delete</button>
+        </div>
+      </div>`;
+    }).join('');
+    wrap.innerHTML = `<div class="bk-table">
+      <div class="bk-hdr" style="grid-template-columns:180px 1fr 120px 180px;">
+        <div>Name</div><div>Email / WhatsApp</div><div>Preferred</div><div>Actions</div>
+      </div>${rows.replace(/grid-template-columns:130px 1fr 100px 90px 130px/g,'grid-template-columns:180px 1fr 120px 180px')}
+    </div>`;
+    // Wire per-row buttons
+    wrap.querySelectorAll('[data-edit]').forEach(btn =>
+      btn.addEventListener('click', () => openContactModal(kind, list.find(c => c.name === btn.dataset.edit))));
+    wrap.querySelectorAll('[data-delete]').forEach(btn =>
+      btn.addEventListener('click', () => deleteContact(kind, btn.dataset.delete)));
+    // Force row grid alignment
+    wrap.querySelectorAll('.bk-row').forEach(r => { r.style.gridTemplateColumns = '180px 1fr 120px 180px'; });
+  }
+
+  function openContactModal(kind, existing) {
+    contactKind = kind;
+    const label = kind.slice(0, -1); // "trucker" | "supplier"
+    $('contactModalTitle').textContent = existing ? `Edit ${label}` : `New ${label}`;
+    $('c_name').value     = existing?.name     || '';
+    $('c_name').disabled  = !!existing; // name is the key — don't allow rename via edit
+    $('c_whatsapp').value = existing?.whatsapp || '';
+    $('c_email').value    = existing?.email    || '';
+    $('c_group').value    = existing?.group_id || '';
+    $('c_mode').value     = existing?.preferred_mode || 'whatsapp';
+    // Reset group search/picker state — stale results from a previous open would confuse the user
+    $('c_group_search').value = '';
+    $('c_group_picker').style.display = 'none';
+    $('c_group_picker_list').innerHTML = '';
+    $('contactErr').style.display = 'none';
+    $('contactModal').style.display = 'flex';
+  }
+
+  function closeContactModal() {
+    $('contactModal').style.display = 'none';
+    $('c_name').disabled = false;
+    contactKind = null;
+  }
+
+  async function deleteContact(kind, name) {
+    if (!confirm(`Delete ${kind.slice(0,-1)} "${name}"?`)) return;
+    try {
+      const r = await fetch(`/api/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error('delete failed');
+      await loadContacts(kind);
+    } catch (e) { alert('Delete failed: ' + e.message); }
+  }
+
+  $('btnAddTrucker').addEventListener('click',  () => openContactModal('truckers', null));
+  $('btnAddSupplier').addEventListener('click', () => openContactModal('suppliers', null));
+  $('contactModalClose').addEventListener('click', closeContactModal);
+  $('contactCancel').addEventListener('click', closeContactModal);
+  $('contactModal').addEventListener('click', (e) => { if (e.target === $('contactModal')) closeContactModal(); });
+
+  $('contactSave').addEventListener('click', async () => {
+    const name = $('c_name').value.trim();
+    if (!name) {
+      $('contactErr').textContent = 'Name is required.';
+      $('contactErr').style.display = 'block';
+      return;
+    }
+    const whatsapp = $('c_whatsapp').value.trim().replace(/\D/g, '');
+    const email    = $('c_email').value.trim();
+    const mode     = $('c_mode').value;
+    if (mode === 'whatsapp' && !whatsapp && !$('c_group').value.trim()) {
+      $('contactErr').textContent = 'For WhatsApp preferred mode, provide a WhatsApp number or group ID.';
+      $('contactErr').style.display = 'block';
+      return;
+    }
+    if (mode === 'email' && !email) {
+      $('contactErr').textContent = 'For Email preferred mode, provide an email address.';
+      $('contactErr').style.display = 'block';
+      return;
+    }
+    $('contactErr').style.display = 'none';
+    const btn = $('contactSave');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
+    try {
+      const payload = { name, whatsapp: whatsapp || null, email: email || null,
+                        group_id: $('c_group').value.trim() || null, preferred_mode: mode };
+      const r = await fetch('/api/' + contactKind, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+      const kind = contactKind;
+      closeContactModal();
+      await loadContacts(kind);
+    } catch (e) {
+      $('contactErr').textContent = e.message;
+      $('contactErr').style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Save';
+    }
+  });
+
+  // ── WhatsApp status: banner + tab ──────────────────────────────────────
+  // Polls /api/whatsapp/status. Updates banner + WhatsApp tab. Auto-opens
+  // the tab if not connected on first load so user sees the QR immediately.
+  const WA_LABEL = {
+    initializing : { title:'Starting up',      sub:'Jarvis is booting the WhatsApp client…',            color:'#98A0AB', bg:'var(--steel-100)', ic:'…' },
+    qr           : { title:'Scan to connect',  sub:'Open WhatsApp on the Jarvis phone and scan this QR.',color:'#C98A1B', bg:'#FBEFD6',          ic:'📱' },
+    ready        : { title:'Connected',        sub:'Jarvis is online and receiving messages.',           color:'#3F9E5C', bg:'#EAF4EC',          ic:'✓'  },
+    disconnected : { title:'Disconnected',     sub:'Lost connection — reconnecting shortly.',            color:'#B3362A', bg:'#FAE2DE',          ic:'⚠' },
+    auth_failure : { title:'Sign-in failed',   sub:'WhatsApp rejected the session — click "Sign out & re-scan".', color:'#B3362A', bg:'#FAE2DE', ic:'⚠' },
+  };
+
+  let waLastStatus = null;
+  let waAutoOpened = false;
+
+  async function loadWhatsappStatus() {
+    try {
+      const r = await fetch('/api/whatsapp/status');
+      const d = await r.json();
+      renderWaState(d);
+      renderWaBanner(d);
+      waLastStatus = d.status;
+    } catch {
+      renderWaState({ status:'disconnected', lastError:'Cannot reach server' });
+      renderWaBanner({ status:'disconnected' });
+    }
+  }
+
+  function renderWaBanner(d) {
+    const banner = $('waBanner');
+    // Show banner in every state EXCEPT ready (ready = green tick doesn't need a banner).
+    if (d.status === 'ready') { banner.style.display = 'none'; return; }
+    const l = WA_LABEL[d.status] || WA_LABEL.disconnected;
+    banner.style.display = 'block';
+    banner.style.background = l.bg;
+    banner.style.color = l.color;
+    $('waBannerDot').style.background = l.color;
+    $('waBannerText').textContent = l.title + ' — click to open WhatsApp tab';
+    banner.onclick = () => {
+      document.querySelector('.tab[data-tab="whatsapp"]').click();
+    };
+  }
+
+  function renderWaState(d) {
+    const l = WA_LABEL[d.status] || WA_LABEL.disconnected;
+    $('waStateIcon').textContent  = l.ic;
+    $('waStateTitle').textContent = l.title;
+    $('waStateSub').textContent   = d.lastError || l.sub;
+    $('waStateTitle').style.color = l.color;
+
+    // QR rendering
+    const holder = $('waQrHolder');
+    if (d.status === 'qr' && d.qr) {
+      holder.style.display = 'block';
+      if (typeof QRCode !== 'undefined') {
+        $('waQr').innerHTML = '';
+        QRCode.toCanvas(d.qr, { width: 260, margin: 1 }, (err, canvas) => {
+          if (!err && canvas) $('waQr').appendChild(canvas);
+          else $('waQr').textContent = 'QR render failed — check console';
+        });
+      } else {
+        $('waQr').textContent = 'QR library not loaded (check network to jsdelivr)';
+      }
+    } else {
+      holder.style.display = 'none';
+    }
+
+    $('waMetaLine').textContent = d.lastChange ? 'Last change: ' + new Date(d.lastChange).toLocaleTimeString() : '';
+  }
+
+  $('btnWaReset').addEventListener('click', async () => {
+    if (!confirm('Sign out of WhatsApp and force a new QR scan? Any messages in the meantime will be dropped.')) return;
+    const btn = $('btnWaReset');
+    btn.disabled = true; btn.textContent = 'Signing out…';
+    try {
+      const r = await fetch('/api/whatsapp/reset', { method: 'POST' });
+      if (!r.ok) throw new Error((await r.json()).error || 'reset failed');
+    } catch (e) { alert('Reset failed: ' + e.message); }
+    btn.disabled = false; btn.textContent = 'Sign out & re-scan';
+    // Force immediate refresh; QR takes a few seconds to reappear
+    setTimeout(loadWhatsappStatus, 800);
+  });
+
+  // Poll every 3s regardless of active tab (banner needs to stay current)
+  loadWhatsappStatus();
+  setInterval(loadWhatsappStatus, 3000);
+
+  // Auto-open WhatsApp tab on first load if not connected — user's explicit spec
+  setTimeout(() => {
+    if (!waAutoOpened && waLastStatus && waLastStatus !== 'ready') {
+      waAutoOpened = true;
+      document.querySelector('.tab[data-tab="whatsapp"]').click();
+    }
+  }, 1500);
+
+  // ── Settings tab ────────────────────────────────────────────────────────
+  let teamMembers = []; // in-memory working copy; committed on Save
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      const s = await r.json();
+      $('s_manager_number').value = s.manager_number || '';
+      $('s_group_id').value       = s.team_group_id  || '';
+      teamMembers = Array.isArray(s.internal_team) ? s.internal_team.map(x => (
+        typeof x === 'string' ? { name: '', whatsapp: x, role: '' } : x
+      )) : [];
+      renderTeamList();
+      $('settingsError').style.display = 'none';
+      $('settingsSaved').style.display = 'none';
+      $('groupPicker').style.display   = 'none';
+    } catch (e) {
+      $('settingsError').textContent = 'Could not load settings: ' + e.message;
+      $('settingsError').style.display = 'block';
+    }
+  }
+
+  function renderTeamList() {
+    if (!teamMembers.length) {
+      $('teamList').innerHTML = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-faint); padding:14px; text-align:center; border:1px dashed var(--border-mid); border-radius:var(--radius-sm);">No team members. Click "+ Add member".</div>`;
+      return;
+    }
+    $('teamList').innerHTML = teamMembers.map((m, i) => `
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:10px; align-items:end; margin-bottom:10px;">
+        <div><label>Name</label><input type="text" data-team-field="name" data-team-index="${i}" value="${esc(m.name || '')}" placeholder="Full name"></div>
+        <div><label>WhatsApp</label><input type="text" data-team-field="whatsapp" data-team-index="${i}" value="${esc(m.whatsapp || '')}" placeholder="e.g. 918056944193"></div>
+        <div><label>Role</label><input type="text" data-team-field="role" data-team-index="${i}" value="${esc(m.role || '')}" placeholder="e.g. Ops Lead"></div>
+        <button type="button" class="btn-secondary" data-team-remove="${i}" style="padding:8px 12px; font-size:11px; color:var(--danger); border-color:var(--danger);">Remove</button>
+      </div>
+    `).join('');
+    $('teamList').querySelectorAll('[data-team-field]').forEach(inp => {
+      inp.addEventListener('input', (e) => {
+        const idx = +e.target.dataset.teamIndex;
+        teamMembers[idx][e.target.dataset.teamField] = e.target.value;
+      });
+    });
+    $('teamList').querySelectorAll('[data-team-remove]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        teamMembers.splice(+btn.dataset.teamRemove, 1);
+        renderTeamList();
+      });
+    });
+  }
+
+  $('btnAddTeamMember').addEventListener('click', () => {
+    teamMembers.push({ name: '', whatsapp: '', role: '' });
+    renderTeamList();
+  });
+
+  // ── Shared group-name validator ────────────────────────────────────────
+  // Used by Settings tab AND by the contact modal (truckers + suppliers).
+  // Args: DOM element IDs. Fills `targetInputId` when user picks a match.
+  async function runGroupValidator({ btnId, queryInputId, pickerId, pickerListId, targetInputId, errorHandler }) {
+    const q = $(queryInputId).value.trim();
+    if (!q) {
+      if (errorHandler) errorHandler('Type a group name (or part of one) to validate.');
+      return;
+    }
+    if (errorHandler) errorHandler(null);
+    const btn = $(btnId);
+    const originalLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Searching…';
+    try {
+      const r = await fetch('/api/whatsapp/find-groups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: q }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'lookup failed');
+      const groups = d.groups || [];
+      const list = $(pickerListId);
+      if (!groups.length) {
+        list.innerHTML = `<div style="font-size:12.5px; color:var(--text-muted);">No matches. Make sure the Jarvis phone is a member of the group first.</div>`;
+      } else {
+        list.innerHTML = groups.map(g => `
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);">
+            <div>
+              <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(g.name)}</div>
+              <div class="mono" style="font-size:11px; color:var(--text-faint);">${esc(g.id)} ${g.participants ? '· ' + g.participants + ' members' : ''}</div>
+            </div>
+            <button type="button" class="btn-secondary" data-pick-group="${esc(g.id)}" style="padding:6px 14px; font-size:10.5px;">Use this</button>
+          </div>
+        `).join('');
+        list.querySelectorAll('[data-pick-group]').forEach(b => {
+          b.addEventListener('click', () => {
+            $(targetInputId).value = b.dataset.pickGroup;
+            $(pickerId).style.display = 'none';
+          });
+        });
+      }
+      $(pickerId).style.display = 'block';
+    } catch (e) {
+      if (errorHandler) errorHandler('Validate failed: ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = originalLabel;
+    }
+  }
+
+  // Contact modal Validate button (Truckers + Suppliers modal)
+  $('c_group_validate').addEventListener('click', () => runGroupValidator({
+    btnId: 'c_group_validate',
+    queryInputId: 'c_group_search',
+    pickerId: 'c_group_picker',
+    pickerListId: 'c_group_picker_list',
+    targetInputId: 'c_group',
+    errorHandler: (msg) => {
+      if (msg) { $('contactErr').textContent = msg; $('contactErr').style.display = 'block'; }
+      else     { $('contactErr').style.display = 'none'; }
+    },
+  }));
+
+  $('btnValidateGroup').addEventListener('click', () => runGroupValidator({
+    btnId: 'btnValidateGroup',
+    queryInputId: 's_group_name',
+    pickerId: 'groupPicker',
+    pickerListId: 'groupPickerList',
+    targetInputId: 's_group_id',
+    errorHandler: (msg) => {
+      if (msg) { $('settingsError').textContent = msg; $('settingsError').style.display = 'block'; }
+      else     { $('settingsError').style.display = 'none'; }
+    },
+  }));
+
+  $('btnSaveSettings').addEventListener('click', async () => {
+    $('settingsError').style.display = 'none';
+    $('settingsSaved').style.display = 'none';
+    const managerNum = $('s_manager_number').value.trim().replace(/\D/g, '');
+    if (!managerNum) {
+      $('settingsError').textContent = 'Manager number is required.';
+      $('settingsError').style.display = 'block';
+      return;
+    }
+    // Strip empty team rows and normalise whatsapp field
+    const cleanedTeam = teamMembers
+      .filter(m => (m.name && m.name.trim()) || (m.whatsapp && m.whatsapp.trim()))
+      .map(m => ({
+        name: (m.name || '').trim(),
+        whatsapp: (m.whatsapp || '').replace(/\D/g, ''),
+        role: (m.role || '').trim(),
+      }));
+    const payload = {
+      manager_number: managerNum,
+      internal_team: cleanedTeam,
+      team_group_id: $('s_group_id').value.trim(),
+    };
+    const btn = $('btnSaveSettings');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
+    try {
+      const r = await fetch('/api/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+      $('settingsSaved').style.display = 'block';
+      setTimeout(() => { $('settingsSaved').style.display = 'none'; }, 2500);
+      // Reload to reflect any server-side normalisation
+      await loadSettings();
+    } catch (e) {
+      $('settingsError').textContent = e.message;
+      $('settingsError').style.display = 'block';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save changes';
     }
   });
 

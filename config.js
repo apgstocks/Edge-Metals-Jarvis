@@ -33,8 +33,9 @@ const APP_PASSWORD   = process.env.APP_PASSWORD || '';     // password gate for 
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
-const GDRIVE_KEYFILE   = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
-const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID || '';
+const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
+const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
+const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 
 // Default fallback groups (used only when a contact has no group and no number)
 const GROUP_TRUCKER  = process.env.GROUP_TRUCKER  || '';
@@ -45,7 +46,6 @@ const WORKFLOW_STAGES = [
     'not_started',
     'supplier_assigned',
     'forwarded',
-    'waiting_empty_drop',
     'empty_dropped',
     'load_ready',
     'picked_up',
@@ -57,7 +57,6 @@ const STEP_LABELS = {
     not_started        : 'Not Started',
     supplier_assigned  : 'Assigned to Supplier',
     forwarded          : 'Forwarded to Trucker',
-    waiting_empty_drop : 'Waiting for Empty Drop',
     empty_dropped      : 'Empty Dropped',
     load_ready         : 'Load Ready',
     picked_up          : 'Picked Up',
@@ -70,7 +69,6 @@ const STAGE_INDEX = {
     not_started        : 0,
     supplier_assigned  : 1,
     forwarded          : 2,
-    waiting_empty_drop : 2,
     empty_dropped      : 3,
     load_ready         : 4,
     picked_up          : 5,
@@ -133,7 +131,7 @@ module.exports = {
     ROOT, DATA_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, SESSION_PATH,
-    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID,
+    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
     GROUP_TRUCKER, GROUP_SUPPLIER,
     WORKFLOW_STAGES, STEP_LABELS, STAGE_INDEX, TERMINAL_STEPS,
     MAX_REMINDERS, URGENT_CUTOFF_DAYS, PENDING_EXPIRY_MS,
