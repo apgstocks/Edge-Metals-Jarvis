@@ -126,4 +126,17 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     return created.data;
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive };
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking };
+
+// ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
+// Fails soft: if the PDF isn't found, returns { deleted: false, reason: 'not_found' }.
+// Real errors (permission denied, network) throw so the caller can decide what to do.
+async function deletePdfByBooking(bkgNo) {
+    if (!bkgNo) throw new Error('booking number required');
+    const file = await findPdfByBooking(bkgNo);
+    if (!file) return { deleted: false, reason: 'not_found' };
+    const drive = getDrive();
+    await drive.files.delete({ fileId: file.id, supportsAllDrives: true });
+    console.log(`[DRIVE] Deleted ${file.name} (${file.id}) for booking ${bkgNo}`);
+    return { deleted: true, fileId: file.id, name: file.name };
+}

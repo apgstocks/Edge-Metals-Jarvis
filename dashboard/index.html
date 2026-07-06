@@ -368,25 +368,28 @@
         </div>
         <div>
           <label for="c_whatsapp">WhatsApp number</label>
-          <input id="c_whatsapp" type="text" placeholder="e.g. 14155551234 (no + or spaces)">
+          <div style="display:flex; gap:8px;">
+            <input id="c_whatsapp" type="text" placeholder="e.g. 14155551234 (no + or spaces)" style="flex:1;">
+            <button class="btn-secondary" id="c_verify_number" type="button" style="white-space:nowrap;">Verify</button>
+          </div>
+          <div id="c_verify_result" style="display:none; margin-top:8px; padding:8px 10px; border-radius:var(--radius-sm); font-size:12px; font-family:var(--mono);"></div>
         </div>
         <div>
           <label for="c_email">Email</label>
           <input id="c_email" type="email" placeholder="dave@example.com">
         </div>
         <div class="full">
-          <label for="c_group_search">WhatsApp group (optional — search Jarvis's groups)</label>
-          <div style="display:flex; gap:8px;">
-            <input id="c_group_search" type="text" placeholder="Type part of the group name (Jarvis must already be a member)" style="flex:1;">
-            <button class="btn-secondary" id="c_group_validate" type="button" style="white-space:nowrap;">Validate</button>
-          </div>
-          <div id="c_group_picker" style="display:none; margin-top:10px; padding:12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
-            <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Matches — pick one:</div>
-            <div id="c_group_picker_list"></div>
+          <label>WhatsApp group (optional)</label>
+          <div id="c_common_groups" style="display:none; padding:12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border); margin-bottom:10px;">
+            <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Shared groups with Jarvis:</div>
+            <div id="c_common_groups_list"></div>
+            <div id="c_common_groups_empty" style="display:none; padding:8px 0; font-size:12px; color:var(--text-muted); line-height:1.5;">
+              <strong>Shared groups: 0.</strong> WhatsApp only lets Jarvis see groups that both Jarvis <em>and</em> this contact belong to. If you want to route via a group, add both to the same group on your phone first, then re-verify.
+            </div>
           </div>
         </div>
         <div class="full">
-          <label for="c_group">Group ID (auto-filled by Validate, or paste manually)</label>
+          <label for="c_group">Group ID (auto-filled by selection above, or paste manually)</label>
           <input id="c_group" type="text" placeholder="e.g. 120363123456@g.us" style="font-family:var(--mono);">
         </div>
         <div>
@@ -662,19 +665,36 @@
     const rows = list.map(b => {
       const wf = workflow[b.booking_number] || {};
       const step = (wf.step || 'not_started').replace(/_/g, ' ');
-      return `<div class="bk-row">
+      return `<div class="bk-row" style="grid-template-columns:130px 1fr 100px 90px 130px 90px;">
         <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
         <div class="bk-cell-sub">${esc(b.buyer || b.consignee || wf.supplier || b.supplier || '—')}<br><span class="bk-cell-mono">${esc(b.container_number || '')}</span></div>
         <div class="bk-cell-mono">${esc(b.carrier || '—')}</div>
         <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
         <div><span class="bk-cell-pill">${esc(step)}</span></div>
+        <div><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);">Delete</button></div>
       </div>`;
     }).join('');
     $('bkList').innerHTML =
       `<div class="bk-table">
-        <div class="bk-hdr"><div>Booking</div><div>Buyer / Container</div><div>Carrier</div><div>Cutoff</div><div>Stage</div></div>
+        <div class="bk-hdr" style="grid-template-columns:130px 1fr 100px 90px 130px 90px;"><div>Booking</div><div>Buyer / Container</div><div>Carrier</div><div>Cutoff</div><div>Stage</div><div></div></div>
         ${rows}
       </div>`;
+    $('bkList').querySelectorAll('[data-bk-delete]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const bkg = btn.dataset.bkDelete;
+        if (!confirm(`Delete booking ${bkg}? This removes it from active list and workflow. The PDF stays in Drive.`)) return;
+        btn.disabled = true; btn.textContent = 'Deleting…';
+        try {
+          const r = await fetch('/api/bookings/' + encodeURIComponent(bkg), { method: 'DELETE' });
+          if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
+          await loadBookings();
+          await load(); // refresh Board too, since KPIs change
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+          btn.disabled = false; btn.textContent = 'Delete';
+        }
+      });
+    });
   }
 
   // ── Bookings tab: modal ─────────────────────────────────────────────────
@@ -906,10 +926,12 @@
     $('c_email').value    = existing?.email    || '';
     $('c_group').value    = existing?.group_id || '';
     $('c_mode').value     = existing?.preferred_mode || 'whatsapp';
-    // Reset group search/picker state — stale results from a previous open would confuse the user
-    $('c_group_search').value = '';
-    $('c_group_picker').style.display = 'none';
-    $('c_group_picker_list').innerHTML = '';
+    // Reset verify + common-groups state
+    $('c_verify_result').style.display = 'none';
+    $('c_verify_result').textContent = '';
+    $('c_common_groups').style.display = 'none';
+    $('c_common_groups_list').innerHTML = '';
+    $('c_common_groups_empty').style.display = 'none';
     $('contactErr').style.display = 'none';
     $('contactModal').style.display = 'flex';
   }
@@ -1173,18 +1195,80 @@
     }
   }
 
-  // Contact modal Validate button (Truckers + Suppliers modal)
-  $('c_group_validate').addEventListener('click', () => runGroupValidator({
-    btnId: 'c_group_validate',
-    queryInputId: 'c_group_search',
-    pickerId: 'c_group_picker',
-    pickerListId: 'c_group_picker_list',
-    targetInputId: 'c_group',
-    errorHandler: (msg) => {
-      if (msg) { $('contactErr').textContent = msg; $('contactErr').style.display = 'block'; }
-      else     { $('contactErr').style.display = 'none'; }
-    },
-  }));
+  // Contact modal: Verify WhatsApp number, then fetch shared groups
+  $('c_verify_number').addEventListener('click', async () => {
+    const raw = $('c_whatsapp').value.trim().replace(/\D/g, '');
+    if (raw.length < 8) {
+      $('contactErr').textContent = 'Enter a full WhatsApp number (country code + number, no + or spaces).';
+      $('contactErr').style.display = 'block';
+      return;
+    }
+    $('contactErr').style.display = 'none';
+    const btn = $('c_verify_number');
+    const originalLabel = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Checking…';
+    const result = $('c_verify_result');
+    result.style.display = 'block';
+    result.style.background = 'var(--steel-100)';
+    result.style.color = 'var(--text-muted)';
+    result.textContent = 'Contacting WhatsApp…';
+    try {
+      // 1. Verify number has WhatsApp
+      const vr = await fetch('/api/whatsapp/verify-number', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: raw }),
+      });
+      const vd = await vr.json();
+      if (!vr.ok) throw new Error(vd.error || 'verify failed');
+      if (!vd.registered) {
+        result.style.background = '#FAE2DE';
+        result.style.color = 'var(--danger-text)';
+        result.textContent = '✗ Not on WhatsApp';
+        $('c_common_groups').style.display = 'none';
+        return;
+      }
+      result.style.background = '#EAF4EC';
+      result.style.color = '#256B3B';
+      result.textContent = '✓ On WhatsApp' + (vd.formatted ? ' (' + vd.formatted + ')' : '');
+
+      // 2. Fetch shared groups
+      const cg = await fetch('/api/whatsapp/common-groups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: vd.contactId }),
+      });
+      const cd = await cg.json();
+      if (!cg.ok) throw new Error(cd.error || 'common-groups failed');
+      const groups = cd.groups || [];
+      $('c_common_groups').style.display = 'block';
+      if (!groups.length) {
+        $('c_common_groups_list').innerHTML = '';
+        $('c_common_groups_empty').style.display = 'block';
+      } else {
+        $('c_common_groups_empty').style.display = 'none';
+        $('c_common_groups_list').innerHTML = groups.map(g => `
+          <div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);">
+            <div>
+              <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(g.name)}</div>
+              <div class="mono" style="font-size:11px; color:var(--text-faint);">${esc(g.id)} ${g.participants ? '· ' + g.participants + ' members' : ''}</div>
+            </div>
+            <button type="button" class="btn-secondary" data-cg-pick="${esc(g.id)}" style="padding:6px 14px; font-size:10.5px;">Use this</button>
+          </div>
+        `).join('');
+        $('c_common_groups_list').querySelectorAll('[data-cg-pick]').forEach(b => {
+          b.addEventListener('click', () => {
+            $('c_group').value = b.dataset.cgPick;
+            // Per your Q1 answer: preferred_mode stays manual — do NOT auto-set it.
+          });
+        });
+      }
+    } catch (e) {
+      result.style.background = '#FAE2DE';
+      result.style.color = 'var(--danger-text)';
+      result.textContent = 'Verify failed: ' + e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = originalLabel;
+    }
+  });
 
   $('btnValidateGroup').addEventListener('click', () => runGroupValidator({
     btnId: 'btnValidateGroup',

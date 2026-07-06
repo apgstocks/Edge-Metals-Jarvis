@@ -123,6 +123,45 @@ waState.setGroupsLookupHandler(async (nameFragment) => {
     return groups;
 });
 
+// Called by POST /api/whatsapp/verify-number — checks a number has a WhatsApp account.
+// Returns { registered, contactId, formatted } — contactId is what getCommonGroups needs.
+waState.setVerifyNumberHandler(async (phoneNum) => {
+    if (!waReady) throw new Error('WhatsApp not ready');
+    const digits = String(phoneNum || '').replace(/\D/g, '');
+    if (digits.length < 8) throw new Error('phone number too short');
+    // getNumberId returns null if not a WhatsApp user; also normalises to WhatsApp's ID format.
+    const numberId = await client.getNumberId(digits);
+    if (!numberId) return { registered: false, contactId: null, formatted: null };
+    return {
+        registered : true,
+        contactId  : numberId._serialized,           // e.g. "14155551234@c.us"
+        formatted  : await client.getFormattedNumber(numberId._serialized).catch(() => digits),
+    };
+});
+
+// Called by POST /api/whatsapp/common-groups — groups Jarvis AND this contact share.
+// WhatsApp privacy: we cannot enumerate all groups a contact is in, only overlap with us.
+waState.setCommonGroupsHandler(async (contactId) => {
+    if (!waReady) throw new Error('WhatsApp not ready');
+    if (!contactId) return [];
+    const chatIds = await client.getCommonGroups(contactId);
+    // getCommonGroups returns an array of ChatId serialisations. Enrich each with name + size.
+    const groups = [];
+    for (const cid of chatIds.slice(0, 30)) {
+        try {
+            const chat = await client.getChatById(cid._serialized || cid);
+            groups.push({
+                id           : chat.id?._serialized || (cid._serialized || cid),
+                name         : chat.name || '(unnamed group)',
+                participants : chat.groupMetadata?.participants?.length || null,
+            });
+        } catch (e) {
+            console.warn('[WA] common-groups: could not fetch chat', cid, e.message);
+        }
+    }
+    return groups;
+});
+
 // Called by POST /api/whatsapp/reset — logs out, wipes session cache, reinitializes
 waState.setLogoutHandler(async () => {
     console.log('[WA] Logout requested — resetting session');

@@ -216,6 +216,23 @@ function createApi() {
     app.post('/api/bookings/:bkgNo/archive', async (req, res) => {
         res.json({ ok: await archiveBooking(req.params.bkgNo.toUpperCase(), 'manual_dashboard') });
     });
+    // REST alias — same effect as archive. Removes booking from active list and workflow.
+    // Also deletes the associated PDF from Drive. If PDF delete fails, we log and continue —
+    // the user's intent was "delete booking," and leaving the booking in the list because
+    // Drive is temporarily down is worse UX than an orphaned PDF.
+    app.delete('/api/bookings/:bkgNo', async (req, res) => {
+        const bkgNo = req.params.bkgNo.toUpperCase();
+        const archived = await archiveBooking(bkgNo, 'manual_dashboard');
+        let pdf = null;
+        try {
+            const { deletePdfByBooking } = require('./helpers/drive');
+            pdf = await deletePdfByBooking(bkgNo);
+        } catch (err) {
+            console.error(`[API] PDF delete failed for ${bkgNo} (booking still archived):`, err.message);
+            pdf = { deleted: false, error: err.message };
+        }
+        res.json({ ok: archived, pdf });
+    });
     app.get('/api/history', (req, res) => res.json(loadHistory()));
 
     // ── Documents: PDF scan + Drive upload ────────────────────────────────────
@@ -349,6 +366,34 @@ function createApi() {
             res.json({ ok: true, groups });
         } catch (err) {
             console.error('[API] whatsapp/find-groups failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Verify a phone number has WhatsApp. Returns { registered, contactId, formatted }.
+    // Rate-limit vector on public dashboards: someone could enumerate valid WhatsApp
+    // numbers. Currently gated by APP_PASSWORD (set to a strong value before VM).
+    app.post('/api/whatsapp/verify-number', async (req, res) => {
+        try {
+            const waState = require('./helpers/wa-state');
+            const result = await waState.verifyNumber(req.body?.number || '');
+            res.json({ ok: true, ...result });
+        } catch (err) {
+            console.error('[API] whatsapp/verify-number failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // List groups this contact shares with Jarvis. WhatsApp privacy: we cannot see
+    // groups the contact is in that Jarvis isn't. If empty, Jarvis + contact are
+    // not in any common group yet — user must add Jarvis to the target group first.
+    app.post('/api/whatsapp/common-groups', async (req, res) => {
+        try {
+            const waState = require('./helpers/wa-state');
+            const groups = await waState.findCommonGroups(req.body?.contactId || '');
+            res.json({ ok: true, groups });
+        } catch (err) {
+            console.error('[API] whatsapp/common-groups failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });

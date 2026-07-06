@@ -44,4 +44,22 @@ async function findGroups(nameFragment) {
     return state._findGroups(nameFragment);
 }
 
-module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups };
+// Number verification — checks a phone number has WhatsApp
+function setVerifyNumberHandler(fn) { state._verifyNumber = fn; }
+async function verifyNumber(phoneNum) {
+    if (typeof state._verifyNumber !== 'function') {
+        throw new Error('verify-number not registered (WhatsApp not ready yet?)');
+    }
+    return state._verifyNumber(phoneNum);
+}
+
+// Common groups — returns groups that Jarvis AND the given number both belong to
+function setCommonGroupsHandler(fn) { state._commonGroups = fn; }
+async function findCommonGroups(contactId) {
+    if (typeof state._commonGroups !== 'function') {
+        throw new Error('common-groups not registered (WhatsApp not ready yet?)');
+    }
+    return state._commonGroups(contactId);
+}
+
+module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups };
