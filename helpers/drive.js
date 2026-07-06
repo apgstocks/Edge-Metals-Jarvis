@@ -24,9 +24,11 @@ function getDrive() {
     const { google } = require('googleapis');
     const auth = new google.auth.GoogleAuth({
         keyFile: cfg.GDRIVE_KEYFILE,
-        // drive.file: read/write only files created by or shared with the SA.
-        // Safer than drive.readwrite, avoids seeing the whole workspace.
-        scopes : ['https://www.googleapis.com/auth/drive.file'],
+        // drive: read/write/delete access to any file in Shared Drives the SA is a member of.
+        // Broader than drive.file (which restricts to files created by this SA session), but
+        // Edge Bot Shared Drive is dedicated to Jarvis — no other files live there.
+        // Fixes "File not found" on delete for files uploaded in prior SA sessions.
+        scopes : ['https://www.googleapis.com/auth/drive'],
     });
     driveClient = google.drive({ version: 'v3', auth });
     return driveClient;
