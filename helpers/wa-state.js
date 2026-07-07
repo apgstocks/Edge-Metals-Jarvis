@@ -1,6 +1,10 @@
 // ── helpers/wa-state.js — shared WhatsApp connection state ─────────────────
 // Written by index.js (client event handlers); read by api.js (/api/whatsapp/*).
-// Not persisted — resets to disconnected on process start, which is correct.
+// Also owns sendCapture: an AsyncLocalStorage used by /api/bot/command to
+// intercept sendMessage calls per-request without changing workflow/actions.js.
+
+const { AsyncLocalStorage } = require('async_hooks');
+const sendCapture = new AsyncLocalStorage();
 
 const state = {
     status: 'initializing', // 'initializing' | 'qr' | 'ready' | 'disconnected' | 'auth_failure'
@@ -62,4 +66,4 @@ async function findCommonGroups(contactId) {
     return state._commonGroups(contactId);
 }
 
-module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups };
+module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups, sendCapture };

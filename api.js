@@ -216,6 +216,79 @@ function createApi() {
     app.post('/api/bookings/:bkgNo/archive', async (req, res) => {
         res.json({ ok: await archiveBooking(req.params.bkgNo.toUpperCase(), 'manual_dashboard') });
     });
+
+    // ── Per-container CRUD (Phase 1 of multi-container refactor) ──────────
+    // Update one container's fields. Only whitelisted fields writable.
+    app.put('/api/bookings/:bkgNo/containers/:seq', async (req, res) => {
+        const bkg = req.params.bkgNo.toUpperCase();
+        const seq = parseInt(req.params.seq, 10);
+        const allowed = ['size','container_number','supplier','trucker','stage'];
+        const patch = {};
+        for (const k of allowed) if (k in req.body) patch[k] = req.body[k];
+        const { migrate } = require('./helpers/containers');
+        const all = loadBookings();
+        if (!all[bkg]) return res.status(400).json({ error: 'booking not found' });
+        const migrated = migrate(all[bkg]);
+        if (!migrated.containers.find(c => c.seq === seq)) {
+            return res.status(400).json({ error: `container seq=${seq} not found` });
+        }
+        await mutateJson(cfg.BOOKINGS_FILE, {}, all2 => {
+            if (!all2[bkg]) return all2;
+            all2[bkg] = migrate(all2[bkg]);
+            const c = all2[bkg].containers.find(x => x.seq === seq);
+            if (c) Object.assign(c, patch);
+            return all2;
+        });
+        res.json({ ok: true });
+    });
+
+    // Add a container (increment seq)
+    app.post('/api/bookings/:bkgNo/containers', async (req, res) => {
+        const bkg = req.params.bkgNo.toUpperCase();
+        const { migrate } = require('./helpers/containers');
+        const all = loadBookings();
+        if (!all[bkg]) return res.status(400).json({ error: 'booking not found' });
+        await mutateJson(cfg.BOOKINGS_FILE, {}, all2 => {
+            if (!all2[bkg]) return all2;
+            all2[bkg] = migrate(all2[bkg]);
+            const nextSeq = Math.max(0, ...all2[bkg].containers.map(c => c.seq)) + 1;
+            all2[bkg].containers.push({
+                seq              : nextSeq,
+                size             : req.body?.size || all2[bkg].containers[0]?.size || null,
+                container_number : req.body?.container_number || null,
+                supplier         : req.body?.supplier || null,
+                trucker          : req.body?.trucker || null,
+                stage            : 'not_started',
+                pdf_drive_id     : null,
+                pdf_uploaded_at  : null,
+            });
+            return all2;
+        });
+        res.json({ ok: true });
+    });
+
+    // Delete a container from a booking (must leave at least 1)
+    app.delete('/api/bookings/:bkgNo/containers/:seq', async (req, res) => {
+        const bkg = req.params.bkgNo.toUpperCase();
+        const seq = parseInt(req.params.seq, 10);
+        const { migrate } = require('./helpers/containers');
+        const all = loadBookings();
+        if (!all[bkg]) return res.status(400).json({ error: 'booking not found' });
+        const migrated = migrate(all[bkg]);
+        if (migrated.containers.length <= 1) {
+            return res.status(400).json({ error: 'cannot delete the last container — delete the booking instead' });
+        }
+        if (!migrated.containers.find(c => c.seq === seq)) {
+            return res.status(400).json({ error: `container seq=${seq} not found` });
+        }
+        await mutateJson(cfg.BOOKINGS_FILE, {}, all2 => {
+            if (!all2[bkg]) return all2;
+            all2[bkg] = migrate(all2[bkg]);
+            all2[bkg].containers = all2[bkg].containers.filter(c => c.seq !== seq);
+            return all2;
+        });
+        res.json({ ok: true });
+    });
     // REST alias — same effect as archive. Removes booking from active list and workflow.
     // Also deletes the associated PDF from Drive. If PDF delete fails, we log and continue —
     // the user's intent was "delete booking," and leaving the booking in the list because
@@ -394,6 +467,52 @@ function createApi() {
             res.json({ ok: true, groups });
         } catch (err) {
             console.error('[API] whatsapp/common-groups failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── Bot command surface — mimic WhatsApp interactions from the web ─────
+    // Injects manager identity into a fake inbound message, runs the same
+    // brain.process() pipeline, and captures whatever the bot would have sent
+    // TO THE MANAGER via a per-request AsyncLocalStorage. Sends to truckers/
+    // suppliers/team groups still fire on WhatsApp for real — per user's
+    // "Real fire" choice.
+    app.post('/api/bot/command', async (req, res) => {
+        const text = String(req.body?.text || '').trim();
+        if (!text) return res.status(400).json({ error: 'text required' });
+        try {
+            const brain = require('./workflow/brain');
+            const { sendCapture } = require('./helpers/wa-state');
+            const settings = cfg.getSettings();
+            const managerNum = settings.manager_number || cfg.MANAGER_NUMBER;
+            if (!managerNum) return res.status(400).json({ error: 'MANAGER_NUMBER not configured' });
+            const chatId = managerNum + '@c.us';
+            const inbound = {
+                chatId,
+                senderNumber: chatId,
+                senderName  : 'Web',
+                text,
+                hasMedia    : false,
+                _source     : 'web',
+            };
+            // brain.process needs a sendMessage function. In the WhatsApp path,
+            // index.js passes its own sendMessage. Here we need the same one so
+            // sendCapture (in AsyncLocalStorage) intercepts correctly. Lazy-
+            // require to avoid circular boot (api.js loaded from index.js).
+            let realSendMessage;
+            try {
+                realSendMessage = global.__jarvisSendMessage;
+                if (!realSendMessage) throw new Error('sendMessage bridge not initialised — check index.js exposes it on global');
+            } catch (e) {
+                return res.status(500).json({ error: e.message });
+            }
+            const capture = { replies: [] };
+            await sendCapture.run(capture, async () => {
+                await brain.process(inbound, realSendMessage);
+            });
+            res.json({ ok: true, replies: capture.replies });
+        } catch (err) {
+            console.error('[API] bot/command failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });

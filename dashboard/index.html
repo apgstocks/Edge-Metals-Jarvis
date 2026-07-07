@@ -213,6 +213,7 @@
   <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
   <button class="tab" data-tab="whatsapp" type="button">WhatsApp</button>
   <button class="tab" data-tab="settings" type="button">Settings</button>
+  <button class="tab" data-tab="bot" type="button">Bot</button>
   <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
 </div>
 
@@ -353,6 +354,29 @@
 </div>
 </div>
 
+<div class="tabpanel" id="panel-bot">
+<div class="container">
+  <div class="bk-head">
+    <h2>Bot</h2>
+    <div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Commands fire <strong style="color:var(--danger);">for real</strong> — same effect as messaging Jarvis on WhatsApp.</div>
+  </div>
+
+  <div id="botLog" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); min-height:340px; max-height:60vh; overflow-y:auto; padding:18px 20px; margin-bottom:14px; display:flex; flex-direction:column; gap:10px;">
+    <div style="color:var(--text-faint); font-family:var(--mono); font-size:11.5px; text-align:center; padding:40px 0;">
+      Type a command below. Try <code>menu</code>, <code>urgent</code>, or <code>status DALA23991600</code>.
+    </div>
+  </div>
+
+  <div style="display:flex; gap:8px;">
+    <input id="botInput" type="text" placeholder="Type command and press Enter (e.g. forward DALA23991600 to Dave)" style="flex:1; font-family:var(--mono);">
+    <button class="btn-primary" id="botSend" type="button" style="white-space:nowrap;">Send</button>
+  </div>
+  <div style="margin-top:8px; font-size:11px; color:var(--text-faint); font-family:var(--mono);">
+    ⚠ No confirmation prompt — destructive commands (forward, assign, archive) fire immediately.
+  </div>
+</div>
+</div>
+
 <!-- Contact modal (shared between Trucker/Supplier add/edit) -->
 <div class="modal-back" id="contactModal" style="display:none">
   <div class="modal">
@@ -438,14 +462,6 @@
           <input id="f_carrier" type="text" placeholder="MSC, Maersk…">
         </div>
         <div>
-          <label for="f_size">Container size</label>
-          <select id="f_size">
-            <option value="">—</option>
-            <option>20GP</option><option>40GP</option><option selected>40HC</option>
-            <option>20RF</option><option>40RF</option><option>45HC</option>
-          </select>
-        </div>
-        <div>
           <label for="f_pol">Port of loading</label>
           <input id="f_pol" type="text" placeholder="Houston">
         </div>
@@ -466,12 +482,15 @@
           <input id="f_vessel" type="text" placeholder="MSC AURORA 226E">
         </div>
         <div>
-          <label for="f_container">Container number</label>
-          <input id="f_container" type="text" placeholder="TCLU8841207">
-        </div>
-        <div>
           <label for="f_buyer">Buyer</label>
           <input id="f_buyer" type="text">
+        </div>
+        <div class="full" style="margin-top:6px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <label style="margin-bottom:0;">Containers</label>
+            <button type="button" class="btn-secondary" id="f_add_container" style="padding:5px 10px; font-size:10px;">+ Add container</button>
+          </div>
+          <div id="f_containers_list" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
       </div>
 
@@ -637,6 +656,7 @@
       if (target === 'suppliers') loadContacts('suppliers');
       if (target === 'whatsapp')  loadWhatsappStatus();
       if (target === 'settings')  loadSettings();
+      if (target === 'bot')       setTimeout(() => $('botInput').focus(), 50);
     });
   });
 
@@ -662,35 +682,73 @@
       $('bkList').innerHTML = `<div class="bk-list-empty">No bookings yet. Click "Add booking" to upload a PDF and let Jarvis extract the fields.</div>`;
       return;
     }
+    // Multi-container-aware: booking row shows container count; click chevron to expand per-container detail.
     const rows = list.map(b => {
       const wf = workflow[b.booking_number] || {};
+      const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{seq:1, size:b.container_size, container_number:b.container_number, stage:'not_started'}];
       const step = (wf.step || 'not_started').replace(/_/g, ' ');
-      return `<div class="bk-row" style="grid-template-columns:130px 1fr 100px 90px 130px 90px;">
-        <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
-        <div class="bk-cell-sub">${esc(b.buyer || b.consignee || wf.supplier || b.supplier || '—')}<br><span class="bk-cell-mono">${esc(b.container_number || '')}</span></div>
-        <div class="bk-cell-mono">${esc(b.carrier || '—')}</div>
-        <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
-        <div><span class="bk-cell-pill">${esc(step)}</span></div>
-        <div><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);">Delete</button></div>
+      const cCount = containers.length;
+      const cLabel = cCount === 1 ? '1 container' : `${cCount} containers`;
+      const stagesSet = new Set(containers.map(c => c.stage || 'not_started'));
+      const stageLabel = stagesSet.size === 1 ? [...stagesSet][0].replace(/_/g,' ') : `${stagesSet.size} stages`;
+
+      const containerRows = containers.map(c => {
+        const assigned = c.supplier || c.trucker;
+        const assignedLabel = c.supplier && c.trucker ? `${c.supplier} → ${c.trucker}` : (c.supplier || c.trucker || '—');
+        return `<div style="display:grid; grid-template-columns:60px 1fr 140px 120px 90px; gap:12px; padding:9px 18px 9px 44px; border-top:1px solid var(--border); align-items:center; font-size:12px; background:var(--steel-100);">
+          <div class="bk-cell-mono" style="color:var(--copper-700); font-weight:700;">#${c.seq}</div>
+          <div class="bk-cell-mono">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div>
+          <div class="bk-cell-mono" style="color:${assigned ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(assignedLabel)}</div>
+          <div><span class="bk-cell-pill">${esc((c.stage || 'not_started').replace(/_/g,' '))}</span></div>
+          <div></div>
+        </div>`;
+      }).join('');
+
+      return `<div class="bk-row-group" data-bkg="${esc(b.booking_number)}">
+        <div class="bk-row" style="grid-template-columns:30px 130px 1fr 100px 90px 130px 90px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}">
+          <div style="text-align:center; color:var(--text-faint); font-family:var(--mono);">▸</div>
+          <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
+          <div class="bk-cell-sub">${esc(b.buyer || b.consignee || wf.supplier || b.supplier || '—')}<br><span class="bk-cell-mono">${esc(cLabel)}</span></div>
+          <div class="bk-cell-mono">${esc(b.carrier || '—')}</div>
+          <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
+          <div><span class="bk-cell-pill">${esc(stageLabel)}</span></div>
+          <div><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);" onclick="event.stopPropagation();">Delete</button></div>
+        </div>
+        <div class="bk-containers" style="display:none;">${containerRows}</div>
       </div>`;
     }).join('');
     $('bkList').innerHTML =
       `<div class="bk-table">
-        <div class="bk-hdr" style="grid-template-columns:130px 1fr 100px 90px 130px 90px;"><div>Booking</div><div>Buyer / Container</div><div>Carrier</div><div>Cutoff</div><div>Stage</div><div></div></div>
+        <div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 100px 90px 130px 90px;"><div></div><div>Booking</div><div>Buyer / Containers</div><div>Carrier</div><div>Cutoff</div><div>Stage</div><div></div></div>
         ${rows}
       </div>`;
+
+    // Expand/collapse
+    $('bkList').querySelectorAll('[data-bk-expand]').forEach(row => {
+      row.addEventListener('click', () => {
+        const wrap = row.closest('.bk-row-group');
+        const detail = wrap.querySelector('.bk-containers');
+        const chev = row.querySelector('div:first-child');
+        const isOpen = detail.style.display !== 'none';
+        detail.style.display = isOpen ? 'none' : 'block';
+        chev.textContent = isOpen ? '▸' : '▾';
+      });
+    });
+
+    // Delete (unchanged from earlier)
     $('bkList').querySelectorAll('[data-bk-delete]').forEach(btn => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
         const bkg = btn.dataset.bkDelete;
-        if (!confirm(`Delete booking ${bkg}? This removes it from active list and workflow. The PDF stays in Drive.`)) return;
+        if (!confirm(`Delete booking ${bkg}? This removes it from active list and workflow. The PDF is moved to Drive trash (auto-purged after 30 days).`)) return;
         btn.disabled = true; btn.textContent = 'Deleting…';
         try {
           const r = await fetch('/api/bookings/' + encodeURIComponent(bkg), { method: 'DELETE' });
           if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
           await loadBookings();
-          await load(); // refresh Board too, since KPIs change
-        } catch (e) {
-          alert('Delete failed: ' + e.message);
+          await load();
+        } catch (e2) {
+          alert('Delete failed: ' + e2.message);
           btn.disabled = false; btn.textContent = 'Delete';
         }
       });
@@ -705,8 +763,9 @@
     reset() {
       modalPdfBase64 = null;
       modalPdfFile   = null;
-      ['f_bkg','f_carrier','f_pol','f_pod','f_erd','f_cutoff','f_vessel','f_container','f_buyer'].forEach(id => { $(id).value = ''; });
-      $('f_size').value = '40HC';
+      ['f_bkg','f_carrier','f_pol','f_pod','f_erd','f_cutoff','f_vessel','f_buyer'].forEach(id => { $(id).value = ''; });
+      modalContainers = [{ seq:1, size:'40HC', container_number:'', supplier:'', trucker:'', stage:'not_started' }];
+      renderContainersInModal();
       $('formErr').style.display = 'none';
       $('scannedBanner').style.display = 'none';
       $('scanBtn').style.display = 'none';
@@ -715,6 +774,61 @@
     },
   };
   let modalPdfBase64 = null, modalPdfFile = null;
+  let modalContainers = [];
+
+  function renderContainersInModal() {
+    const wrap = $('f_containers_list');
+    const SIZES = ['20GP','40GP','40HC','20RF','40RF','45HC'];
+    wrap.innerHTML = modalContainers.map((c, i) => `
+      <div style="display:grid; grid-template-columns:60px 100px 1fr 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+        <div>
+          <label style="font-size:9px;">Seq</label>
+          <div class="bk-cell-mono" style="padding:9px 12px; font-weight:700; color:var(--copper-700);">#${c.seq}</div>
+        </div>
+        <div>
+          <label style="font-size:9px;">Size</label>
+          <select data-c-field="size" data-c-idx="${i}">
+            <option value="">—</option>
+            ${SIZES.map(s => `<option ${c.size === s ? 'selected' : ''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:9px;">Container number (optional)</label>
+          <input type="text" data-c-field="container_number" data-c-idx="${i}" value="${esc(c.container_number || '')}" placeholder="TCLU8841207">
+        </div>
+        <div>
+          <button type="button" class="btn-secondary" data-c-remove="${i}" style="padding:9px 8px; font-size:11px; color:var(--danger); border-color:var(--danger);" title="Remove container" ${modalContainers.length <= 1 ? 'disabled' : ''}>×</button>
+        </div>
+      </div>
+    `).join('');
+    wrap.querySelectorAll('[data-c-field]').forEach(el => {
+      el.addEventListener('input', (e) => {
+        const idx = +e.target.dataset.cIdx;
+        modalContainers[idx][e.target.dataset.cField] = e.target.value;
+      });
+      el.addEventListener('change', (e) => {
+        const idx = +e.target.dataset.cIdx;
+        modalContainers[idx][e.target.dataset.cField] = e.target.value;
+      });
+    });
+    wrap.querySelectorAll('[data-c-remove]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (modalContainers.length <= 1) return;
+        modalContainers.splice(+btn.dataset.cRemove, 1);
+        // Reassign seq to stay 1..N
+        modalContainers.forEach((c, i) => { c.seq = i + 1; });
+        renderContainersInModal();
+      });
+    });
+  }
+
+  // Wire add button (element exists at load time — IIFE runs after body)
+  $('f_add_container').addEventListener('click', () => {
+    const nextSeq = modalContainers.length ? Math.max(...modalContainers.map(c => c.seq)) + 1 : 1;
+    const defaultSize = modalContainers[0]?.size || '40HC';
+    modalContainers.push({ seq: nextSeq, size: defaultSize, container_number: '', supplier: '', trucker: '', stage: 'not_started' });
+    renderContainersInModal();
+  });
 
   function renderDrop() {
     const dz = $('dropZone');
@@ -794,10 +908,32 @@
       if (f.erd_date)         $('f_erd').value       = f.erd_date;
       if (f.cutoff_date)      $('f_cutoff').value    = f.cutoff_date;
       if (f.vessel_voyage)    $('f_vessel').value    = f.vessel_voyage;
-      if (f.container_number) $('f_container').value = f.container_number;
       if (f.buyer)            $('f_buyer').value     = f.buyer;
       else if (f.consignee)   $('f_buyer').value     = f.consignee;
-      if (f.container_size)   $('f_size').value      = f.container_size;
+
+      // Multi-container: parse 'SIZE X COUNT' pattern from container_size.
+      // Matches "40HC X 3", "40HC*3", "20GP x 2". Falls back to single container.
+      if (f.container_size) {
+        const raw = String(f.container_size).trim();
+        const m = raw.match(/^\s*(\d+[A-Z]{2,3})\s*[xX*]\s*(\d+)\s*$/);
+        let size, count;
+        if (m) { size = m[1]; count = parseInt(m[2], 10) || 1; }
+        else   { size = raw;  count = 1; }
+        modalContainers = [];
+        for (let i = 1; i <= count; i++) {
+          modalContainers.push({
+            seq: i, size,
+            container_number: (i === 1 && f.container_number) ? f.container_number : '',
+            supplier: '', trucker: '', stage: 'not_started',
+          });
+        }
+        renderContainersInModal();
+      } else if (f.container_number) {
+        // Only container number, no size — set on container 1
+        modalContainers[0].container_number = f.container_number;
+        renderContainersInModal();
+      }
+
       $('scannedBanner').style.display = 'block';
       $('scanBtn').style.display = 'none';
     } catch (err) {
@@ -824,14 +960,20 @@
       const payload = {
         booking_number   : bkg,
         carrier          : $('f_carrier').value.trim()  || null,
-        container_size   : $('f_size').value            || null,
         port_of_loading  : $('f_pol').value.trim()      || null,
         port_of_discharge: $('f_pod').value.trim()      || null,
         erd_date         : $('f_erd').value.trim()      || null,
         cutoff_date      : $('f_cutoff').value.trim()   || null,
         vessel_voyage    : $('f_vessel').value.trim()   || null,
-        container_number : $('f_container').value.trim()|| null,
         buyer            : $('f_buyer').value.trim()    || null,
+        containers       : modalContainers.map(c => ({
+          seq              : c.seq,
+          size             : c.size || null,
+          container_number : (c.container_number || '').trim() || null,
+          supplier         : c.supplier || null,
+          trucker          : c.trucker || null,
+          stage            : c.stage || 'not_started',
+        })),
       };
       const bkRes = await fetch('/api/bookings', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1322,6 +1464,60 @@
     } finally {
       btn.disabled = false; btn.textContent = 'Save changes';
     }
+  });
+
+  // ── Bot tab: send commands, log replies ────────────────────────────────
+  function botAppend(kind, text, media) {
+    const log = $('botLog');
+    // Clear placeholder on first message
+    if (log.querySelector('div[style*="Type a command"]')) log.innerHTML = '';
+    const wrap = document.createElement('div');
+    const isMe = kind === 'me';
+    wrap.style.cssText = `display:flex; ${isMe ? 'justify-content:flex-end;' : 'justify-content:flex-start;'}`;
+    const bubble = document.createElement('div');
+    bubble.style.cssText = `max-width:75%; padding:9px 13px; border-radius:${isMe ? '14px 14px 3px 14px' : '14px 14px 14px 3px'}; background:${isMe ? 'var(--copper-600)' : 'var(--steel-100)'}; color:${isMe ? '#fff' : 'var(--text-strong)'}; font-family:${isMe ? 'var(--mono)' : 'var(--sans)'}; font-size:${isMe ? '12.5px' : '13px'}; line-height:1.45; white-space:pre-wrap; word-break:break-word;`;
+    bubble.textContent = text || '';
+    if (media) {
+      const attach = document.createElement('div');
+      attach.style.cssText = 'margin-top:6px; padding:6px 8px; background:rgba(0,0,0,.08); border-radius:6px; font-size:11px; font-family:var(--mono);';
+      attach.textContent = '📎 ' + (media.filename || '(attachment)');
+      bubble.appendChild(attach);
+    }
+    wrap.appendChild(bubble);
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function botSend() {
+    const text = $('botInput').value.trim();
+    if (!text) return;
+    $('botInput').value = '';
+    botAppend('me', text, null);
+    const btn = $('botSend');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/bot/command', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'command failed');
+      if (!d.replies?.length) {
+        botAppend('bot', '(no reply from Jarvis)', null);
+      } else {
+        d.replies.forEach(rep => botAppend('bot', rep.text, rep.media));
+      }
+    } catch (e) {
+      botAppend('bot', '⚠ ' + e.message, null);
+    } finally {
+      btn.disabled = false;
+      $('botInput').focus();
+    }
+  }
+
+  $('botSend').addEventListener('click', botSend);
+  $('botInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); botSend(); }
   });
 
 })();

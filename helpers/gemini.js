@@ -86,8 +86,8 @@ Schema (every field can be null if not present):
   "erd_date": null,         // MM/DD/YYYY format — Earliest Return Date
   "etd": null,              // MM/DD/YYYY
   "vessel_voyage": null,    // e.g. "MSC AURORA 226E"
-  "container_size": null,   // one of: 20GP, 40GP, 40HC, 20RF, 40RF, 45HC
-  "container_number": null, // e.g. "TCLU8841207"
+  "container_size": null,   // format "40HC" (single) or "40HC X 3" (three containers of 40HC). Multiple containers common in metals bookings.
+  "container_number": null, // e.g. "TCLU8841207". If multiple, use first only; others assigned later per-container.
   "shipper": null,
   "consignee": null,
   "buyer": null             // often same as consignee

@@ -11,6 +11,7 @@ const cfg  = require('./config');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const waState = require('./helpers/wa-state');
+const { sendCapture } = waState;
 
 const brain     = require('./workflow/brain');
 const actions   = require('./workflow/actions');
@@ -45,6 +46,20 @@ let waReady = false;
 
 // ── Messaging primitives (everything sends through these) ─────────────────────
 async function sendMessage(chatId, text, media = null) {
+    // Per-request web interception: if this call is inside a bot-command
+    // request AND destined for the manager chat, buffer the reply for the
+    // web response instead of sending to WhatsApp. Other destinations
+    // (truckers, suppliers, team groups) still fire for real — user chose
+    // "Real fire" for the web bot command surface.
+    const capture = sendCapture.getStore();
+    if (capture) {
+        const managerChatId = (cfg.getSettings().manager_number || cfg.MANAGER_NUMBER) + '@c.us';
+        if (chatId === managerChatId) {
+            capture.replies.push({ chatId, text: text || null, media: media ? { filename: media.filename, mimetype: media.mimetype } : null });
+            return true;
+        }
+        // else: falls through to real WhatsApp send below
+    }
     if (!waReady) { console.warn(`[SEND] WA not ready — dropped message to ${chatId}`); return false; }
     if (!chatId)  { console.warn('[SEND] No chatId'); return false; }
     try {
@@ -76,6 +91,11 @@ async function sendToTeam(text) {
 // ── Wire modules ───────────────────────────────────────────────────────────────
 alerts.init({ sendToManager });
 actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAlert });
+
+// Bridge for the /api/bot/command endpoint — brain.process() takes a sendMessage
+// argument, and api.js needs to pass the SAME sendMessage that has the capture
+// logic. Global bridge avoids circular require (api ← index).
+global.__jarvisSendMessage = sendMessage;
 scheduler.init({ sendToManager, sendToTeam });
 
 // ── HTTP up first — dashboard usable while WA scans QR ─────────────────────────

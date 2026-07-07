@@ -62,7 +62,13 @@ async function mutateJson(filePath, defaultVal, mutator) {
 }
 
 // ── Typed loaders (sync reads are fine — writes are the danger) ───────────────
-const loadBookings  = () => loadJson(cfg.BOOKINGS_FILE,  {});
+// Bookings always come back with containers[] populated (auto-migrated from
+// legacy flat shape). All downstream code — dashboard, brain, actions,
+// scheduler — can rely on booking.containers being an array of ≥1 entries.
+const loadBookings  = () => {
+    const { migrateAll } = require('./containers');
+    return migrateAll(loadJson(cfg.BOOKINGS_FILE, {}));
+};
 const loadWorkflow  = () => loadJson(cfg.WORKFLOW_FILE,  {});
 const loadHistory   = () => loadJson(cfg.HISTORY_FILE,   {});
 const loadTruckers  = () => loadJson(cfg.TRUCKERS_FILE,  []);
