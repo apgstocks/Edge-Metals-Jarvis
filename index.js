@@ -96,7 +96,7 @@ actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAle
 // argument, and api.js needs to pass the SAME sendMessage that has the capture
 // logic. Global bridge avoids circular require (api ← index).
 global.__jarvisSendMessage = sendMessage;
-scheduler.init({ sendToManager, sendToTeam });
+scheduler.init({ sendToManager, sendToTeam, sendMessage });
 
 // ── HTTP up first — dashboard usable while WA scans QR ─────────────────────────
 const app = createApi();

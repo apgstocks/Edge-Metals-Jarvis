@@ -12,10 +12,11 @@ const { stepLabel }               = require('./helpers/booking');
 const { pushAlert }               = require('./alerts');
 const cfg = require('./config');
 
-let _sendToManager = async () => {}, _sendToTeam = async () => {};
-function init({ sendToManager, sendToTeam }) {
+let _sendToManager = async () => {}, _sendToTeam = async () => {}, _sendMessage = async () => {};
+function init({ sendToManager, sendToTeam, sendMessage }) {
     _sendToManager = sendToManager;
     _sendToTeam    = sendToTeam;
+    if (sendMessage) _sendMessage = sendMessage;
 }
 
 const TZ = { timezone: 'America/Los_Angeles' };
@@ -109,11 +110,88 @@ async function autoArchive() {
     await pushAlert({ type: 'auto_archived', bkgNo: null, message: `Auto-archived: ${archived.join(', ')}`, severity: 'info' });
 }
 
+// ── Task runner — fires persistent tasks whose fire_at has passed ─────────
+// Called every minute. For each due task:
+//   1. Evaluate its condition (if any). If condition says 'skip', archive as done_condition_met.
+//   2. Resolve target chatId by looking up trucker/supplier by name (name is the durable key,
+//      whatsapp/group_id can drift). Falls back to task.target_chat if lookup fails.
+//   3. Send the message. On success, archive as done_fired.
+//      On failure, increment tries; if tries >= max_tries, archive as failed.
+async function taskRunner() {
+    const tasks = require('./helpers/tasks');
+    const { loadTruckers, loadSuppliers } = require('./helpers/json');
+    const settings = cfg.getSettings ? cfg.getSettings() : {};
+    const managerChat = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
+
+    const due = tasks.dueTasks();
+    if (!due.length) return;
+
+    for (const task of due) {
+        try {
+            // 1. Condition check — has the reason for this task already resolved?
+            const gate = tasks.evaluateCondition(task);
+            if (gate === 'skip') {
+                await tasks.archive(task.id, { status: 'done', result_note: 'condition_met_before_fire' });
+                continue;
+            }
+
+            // 2. Resolve target chatId. Look up by name; fall back to explicit chat if not found.
+            let chatId = task.target_chat || null;
+            if (task.target_kind === 'trucker' && task.target_name) {
+                const t = loadTruckers().find(x => x.name === task.target_name);
+                if (t?.group_id)      chatId = t.group_id;
+                else if (t?.whatsapp) chatId = t.whatsapp + '@c.us';
+            } else if (task.target_kind === 'supplier' && task.target_name) {
+                const s = loadSuppliers().find(x => x.name === task.target_name);
+                if (s?.group_id)      chatId = s.group_id;
+                else if (s?.whatsapp) chatId = s.whatsapp + '@c.us';
+            } else if (task.target_kind === 'manager') {
+                chatId = managerChat;
+            }
+            if (!chatId) {
+                await tasks.updateTask(task.id, { tries: (task.tries || 0) + 1 });
+                if ((task.tries || 0) + 1 >= (task.max_tries || 3)) {
+                    await tasks.archive(task.id, { status: 'failed', result_note: 'no_chatid_resolved' });
+                }
+                continue;
+            }
+
+            // 3. Send.
+            await tasks.updateTask(task.id, { status: 'firing' });
+            const ok = await _sendMessage(chatId, task.message);
+            if (ok) {
+                await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
+                console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);
+            } else {
+                const nextTries = (task.tries || 0) + 1;
+                if (nextTries >= (task.max_tries || 3)) {
+                    await tasks.archive(task.id, { status: 'failed', result_note: 'send_failed_max_tries' });
+                } else {
+                    // Reschedule 5 minutes out for a retry
+                    await tasks.updateTask(task.id, {
+                        status: 'pending', tries: nextTries,
+                        fire_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                    });
+                }
+            }
+        } catch (err) {
+            console.error(`[TASK] runner error on ${task.id}:`, err.message);
+            const nextTries = (task.tries || 0) + 1;
+            if (nextTries >= (task.max_tries || 3)) {
+                await tasks.archive(task.id, { status: 'failed', result_note: 'runner_exception: ' + err.message });
+            } else {
+                await tasks.updateTask(task.id, { status: 'pending', tries: nextTries });
+            }
+        }
+    }
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => urgentWatch().catch(e => console.error('[SCHED] urgent:', e)),   TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
-    console.log('[SCHED] Jobs registered (8AM digest, hourly urgent 9-17, 11PM archive — LA time)');
+    cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
+    console.log('[SCHED] Jobs registered (8AM digest, hourly urgent 9-17, 11PM archive, minute task-runner — LA time)');
 }
 
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive };
+module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner };

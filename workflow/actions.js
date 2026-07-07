@@ -201,6 +201,7 @@ await updateWorkflow(bkgNo, { step: 'empty_dropped', empty_dropped_at: new Date(
 const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
 if (supplierChat) await _send(supplierChat, `${bkgNo}: empty container dropped. Please start loading and reply "load ready" when done.`);
 await _sendToTeam(`${bkgNo}: empty dropped (${byName || 'trucker'}).`);
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_empty_drop', bkg_no: bkgNo });
 return { action_taken: 'empty_dropped' };
 }
 
@@ -210,6 +211,7 @@ await updateWorkflow(bkgNo, { step: 'load_ready', load_ready_at: new Date().toIS
 const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
 if (truckerChat) await _send(truckerChat, `${bkgNo}: load is READY for pickup. Please confirm your pickup window and send the scale ticket after pickup.`);
 await _sendToTeam(`${bkgNo}: load ready (${byName || 'supplier'}). Trucker notified.`);
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_load_ready', bkg_no: bkgNo });
 return { action_taken: 'load_ready' };
 }
 
@@ -220,6 +222,9 @@ await updateWorkflow(bkgNo, {
     ...(hasScaleTicket ? { scale_ticket: true, scale_ticket_at: new Date().toISOString() } : {}),
 });
 await _sendToTeam(`${bkgNo}: picked up${hasScaleTicket ? ' — scale ticket received' : ' (scale ticket pending)'} (${byName || 'trucker'}).`);
+const tasksHelper = require('../helpers/tasks');
+await tasksHelper.cancelMatching({ type: 'nudge_pickup', bkg_no: bkgNo });
+if (hasScaleTicket) await tasksHelper.cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
 return { action_taken: 'picked_up' };
 }
 
@@ -227,6 +232,7 @@ return { action_taken: 'picked_up' };
 async function scaleTicketReceived(bkgNo) {
 await updateWorkflow(bkgNo, { scale_ticket: true, scale_ticket_at: new Date().toISOString() });
 await _sendToTeam(`${bkgNo}: scale ticket received.`);
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
 return { action_taken: 'scale_ticket' };
 }
 
@@ -235,6 +241,7 @@ await updateWorkflow(bkgNo, { step: 'ingate_received', ingate_at: new Date().toI
 await _sendToManager(`${bkgNo}: INGATED at port. Booking complete.`);
 await _sendToTeam(`${bkgNo}: ingate received (${byName || 'trucker'}).`);
 _pushAlert({ type: 'ingated', bkgNo, message: `${bkgNo} ingated`, severity: 'info' });
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_ingate', bkg_no: bkgNo });
 return { action_taken: 'ingated' };
 }
 

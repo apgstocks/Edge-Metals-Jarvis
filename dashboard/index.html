@@ -214,6 +214,7 @@
   <button class="tab" data-tab="whatsapp" type="button">WhatsApp</button>
   <button class="tab" data-tab="settings" type="button">Settings</button>
   <button class="tab" data-tab="bot" type="button">Bot</button>
+  <button class="tab" data-tab="tasks" type="button">Tasks</button>
   <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
 </div>
 
@@ -373,6 +374,72 @@
   </div>
   <div style="margin-top:8px; font-size:11px; color:var(--text-faint); font-family:var(--mono);">
     ⚠ No confirmation prompt — destructive commands (forward, assign, archive) fire immediately.
+  </div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-tasks">
+<div class="container">
+  <div class="bk-head">
+    <h2>Tasks</h2>
+    <div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Persistent follow-ups. Fires at scheduled time. Auto-cancels if the answer arrives first.</div>
+  </div>
+
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Create task</div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+      <div>
+        <label for="t_type">Type</label>
+        <select id="t_type">
+          <option value="nudge_scale_ticket">Nudge for scale ticket</option>
+          <option value="nudge_load_ready">Nudge for load ready</option>
+          <option value="nudge_empty_drop">Nudge for empty drop</option>
+          <option value="nudge_ingate">Nudge for ingate</option>
+          <option value="nudge_pickup">Nudge for pickup</option>
+          <option value="generic_message">Custom message</option>
+        </select>
+      </div>
+      <div>
+        <label for="t_target_kind">Target</label>
+        <select id="t_target_kind">
+          <option value="trucker">Trucker</option>
+          <option value="supplier">Supplier</option>
+          <option value="manager">Manager (me)</option>
+        </select>
+      </div>
+      <div>
+        <label for="t_target_name">Name (leave blank for manager)</label>
+        <input id="t_target_name" type="text" placeholder="e.g. Dave R.">
+      </div>
+      <div>
+        <label for="t_bkg">Booking (optional, enables auto-cancel)</label>
+        <input id="t_bkg" type="text" placeholder="DALA23991600" style="font-family:var(--mono);">
+      </div>
+      <div>
+        <label for="t_delay">Fire in (minutes)</label>
+        <input id="t_delay" type="number" min="1" value="60">
+      </div>
+      <div>
+        <label for="t_message">Message</label>
+        <input id="t_message" type="text" placeholder="Auto-filled from type — edit freely">
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn-primary" id="t_create" type="button">Create task</button>
+      <div id="t_create_err" style="color:var(--danger); font-size:12px; align-self:center;"></div>
+    </div>
+  </div>
+
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Pending</div>
+    <div id="t_pending_list" style="display:flex; flex-direction:column; gap:8px;">
+      <div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div>
+    </div>
+  </div>
+
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">History</div>
+    <div id="t_history_list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div>
   </div>
 </div>
 </div>
@@ -657,6 +724,7 @@
       if (target === 'whatsapp')  loadWhatsappStatus();
       if (target === 'settings')  loadSettings();
       if (target === 'bot')       setTimeout(() => $('botInput').focus(), 50);
+      if (target === 'tasks')     loadTasks();
     });
   });
 
@@ -1518,6 +1586,122 @@
   $('botSend').addEventListener('click', botSend);
   $('botInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); botSend(); }
+  });
+
+  // ── Tasks tab ──────────────────────────────────────────────────────────
+  const TASK_MESSAGE_DEFAULTS = {
+    nudge_scale_ticket: 'Hey — following up on the scale ticket. Can you send it when you get a moment?',
+    nudge_load_ready  : 'Checking in — is the load ready for pickup?',
+    nudge_empty_drop  : 'Hey — has the empty container been dropped yet?',
+    nudge_ingate      : 'Following up — has the container been ingated at port yet?',
+    nudge_pickup      : 'Any update on the pickup?',
+    generic_message   : '',
+  };
+  const TASK_TYPE_TO_CONDITION = {
+    nudge_scale_ticket: (bkg) => bkg ? { type:'workflow_flag_true', flag:'scale_ticket', bkg_no: bkg } : null,
+    nudge_load_ready  : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'load_ready', bkg_no: bkg } : null,
+    nudge_empty_drop  : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'empty_dropped', bkg_no: bkg } : null,
+    nudge_ingate      : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'ingate_received', bkg_no: bkg } : null,
+    nudge_pickup      : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'picked_up', bkg_no: bkg } : null,
+    generic_message   : () => null,
+  };
+
+  // Auto-fill message when type changes and message is empty/default
+  $('t_type').addEventListener('change', () => {
+    const type = $('t_type').value;
+    const cur  = $('t_message').value.trim();
+    const defaults = Object.values(TASK_MESSAGE_DEFAULTS);
+    if (!cur || defaults.includes(cur)) $('t_message').value = TASK_MESSAGE_DEFAULTS[type] || '';
+  });
+  // Prime the message field
+  $('t_message').value = TASK_MESSAGE_DEFAULTS[$('t_type').value] || '';
+
+  async function loadTasks() {
+    try {
+      const r = await fetch('/api/tasks');
+      const d = await r.json();
+      renderTasksPending(d.pending || []);
+      renderTasksHistory(d.history || []);
+    } catch (e) {
+      $('t_pending_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Failed to load: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderTasksPending(list) {
+    if (!list.length) {
+      $('t_pending_list').innerHTML = `<div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">No pending tasks.</div>`;
+      return;
+    }
+    list.sort((a,b) => new Date(a.fire_at) - new Date(b.fire_at));
+    $('t_pending_list').innerHTML = list.map(t => {
+      const fireIn = Math.round((new Date(t.fire_at) - new Date()) / 60000);
+      const when   = fireIn > 0 ? `in ${fireIn} min` : (fireIn < -60 ? `${Math.abs(Math.round(fireIn/60))}h overdue` : 'now');
+      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')}</div>
+          <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:2px;">${t.bkg_no ? esc(t.bkg_no) + ' · ' : ''}${when} · fires ${new Date(t.fire_at).toLocaleString()}</div>
+          <div style="font-size:11.5px; color:var(--text-body); margin-top:4px; font-style:italic;">"${esc(t.message.slice(0, 100))}${t.message.length > 100 ? '…' : ''}"</div>
+        </div>
+        <button type="button" class="btn-secondary" data-t-cancel="${esc(t.id)}" style="padding:5px 10px; font-size:10.5px; color:var(--danger); border-color:var(--danger); white-space:nowrap;">Cancel</button>
+      </div>`;
+    }).join('');
+    $('t_pending_list').querySelectorAll('[data-t-cancel]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Cancel this task?')) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch('/api/tasks/' + encodeURIComponent(btn.dataset.tCancel), { method:'DELETE' });
+          if (!r.ok) throw new Error((await r.json()).error || 'cancel failed');
+          await loadTasks();
+        } catch (e) { alert('Cancel failed: ' + e.message); btn.disabled = false; }
+      });
+    });
+  }
+
+  function renderTasksHistory(list) {
+    if (!list.length) {
+      $('t_history_list').innerHTML = `<div style="color:var(--text-faint); font-size:11.5px; padding:6px 0;">No history yet.</div>`;
+      return;
+    }
+    list.sort((a,b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0));
+    $('t_history_list').innerHTML = list.slice(0, 100).map(t => {
+      const badge = t.status === 'done'      ? 'background:#EAF4EC; color:#256B3B;'
+                  : t.status === 'cancelled' ? 'background:var(--steel-150); color:var(--text-muted);'
+                  : /* failed */              'background:#FAE2DE; color:var(--danger-text);';
+      return `<div style="display:grid; grid-template-columns:80px 1fr 160px; gap:10px; padding:6px 10px; font-size:11px; border-bottom:1px solid var(--border);">
+        <div><span class="bk-cell-pill" style="${badge}">${esc(t.status)}</span></div>
+        <div>${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')} ${t.bkg_no ? '· ' + esc(t.bkg_no) : ''} <span style="color:var(--text-faint);">${esc(t.result_note || '')}</span></div>
+        <div class="mono" style="color:var(--text-faint);">${t.completed_at ? new Date(t.completed_at).toLocaleString() : '—'}</div>
+      </div>`;
+    }).join('');
+  }
+
+  $('t_create').addEventListener('click', async () => {
+    const type        = $('t_type').value;
+    const target_kind = $('t_target_kind').value;
+    const target_name = $('t_target_name').value.trim();
+    const bkg_no      = $('t_bkg').value.trim().toUpperCase();
+    const delay_minutes = parseInt($('t_delay').value, 10);
+    const message     = $('t_message').value.trim();
+    $('t_create_err').textContent = '';
+    if (target_kind !== 'manager' && !target_name) { $('t_create_err').textContent = 'Name required for trucker/supplier.'; return; }
+    if (!message) { $('t_create_err').textContent = 'Message required.'; return; }
+    if (!delay_minutes || delay_minutes < 1) { $('t_create_err').textContent = 'Delay must be at least 1 minute.'; return; }
+    const btn = $('t_create'); btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const condition = TASK_TYPE_TO_CONDITION[type] ? TASK_TYPE_TO_CONDITION[type](bkg_no || null) : null;
+      const r = await fetch('/api/tasks', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ type, target_kind, target_name: target_name || null, bkg_no: bkg_no || null, delay_minutes, message, condition }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'create failed');
+      $('t_target_name').value = '';
+      $('t_bkg').value = '';
+      $('t_message').value = TASK_MESSAGE_DEFAULTS[type] || '';
+      await loadTasks();
+    } catch (e) { $('t_create_err').textContent = e.message; }
+    finally { btn.disabled = false; btn.textContent = 'Create task'; }
   });
 
 })();

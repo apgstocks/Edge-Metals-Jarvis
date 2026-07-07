@@ -308,6 +308,53 @@ function createApi() {
     });
     app.get('/api/history', (req, res) => res.json(loadHistory()));
 
+    // ── Tasks — persistent queue for delayed follow-ups ────────────────────
+    // Web creates tasks like "nudge Dave for scale ticket 1 hour from now".
+    // Scheduler fires them at fire_at (with condition check that auto-cancels
+    // if the reason resolved before firing — e.g. trucker already sent it).
+    app.get('/api/tasks', (req, res) => {
+        const tasks = require('./helpers/tasks');
+        res.json({ pending: tasks.loadTasks(), history: tasks.loadHistory() });
+    });
+
+    app.post('/api/tasks', async (req, res) => {
+        try {
+            const tasks = require('./helpers/tasks');
+            const body = req.body || {};
+            // Accept both absolute fire_at and relative delay_minutes (easier from UI)
+            let fire_at = body.fire_at;
+            if (!fire_at && body.delay_minutes) {
+                fire_at = new Date(Date.now() + Number(body.delay_minutes) * 60 * 1000).toISOString();
+            }
+            const task = await tasks.enqueue({
+                type          : body.type          || 'generic_message',
+                target_kind   : body.target_kind,
+                target_name   : body.target_name   || null,
+                target_chat   : body.target_chat   || null,
+                bkg_no        : body.bkg_no        || null,
+                container_seq : body.container_seq || null,
+                message       : body.message,
+                fire_at,
+                condition     : body.condition     || null,
+                created_by    : body.created_by    || 'web',
+            });
+            res.json({ ok: true, task });
+        } catch (err) {
+            res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.delete('/api/tasks/:id', async (req, res) => {
+        try {
+            const tasks = require('./helpers/tasks');
+            const removed = await tasks.cancel(req.params.id, 'user_cancelled');
+            if (!removed) return res.status(404).json({ error: 'task not found' });
+            res.json({ ok: true, task: removed });
+        } catch (err) {
+            res.status(400).json({ error: err.message });
+        }
+    });
+
     // ── Documents: PDF scan + Drive upload ────────────────────────────────────
     // Base64-encoded PDFs inflate ~33% over binary. Booking PDFs run 200KB–2MB,
     // so 10mb is the safe ceiling. Scoped to these two routes only.

@@ -14,6 +14,8 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const FILES = {
     BOOKINGS_FILE    : path.join(DATA_DIR, 'bookings.json'),
     WORKFLOW_FILE    : path.join(DATA_DIR, 'workflow.json'),
+    TASKS_FILE       : path.join(DATA_DIR, 'tasks.json'),
+    TASKS_HISTORY_FILE: path.join(DATA_DIR, 'tasks_history.json'),
     HISTORY_FILE     : path.join(DATA_DIR, 'history.json'),
     TRUCKERS_FILE    : path.join(DATA_DIR, 'truckers.json'),
     SUPPLIERS_FILE   : path.join(DATA_DIR, 'suppliers.json'),
