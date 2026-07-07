@@ -141,12 +141,22 @@ function policyDecide(ctx) {
             if (step === 'picked_up')
                 return { intent: 'ingate_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         }
+        // Whitelisted state-change signals — trucker's message must contain at least one keyword.
         if (/(empty|dropped)/.test(t) && step === 'forwarded')
             return { intent: 'empty_drop_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         if (/(picked\s*up|loaded)/.test(t) && step === 'load_ready')
             return { intent: 'picked_up_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, scale_ticket: false } };
+        if (/(scale|ticket)/.test(t) && step === 'picked_up' && !ctx.workflow?.scale_ticket)
+            return { intent: 'scale_ticket_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         if (/(ingate|in-gate|gated)/.test(t) && step === 'picked_up')
             return { intent: 'ingate_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        // Whitelisted info queries — ERD / cutoff date lookup on the trucker's active booking.
+        if (/\berd\b/.test(t))
+            return { intent: 'trucker_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        if (/(cut\s*off|cutoff)/.test(t))
+            return { intent: 'trucker_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        // Silence: message is out-of-scope. Jarvis does NOT reply. Per user rule.
+        return { intent: 'silent', resolvedBy: 'policy', data: {} };
     }
 
     // ── D. Supplier signals ────────────────────────────────────────────────────
@@ -154,6 +164,13 @@ function policyDecide(ctx) {
         const step = ctx.workflow?.step;
         if (/(load\s*ready|loaded|ready)/.test(t) && ['supplier_assigned', 'empty_dropped'].includes(step))
             return { intent: 'load_ready_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        // Same whitelisted info queries for suppliers.
+        if (/\berd\b/.test(t))
+            return { intent: 'supplier_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        if (/(cut\s*off|cutoff)/.test(t))
+            return { intent: 'supplier_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        // Silence: message is out-of-scope.
+        return { intent: 'silent', resolvedBy: 'policy', data: {} };
     }
 
     // ── E. Trucker/supplier with multiple bookings and a booking no. in text ──
@@ -267,11 +284,17 @@ async function route(decision, ctx, sendMessage) {
         case 'scale_ticket_received':  return actions.scaleTicketReceived(bkg);
         case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName);
         case 'check_supplier':         return ask(chatId, 'Which booking? I will ping its supplier for pickup status.');
+        // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
+        case 'trucker_ask_erd':
+        case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
+        case 'trucker_ask_cutoff':
+        case 'supplier_ask_cutoff':    return actions.showCutoff ? actions.showCutoff(chatId, bkg) : ask(chatId, `Cutoff: ${(actions.getBookingField && actions.getBookingField(bkg, 'cutoff_date')) || 'not set'}`);
+        // Silence — trucker/supplier said something out-of-scope. Jarvis intentionally does not reply.
+        case 'silent':                 return { action_taken: 'silent' };
         case 'forward_booking_menu':
         case 'ask_booking_number':     return ask(chatId, 'Type the booking number.');
         case 'ask_which_booking':      return ask(chatId, `This chat has multiple bookings: ${(d.slots || []).join(', ')}. Which one?`);
         case 'reply':                  return d.reply ? send(chatId, d.reply) : { action_taken: 'noop' };
-        case 'silent':                 return { action_taken: 'silent' };
         case 'NEED_APPROVAL':          return ask(chatId, `This needs your explicit confirmation. ${d.reply || 'Please restate the exact action.'}`);
         case 'NEED_DATA':
         default:
