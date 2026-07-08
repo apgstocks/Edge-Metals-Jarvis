@@ -773,11 +773,11 @@
       }).join('');
 
       return `<div class="bk-row-group" data-bkg="${esc(b.booking_number)}">
-        <div class="bk-row" style="grid-template-columns:30px 130px 1fr 100px 90px 130px 90px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}">
+        <div class="bk-row" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 90px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}">
           <div style="text-align:center; color:var(--text-faint); font-family:var(--mono);">▸</div>
           <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
-          <div class="bk-cell-sub">${esc(b.buyer || b.consignee || wf.supplier || b.supplier || '—')}<br><span class="bk-cell-mono">${esc(cLabel)}</span></div>
-          <div class="bk-cell-mono">${esc(b.carrier || '—')}</div>
+          <div class="bk-cell-sub"><span class="bk-cell-mono">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</span><br><span class="bk-cell-mono" style="color:var(--text-faint);">${esc(cLabel)}</span></div>
+          <div class="bk-cell-mono">${esc(b.erd_date || '—')}</div>
           <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
           <div><span class="bk-cell-pill">${esc(stageLabel)}</span></div>
           <div><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);" onclick="event.stopPropagation();">Delete</button></div>
@@ -787,7 +787,7 @@
     }).join('');
     $('bkList').innerHTML =
       `<div class="bk-table">
-        <div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 100px 90px 130px 90px;"><div></div><div>Booking</div><div>Buyer / Containers</div><div>Carrier</div><div>Cutoff</div><div>Stage</div><div></div></div>
+        <div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 90px;"><div></div><div>Booking</div><div>Route / Containers</div><div>ERD</div><div>Cutoff</div><div>Stage</div><div></div></div>
         ${rows}
       </div>`;
 
@@ -844,11 +844,26 @@
   let modalPdfBase64 = null, modalPdfFile = null;
   let modalContainers = [];
 
+  // Cached lists for modal dropdowns
+  let modalSuppliersList = [];
+  let modalTruckersList  = [];
+  async function loadModalContacts() {
+    try {
+      const [ts, ss] = await Promise.all([
+        fetch('/api/truckers').then(r => r.json()),
+        fetch('/api/suppliers').then(r => r.json()),
+      ]);
+      modalTruckersList  = Array.isArray(ts) ? ts.map(t => t.name).filter(Boolean) : [];
+      modalSuppliersList = Array.isArray(ss) ? ss.map(s => s.name).filter(Boolean) : [];
+    } catch { /* silent — dropdowns will be empty, user can still save booking */ }
+  }
+
   function renderContainersInModal() {
     const wrap = $('f_containers_list');
     const SIZES = ['20GP','40GP','40HC','20RF','40RF','45HC'];
+    const opt = (list, sel) => `<option value="">—</option>` + list.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('');
     wrap.innerHTML = modalContainers.map((c, i) => `
-      <div style="display:grid; grid-template-columns:60px 100px 1fr 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+      <div style="display:grid; grid-template-columns:50px 90px 1fr 1fr 1fr 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
         <div>
           <label style="font-size:9px;">Seq</label>
           <div class="bk-cell-mono" style="padding:9px 12px; font-weight:700; color:var(--copper-700);">#${c.seq}</div>
@@ -861,8 +876,16 @@
           </select>
         </div>
         <div>
-          <label style="font-size:9px;">Container number (optional)</label>
+          <label style="font-size:9px;">Container #</label>
           <input type="text" data-c-field="container_number" data-c-idx="${i}" value="${esc(c.container_number || '')}" placeholder="TCLU8841207">
+        </div>
+        <div>
+          <label style="font-size:9px;">Supplier</label>
+          <select data-c-field="supplier" data-c-idx="${i}">${opt(modalSuppliersList, c.supplier)}</select>
+        </div>
+        <div>
+          <label style="font-size:9px;">Trucker</label>
+          <select data-c-field="trucker" data-c-idx="${i}">${opt(modalTruckersList, c.trucker)}</select>
         </div>
         <div>
           <button type="button" class="btn-secondary" data-c-remove="${i}" style="padding:9px 8px; font-size:11px; color:var(--danger); border-color:var(--danger);" title="Remove container" ${modalContainers.length <= 1 ? 'disabled' : ''}>×</button>
@@ -870,20 +893,17 @@
       </div>
     `).join('');
     wrap.querySelectorAll('[data-c-field]').forEach(el => {
-      el.addEventListener('input', (e) => {
+      const handler = (e) => {
         const idx = +e.target.dataset.cIdx;
         modalContainers[idx][e.target.dataset.cField] = e.target.value;
-      });
-      el.addEventListener('change', (e) => {
-        const idx = +e.target.dataset.cIdx;
-        modalContainers[idx][e.target.dataset.cField] = e.target.value;
-      });
+      };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
     });
     wrap.querySelectorAll('[data-c-remove]').forEach(btn => {
       btn.addEventListener('click', () => {
         if (modalContainers.length <= 1) return;
         modalContainers.splice(+btn.dataset.cRemove, 1);
-        // Reassign seq to stay 1..N
         modalContainers.forEach((c, i) => { c.seq = i + 1; });
         renderContainersInModal();
       });
@@ -940,7 +960,10 @@
     reader.readAsDataURL(f);
   }
 
-  $('btnAddBooking').addEventListener('click', modal.open);
+  $('btnAddBooking').addEventListener('click', async () => {
+    await loadModalContacts();
+    modal.open();
+  });
   $('modalClose').addEventListener('click', modal.close);
   $('btnCancel').addEventListener('click', modal.close);
   modal.back.addEventListener('click', (e) => { if (e.target === modal.back) modal.close(); });

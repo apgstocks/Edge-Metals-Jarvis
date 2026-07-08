@@ -7,13 +7,20 @@
 
 const { loadBookings, loadWorkflow, loadTruckers, loadSuppliers,
     mutateBrain, loadBrain, updateWorkflow, archiveBooking } = require('../helpers/json');
-const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable,
+const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings, stepLabel } = require('../helpers/booking');
 const { getLATime, daysUntil } = require('../helpers/time');
 const { updateSession }        = require('../helpers/context');
 const truckers  = require('./truckers');
 const suppliers = require('./suppliers');
 const cfg       = require('../config');
+const { sendCapture } = require('../helpers/wa-state');
+
+// True when the current async context is inside a /api/bot/command request.
+// Used by forwardBooking / assignSupplier to skip yes/no confirm on web.
+function isWebSource() {
+try { return !!sendCapture.getStore(); } catch { return false; }
+}
 
 // ── Messaging injected at boot by index.js ────────────────────────────────────
 let _send, _sendToManager, _sendToTeam, _pushAlert;
@@ -106,6 +113,16 @@ async function forwardBooking(chatId, bkgNo, truckerName) {
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
 
+// Guard — real ops rule: supplier must be assigned before forwarding to trucker.
+// Prevents forwarding a booking that has no supplier lined up to load it.
+// Checks per-container suppliers (Phase 1 schema) first, falls back to legacy flat supplier.
+const containers = Array.isArray(booking.containers) ? booking.containers : [];
+const hasAnySupplier = containers.some(c => c.supplier) || !!booking.supplier;
+if (!hasAnySupplier) {
+    await _send(chatId, `Can't forward ${bkgNo} — no supplier assigned yet. Type "assign ${bkgNo}" first to pick a supplier.`);
+    return { action_taken: 'no_supplier_assigned' };
+}
+
 if (!truckerName) {
     const sel = truckers.buildTruckerSelectionMessage(bkgNo);
     if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_truckers' }; }
@@ -116,6 +133,13 @@ if (!truckerName) {
 
 const t = truckers.getTrucker(truckerName);
 if (!t) { await _send(chatId, `Trucker "${truckerName}" not found. Type "forward ${bkgNo}" to pick from the list.`); return { action_taken: 'trucker_not_found' }; }
+
+// Web Bot tab (sendCapture ALS active) — skip yes/no confirm, fire immediately.
+// User explicitly accepted the risk of no confirmation for the web command surface.
+if (isWebSource()) {
+    await clearPending(chatId);
+    return executeForward(chatId, bkgNo, t.name);
+}
 
 await setPending(chatId, { type: 'confirm_forward', bkg_no: bkgNo, trucker_name: t.name });
 await _send(chatId, `Forward ${bkgNo} to ${t.name}? (yes/no)`);
@@ -131,7 +155,7 @@ const truckerChat = truckers.getTruckerChatId(truckerName);
 const t           = truckers.getTrucker(truckerName);
 
 await _send(truckerChat,
-    [`New booking — ${bkgNo}`, '', formatBookingFull(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
+    [`New booking — ${bkgNo}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
 
 // PDF side track — never blocks the forward
 try {
@@ -168,6 +192,12 @@ if (!supplierName) {
 const s = suppliers.getSupplier(supplierName);
 if (!s) { await _send(chatId, `Supplier "${supplierName}" not found.`); return { action_taken: 'supplier_not_found' }; }
 
+// Web Bot tab — skip yes/no confirm, fire immediately.
+if (isWebSource()) {
+    await clearPending(chatId);
+    return executeAssign(chatId, bkgNo, s.name);
+}
+
 await setPending(chatId, { type: 'confirm_assign', bkg_no: bkgNo, supplier_name: s.name });
 await _send(chatId, `Assign ${bkgNo} to ${s.name}? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
@@ -181,7 +211,7 @@ const supplierChat = suppliers.getSupplierChatId(supplierName);
 const s            = suppliers.getSupplier(supplierName);
 
 await _send(supplierChat,
-    [`New assignment — ${bkgNo}`, '', formatBookingFull(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
+    [`New assignment — ${bkgNo}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
 
 await updateWorkflow(bkgNo, {
     step             : 'supplier_assigned',

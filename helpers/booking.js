@@ -30,6 +30,19 @@ function formatBookingFull(b) {
     ].join('\n');
 }
 
+// Minimal 5-field summary for forward + assign messages to truckers / suppliers.
+// Deliberately excludes vessel / carrier / buyer / consignee — user requirement.
+// If a trucker asks vessel/carrier via WhatsApp, add that as a follow-up query
+// (whitelist doesn't cover it today — future work).
+function formatBookingForForward(b) {
+    return [
+        `Booking: ${b.booking_number}`,
+        `Route: ${b.port_of_loading || '—'} → ${b.port_of_discharge || '—'}`,
+        `ERD: ${b.erd_date || '—'}`,
+        `Cutoff: ${b.cutoff_date || '—'}`,
+    ].join('\n');
+}
+
 function formatBookingLine(b) {
     const wf = loadWorkflow()[b.booking_number] || {};
     return `${b.booking_number} | ${stepLabel(wf.step)} | Trucker: ${wf.trucker_name || '—'} | Cutoff: ${b.cutoff_date || '—'}`;
@@ -76,7 +89,7 @@ function getBookingsByRoute(pol, pod) {
 function findBookingInLoadingStage() {
     const workflow = loadWorkflow();
     const bookings = loadBookings();
-    const stages = ['waiting_empty_drop', 'empty_dropped', 'load_ready'];
+    const stages = ['empty_dropped', 'load_ready'];
     const candidates = Object.entries(workflow)
         .filter(([bkgNo, wf]) => stages.includes(wf.step) && bookings[bkgNo])
         .map(([bkgNo]) => bkgNo);
@@ -91,7 +104,7 @@ function resolveBookingNumber(text) {
 
 module.exports = {
     getBooking, stepLabel,
-    formatBookingFull, formatBookingLine, formatBookingAvailable,
+    formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
 };
