@@ -130,48 +130,142 @@ function policyDecide(ctx) {
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: bkg } };
     }
 
-    // ── C. Trucker signals (single active booking required) ───────────────────
-    if (ctx.isTrucker && ctx.activeBooking) {
-        const step = ctx.workflow?.step;
-        if (ctx.hasMedia) {
-            if (step === 'forwarded')
-                return { intent: 'empty_drop_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-            if (step === 'load_ready')
-                return { intent: 'picked_up_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, scale_ticket: true } };
-            if (step === 'picked_up' && !ctx.workflow?.scale_ticket)
-                return { intent: 'scale_ticket_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-            if (step === 'picked_up')
-                return { intent: 'ingate_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+    // ── C. Trucker signals — with per-container disambiguation ───────────────
+    // Trucker types a state message ("empty dropped"). We need to figure out:
+    //   which booking, and which container within that booking.
+    // Options:
+    //   0 active assignments → silent (out-of-scope)
+    //   1 booking + 1 container → auto-apply
+    //   1 booking + 2+ containers matching stage → ask "which container?"
+    //   2+ bookings → ask "which booking?" first
+    if (ctx.isTrucker) {
+        const containers = require('../helpers/containers');
+        const { loadBookings } = require('../helpers/json');
+        const bookings = loadBookings();
+        const truckerName = ctx.matchedTrucker?.name;
+
+        // Which state intent is this message? Returns {kind, requiredStage} or null.
+        const classify = () => {
+            if (ctx.hasMedia) {
+                // Media alone can't tell us the stage — infer from what containers this trucker has.
+                // Pick the most-common current stage among their assignments; brain uses that to route.
+                return { kind: 'media', requiredStage: null };
+            }
+            if (/(empty|dropped)/.test(t))               return { kind: 'empty_drop',   requiredStage: 'forwarded' };
+            if (/(picked\s*up|loaded)/.test(t))          return { kind: 'picked_up',    requiredStage: 'load_ready' };
+            if (/(scale|ticket)/.test(t))                return { kind: 'scale_ticket', requiredStage: 'picked_up' };
+            if (/(ingate|in-gate|gated)/.test(t))        return { kind: 'ingate',       requiredStage: 'picked_up' };
+            return null;
+        };
+
+        const stateSig = classify();
+        if (stateSig) {
+            // Find every active (in-progress) container this trucker owns.
+            const active = truckerName
+                ? containers.findActiveAssignments(bookings, 'trucker', truckerName)
+                : [];
+
+            // Filter to those matching the required stage (empty-drop only from forwarded containers, etc).
+            // For media (kind='media'), don't stage-filter — accept any active assignment.
+            const matches = stateSig.kind === 'media'
+                ? active
+                : active.filter(a => (a.container.stage || 'not_started') === stateSig.requiredStage);
+
+            if (matches.length === 0) {
+                // Trucker used a state keyword but has no matching container. Silent (whitelist rule).
+                return { intent: 'silent', resolvedBy: 'policy', data: {} };
+            }
+
+            // For 'media' with mixed stages, prefer inferring the actual state.
+            let stageKind = stateSig.kind;
+            if (stageKind === 'media') {
+                // Auto-pick based on the container's current stage.
+                const stagesInMatches = new Set(matches.map(m => m.container.stage));
+                if      (stagesInMatches.has('forwarded'))     stageKind = 'empty_drop';
+                else if (stagesInMatches.has('load_ready'))    stageKind = 'picked_up';
+                else if (stagesInMatches.has('picked_up'))     stageKind = 'ingate';
+                else return { intent: 'silent', resolvedBy: 'policy', data: {} };
+            }
+
+            const intentName =
+                stageKind === 'empty_drop'   ? 'empty_drop_confirmed' :
+                stageKind === 'picked_up'    ? 'picked_up_confirmed'  :
+                stageKind === 'scale_ticket' ? 'scale_ticket_received':
+                                               'ingate_received';
+
+            // Count DISTINCT bookings in matches.
+            const bookingsInMatches = [...new Set(matches.map(m => m.bookingNumber))];
+
+            // Case 1: 1 booking, 1 matching container → auto-apply.
+            if (bookingsInMatches.length === 1 && matches.length === 1) {
+                return { intent: intentName, resolvedBy: 'policy',
+                         data: { bkg_no: matches[0].bookingNumber, container_seq: matches[0].container.seq,
+                                 scale_ticket: stageKind === 'picked_up' && stateSig.kind === 'media' } };
+            }
+
+            // Case 2: 1 booking, 2+ matching containers → ask which container.
+            if (bookingsInMatches.length === 1) {
+                return { intent: 'ask_which_container', resolvedBy: 'policy',
+                         data: { bkg_no: bookingsInMatches[0], intent_to_resolve: intentName,
+                                 has_media: !!ctx.hasMedia,
+                                 container_options: matches.map(m => m.container.seq) } };
+            }
+
+            // Case 3: 2+ bookings → ask which booking first.
+            return { intent: 'ask_which_booking', resolvedBy: 'policy',
+                     data: { intent_to_resolve: intentName, has_media: !!ctx.hasMedia,
+                             booking_options: bookingsInMatches } };
         }
-        // Whitelisted state-change signals — trucker's message must contain at least one keyword.
-        if (/(empty|dropped)/.test(t) && step === 'forwarded')
-            return { intent: 'empty_drop_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        if (/(picked\s*up|loaded)/.test(t) && step === 'load_ready')
-            return { intent: 'picked_up_confirmed', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, scale_ticket: false } };
-        if (/(scale|ticket)/.test(t) && step === 'picked_up' && !ctx.workflow?.scale_ticket)
-            return { intent: 'scale_ticket_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        if (/(ingate|in-gate|gated)/.test(t) && step === 'picked_up')
-            return { intent: 'ingate_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        // Whitelisted info queries — ERD / cutoff date lookup on the trucker's active booking.
-        if (/\berd\b/.test(t))
-            return { intent: 'trucker_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        if (/(cut\s*off|cutoff)/.test(t))
-            return { intent: 'trucker_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        // Silence: message is out-of-scope. Jarvis does NOT reply. Per user rule.
+
+        // Info queries — trucker asks ERD / cutoff. Requires activeBooking (single-container heuristic).
+        if (ctx.activeBooking) {
+            if (/\berd\b/.test(t))
+                return { intent: 'trucker_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+            if (/(cut\s*off|cutoff)/.test(t))
+                return { intent: 'trucker_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        }
         return { intent: 'silent', resolvedBy: 'policy', data: {} };
     }
 
-    // ── D. Supplier signals ────────────────────────────────────────────────────
-    if (ctx.isSupplier && ctx.activeBooking) {
-        const step = ctx.workflow?.step;
-        if (/(load\s*ready|loaded|ready)/.test(t) && ['supplier_assigned', 'empty_dropped'].includes(step))
-            return { intent: 'load_ready_received', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        // Same whitelisted info queries for suppliers.
-        if (/\berd\b/.test(t))
-            return { intent: 'supplier_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        if (/(cut\s*off|cutoff)/.test(t))
-            return { intent: 'supplier_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
-        // Silence: message is out-of-scope.
+    // ── D. Supplier signals ──────────────────────────────────────────────────
+    if (ctx.isSupplier) {
+        const containers = require('../helpers/containers');
+        const { loadBookings } = require('../helpers/json');
+        const bookings = loadBookings();
+        const supplierName = ctx.matchedSupplier?.name;
+
+        // Supplier fires "load ready" — must be on a container currently at supplier_assigned or empty_dropped.
+        if (/(load\s*ready|loaded|ready)/.test(t)) {
+            const active = supplierName
+                ? containers.findActiveAssignments(bookings, 'supplier', supplierName, ['supplier_assigned','empty_dropped'])
+                : [];
+            if (active.length === 0) return { intent: 'silent', resolvedBy: 'policy', data: {} };
+
+            const bookingsInMatches = [...new Set(active.map(m => m.bookingNumber))];
+
+            if (bookingsInMatches.length === 1 && active.length === 1) {
+                return { intent: 'load_ready_received', resolvedBy: 'policy',
+                         data: { bkg_no: active[0].bookingNumber, container_seq: active[0].container.seq } };
+            }
+
+            if (bookingsInMatches.length === 1) {
+                return { intent: 'ask_which_container', resolvedBy: 'policy',
+                         data: { bkg_no: bookingsInMatches[0], intent_to_resolve: 'load_ready_received',
+                                 has_media: false, container_options: active.map(m => m.container.seq) } };
+            }
+
+            return { intent: 'ask_which_booking', resolvedBy: 'policy',
+                     data: { intent_to_resolve: 'load_ready_received', has_media: false,
+                             booking_options: bookingsInMatches } };
+        }
+
+        // Info queries scoped to activeBooking (single-container heuristic).
+        if (ctx.activeBooking) {
+            if (/\berd\b/.test(t))
+                return { intent: 'supplier_ask_erd', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+            if (/(cut\s*off|cutoff)/.test(t))
+                return { intent: 'supplier_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
+        }
         return { intent: 'silent', resolvedBy: 'policy', data: {} };
     }
 
@@ -280,11 +374,13 @@ async function route(decision, ctx, sendMessage) {
         case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : ask(chatId, 'Which booking should I assign? e.g. "assign BK123456"');
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : ask(chatId, 'Which booking should I recall?');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : ask(chatId, 'Which booking should I archive?');
-        case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName);
-        case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName);
-        case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName);
-        case 'scale_ticket_received':  return actions.scaleTicketReceived(bkg);
-        case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName);
+        case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
+        case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
+        case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
+        case 'scale_ticket_received':  return actions.scaleTicketReceived(bkg, d.container_seq);
+        case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName, d.container_seq);
+        case 'ask_which_container':    return actions.askWhichContainer(chatId, d);
+        case 'ask_which_booking':      return actions.askWhichBooking(chatId, d, ctx.matchedTrucker?.name || ctx.matchedSupplier?.name, ctx.isSupplier ? 'supplier' : 'trucker');
         case 'check_supplier':         return ask(chatId, 'Which booking? I will ping its supplier for pickup status.');
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':

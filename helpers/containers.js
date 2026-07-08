@@ -92,4 +92,33 @@ function containerAssignedTo(booking, kind, name) {
     return booking.containers.find(c => c[kind] && String(c[kind]).toLowerCase() === lower) || null;
 }
 
-module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount, nextUnassignedContainer, containerAssignedTo };
+// Plural: return ALL containers of one booking assigned to a person. Used when trucker
+// has multiple containers on same booking and sends an ambiguous state message.
+function containersAssignedTo(booking, kind, name) {
+    if (!booking?.containers || !name) return [];
+    const lower = String(name).toLowerCase();
+    return booking.containers.filter(c => c[kind] && String(c[kind]).toLowerCase() === lower);
+}
+
+// Find every {bookingNumber, container} pair across ALL bookings where this person is
+// assigned as trucker/supplier, filtered to containers currently in an active stage
+// (i.e. still expecting action from them — not 'done' / 'ingate_received').
+// Used to disambiguate WHICH booking's stage advances when trucker types a state msg.
+function findActiveAssignments(bookingsDict, kind, name, activeStages = null) {
+    if (!bookingsDict || !name) return [];
+    const lower  = String(name).toLowerCase();
+    const active = activeStages || ['forwarded', 'empty_dropped', 'load_ready', 'picked_up'];
+    const out = [];
+    for (const bkgNo of Object.keys(bookingsDict)) {
+        const b = bookingsDict[bkgNo];
+        if (!Array.isArray(b?.containers)) continue;
+        for (const c of b.containers) {
+            if (c[kind] && String(c[kind]).toLowerCase() === lower && active.includes(c.stage || 'not_started')) {
+                out.push({ bookingNumber: b.booking_number || bkgNo, container: c });
+            }
+        }
+    }
+    return out;
+}
+
+module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount, nextUnassignedContainer, containerAssignedTo, containersAssignedTo, findActiveAssignments };

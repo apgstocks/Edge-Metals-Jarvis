@@ -316,52 +316,140 @@ _pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierN
 return { action_taken: 'assigned' };
 }
 
-// ── Stage confirmations (from trucker / supplier chats) ───────────────────────
-async function emptyDropConfirmed(bkgNo, byName) {
-await updateWorkflow(bkgNo, { step: 'empty_dropped', empty_dropped_at: new Date().toISOString() });
+// ── Phase 4a: disambiguation prompts to trucker/supplier ──────────────────
+// askWhichBooking: fired when a trucker/supplier's state message is ambiguous
+// across 2+ bookings. Sends numbered list and stores pending awaiting_booking_selection.
+async function askWhichBooking(chatId, decisionData, personName, kind /* 'trucker'|'supplier' */) {
+const options = decisionData.booking_options || [];
+const lines = options.map((b, i) => `${i + 1}. ${b}`);
+await setPending(chatId, {
+    type              : 'awaiting_booking_selection',
+    intent_to_resolve : decisionData.intent_to_resolve,
+    has_media         : !!decisionData.has_media,
+    booking_options   : options,
+    person_name       : personName,
+    person_kind       : kind,
+});
+await _send(chatId, ['Which booking?', '', ...lines, '', 'Reply with a number or the booking number.'].join('\n'));
+return { action_taken: 'awaiting_booking_selection' };
+}
+
+// askWhichContainer: fired when the booking is known but 2+ containers on it
+// are assigned to this person and match the required stage. Numbered list of
+// container seqs.
+async function askWhichContainer(chatId, decisionData) {
+const bkg     = decisionData.bkg_no;
+const options = decisionData.container_options || [];
+const lines = options.map(seq => `${seq}. ${bkg}/${seq}`);
+await setPending(chatId, {
+    type              : 'awaiting_container_selection',
+    intent_to_resolve : decisionData.intent_to_resolve,
+    has_media         : !!decisionData.has_media,
+    bkg_no            : bkg,
+    container_options : options,
+});
+await _send(chatId, [`Which container of ${bkg}?`, '', ...lines, '', 'Reply with the container number.'].join('\n'));
+return { action_taken: 'awaiting_container_selection' };
+}
+
+// Fire the resolved state intent with fully-known bkg + container_seq.
+async function fireResolvedStateIntent(intent, bkgNo, containerSeq, senderName, hasMedia) {
+switch (intent) {
+    case 'empty_drop_confirmed':   return emptyDropConfirmed(bkgNo, senderName, containerSeq);
+    case 'load_ready_received':    return loadReadyReceived(bkgNo, senderName, containerSeq);
+    case 'picked_up_confirmed':    return pickedUpConfirmed(bkgNo, hasMedia, senderName, containerSeq);
+    case 'scale_ticket_received':  return scaleTicketReceived(bkgNo, containerSeq);
+    case 'ingate_received':        return ingateReceived(bkgNo, senderName, containerSeq);
+    default: return { action_taken: 'noop' };
+}
+}
+// All five handlers below accept containerSeq (optional).
+// If containerSeq is given, the target container's `stage` is set and the
+// booking-level workflow.step becomes the weakest-link of container stages.
+// If containerSeq is null (legacy / single-container), fall back to legacy
+// behavior — top-level step advances directly.
+
+async function advanceContainer(bkgNo, containerSeq, newStage) {
+if (containerSeq == null) return;
+const { mutateJson } = require('../helpers/json');
+const { migrate } = require('../helpers/containers');
+await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
+    if (!all[bkgNo]) return all;
+    all[bkgNo] = migrate(all[bkgNo]);
+    const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+    if (c) c.stage = newStage;
+    return all;
+});
+}
+
+// Compute weakest-link booking step from post-write state.
+async function syncWorkflowFromContainers(bkgNo) {
+const { bookingStage } = require('../helpers/containers');
+const { loadBookings } = require('../helpers/json');
+const fresh = loadBookings()[bkgNo];
+return fresh ? bookingStage(fresh) : null;
+}
+
+async function emptyDropConfirmed(bkgNo, byName, containerSeq) {
+await advanceContainer(bkgNo, containerSeq, 'empty_dropped');
+const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'empty_dropped';
+await updateWorkflow(bkgNo, { step: topStep, empty_dropped_at: new Date().toISOString() });
 const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
-if (supplierChat) await _send(supplierChat, `${bkgNo}: empty container dropped. Please start loading and reply "load ready" when done.`);
-await _sendToTeam(`${bkgNo}: empty dropped (${byName || 'trucker'}).`);
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+if (supplierChat) await _send(supplierChat, `${label}: empty container dropped. Please start loading and reply "load ready" when done.`);
+await _sendToTeam(`${label}: empty dropped (${byName || 'trucker'}).`);
 await require('../helpers/tasks').cancelMatching({ type: 'nudge_empty_drop', bkg_no: bkgNo });
 return { action_taken: 'empty_dropped' };
 }
 
 // Supplier → trucker DIRECTLY. No manager approval (established rule).
-async function loadReadyReceived(bkgNo, byName) {
-await updateWorkflow(bkgNo, { step: 'load_ready', load_ready_at: new Date().toISOString() });
+async function loadReadyReceived(bkgNo, byName, containerSeq) {
+await advanceContainer(bkgNo, containerSeq, 'load_ready');
+const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'load_ready';
+await updateWorkflow(bkgNo, { step: topStep, load_ready_at: new Date().toISOString() });
 const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
-if (truckerChat) await _send(truckerChat, `${bkgNo}: load is READY for pickup. Please confirm your pickup window and send the scale ticket after pickup.`);
-await _sendToTeam(`${bkgNo}: load ready (${byName || 'supplier'}). Trucker notified.`);
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+if (truckerChat) await _send(truckerChat, `${label}: load is READY for pickup. Please confirm your pickup window and send the scale ticket after pickup.`);
+await _sendToTeam(`${label}: load ready (${byName || 'supplier'}). Trucker notified.`);
 await require('../helpers/tasks').cancelMatching({ type: 'nudge_load_ready', bkg_no: bkgNo });
 return { action_taken: 'load_ready' };
 }
 
-async function pickedUpConfirmed(bkgNo, hasScaleTicket, byName) {
+async function pickedUpConfirmed(bkgNo, hasScaleTicket, byName, containerSeq) {
+await advanceContainer(bkgNo, containerSeq, 'picked_up');
+const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'picked_up';
 await updateWorkflow(bkgNo, {
-    step        : 'picked_up',
+    step        : topStep,
     picked_up_at: new Date().toISOString(),
     ...(hasScaleTicket ? { scale_ticket: true, scale_ticket_at: new Date().toISOString() } : {}),
 });
-await _sendToTeam(`${bkgNo}: picked up${hasScaleTicket ? ' — scale ticket received' : ' (scale ticket pending)'} (${byName || 'trucker'}).`);
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+await _sendToTeam(`${label}: picked up${hasScaleTicket ? ' — scale ticket received' : ' (scale ticket pending)'} (${byName || 'trucker'}).`);
 const tasksHelper = require('../helpers/tasks');
 await tasksHelper.cancelMatching({ type: 'nudge_pickup', bkg_no: bkgNo });
 if (hasScaleTicket) await tasksHelper.cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
 return { action_taken: 'picked_up' };
 }
 
-// Scale ticket arriving late (side track)
-async function scaleTicketReceived(bkgNo) {
+// Scale ticket arriving late (side track). Not a stage transition — just a flag.
+async function scaleTicketReceived(bkgNo, containerSeq) {
+// No container stage change — scale_ticket is a workflow-level flag today.
+// (Future: could be per-container. Leaving as booking-level for now to match schema.)
 await updateWorkflow(bkgNo, { scale_ticket: true, scale_ticket_at: new Date().toISOString() });
-await _sendToTeam(`${bkgNo}: scale ticket received.`);
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+await _sendToTeam(`${label}: scale ticket received.`);
 await require('../helpers/tasks').cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
 return { action_taken: 'scale_ticket' };
 }
 
-async function ingateReceived(bkgNo, byName) {
-await updateWorkflow(bkgNo, { step: 'ingate_received', ingate_at: new Date().toISOString() });
-await _sendToManager(`${bkgNo}: INGATED at port. Booking complete.`);
-await _sendToTeam(`${bkgNo}: ingate received (${byName || 'trucker'}).`);
-_pushAlert({ type: 'ingated', bkgNo, message: `${bkgNo} ingated`, severity: 'info' });
+async function ingateReceived(bkgNo, byName, containerSeq) {
+await advanceContainer(bkgNo, containerSeq, 'ingate_received');
+const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'ingate_received';
+await updateWorkflow(bkgNo, { step: topStep, ingate_at: new Date().toISOString() });
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+await _sendToManager(`${label}: INGATED at port.`);
+await _sendToTeam(`${label}: ingate received (${byName || 'trucker'}).`);
+_pushAlert({ type: 'ingated', bkgNo, message: `${label} ingated`, severity: 'info' });
 await require('../helpers/tasks').cancelMatching({ type: 'nudge_ingate', bkg_no: bkgNo });
 return { action_taken: 'ingated' };
 }
@@ -412,6 +500,70 @@ switch (pending.type) {
     case 'confirm_recall':
         await clearPending(chatId);
         return executeRecall(chatId, pending.bkg_no);
+
+    // Phase 4a: trucker/supplier selecting which booking their state message applied to.
+    // Answer is a number (1/2/…) or the booking number itself.
+    case 'awaiting_booking_selection': {
+        const opts = pending.booking_options || [];
+        const raw = String(answer || selection || '').trim();
+        let picked = null;
+        const asNum = parseInt(raw, 10);
+        if (!isNaN(asNum) && asNum >= 1 && asNum <= opts.length) picked = opts[asNum - 1];
+        else picked = opts.find(o => o.toLowerCase() === raw.toLowerCase()) || null;
+        if (!picked) {
+            await _send(chatId, `Didn't recognise that. Reply with 1..${opts.length} or the booking number.`);
+            return { action_taken: 'awaiting_booking_selection' };
+        }
+        await clearPending(chatId);
+        // Now check within the picked booking how many containers of this person still need this action.
+        // If just 1 → fire directly. If 2+ → ask which container.
+        const containers = require('../helpers/containers');
+        const { loadBookings } = require('../helpers/json');
+        const b = loadBookings()[picked];
+        const stagesForIntent = {
+            empty_drop_confirmed  : ['forwarded'],
+            picked_up_confirmed   : ['load_ready'],
+            scale_ticket_received : ['picked_up'],
+            ingate_received       : ['picked_up'],
+            load_ready_received   : ['supplier_assigned', 'empty_dropped'],
+        };
+        const kind = pending.person_kind || 'trucker';
+        const stageWhitelist = stagesForIntent[pending.intent_to_resolve] || [];
+        const matches = (b?.containers || []).filter(c =>
+            c[kind] && String(c[kind]).toLowerCase() === String(pending.person_name || '').toLowerCase() &&
+            stageWhitelist.includes(c.stage || 'not_started')
+        );
+        if (matches.length === 0) {
+            await _send(chatId, `Nothing to update on ${picked} — no containers waiting for that action.`);
+            return { action_taken: 'noop' };
+        }
+        if (matches.length === 1) {
+            return fireResolvedStateIntent(pending.intent_to_resolve, picked, matches[0].seq, pending.person_name, pending.has_media);
+        }
+        // 2+ containers → cascade to container selection.
+        return askWhichContainer(chatId, {
+            bkg_no            : picked,
+            intent_to_resolve : pending.intent_to_resolve,
+            has_media         : pending.has_media,
+            container_options : matches.map(c => c.seq),
+        });
+    }
+
+    // Phase 4a: trucker/supplier picking which container of a known booking.
+    case 'awaiting_container_selection': {
+        const opts = pending.container_options || [];
+        const raw = String(answer || selection || '').trim();
+        const seq = parseInt(raw, 10);
+        if (isNaN(seq) || !opts.includes(seq)) {
+            await _send(chatId, `Didn't recognise that. Reply with one of: ${opts.join(', ')}.`);
+            return { action_taken: 'awaiting_container_selection' };
+        }
+        await clearPending(chatId);
+        // person_name is derived from chatId at fire time — but we didn't stash it here.
+        // We rely on the state handlers not needing it (they use byName only for team-notify text).
+        return fireResolvedStateIntent(pending.intent_to_resolve, pending.bkg_no, seq, null, pending.has_media);
+    }
+
     default:
         await clearPending(chatId);
         return { action_taken: 'unknown_pending_cleared' };
@@ -443,6 +595,7 @@ showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,
 emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived,
+askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 };
