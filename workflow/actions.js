@@ -109,24 +109,51 @@ return { action_taken: 'contacts_shown' };
 
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
-async function forwardBooking(chatId, bkgNo, truckerName) {
+async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
 
-// Guard — real ops rule: supplier must be assigned before forwarding to trucker.
-// Prevents forwarding a booking that has no supplier lined up to load it.
-// Checks per-container suppliers (Phase 1 schema) first, falls back to legacy flat supplier.
-const containers = Array.isArray(booking.containers) ? booking.containers : [];
-const hasAnySupplier = containers.some(c => c.supplier) || !!booking.supplier;
-if (!hasAnySupplier) {
-    await _send(chatId, `Can't forward ${bkgNo} — no supplier assigned yet. Type "assign ${bkgNo}" first to pick a supplier.`);
-    return { action_taken: 'no_supplier_assigned' };
+const containers = require('../helpers/containers');
+const cList = Array.isArray(booking.containers) ? booking.containers : [];
+
+// Resolve target container:
+//   - Explicit seq → validate exists.
+//   - No seq + multi-container → auto-pick next unassigned (lowest seq).
+//   - No seq + single container (or legacy flat) → container 1 (or synthesised).
+let targetContainer;
+if (containerSeq != null) {
+    targetContainer = containers.getContainer(booking, containerSeq);
+    if (!targetContainer) {
+        await _send(chatId, `Container ${containerSeq} not found on ${bkgNo}. Available: ${cList.map(c => '#' + c.seq).join(', ') || 'none'}.`);
+        return { action_taken: 'container_not_found' };
+    }
+} else if (cList.length > 0) {
+    targetContainer = containers.nextUnassignedContainer(booking, 'trucker');
+    if (!targetContainer) {
+        await _send(chatId, `${bkgNo}: all ${cList.length} container${cList.length > 1 ? 's' : ''} already assigned to truckers. Nothing to forward.`);
+        return { action_taken: 'max_capacity' };
+    }
+} else {
+    targetContainer = null; // Legacy flat — no containers[] at all
+}
+
+// Supplier guard — per-container check when we have a target, else legacy any-supplier check.
+if (targetContainer) {
+    if (!targetContainer.supplier) {
+        await _send(chatId, `Can't forward ${bkgNo}/${targetContainer.seq} — no supplier assigned to container #${targetContainer.seq}. Assign a supplier first.`);
+        return { action_taken: 'no_supplier_assigned' };
+    }
+} else {
+    if (!booking.supplier) {
+        await _send(chatId, `Can't forward ${bkgNo} — no supplier assigned yet. Type "assign ${bkgNo}" first.`);
+        return { action_taken: 'no_supplier_assigned' };
+    }
 }
 
 if (!truckerName) {
     const sel = truckers.buildTruckerSelectionMessage(bkgNo);
     if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_truckers' }; }
-    await setPending(chatId, { type: 'select_trucker', bkg_no: bkgNo, options: sel.list.map(t => t.name) });
+    await setPending(chatId, { type: 'select_trucker', bkg_no: bkgNo, container_seq: targetContainer?.seq || null, options: sel.list.map(t => t.name) });
     await _send(chatId, sel.text);
     return { action_taken: 'awaiting_trucker_selection' };
 }
@@ -134,28 +161,30 @@ if (!truckerName) {
 const t = truckers.getTrucker(truckerName);
 if (!t) { await _send(chatId, `Trucker "${truckerName}" not found. Type "forward ${bkgNo}" to pick from the list.`); return { action_taken: 'trucker_not_found' }; }
 
-// Web Bot tab (sendCapture ALS active) — skip yes/no confirm, fire immediately.
-// User explicitly accepted the risk of no confirmation for the web command surface.
+// Web Bot tab — skip yes/no confirm.
 if (isWebSource()) {
     await clearPending(chatId);
-    return executeForward(chatId, bkgNo, t.name);
+    return executeForward(chatId, bkgNo, t.name, targetContainer?.seq || null);
 }
 
-await setPending(chatId, { type: 'confirm_forward', bkg_no: bkgNo, trucker_name: t.name });
-await _send(chatId, `Forward ${bkgNo} to ${t.name}? (yes/no)`);
+await setPending(chatId, { type: 'confirm_forward', bkg_no: bkgNo, trucker_name: t.name, container_seq: targetContainer?.seq || null });
+const label = targetContainer ? `${bkgNo}/${targetContainer.seq}` : bkgNo;
+await _send(chatId, `Forward ${label} to ${t.name}? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
 }
 
-// Executes after manager confirms
-async function executeForward(chatId, bkgNo, truckerName) {
+// Executes after manager confirms.
+// containerSeq (optional): write the trucker onto that specific container.
+async function executeForward(chatId, bkgNo, truckerName, containerSeq) {
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
 
 const truckerChat = truckers.getTruckerChatId(truckerName);
 const t           = truckers.getTrucker(truckerName);
+const label       = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
 await _send(truckerChat,
-    [`New booking — ${bkgNo}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
+    [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
 
 // PDF side track — never blocks the forward
 try {
@@ -164,27 +193,68 @@ try {
     if (pdf) await _send(truckerChat, null, pdf);
 } catch (e) { console.log('[ACTIONS] PDF skip:', e.message); }
 
+// Per-container: write trucker + stage onto the target container.
+if (containerSeq != null) {
+    const { mutateJson } = require('../helpers/json');
+    const { migrate } = require('../helpers/containers');
+    await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
+        if (!all[bkgNo]) return all;
+        all[bkgNo] = migrate(all[bkgNo]);
+        const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+        if (c) { c.trucker = truckerName; c.stage = 'forwarded'; }
+        return all;
+    });
+}
+
+// Booking-level workflow: bookingStage (weakest link) drives the top-level 'step'.
+// Once ANY container is forwarded, top-level step advances to 'forwarded' if it was earlier.
+const { bookingStage } = require('../helpers/containers');
+const { loadBookings } = require('../helpers/json');
+const fresh = loadBookings()[bkgNo];
+const topStage = fresh ? bookingStage(fresh) : 'forwarded';
+
 await updateWorkflow(bkgNo, {
-    step            : 'forwarded',
-    trucker_name    : truckerName,
+    step            : topStage,
+    trucker_name    : truckerName,                  // legacy — kept for backward compat with existing readers
     trucker_group_id: t?.group_id || truckerChat,
     forwarded_at    : new Date().toISOString(),
 });
 
-await _send(chatId, `${bkgNo} forwarded to ${truckerName}.`);
-_pushAlert({ type: 'forwarded', bkgNo, message: `${bkgNo} forwarded to ${truckerName}`, severity: 'info' });
+await _send(chatId, `${label} forwarded to ${truckerName}.`);
+_pushAlert({ type: 'forwarded', bkgNo, message: `${label} forwarded to ${truckerName}`, severity: 'info' });
 return { action_taken: 'forwarded' };
 }
 
 // ── Assign supplier ───────────────────────────────────────────────────────────
-async function assignSupplier(chatId, bkgNo, supplierName) {
+async function assignSupplier(chatId, bkgNo, supplierName, containerSeq) {
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+
+const containersMod = require('../helpers/containers');
+const cList = Array.isArray(booking.containers) ? booking.containers : [];
+
+// Resolve target container: explicit seq → validate; else auto-pick next unassigned supplier.
+let targetContainer;
+if (containerSeq != null) {
+    targetContainer = containersMod.getContainer(booking, containerSeq);
+    if (!targetContainer) {
+        await _send(chatId, `Container ${containerSeq} not found on ${bkgNo}. Available: ${cList.map(c => '#' + c.seq).join(', ') || 'none'}.`);
+        return { action_taken: 'container_not_found' };
+    }
+} else if (cList.length > 0) {
+    targetContainer = containersMod.nextUnassignedContainer(booking, 'supplier');
+    if (!targetContainer) {
+        await _send(chatId, `${bkgNo}: all ${cList.length} container${cList.length > 1 ? 's' : ''} already have suppliers. Nothing to assign.`);
+        return { action_taken: 'max_capacity' };
+    }
+} else {
+    targetContainer = null; // Legacy flat
+}
 
 if (!supplierName) {
     const sel = suppliers.buildSupplierSelectionMessage(bkgNo);
     if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_suppliers' }; }
-    await setPending(chatId, { type: 'select_supplier', bkg_no: bkgNo, options: sel.list.map(s => s.name) });
+    await setPending(chatId, { type: 'select_supplier', bkg_no: bkgNo, container_seq: targetContainer?.seq || null, options: sel.list.map(s => s.name) });
     await _send(chatId, sel.text);
     return { action_taken: 'awaiting_supplier_selection' };
 }
@@ -195,33 +265,54 @@ if (!s) { await _send(chatId, `Supplier "${supplierName}" not found.`); return {
 // Web Bot tab — skip yes/no confirm, fire immediately.
 if (isWebSource()) {
     await clearPending(chatId);
-    return executeAssign(chatId, bkgNo, s.name);
+    return executeAssign(chatId, bkgNo, s.name, targetContainer?.seq || null);
 }
 
-await setPending(chatId, { type: 'confirm_assign', bkg_no: bkgNo, supplier_name: s.name });
-await _send(chatId, `Assign ${bkgNo} to ${s.name}? (yes/no)`);
+await setPending(chatId, { type: 'confirm_assign', bkg_no: bkgNo, supplier_name: s.name, container_seq: targetContainer?.seq || null });
+const label = targetContainer ? `${bkgNo}/${targetContainer.seq}` : bkgNo;
+await _send(chatId, `Assign ${label} to ${s.name}? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
 }
 
-async function executeAssign(chatId, bkgNo, supplierName) {
+async function executeAssign(chatId, bkgNo, supplierName, containerSeq) {
 const { booking } = getBooking(bkgNo);
 if (!booking) return { action_taken: 'not_found' };
 
 const supplierChat = suppliers.getSupplierChatId(supplierName);
 const s            = suppliers.getSupplier(supplierName);
+const label        = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
 await _send(supplierChat,
-    [`New assignment — ${bkgNo}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
+    [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
+
+// Per-container: write supplier + stage onto the target container.
+if (containerSeq != null) {
+    const { mutateJson } = require('../helpers/json');
+    const { migrate } = require('../helpers/containers');
+    await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
+        if (!all[bkgNo]) return all;
+        all[bkgNo] = migrate(all[bkgNo]);
+        const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+        if (c) { c.supplier = supplierName; if (c.stage === 'not_started') c.stage = 'supplier_assigned'; }
+        return all;
+    });
+}
+
+// Booking-level workflow — weakest link.
+const { bookingStage } = require('../helpers/containers');
+const { loadBookings } = require('../helpers/json');
+const fresh = loadBookings()[bkgNo];
+const topStage = fresh ? bookingStage(fresh) : 'supplier_assigned';
 
 await updateWorkflow(bkgNo, {
-    step             : 'supplier_assigned',
-    supplier         : supplierName,
+    step             : topStage,
+    supplier         : supplierName,             // legacy — kept for existing readers
     supplier_group_id: s?.group_id || supplierChat,
     assigned_at      : new Date().toISOString(),
 });
 
-await _send(chatId, `${bkgNo} assigned to ${supplierName}.`);
-_pushAlert({ type: 'assigned', bkgNo, message: `${bkgNo} assigned to ${supplierName}`, severity: 'info' });
+await _send(chatId, `${label} assigned to ${supplierName}.`);
+_pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierName}`, severity: 'info' });
 return { action_taken: 'assigned' };
 }
 
@@ -308,16 +399,16 @@ if (answer === 'no') {
 switch (pending.type) {
     case 'select_trucker':
         await clearPending(chatId);
-        return forwardBooking(chatId, pending.bkg_no, selection); // → confirm step
+        return forwardBooking(chatId, pending.bkg_no, selection, pending.container_seq); // → confirm step
     case 'select_supplier':
         await clearPending(chatId);
-        return assignSupplier(chatId, pending.bkg_no, selection);
+        return assignSupplier(chatId, pending.bkg_no, selection, pending.container_seq);
     case 'confirm_forward':
         await clearPending(chatId);
-        return executeForward(chatId, pending.bkg_no, pending.trucker_name);
+        return executeForward(chatId, pending.bkg_no, pending.trucker_name, pending.container_seq);
     case 'confirm_assign':
         await clearPending(chatId);
-        return executeAssign(chatId, pending.bkg_no, pending.supplier_name);
+        return executeAssign(chatId, pending.bkg_no, pending.supplier_name, pending.container_seq);
     case 'confirm_recall':
         await clearPending(chatId);
         return executeRecall(chatId, pending.bkg_no);

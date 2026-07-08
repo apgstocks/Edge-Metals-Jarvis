@@ -111,10 +111,12 @@ function policyDecide(ctx) {
         if (['truckers', 'suppliers', 'contacts'].includes(t)) return { intent: 'show_contacts', resolvedBy: 'policy' };
 
         let m;
-        if ((m = t.match(/^forward\s+(\S+)(?:\s+to\s+(.+))?$/)))
-            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), trucker_name: m[2] || null } };
-        if ((m = t.match(/^assign\s+(\S+)(?:\s+to\s+(.+))?$/)))
-            return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), supplier_name: m[2] || null } };
+        // Grammar supports optional /N suffix for container seq: "forward BKG/1 to Dave"
+        // No slash → auto-picks next unassigned container in executeForward.
+        if ((m = t.match(/^forward\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/)))
+            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), container_seq: m[2] ? parseInt(m[2], 10) : null, trucker_name: m[3] || null } };
+        if ((m = t.match(/^assign\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/)))
+            return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), container_seq: m[2] ? parseInt(m[2], 10) : null, supplier_name: m[3] || null } };
         if ((m = t.match(/^recall\s+(\S+)$/)))
             return { intent: 'recall_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
         if ((m = t.match(/^archive\s+(\S+)$/)))
@@ -274,8 +276,8 @@ async function route(decision, ctx, sendMessage) {
         case 'show_bookings_available':return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
-        case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name) : ask(chatId, 'Which booking should I forward? e.g. "forward BK123456"');
-        case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name) : ask(chatId, 'Which booking should I assign? e.g. "assign BK123456"');
+        case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : ask(chatId, 'Which booking should I forward? e.g. "forward BK123456"');
+        case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : ask(chatId, 'Which booking should I assign? e.g. "assign BK123456"');
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : ask(chatId, 'Which booking should I recall?');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : ask(chatId, 'Which booking should I archive?');
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName);

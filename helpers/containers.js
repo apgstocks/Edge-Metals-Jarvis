@@ -76,4 +76,20 @@ function assignedCount(booking, kind /* 'supplier'|'trucker' */) {
     return (booking?.containers || []).filter(c => c[kind]).length;
 }
 
-module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount };
+// Return lowest-seq container missing the given assignment (kind: 'supplier'|'trucker').
+// Returns null if all containers already have that kind assigned (capacity full).
+function nextUnassignedContainer(booking, kind) {
+    if (!booking?.containers) return null;
+    const sorted = [...booking.containers].sort((a, b) => a.seq - b.seq);
+    return sorted.find(c => !c[kind]) || null;
+}
+
+// Look up which container of a booking is assigned to a person by name.
+// Used later by trucker/supplier replies to disambiguate which container's stage advances.
+function containerAssignedTo(booking, kind, name) {
+    if (!booking?.containers || !name) return null;
+    const lower = String(name).toLowerCase();
+    return booking.containers.find(c => c[kind] && String(c[kind]).toLowerCase() === lower) || null;
+}
+
+module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount, nextUnassignedContainer, containerAssignedTo };
