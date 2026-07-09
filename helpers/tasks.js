@@ -101,14 +101,30 @@ async function cancel(taskId, reason = 'user_cancelled') {
 // Called by brain when a state change makes pending tasks moot.
 // Example: trucker sends scale ticket → cancel all pending 'nudge_scale_ticket' tasks
 // tied to that booking. Prevents Jarvis nagging after the answer arrived.
-async function cancelMatching({ type, bkg_no, target_name }) {
+//
+// container_seq semantics:
+//   - Call specifies container_seq: cancel tasks that either have NO container_seq
+//     (booking-level tasks) OR match the same container_seq.
+//   - Call omits container_seq: cancel only tasks that ALSO have no container_seq
+//     (avoid killing container-specific tasks from a booking-level state change).
+async function cancelMatching({ type, bkg_no, target_name, container_seq }) {
     const list = loadTasks();
-    const toCancel = list.filter(t =>
-        t.status === 'pending' &&
-        (!type         || t.type        === type) &&
-        (!bkg_no       || t.bkg_no      === bkg_no) &&
-        (!target_name  || t.target_name === target_name)
-    );
+    const toCancel = list.filter(t => {
+        if (t.status !== 'pending') return false;
+        if (type         && t.type        !== type)        return false;
+        if (bkg_no       && t.bkg_no      !== bkg_no)      return false;
+        if (target_name  && t.target_name !== target_name) return false;
+        // Container-seq matching:
+        if (container_seq != null) {
+            // caller advanced a specific container — cancel tasks for that container
+            // AND tasks with no container_seq (booking-level tasks that resolve too)
+            if (t.container_seq != null && t.container_seq !== container_seq) return false;
+        } else {
+            // caller advanced booking-level — do NOT cancel container-specific tasks
+            if (t.container_seq != null) return false;
+        }
+        return true;
+    });
     for (const t of toCancel) {
         await archive(t.id, { status: 'cancelled', result_note: 'auto_cancelled_state_resolved' });
     }
@@ -119,17 +135,35 @@ async function cancelMatching({ type, bkg_no, target_name }) {
 // 'skip' means the reason for the task no longer applies — auto-archive as done.
 function evaluateCondition(task) {
     if (!task.condition || !task.condition.type) return 'fire';
-    const { loadWorkflow } = require('./json');
-    const wf = loadWorkflow()[task.condition.bkg_no || task.bkg_no] || {};
+    const bkgNo = task.condition.bkg_no || task.bkg_no;
     if (task.condition.type === 'workflow_flag_true') {
+        const { loadWorkflow } = require('./json');
+        const wf = loadWorkflow()[bkgNo] || {};
         return wf[task.condition.flag] ? 'skip' : 'fire';
     }
     if (task.condition.type === 'workflow_step_at_or_past') {
+        const { loadWorkflow } = require('./json');
+        const wf = loadWorkflow()[bkgNo] || {};
         const cfg2 = require('../config');
         const order = cfg2.WORKFLOW_STAGES || [];
         const current = order.indexOf(wf.step);
         const target  = order.indexOf(task.condition.step);
-        // fire only if we haven't reached the target step yet
+        return (current >= 0 && target >= 0 && current >= target) ? 'skip' : 'fire';
+    }
+    // Per-container stage check — used when task is tied to a specific container.
+    // Skips (auto-completes) if the target container's stage has reached or passed
+    // the condition's step.
+    if (task.condition.type === 'container_stage_at_or_past') {
+        const { loadBookings } = require('./json');
+        const cfg2 = require('../config');
+        const seq = task.condition.container_seq != null ? task.condition.container_seq : task.container_seq;
+        const booking = loadBookings()[bkgNo];
+        if (!booking || !Array.isArray(booking.containers) || seq == null) return 'fire';
+        const c = booking.containers.find(x => x.seq === seq);
+        if (!c) return 'fire';
+        const order = cfg2.WORKFLOW_STAGES || [];
+        const current = order.indexOf(c.stage);
+        const target  = order.indexOf(task.condition.step);
         return (current >= 0 && target >= 0 && current >= target) ? 'skip' : 'fire';
     }
     return 'fire';

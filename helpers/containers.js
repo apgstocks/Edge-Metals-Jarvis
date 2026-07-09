@@ -121,4 +121,19 @@ function findActiveAssignments(bookingsDict, kind, name, activeStages = null) {
     return out;
 }
 
-module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount, nextUnassignedContainer, containerAssignedTo, containersAssignedTo, findActiveAssignments };
+module.exports = { migrate, migrateAll, getContainer, bookingStage, assignedCount, nextUnassignedContainer, containerAssignedTo, containersAssignedTo, findActiveAssignments, laggingContainers, allContainersTerminal };
+
+// Return containers of a booking that are NOT yet in a terminal stage.
+// terminalStages defaults to config's TERMINAL_STEPS if none passed.
+function laggingContainers(booking, terminalStages) {
+    if (!Array.isArray(booking?.containers)) return [];
+    const term = terminalStages || (require('../config').TERMINAL_STEPS || ['ingate_received', 'done']);
+    return booking.containers.filter(c => !term.includes(c.stage || 'not_started'));
+}
+
+// True iff every container has reached a terminal stage.
+function allContainersTerminal(booking, terminalStages) {
+    if (!Array.isArray(booking?.containers) || booking.containers.length === 0) return false;
+    const term = terminalStages || (require('../config').TERMINAL_STEPS || ['ingate_received', 'done']);
+    return booking.containers.every(c => term.includes(c.stage || 'not_started'));
+}

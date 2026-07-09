@@ -416,6 +416,10 @@
         <input id="t_bkg" type="text" placeholder="DALA23991600" style="font-family:var(--mono);">
       </div>
       <div>
+        <label for="t_container_seq">Container # (optional)</label>
+        <input id="t_container_seq" type="number" min="1" placeholder="e.g. 2 for BKG/2" style="font-family:var(--mono);">
+      </div>
+      <div>
         <label for="t_delay">Fire in (minutes)</label>
         <input id="t_delay" type="number" min="1" value="60">
       </div>
@@ -1662,7 +1666,7 @@
       return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
         <div style="flex:1; min-width:0;">
           <div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')}</div>
-          <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:2px;">${t.bkg_no ? esc(t.bkg_no) + ' · ' : ''}${when} · fires ${new Date(t.fire_at).toLocaleString()}</div>
+          <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:2px;">${t.bkg_no ? esc(t.bkg_no) + (t.container_seq != null ? '/' + t.container_seq : '') + ' · ' : ''}${when} · fires ${new Date(t.fire_at).toLocaleString()}</div>
           <div style="font-size:11.5px; color:var(--text-body); margin-top:4px; font-style:italic;">"${esc(t.message.slice(0, 100))}${t.message.length > 100 ? '…' : ''}"</div>
         </div>
         <button type="button" class="btn-secondary" data-t-cancel="${esc(t.id)}" style="padding:5px 10px; font-size:10.5px; color:var(--danger); border-color:var(--danger); white-space:nowrap;">Cancel</button>
@@ -1693,34 +1697,56 @@
                   : /* failed */              'background:#FAE2DE; color:var(--danger-text);';
       return `<div style="display:grid; grid-template-columns:80px 1fr 160px; gap:10px; padding:6px 10px; font-size:11px; border-bottom:1px solid var(--border);">
         <div><span class="bk-cell-pill" style="${badge}">${esc(t.status)}</span></div>
-        <div>${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')} ${t.bkg_no ? '· ' + esc(t.bkg_no) : ''} <span style="color:var(--text-faint);">${esc(t.result_note || '')}</span></div>
+        <div>${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')} ${t.bkg_no ? '· ' + esc(t.bkg_no) + (t.container_seq != null ? '/' + t.container_seq : '') : ''} <span style="color:var(--text-faint);">${esc(t.result_note || '')}</span></div>
         <div class="mono" style="color:var(--text-faint);">${t.completed_at ? new Date(t.completed_at).toLocaleString() : '—'}</div>
       </div>`;
     }).join('');
   }
+
+  // Container-aware condition builder — when task is tied to a specific container,
+  // the condition checks per-container stage (auto-cancels only when THAT container advances).
+  const TASK_TYPE_TO_CONTAINER_CONDITION = {
+    nudge_scale_ticket: (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'picked_up',       bkg_no: bkg, container_seq: seq } : null,
+    nudge_load_ready  : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'load_ready',      bkg_no: bkg, container_seq: seq } : null,
+    nudge_empty_drop  : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'empty_dropped',   bkg_no: bkg, container_seq: seq } : null,
+    nudge_ingate      : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'ingate_received', bkg_no: bkg, container_seq: seq } : null,
+    nudge_pickup      : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'picked_up',       bkg_no: bkg, container_seq: seq } : null,
+    generic_message   : () => null,
+  };
 
   $('t_create').addEventListener('click', async () => {
     const type        = $('t_type').value;
     const target_kind = $('t_target_kind').value;
     const target_name = $('t_target_name').value.trim();
     const bkg_no      = $('t_bkg').value.trim().toUpperCase();
+    const container_seq_raw = $('t_container_seq').value.trim();
+    const container_seq = container_seq_raw ? parseInt(container_seq_raw, 10) : null;
     const delay_minutes = parseInt($('t_delay').value, 10);
     const message     = $('t_message').value.trim();
     $('t_create_err').textContent = '';
     if (target_kind !== 'manager' && !target_name) { $('t_create_err').textContent = 'Name required for trucker/supplier.'; return; }
     if (!message) { $('t_create_err').textContent = 'Message required.'; return; }
     if (!delay_minutes || delay_minutes < 1) { $('t_create_err').textContent = 'Delay must be at least 1 minute.'; return; }
+    if (container_seq_raw && (isNaN(container_seq) || container_seq < 1)) { $('t_create_err').textContent = 'Container # must be a positive number.'; return; }
+    if (container_seq && !bkg_no) { $('t_create_err').textContent = 'Container # requires a booking number.'; return; }
     const btn = $('t_create'); btn.disabled = true; btn.textContent = 'Creating…';
     try {
-      const condition = TASK_TYPE_TO_CONDITION[type] ? TASK_TYPE_TO_CONDITION[type](bkg_no || null) : null;
+      // Pick container-aware condition if seq set, else booking-level condition, else none.
+      let condition = null;
+      if (container_seq && bkg_no && TASK_TYPE_TO_CONTAINER_CONDITION[type]) {
+        condition = TASK_TYPE_TO_CONTAINER_CONDITION[type](bkg_no, container_seq);
+      } else if (bkg_no && TASK_TYPE_TO_CONDITION[type]) {
+        condition = TASK_TYPE_TO_CONDITION[type](bkg_no);
+      }
       const r = await fetch('/api/tasks', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ type, target_kind, target_name: target_name || null, bkg_no: bkg_no || null, delay_minutes, message, condition }),
+        body: JSON.stringify({ type, target_kind, target_name: target_name || null, bkg_no: bkg_no || null, container_seq: container_seq || null, delay_minutes, message, condition }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'create failed');
       $('t_target_name').value = '';
       $('t_bkg').value = '';
+      $('t_container_seq').value = '';
       $('t_message').value = TASK_MESSAGE_DEFAULTS[type] || '';
       await loadTasks();
     } catch (e) { $('t_create_err').textContent = e.message; }

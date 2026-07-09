@@ -35,18 +35,33 @@ async function morningDigest() {
     const active   = Object.values(bookings);
     if (!active.length) return;
 
+    const { laggingContainers, allContainersTerminal } = require('./helpers/containers');
+
     const urgent = getUrgentBookings();
     const stuck  = Object.entries(workflow).filter(([bkgNo, wf]) => {
-        if (!bookings[bkgNo] || cfg.TERMINAL_STEPS.includes(wf.step)) return false;
+        if (!bookings[bkgNo] || allContainersTerminal(bookings[bkgNo])) return false;
+        if (cfg.TERMINAL_STEPS.includes(wf.step) && !Array.isArray(bookings[bkgNo]?.containers)) return false;
         const last = new Date(wf.updated_at || wf.created_at || 0).getTime();
         return Date.now() - last > 2 * 86400000; // no movement in 48h
     });
+
+    // Per-booking urgent line: if multi-container, list lagging containers explicitly.
+    const urgentLine = (b) => {
+        const wf   = workflow[b.booking_number] || {};
+        const lag  = laggingContainers(b);
+        const dLeft = daysUntil(b.cutoff_date);
+        if (Array.isArray(b.containers) && b.containers.length > 1 && lag.length > 0 && lag.length < b.containers.length) {
+            const lagList = lag.map(c => `${b.booking_number}/${c.seq} (${stepLabel(c.stage)})`).join(', ');
+            return `- ${b.booking_number} cutoff ${b.cutoff_date} (${dLeft}d) — lagging: ${lagList}`;
+        }
+        return `- ${b.booking_number} cutoff ${b.cutoff_date} (${dLeft}d) — ${stepLabel(wf.step)}`;
+    };
 
     const lines = [
         `Morning digest — ${active.length} active booking(s)`,
         '',
         urgent.length ? 'URGENT CUTOFFS:' : 'No urgent cutoffs.',
-        ...urgent.map(b => `- ${b.booking_number} cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d) — ${stepLabel(workflow[b.booking_number]?.step)}`),
+        ...urgent.map(urgentLine),
     ];
     if (stuck.length) {
         lines.push('', 'STUCK (48h+ no movement):');
@@ -59,31 +74,51 @@ async function morningDigest() {
 }
 
 // ── Hourly 9–17 — urgent cutoff watch ─────────────────────────────────────────
+// Alerts fire per lagging container on multi-container bookings, or per-booking
+// on single-container bookings. Booking is considered done when ALL containers
+// reach a terminal stage (per user rule: cutoff is booking-level).
 async function urgentWatch() {
     const workflow = loadWorkflow();
+    const { laggingContainers, allContainersTerminal } = require('./helpers/containers');
+
     for (const b of getUrgentBookings()) {
         const wf = workflow[b.booking_number] || {};
-        if (cfg.TERMINAL_STEPS.includes(wf.step)) continue;
+        if (allContainersTerminal(b)) continue;
+        // Legacy flat: fall back to top-level step
+        if (!Array.isArray(b.containers) && cfg.TERMINAL_STEPS.includes(wf.step)) continue;
 
         const d   = daysUntil(b.cutoff_date);
         const key = `urgent_${b.booking_number}_${todayKey()}`;
         if (alreadySent(key)) continue;
 
+        const lag = laggingContainers(b);
+        let message;
+        if (lag.length > 0 && Array.isArray(b.containers) && b.containers.length > 1) {
+            const lagList = lag.map(c => `${b.booking_number}/${c.seq} at ${stepLabel(c.stage)}`).join(', ');
+            message = `${b.booking_number}: cutoff in ${d}d — lagging: ${lagList}`;
+        } else {
+            message = `${b.booking_number}: cutoff in ${d}d, still at "${stepLabel(wf.step)}"`;
+        }
+
         await pushAlert({
             type    : 'cutoff_risk',
             bkgNo   : b.booking_number,
-            message : `${b.booking_number}: cutoff in ${d}d, still at "${stepLabel(wf.step)}"`,
+            message,
             severity: d <= 1 ? 'high' : 'warning',
         });
-        if (d <= 1) await _sendToTeam(`${b.booking_number}: cutoff TOMORROW and still at "${stepLabel(wf.step)}". Escalate now.`);
+        if (d <= 1) await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
         await markSent(key);
     }
 }
 
 // ── 11PM — auto-archive (cutoff passed yesterday, no ingate, not kept) ────────
+// Multi-container rule: archive only if ALL containers are in a terminal stage.
+// If /1 is ingated but /2 is still forwarded, the booking stays active so ops
+// can decide (recall /2, escalate, etc).
 async function autoArchive() {
     const bookings = loadBookings();
     const workflow = loadWorkflow();
+    const { allContainersTerminal } = require('./helpers/containers');
     const archived = [];
 
     for (const [bkgNo, b] of Object.entries(bookings)) {
@@ -91,8 +126,14 @@ async function autoArchive() {
         const d  = daysUntil(b.cutoff_date);
         const wf = workflow[bkgNo] || {};
         if (d !== -1) continue;                                  // exactly one day past — older ones handled in earlier runs
-        if (cfg.TERMINAL_STEPS.includes(wf.step)) continue;
         if (wf.keep_active) continue;
+
+        // Multi-container: skip if any container still active. Legacy flat: use wf.step.
+        if (Array.isArray(b.containers) && b.containers.length > 0) {
+            if (!allContainersTerminal(b)) continue;
+        } else {
+            if (cfg.TERMINAL_STEPS.includes(wf.step)) continue;
+        }
 
         await mutateJson(cfg.HISTORY_FILE, {}, (h) => {
             h[bkgNo] = { ...b, archived_at: new Date().toISOString(), archive_reason: 'cutoff_passed_auto', final_step: wf.step || 'not_started' };
@@ -156,9 +197,15 @@ async function taskRunner() {
                 continue;
             }
 
-            // 3. Send.
+            // 3. Send. Auto-prefix booking/container label so the recipient has context.
+            //    Skips prefix if the message already mentions the booking number.
             await tasks.updateTask(task.id, { status: 'firing' });
-            const ok = await _sendMessage(chatId, task.message);
+            let msg = task.message;
+            if (task.bkg_no && !msg.includes(task.bkg_no)) {
+                const label = task.container_seq != null ? `${task.bkg_no}/${task.container_seq}` : task.bkg_no;
+                msg = `${label}: ${msg}`;
+            }
+            const ok = await _sendMessage(chatId, msg);
             if (ok) {
                 await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
                 console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);

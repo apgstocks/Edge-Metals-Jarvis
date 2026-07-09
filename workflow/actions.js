@@ -398,7 +398,7 @@ const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 if (supplierChat) await _send(supplierChat, `${label}: empty container dropped. Please start loading and reply "load ready" when done.`);
 await _sendToTeam(`${label}: empty dropped (${byName || 'trucker'}).`);
-await require('../helpers/tasks').cancelMatching({ type: 'nudge_empty_drop', bkg_no: bkgNo });
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_empty_drop', bkg_no: bkgNo, container_seq: containerSeq });
 return { action_taken: 'empty_dropped' };
 }
 
@@ -411,7 +411,7 @@ const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 if (truckerChat) await _send(truckerChat, `${label}: load is READY for pickup. Please confirm your pickup window and send the scale ticket after pickup.`);
 await _sendToTeam(`${label}: load ready (${byName || 'supplier'}). Trucker notified.`);
-await require('../helpers/tasks').cancelMatching({ type: 'nudge_load_ready', bkg_no: bkgNo });
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_load_ready', bkg_no: bkgNo, container_seq: containerSeq });
 return { action_taken: 'load_ready' };
 }
 
@@ -426,8 +426,8 @@ await updateWorkflow(bkgNo, {
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 await _sendToTeam(`${label}: picked up${hasScaleTicket ? ' — scale ticket received' : ' (scale ticket pending)'} (${byName || 'trucker'}).`);
 const tasksHelper = require('../helpers/tasks');
-await tasksHelper.cancelMatching({ type: 'nudge_pickup', bkg_no: bkgNo });
-if (hasScaleTicket) await tasksHelper.cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
+await tasksHelper.cancelMatching({ type: 'nudge_pickup', bkg_no: bkgNo, container_seq: containerSeq });
+if (hasScaleTicket) await tasksHelper.cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo, container_seq: containerSeq });
 return { action_taken: 'picked_up' };
 }
 
@@ -438,7 +438,7 @@ async function scaleTicketReceived(bkgNo, containerSeq) {
 await updateWorkflow(bkgNo, { scale_ticket: true, scale_ticket_at: new Date().toISOString() });
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 await _sendToTeam(`${label}: scale ticket received.`);
-await require('../helpers/tasks').cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo });
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_scale_ticket', bkg_no: bkgNo, container_seq: containerSeq });
 return { action_taken: 'scale_ticket' };
 }
 
@@ -450,7 +450,7 @@ const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 await _sendToManager(`${label}: INGATED at port.`);
 await _sendToTeam(`${label}: ingate received (${byName || 'trucker'}).`);
 _pushAlert({ type: 'ingated', bkgNo, message: `${label} ingated`, severity: 'info' });
-await require('../helpers/tasks').cancelMatching({ type: 'nudge_ingate', bkg_no: bkgNo });
+await require('../helpers/tasks').cancelMatching({ type: 'nudge_ingate', bkg_no: bkgNo, container_seq: containerSeq });
 return { action_taken: 'ingated' };
 }
 
