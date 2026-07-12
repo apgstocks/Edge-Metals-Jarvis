@@ -131,14 +131,21 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
 module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
+// Uses files.update with trashed=true instead of files.delete. The hard-delete
+// path has a documented Google Drive API issue where SA-uploaded files in Shared
+// Drives return "File not found" on delete despite existing. Trashing works
+// reliably and Drive auto-purges after 30 days.
 // Fails soft: if the PDF isn't found, returns { deleted: false, reason: 'not_found' }.
-// Real errors (permission denied, network) throw so the caller can decide what to do.
 async function deletePdfByBooking(bkgNo) {
     if (!bkgNo) throw new Error('booking number required');
     const file = await findPdfByBooking(bkgNo);
     if (!file) return { deleted: false, reason: 'not_found' };
     const drive = getDrive();
-    await drive.files.delete({ fileId: file.id, supportsAllDrives: true });
-    console.log(`[DRIVE] Deleted ${file.name} (${file.id}) for booking ${bkgNo}`);
+    await drive.files.update({
+        fileId: file.id,
+        requestBody: { trashed: true },
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Trashed ${file.name} (${file.id}) for booking ${bkgNo}`);
     return { deleted: true, fileId: file.id, name: file.name };
 }

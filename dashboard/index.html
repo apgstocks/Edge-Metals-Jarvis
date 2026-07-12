@@ -777,21 +777,24 @@
       }).join('');
 
       return `<div class="bk-row-group" data-bkg="${esc(b.booking_number)}">
-        <div class="bk-row" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 90px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}">
+        <div class="bk-row" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 130px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}">
           <div style="text-align:center; color:var(--text-faint); font-family:var(--mono);">▸</div>
           <div class="bk-cell-bkg">${esc(b.booking_number)}</div>
           <div class="bk-cell-sub"><span class="bk-cell-mono">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</span><br><span class="bk-cell-mono" style="color:var(--text-faint);">${esc(cLabel)}</span></div>
           <div class="bk-cell-mono">${esc(b.erd_date || '—')}</div>
           <div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div>
           <div><span class="bk-cell-pill">${esc(stageLabel)}</span></div>
-          <div><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);" onclick="event.stopPropagation();">Delete</button></div>
+          <div style="display:flex; gap:5px; justify-content:flex-end;">
+            <button type="button" class="btn-secondary" data-bk-edit="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px;" onclick="event.stopPropagation();">Edit</button>
+            <button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);" onclick="event.stopPropagation();">Delete</button>
+          </div>
         </div>
         <div class="bk-containers" style="display:none;">${containerRows}</div>
       </div>`;
     }).join('');
     $('bkList').innerHTML =
       `<div class="bk-table">
-        <div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 90px;"><div></div><div>Booking</div><div>Route / Containers</div><div>ERD</div><div>Cutoff</div><div>Stage</div><div></div></div>
+        <div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 130px;"><div></div><div>Booking</div><div>Route / Containers</div><div>ERD</div><div>Cutoff</div><div>Stage</div><div></div></div>
         ${rows}
       </div>`;
 
@@ -825,28 +828,97 @@
         }
       });
     });
+
+    // Edit — opens modal in edit mode with fields prefilled
+    $('bkList').querySelectorAll('[data-bk-edit]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const bkg = btn.dataset.bkEdit;
+        await modal.openForEdit(bkg, bookings);
+      });
+    });
   }
 
   // ── Bookings tab: modal ─────────────────────────────────────────────────
   const modal = {
     back: $('modalBack'),
     open() { modal.reset(); modal.back.style.display = 'flex'; },
-    close() { modal.back.style.display = 'none'; },
+    close() { modal.back.style.display = 'none'; editingBookingNumber = null; },
+    async openForEdit(bkg, allBookings) {
+      modal.reset();
+      const b = allBookings[bkg];
+      if (!b) { alert('Booking not found.'); return; }
+      editingBookingNumber = bkg;
+
+      // Load contact lists so container supplier/trucker dropdowns render properly.
+      await loadModalContacts();
+
+      // Populate booking-level fields
+      $('f_bkg').value    = b.booking_number || '';
+      $('f_bkg').disabled = true; // booking_number is the primary key — cannot rename
+      $('f_carrier').value = b.carrier || '';
+      $('f_pol').value    = b.port_of_loading || '';
+      $('f_pod').value    = b.port_of_discharge || '';
+      $('f_erd').value    = b.erd_date || '';
+      $('f_cutoff').value = b.cutoff_date || '';
+      $('f_vessel').value = b.vessel_voyage || '';
+      $('f_buyer').value  = b.buyer || b.consignee || '';
+
+      // Load containers (Phase 1 migration guarantees containers[] exists)
+      modalContainers = (b.containers || []).map(c => ({
+        seq              : c.seq,
+        size             : c.size || '',
+        container_number : c.container_number || '',
+        supplier         : c.supplier || '',
+        trucker          : c.trucker || '',
+        stage            : c.stage || 'not_started',
+        _locked          : ['forwarded','empty_dropped','load_ready','picked_up','ingate_received','done'].includes(c.stage || ''),
+      }));
+      renderContainersInModal();
+
+      // In edit mode, show PDF drop zone as OPTIONAL re-upload. Scan button stays hidden —
+      // edit is for manual correction, not for re-extracting fields. If user drops a PDF,
+      // Drive receives an update-in-place (uploadPdfToDrive already handles this via
+      // files.update on matching name).
+      const dropZone = $('dropZone');
+      if (dropZone) {
+        dropZone.style.display = '';
+        // Hint text lives in the drop zone label area — leave alone; user knows what they're doing
+      }
+      $('scanBtn').style.display = 'none';
+
+      // Update title + submit button label
+      const titleEl = document.getElementById('modalTitle');
+      if (titleEl) titleEl.textContent = `Edit booking — ${bkg}`;
+      const saveBtn = document.getElementById('btnSave');
+      if (saveBtn) saveBtn.textContent = 'Save changes';
+
+      modal.back.style.display = 'flex';
+    },
     reset() {
       modalPdfBase64 = null;
       modalPdfFile   = null;
+      editingBookingNumber = null;
       ['f_bkg','f_carrier','f_pol','f_pod','f_erd','f_cutoff','f_vessel','f_buyer'].forEach(id => { $(id).value = ''; });
+      $('f_bkg').disabled = false;
       modalContainers = [{ seq:1, size:'40HC', container_number:'', supplier:'', trucker:'', stage:'not_started' }];
       renderContainersInModal();
       $('formErr').style.display = 'none';
       $('scannedBanner').style.display = 'none';
       $('scanBtn').style.display = 'none';
       $('scanBtn').disabled = true;
+      const dropZone = $('dropZone');
+      if (dropZone) dropZone.style.display = '';
+      const titleEl = document.getElementById('modalTitle');
+      if (titleEl) titleEl.textContent = 'New booking';
+      const saveBtn = document.getElementById('btnSave');
+      if (saveBtn) saveBtn.textContent = 'Save booking';
       renderDrop();
     },
   };
   let modalPdfBase64 = null, modalPdfFile = null;
   let modalContainers = [];
+  let editingBookingNumber = null;
 
   // Cached lists for modal dropdowns
   let modalSuppliersList = [];
@@ -864,10 +936,15 @@
 
   function renderContainersInModal() {
     const wrap = $('f_containers_list');
-    const SIZES = ['20GP','40GP','40HC','20RF','40RF','45HC'];
+    const SIZES  = ['20GP','40GP','40HC','20RF','40RF','45HC'];
+    // Stage list mirrors config.WORKFLOW_STAGES — kept explicit here so a mis-edit doesn't
+    // silently break the dropdown. Manual override is only shown in edit mode.
+    const STAGES = ['not_started','supplier_assigned','forwarded','empty_dropped','load_ready','picked_up','ingate_received','done'];
+    const stageLabel = (s) => s.replace(/_/g,' ');
     const opt = (list, sel) => `<option value="">—</option>` + list.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('');
+    const isEditing = !!editingBookingNumber;
     wrap.innerHTML = modalContainers.map((c, i) => `
-      <div style="display:grid; grid-template-columns:50px 90px 1fr 1fr 1fr 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
+      <div style="display:grid; grid-template-columns:50px 80px 1fr 1fr 1fr ${isEditing ? '130px' : ''} 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
         <div>
           <label style="font-size:9px;">Seq</label>
           <div class="bk-cell-mono" style="padding:9px 12px; font-weight:700; color:var(--copper-700);">#${c.seq}</div>
@@ -891,11 +968,26 @@
           <label style="font-size:9px;">Trucker</label>
           <select data-c-field="trucker" data-c-idx="${i}">${opt(modalTruckersList, c.trucker)}</select>
         </div>
+        ${isEditing ? `
+        <div>
+          <label style="font-size:9px; color:var(--danger);" title="Manual override skips WhatsApp notifications">Stage (manual)</label>
+          <select data-c-field="stage" data-c-idx="${i}" style="border-color:var(--danger);">
+            ${STAGES.map(s => `<option value="${s}" ${(c.stage || 'not_started') === s ? 'selected' : ''}>${stageLabel(s)}</option>`).join('')}
+          </select>
+        </div>
+        ` : ''}
         <div>
           <button type="button" class="btn-secondary" data-c-remove="${i}" style="padding:9px 8px; font-size:11px; color:var(--danger); border-color:var(--danger);" title="Remove container" ${modalContainers.length <= 1 ? 'disabled' : ''}>×</button>
         </div>
       </div>
     `).join('');
+    // In edit mode, show a warning banner about manual stage override
+    if (isEditing) {
+      const banner = document.createElement('div');
+      banner.style.cssText = 'padding:8px 12px; background:#FAE2DE; color:var(--danger-text); border-radius:var(--radius-sm); font-size:11.5px; margin-bottom:8px; line-height:1.4;';
+      banner.innerHTML = `<strong>Manual stage override:</strong> Changing a stage here does NOT send WhatsApp messages to trucker/supplier. Use only to correct out-of-sync bookings.`;
+      wrap.insertBefore(banner, wrap.firstChild);
+    }
     wrap.querySelectorAll('[data-c-field]').forEach(el => {
       const handler = (e) => {
         const idx = +e.target.dataset.cIdx;
@@ -907,7 +999,8 @@
     wrap.querySelectorAll('[data-c-remove]').forEach(btn => {
       btn.addEventListener('click', () => {
         if (modalContainers.length <= 1) return;
-        modalContainers.splice(+btn.dataset.cRemove, 1);
+        const idx = +btn.dataset.cRemove;
+        modalContainers.splice(idx, 1);
         modalContainers.forEach((c, i) => { c.seq = i + 1; });
         renderContainersInModal();
       });
@@ -1070,13 +1163,21 @@
           stage            : c.stage || 'not_started',
         })),
       };
-      const bkRes = await fetch('/api/bookings', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const isEditing = !!editingBookingNumber;
+      const bkRes = isEditing
+        ? await fetch('/api/bookings/' + encodeURIComponent(editingBookingNumber), {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+        : await fetch('/api/bookings', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
       if (!bkRes.ok) throw new Error((await bkRes.json()).error || 'save failed');
 
-      // 2. Upload PDF to Drive (best-effort; booking saved either way)
+      // 2. Upload PDF to Drive (best-effort; booking saved either way).
+      // Runs on both create and edit — in edit mode, uploadPdfToDrive updates the
+      // existing Drive file in place (same filename → files.update).
       if (modalPdfBase64) {
         try {
           const up = await fetch('/api/bookings/upload-pdf', {

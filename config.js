@@ -139,4 +139,10 @@ module.exports = {
     MAX_REMINDERS, URGENT_CUTOFF_DAYS, PENDING_EXPIRY_MS,
     getSettings, getManagerNumber, getTeamGroupId,
     MAIN_MENU, BOOKINGS_MENU,
+    // ── LLM manager intent — Phase 1 ─────────────────────────────────────────
+    LLM_MANAGER_ENABLED : process.env.LLM_MANAGER_ENABLED !== 'false',  // default ON; set 'false' to kill
+    GEMINI_MODEL        : process.env.GEMINI_MODEL        || 'gemini-2.5-flash',
+    LLM_TIMEOUT_MS      : parseInt(process.env.LLM_TIMEOUT_MS      || '2000', 10),
+    LLM_CONFIDENCE_HIGH : parseFloat(process.env.LLM_CONFIDENCE_HIGH || '0.85'),
+    LLM_CONFIDENCE_LOW  : parseFloat(process.env.LLM_CONFIDENCE_LOW  || '0.5'),
 };

@@ -129,5 +129,26 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
     if (lastErr) throw lastErr;
     return null;
 }
+// ── Text-in / text-out call for intent parsing ──────────────────────────────
+// Separate from PDF extraction path so response formats don't leak.
+async function callGeminiText(prompt, maxTokens = 300) {
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const cfg = require('../config');
 
+    const apiKey = process.env.GEMINI_API_KEY || cfg.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY missing');
+
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+        model: cfg.GEMINI_MODEL || 'gemini-1.5-flash',
+        generationConfig: {
+            temperature       : 0.1,
+            maxOutputTokens   : maxTokens,
+            responseMimeType  : 'application/json',
+        },
+    });
+
+    const result = await model.generateContent(prompt);
+    return result.response.text();
+}
 module.exports = { callGeminiJSON, callGeminiText, extractPdfFields };
