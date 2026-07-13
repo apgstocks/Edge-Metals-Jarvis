@@ -7,6 +7,15 @@ const cfg = require('../config');
 
 const digits = (v) => String(v || '').replace(/\D/g, '');
 
+// Locality match — mirror of dashboard/index.html localityMatchesPort.
+// If either side is empty, no match (strict: unknown locality is not "any port").
+function localityMatchesPort(loc, port) {
+    const l = String(loc || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    const p = String(port || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    if (!l || !p) return false;
+    return l.includes(p) || p.includes(l);
+}
+
 // Identify which trucker a chat/sender belongs to. Returns trucker object or null.
 function matchTruckerByChat(chatId, senderNumber) {
     const truckers = loadTruckers();
@@ -51,13 +60,25 @@ function getTruckerGroupIdForBooking(bkgNo) {
     return getTruckerChatId(wf.trucker_name || loadBookings()[bkgNo]?.trucker || '');
 }
 
-// Numbered list for manager selection (policy resolves the reply by index/name)
+// Numbered list for manager selection (policy resolves the reply by index/name).
+// Strict locality: only offer truckers whose locality matches the booking's POL.
 function buildTruckerSelectionMessage(bkgNo) {
-    const truckers = loadTruckers();
-    if (!truckers.length) return { text: 'No truckers registered. Add one from the dashboard first.', list: [] };
+    const all = loadTruckers();
+    if (!all.length) return { text: 'No truckers registered. Add one from the dashboard first.', list: [] };
+
+    const port = loadBookings()[bkgNo]?.port_of_loading || '';
+    const truckers = port ? all.filter(t => localityMatchesPort(t.locality, port)) : all;
+
+    if (!truckers.length) {
+        return {
+            text: `No trucker registered at ${port}. Add one from the dashboard (Truckers tab) with locality "${port}" first.`,
+            list: [],
+        };
+    }
+    const header = port ? `Forward ${bkgNo} (${port}) — which trucker?` : `Forward ${bkgNo} — which trucker?`;
     const lines = truckers.map((t, i) => `${i + 1}. ${t.name}${t.group_id ? '' : ' (DM)'}`);
     return {
-        text: [`Forward ${bkgNo} — which trucker?`, '', ...lines, '', 'Reply with a number or name.'].join('\n'),
+        text: [header, '', ...lines, '', 'Reply with a number or name.'].join('\n'),
         list: truckers,
     };
 }

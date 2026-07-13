@@ -390,12 +390,17 @@
     return { local, universal, other };
   }
   function buildContactOptions(contacts, selectedName, port) {
-    const { local, universal, other } = splitByLocality(contacts, port);
+    const p = normLoc(port);
+    // Strict locality filter: when the booking has a POL, show ONLY contacts whose
+    // locality matches that port. If no POL is set yet (new booking), show all.
+    // The currently-selected contact is always included so a POL change doesn't
+    // silently drop the existing selection.
+    const visible = p
+      ? contacts.filter(c => localityMatchesPort(c.locality, p) || (selectedName && c.name === selectedName))
+      : contacts;
     const optOf = (c) => `<option value="${esc(c.name)}" ${selectedName === c.name ? 'selected' : ''}>${esc(c.name)}${c.locality ? ' · ' + esc(c.locality) : ''}</option>`;
     let html = `<option value="">—</option>`;
-    if (normLoc(port) && local.length) html += `<optgroup label="At ${esc(port)}">` + local.map(optOf).join('') + `</optgroup>`;
-    if (universal.length) html += `<optgroup label="${normLoc(port) ? 'No location set' : 'All contacts'}">` + universal.map(optOf).join('') + `</optgroup>`;
-    if (normLoc(port) && other.length) html += `<optgroup label="Other locations">` + other.map(optOf).join('') + `</optgroup>`;
+    html += visible.map(optOf).join('');
     return html;
   }
 

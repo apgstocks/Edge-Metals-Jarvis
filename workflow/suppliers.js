@@ -6,6 +6,15 @@ const cfg = require('../config');
 
 const digits = (v) => String(v || '').replace(/\D/g, '');
 
+// Locality match — mirror of dashboard/index.html localityMatchesPort.
+// If either side is empty, no match (strict: unknown locality is not "any port").
+function localityMatchesPort(loc, port) {
+    const l = String(loc || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    const p = String(port || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    if (!l || !p) return false;
+    return l.includes(p) || p.includes(l);
+}
+
 function matchSupplierByChat(chatId, senderNumber) {
     const suppliers = loadSuppliers();
 
@@ -47,11 +56,24 @@ function getSupplierGroupIdForBooking(bkgNo) {
 }
 
 function buildSupplierSelectionMessage(bkgNo) {
-    const suppliers = loadSuppliers();
-    if (!suppliers.length) return { text: 'No suppliers registered. Add one from the dashboard first.', list: [] };
+    const all = loadSuppliers();
+    if (!all.length) return { text: 'No suppliers registered. Add one from the dashboard first.', list: [] };
+
+    const port = loadBookings()[bkgNo]?.port_of_loading || '';
+    // Strict: if POL is set, only offer suppliers at that port.
+    // If POL is empty (unlikely but defensive), offer all.
+    const suppliers = port ? all.filter(s => localityMatchesPort(s.locality, port)) : all;
+
+    if (!suppliers.length) {
+        return {
+            text: `No supplier registered at ${port}. Add one from the dashboard (Suppliers tab) with locality "${port}" first.`,
+            list: [],
+        };
+    }
+    const header = port ? `Assign supplier to ${bkgNo} (${port}) — which one?` : `Assign supplier to ${bkgNo} — which one?`;
     const lines = suppliers.map((s, i) => `${i + 1}. ${s.name}${s.group_id ? '' : ' (DM)'}`);
     return {
-        text: [`Assign supplier to ${bkgNo} — which one?`, '', ...lines, '', 'Reply with a number or name.'].join('\n'),
+        text: [header, '', ...lines, '', 'Reply with a number or name.'].join('\n'),
         list: suppliers,
     };
 }
