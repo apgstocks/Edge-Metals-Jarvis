@@ -87,6 +87,12 @@ function policyDecide(ctx) {
             const pick = resolveListSelection(ctx.text, p.options);
             if (pick) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: pick } };
         }
+        // Waiting for a booking number from a menu prompt (assign/forward/recall/archive/status).
+        // Resume the saved intent with the booking number instead of falling into "bare bkg → status".
+        if (p.type === 'await_bkg_no') {
+            const bkgResolved = resolveBookingNumber(ctx.text);
+            if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved } };
+        }
         // fall through — the manager may be asking something else mid-pending
     }
 
@@ -360,21 +366,31 @@ async function route(decision, ctx, sendMessage) {
 
     const send = async (id, text) => { await sendMessage(id, text); return { action_taken: 'replied' }; };
     const ask  = (id, text) => send(id, text);
+    // askBkg: send prompt AND remember which intent to resume when the user replies with a booking number.
+    const askBkg = async (id, text, nextIntent) => {
+        await actions.setPending(id, { type: 'await_bkg_no', nextIntent });
+        return send(id, text);
+    };
+    // Await-bkg pendings are single-round-trip; clear once we're routing again so a
+    // stale one can't hijack the next bare booking number the user types.
+    if (ctx.pendingAction?.type === 'await_bkg_no') {
+        try { await actions.clearPending(chatId); } catch {}
+    }
 
     switch (decision.intent) {
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection);
         case 'show_menu':              return actions.showMenu(chatId);
         case 'bookings_menu':          return actions.showBookingsMenu(chatId);
-        case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : ask(chatId, 'Which booking number?');
+        case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
         case 'show_bookings_all':      return actions.showBookingsAll(chatId);
         case 'show_bookings_urgent':   return actions.showBookingsUrgent(chatId);
         case 'show_bookings_available':return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
-        case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : ask(chatId, 'Which booking should I forward? e.g. "forward BK123456"');
-        case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : ask(chatId, 'Which booking should I assign? e.g. "assign BK123456"');
-        case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : ask(chatId, 'Which booking should I recall?');
-        case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : ask(chatId, 'Which booking should I archive?');
+        case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : askBkg(chatId, 'Which booking should I forward? e.g. "forward BK123456"', 'forward_booking');
+        case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : askBkg(chatId, 'Which booking should I assign? e.g. "assign BK123456"', 'assign_supplier');
+        case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
+        case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
         case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
@@ -391,7 +407,7 @@ async function route(decision, ctx, sendMessage) {
         // Silence — trucker/supplier said something out-of-scope. Jarvis intentionally does not reply.
         case 'silent':                 return { action_taken: 'silent' };
         case 'forward_booking_menu':
-        case 'ask_booking_number':     return ask(chatId, 'Type the booking number.');
+        case 'ask_booking_number':     return askBkg(chatId, 'Type the booking number.', 'show_booking_status');
         case 'ask_which_booking':      return ask(chatId, `This chat has multiple bookings: ${(d.slots || []).join(', ')}. Which one?`);
         case 'reply':                  return d.reply ? send(chatId, d.reply) : { action_taken: 'noop' };
         case 'NEED_APPROVAL':          return ask(chatId, `This needs your explicit confirmation. ${d.reply || 'Please restate the exact action.'}`);

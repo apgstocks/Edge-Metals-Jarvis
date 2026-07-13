@@ -182,19 +182,22 @@ waState.setCommonGroupsHandler(async (contactId) => {
     return groups;
 });
 
-// Called by POST /api/whatsapp/reset — logs out, wipes session cache, reinitializes
+// Called by POST /api/whatsapp/reset — logs out, wipes session cache, then exits
+// so pm2 respawns a fresh Client. Re-initializing the same Client after
+// destroy() hangs forever in "initializing" — puppeteer is already dead.
 waState.setLogoutHandler(async () => {
-    console.log('[WA] Logout requested — resetting session');
+    console.log('[WA] Logout requested — wiping session and restarting process');
     waReady = false;
     waState.setStatus('initializing');
     try { await client.logout(); } catch (e) { console.warn('[WA] Logout error (ignoring):', e.message); }
     try { await client.destroy(); } catch (e) { console.warn('[WA] Destroy error (ignoring):', e.message); }
-    // Wipe the LocalAuth cache so the next initialize forces a fresh QR
     try {
         const rimraf = require('fs').rmSync;
         rimraf(cfg.SESSION_PATH, { recursive: true, force: true });
     } catch (e) { console.warn('[WA] Cache wipe error (ignoring):', e.message); }
-    setTimeout(() => client.initialize().catch(e => console.error('[WA] Reinit after reset failed:', e.message)), 1500);
+    // Delay exit so the HTTP response to /api/whatsapp/reset flushes first.
+    console.log('[WA] Exiting in 1.5s — pm2 will respawn with a fresh QR');
+    setTimeout(() => process.exit(0), 1500);
     return { ok: true };
 });
 
