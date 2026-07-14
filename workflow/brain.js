@@ -8,7 +8,7 @@ const llmIntent = require('../helpers/llm-intent');
 const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
-const { resolveBookingNumber }                     = require('../helpers/booking');
+const { resolveBookingNumber, queryBookingsByLocation }             = require('../helpers/booking');
 const { callGeminiJSON }                           = require('../helpers/gemini');
 const { getLATime }                                = require('../helpers/time');
 const { matchTruckerByChat }                       = require('./truckers');
@@ -87,8 +87,6 @@ function policyDecide(ctx) {
             const pick = resolveListSelection(ctx.text, p.options);
             if (pick) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: pick } };
         }
-        // Waiting for a booking number from a menu prompt (assign/forward/recall/archive/status).
-        // Resume the saved intent with the booking number instead of falling into "bare bkg → status".
         if (p.type === 'await_bkg_no') {
             const bkgResolved = resolveBookingNumber(ctx.text);
             if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved } };
@@ -132,7 +130,6 @@ function policyDecide(ctx) {
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
         // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
-        // Duration is optional; scheduleFollowup defaults to 30 min if omitted.
         if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {
             const rawMins = m[2] ? parseInt(m[2], 10) : null;
             const unit    = m[3] || '';
@@ -141,6 +138,14 @@ function policyDecide(ctx) {
                 intent: 'schedule_followup', resolvedBy: 'policy',
                 data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
             };
+        }
+
+        // "how many bookings [are] unassigned from LA" / "how many bookings from LA" etc.
+        if ((m = t.match(/^how\s+many\s+(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:are\s+|do\s+we\s+have\s+)?(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
+            const statusRaw = (m[1] || m[2] || '').trim();
+            const filter = /unassigned|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
+                         : statusRaw === 'assigned' ? 'assigned' : null;
+            return { intent: 'bookings_count_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
         }
 
         // Bare booking number → status
@@ -243,7 +248,10 @@ function policyDecide(ctx) {
             if (/(cut\s*off|cutoff)/.test(t))
                 return { intent: 'trucker_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         }
-        return { intent: 'silent', resolvedBy: 'policy', data: {} };
+        // No keyword matched at all — this is genuinely unrecognized free text (e.g. "truck broke
+        // down"), not a known-shape message with nothing to do. Let AI take a pass; if AI also
+        // can't classify it, route()'s NEED_DATA fallback escalates to the manager.
+        return { intent: null, resolvedBy: null, needsAI: true };
     }
 
     // ── D. Supplier signals ──────────────────────────────────────────────────
@@ -285,7 +293,8 @@ function policyDecide(ctx) {
             if (/(cut\s*off|cutoff)/.test(t))
                 return { intent: 'supplier_ask_cutoff', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking } };
         }
-        return { intent: 'silent', resolvedBy: 'policy', data: {} };
+        // Same rule as trucker section: unrecognized free text goes to AI, not hard silence.
+        return { intent: null, resolvedBy: null, needsAI: true };
     }
 
     // ── E. Trucker/supplier with multiple bookings and a booking no. in text ──
@@ -316,6 +325,8 @@ STRICT RULES:
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
 - When activeBooking is set AND the message clearly refers to an action verb ("forward", "assign", "recall", "archive", "status") WITHOUT naming a booking number, use activeBooking as bkg_no. Do NOT return NEED_DATA in this case.
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
+- "silent" is ONLY for a trucker/supplier message that is clearly not operational (small talk, wrong-number chatter, an emoji with no context). If the sender (role is "trucker" or "supplier") sent something that could plausibly be about their job — a question, a problem, a status update you can't quite place — use "NEED_DATA", not "silent". NEED_DATA for a trucker/supplier gets escalated to the manager; "silent" gets no response at all, so default to NEED_DATA when unsure.
+- If the sender's role is "manager" or "team" and the message is a genuine question rather than a command (e.g. "why is DALA23991600 stuck", "how many bookings are unassigned from LA", "what's the busiest lane this week", "should I worry about anything today", "what's Jey's status"), ANSWER IT using the BOOKING / SESSION / FACTS / URGENT / BOOKINGS BY PORT context provided above. Reason over what's there — cross-reference dates, statuses, counts, and pending items — and give a direct, specific answer via action "reply". Do not fall back to NEED_DATA just because the question isn't one of the defined command actions; NEED_DATA is for when you're missing information you'd need to safely execute an ACTION, not for ordinary questions you can answer from context. Only use NEED_DATA for a genuine question if the context truly doesn't contain what's needed to answer it — and say specifically what's missing.
 
 ═══ RUNTIME CONTEXT ═══
 Time (LA): ${a.now_la}
@@ -340,6 +351,9 @@ ${a.facts}
 
 ═══ URGENT ═══
 ${a.urgentBookings}
+
+═══ BOOKINGS BY PORT (all active bookings, not just activeBooking) ═══
+${a.portStats}
 
 ═══ NEW MESSAGE ═══
 "${a.message}"
@@ -366,11 +380,23 @@ Return ONLY this JSON:
 }`;
 }
 
+const SAFE_ACTIONS = new Set([
+    'reply', 'silent', 'NEED_DATA', 'NEED_APPROVAL',
+    'show_menu', 'bookings_menu', 'show_booking_status', 'show_bookings_all',
+    'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
+    'show_contacts', 'check_supplier',
+    'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
+]);
+
 async function aiDecide(ctx) {
     const decision = await callGeminiJSON(buildPrompt(ctx));
     if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable' };
-    if ((decision.confidence ?? 0) < 0.6) {
-        console.warn(`[AI] Low confidence ${decision.confidence} → NEED_DATA`);
+    // Confidence gate protects actions that mutate data (forward, assign, archive, etc).
+    // A conversational "reply" or a read-only lookup has no side effects — don't crush
+    // a genuinely useful answer into a canned "I couldn't pin that down" just because
+    // Gemini's confidence score for free-text Q&A tends to run lower than for clean commands.
+    if (!SAFE_ACTIONS.has(decision.action) && (decision.confidence ?? 0) < 0.6) {
+        console.warn(`[AI] Low confidence ${decision.confidence} on mutating action "${decision.action}" → NEED_DATA`);
         return { ...decision, action: 'NEED_DATA' };
     }
     console.log(`[AI] ${decision.action} (${decision.confidence}) — ${decision.reasoning}`);
@@ -385,13 +411,10 @@ async function route(decision, ctx, sendMessage) {
 
     const send = async (id, text) => { await sendMessage(id, text); return { action_taken: 'replied' }; };
     const ask  = (id, text) => send(id, text);
-    // askBkg: send prompt AND remember which intent to resume when the user replies with a booking number.
     const askBkg = async (id, text, nextIntent) => {
         await actions.setPending(id, { type: 'await_bkg_no', nextIntent });
         return send(id, text);
     };
-    // Await-bkg pendings are single-round-trip; clear once we're routing again so a
-    // stale one can't hijack the next bare booking number the user types.
     if (ctx.pendingAction?.type === 'await_bkg_no') {
         try { await actions.clearPending(chatId); } catch {}
     }
@@ -411,6 +434,12 @@ async function route(decision, ctx, sendMessage) {
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
+        case 'bookings_count_query': {
+            const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
+            const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
+            const list = count && count <= 10 ? `: ${bookings.join(', ')}` : '';
+            return send(chatId, `${count} ${label}booking${count === 1 ? '' : 's'} from ${d.location}${list}`);
+        }
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
         case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
@@ -424,7 +453,8 @@ async function route(decision, ctx, sendMessage) {
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
         case 'trucker_ask_cutoff':
         case 'supplier_ask_cutoff':    return actions.showCutoff ? actions.showCutoff(chatId, bkg) : ask(chatId, `Cutoff: ${(actions.getBookingField && actions.getBookingField(bkg, 'cutoff_date')) || 'not set'}`);
-        // Silence — trucker/supplier said something out-of-scope. Jarvis intentionally does not reply.
+        // Silence — trucker/supplier used a recognized keyword but no container matched it.
+        // Deliberate: this is a known-shape message with nothing to do, not "we don't understand".
         case 'silent':                 return { action_taken: 'silent' };
         case 'forward_booking_menu':
         case 'ask_booking_number':     return askBkg(chatId, 'Type the booking number.', 'show_booking_status');
@@ -434,8 +464,8 @@ async function route(decision, ctx, sendMessage) {
         case 'NEED_DATA':
         default:
             if (ctx.isManagerOrTeam) return ask(chatId, d.reply || "I couldn't pin that down. Type 'menu' for options or give me a booking number.");
-            // Trucker/supplier said something we couldn't classify — per manager rule,
-            // never leave a real reply unhandled. Escalate to manager instead of silence.
+            // Trucker/supplier said something we genuinely couldn't classify (reached here via
+            // AI fallback, not the policy-layer keyword-silence above). Escalate, don't ignore.
             if (ctx.isTrucker || ctx.isSupplier) return actions.escalateUnclear(ctx);
             return { action_taken: 'silent' }; // truly unknown sender — stay silent
     }

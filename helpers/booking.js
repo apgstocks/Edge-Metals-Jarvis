@@ -78,6 +78,30 @@ function getAvailableBookings() {
     return Object.values(loadBookings()).filter(b => !b.supplier);
 }
 
+// Loose substring match — mirrors the same rule used in dashboard/index.html
+// and workflow/truckers.js|suppliers.js for locality filtering. Kept as its
+// own copy here deliberately (matches existing pattern in this codebase);
+// flagged in the July 14 review as worth consolidating into one shared helper.
+function localityMatchesPort(loc, port) {
+    const l = String(loc || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    const p = String(port || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    if (!l || !p) return false;
+    return l.includes(p) || p.includes(l);
+}
+
+// Deterministic answer for "how many bookings [are] unassigned from LA"-style
+// questions — no LLM call needed, zero hallucination risk. Filter:
+//   'unassigned' → no supplier set (matches dashboard's "Available" definition)
+//   'assigned'   → has a supplier
+//   null         → no status filter, just count bookings at that location
+function queryBookingsByLocation(location, filter) {
+    const all = Object.values(loadBookings()).filter(b => localityMatchesPort(b.port_of_loading, location));
+    const filtered = filter === 'unassigned' ? all.filter(b => !b.supplier)
+                    : filter === 'assigned'   ? all.filter(b => !!b.supplier)
+                    : all;
+    return { count: filtered.length, bookings: filtered.map(b => b.booking_number) };
+}
+
 function getBookingsByRoute(pol, pod) {
     return Object.values(loadBookings()).filter(b =>
         (b.port_of_loading  || '').toLowerCase().includes(pol.toLowerCase()) &&
@@ -107,4 +131,5 @@ module.exports = {
     formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
+    queryBookingsByLocation,
 };
