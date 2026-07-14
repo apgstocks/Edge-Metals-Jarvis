@@ -128,9 +128,9 @@ function policyDecide(ctx) {
             if (intent) return { intent, resolvedBy: 'policy', data: {} };
         }
 
-        if (t === 'bookings')                    return { intent: 'bookings_menu',           resolvedBy: 'policy' };
-        if (t === 'urgent')                      return { intent: 'show_bookings_urgent',    resolvedBy: 'policy' };
-        if (t === 'available')                   return { intent: 'show_bookings_available', resolvedBy: 'policy' };
+        if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
+        if (t === 'urgent' || /^(?:show\s+(?:me\s+)?|list\s+)?urgent\s+bookings?$/.test(t)) return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
+        if (t === 'available' || /^(?:show\s+(?:me\s+)?|list\s+)?available\s+bookings?$/.test(t)) return { intent: 'show_bookings_available', resolvedBy: 'policy' };
         if (['truckers', 'suppliers', 'contacts'].includes(t)) return { intent: 'show_contacts', resolvedBy: 'policy' };
 
         let m;
@@ -391,6 +391,7 @@ You are one step in a pipeline. The policy layer already handled deterministic c
 You are called because the message intent is ambiguous.
 
 STRICT RULES:
+- You reach this prompt ONLY when the deterministic command grammar found no exact match — that's expected for typos, informal phrasing, or wording it doesn't anticipate, NOT a sign the message is unintelligible. Read past spelling: "bookking" means "booking", "avilable" means "available", "shw me" means "show me". If the corrected reading maps clearly onto one of the AVAILABLE ACTIONS below, use that action confidently — do not fall back to NEED_DATA or a generic "couldn't understand" reply just because the exact letters didn't match a pattern. A real assistant reads intent through typos; only use NEED_DATA when the actual MEANING is genuinely ambiguous or missing information, never because of spelling.
 - For anything specific to Edge Metals' own data — booking status, dates, who's assigned, counts, contacts — use ONLY the context below. The ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE sections are your complete knowledge base for everything currently active — search across ALL of it, not just activeBooking, before saying you don't know. Never invent or guess a fact that isn't there.
 - Archived/completed bookings are NOT included in the context above (kept out to bound token cost). If a question is plausibly about an older/closed booking not in ALL ACTIVE BOOKINGS, say it may be archived and suggest checking the dashboard → History — do not guess, and do not claim it doesn't exist.
 - For general freight/logistics knowledge NOT specific to Edge Metals' data (e.g. "what does FCL mean", "what happens if we miss cutoff", "typical transit time LA to Busan", "what's a bill of lading") — answer from your own general knowledge via "reply", like a knowledgeable freight ops assistant would. Don't refuse or say NEED_DATA just because it's not in the context block; that restriction is only for YOUR business's specific data, not general domain expertise. If mixing the two, clearly ground the business-specific part in context and flag anything you're unsure of.
