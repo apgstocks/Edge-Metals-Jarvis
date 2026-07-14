@@ -99,7 +99,7 @@ function queryBookingsByLocation(location, filter) {
     const filtered = filter === 'unassigned' ? all.filter(b => !b.supplier)
                     : filter === 'assigned'   ? all.filter(b => !!b.supplier)
                     : all;
-    return { count: filtered.length, bookings: filtered.map(b => b.booking_number) };
+    return { count: filtered.length, bookings: filtered.map(b => b.booking_number), records: filtered };
 }
 
 function getBookingsByRoute(pol, pod) {

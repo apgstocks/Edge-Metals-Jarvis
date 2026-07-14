@@ -8,7 +8,7 @@ const llmIntent = require('../helpers/llm-intent');
 const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
-const { resolveBookingNumber, queryBookingsByLocation }             = require('../helpers/booking');
+const { resolveBookingNumber, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
 const { callGeminiJSON }                           = require('../helpers/gemini');
 const { getLATime }                                = require('../helpers/time');
 const { matchTruckerByChat }                       = require('./truckers');
@@ -164,6 +164,15 @@ function policyDecide(ctx) {
             const filter = /unassigned|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
                          : statusRaw === 'assigned' ? 'assigned' : null;
             return { intent: 'bookings_count_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
+        }
+
+        // "show/list [unassigned] bookings from LA" — same filter logic as above,
+        // but returns the actual list, not just a count.
+        if ((m = t.match(/^(?:show(?:\s+me)?|list)\s+(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:that\s+are\s+)?(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
+            const statusRaw = (m[1] || m[2] || '').trim();
+            const filter = /unassigned|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
+                         : statusRaw === 'assigned' ? 'assigned' : null;
+            return { intent: 'bookings_list_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
         }
 
         // "remember X" / "note X" / "remember that X" — explicit standing-fact capture.
@@ -480,6 +489,13 @@ async function route(decision, ctx, sendMessage) {
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
             const list = count && count <= 10 ? `: ${bookings.join(', ')}` : '';
             return send(chatId, `${count} ${label}booking${count === 1 ? '' : 's'} from ${d.location}${list}`);
+        }
+        case 'bookings_list_query': {
+            const { count, records } = queryBookingsByLocation(d.location, d.filter);
+            const label = d.filter === 'unassigned' ? 'Unassigned (no supplier) ' : d.filter === 'assigned' ? 'Assigned ' : '';
+            if (!count) return send(chatId, `No ${label.toLowerCase()}bookings from ${d.location}.`);
+            const body = records.map(b => formatBookingLine(b)).join('\n');
+            return send(chatId, `${label}bookings from ${d.location} (${count}):\n${body}`);
         }
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
