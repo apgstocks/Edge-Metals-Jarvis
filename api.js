@@ -44,7 +44,7 @@ const DASH_STAGES = ['Not Started', 'Assigned to Supplier', 'Forwarded to Trucke
 
 // Per-step: default pending text + who owns the next move
 const STEP_PENDING = {
-    not_started        : (b, wf) => ({ pending: b.supplier ? 'Awaiting forward to trucker' : 'Awaiting supplier assignment', owner: 'Edge Metals' }),
+    not_started        : (b, wf) => ({ pending: b.supplier ? 'Awaiting forward to trucker' : 'Awaiting supplier assignment', owner: 'Manager' }),
     supplier_assigned  : (b, wf) => ({ pending: 'Awaiting supplier confirmation', owner: wf.supplier || b.supplier || 'Supplier' }),
     forwarded          : (b, wf) => ({ pending: "Trucker hasn't confirmed pickup", owner: wf.trucker_name ? `${wf.trucker_name} (Trucker)` : 'Trucker' }),
     empty_dropped      : (b, wf) => ({ pending: 'Loading in progress', owner: wf.supplier || b.supplier || 'Supplier' }),
@@ -75,7 +75,7 @@ function decorateBooking(b, wf) {
     else                        risk = 'low';
 
     const pend = wf.pending_note
-        ? { pending: wf.pending_note, owner: wf.pending_owner || 'Edge Metals' }
+        ? { pending: wf.pending_note, owner: wf.pending_owner || '—' }
         : (STEP_PENDING[step] || STEP_PENDING.not_started)(b, wf);
 
     // "Empty Dropped · Scale ticket pending" style sub-branch
@@ -84,7 +84,7 @@ function decorateBooking(b, wf) {
 
     return {
         bookingNo    : b.booking_number,
-        buyer        : b.buyer || b.consignee || wf.supplier || b.supplier || '—',
+        route        : `${b.port_of_loading || '—'} → ${b.port_of_discharge || '—'}`,
         container    : wf.container || b.container_number || '—',
         stageIndex,
         stageName    : DASH_STAGES[stageIndex],
