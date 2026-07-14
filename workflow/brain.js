@@ -136,10 +136,26 @@ function policyDecide(ctx) {
         let m;
         // Grammar supports optional /N suffix for container seq: "forward BKG/1 to Dave"
         // No slash → auto-picks next unassigned container in executeForward.
-        if ((m = t.match(/^forward\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/)))
-            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), container_seq: m[2] ? parseInt(m[2], 10) : null, trucker_name: m[3] || null } };
-        if ((m = t.match(/^assign\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/)))
-            return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase(), container_seq: m[2] ? parseInt(m[2], 10) : null, supplier_name: m[3] || null } };
+        // Order-agnostic: "forward BKG to Dave" AND "forward Dave to BKG" both work —
+        // whichever captured token actually matches the booking-number FORMAT wins,
+        // regardless of position. Without this, "assign him to DALA52325500" silently
+        // treated "him" as the booking and DALA52325500 as the supplier name.
+        if ((m = t.match(/^forward\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
+            const [first, seq, second] = [m[1], m[2], m[3]];
+            const firstIsBkg = resolveBookingNumber(first);
+            const secondIsBkg = second && resolveBookingNumber(second);
+            const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
+            const trucker_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
+            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
+        }
+        if ((m = t.match(/^assign\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
+            const [first, seq, second] = [m[1], m[2], m[3]];
+            const firstIsBkg = resolveBookingNumber(first);
+            const secondIsBkg = second && resolveBookingNumber(second);
+            const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
+            const supplier_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
+            return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, supplier_name } };
+        }
         if ((m = t.match(/^recall\s+(\S+)$/)))
             return { intent: 'recall_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
         if ((m = t.match(/^archive\s+(\S+)$/)))
@@ -345,6 +361,25 @@ function policyDecide(ctx) {
         // re-run C/D logic with explicit booking — hand to AI with strong hint instead of duplicating
     }
 
+    // ── F. Bare location follow-up to a just-shown bookings listing ───────────
+    // "show available bookings" → "from oakland" / "Oakland" (no "show/list/how
+    // many" wrapper) should narrow the SAME query, not repeat it unfiltered.
+    // Guarded tightly: only fires for manager/team, only right after a bookings
+    // query, and only for short alphabetic text — avoids treating "thanks" or
+    // "ok" typed right after a listing as a location.
+    if (ctx.isManagerOrTeam && ctx.session?.lastInstruction === 'bookings_query') {
+        const stripped = t.replace(/^(?:from|at|in)\s+/, '').trim();
+        const wordCount = stripped.split(/\s+/).filter(Boolean).length;
+        const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && /^[a-z\s.'-]+$/i.test(stripped)
+            && !['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel'].includes(stripped);
+        if (looksLikeLocation) {
+            return {
+                intent: 'bookings_list_query', resolvedBy: 'policy',
+                data: { location: stripped, filter: ctx.session.lastBookingsFilter ?? null },
+            };
+        }
+    }
+
     return { intent: null, resolvedBy: null, needsAI: true };
 }
 
@@ -370,6 +405,7 @@ STRICT RULES:
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
 - "silent" is ONLY for a trucker/supplier message that is clearly not operational (small talk, wrong-number chatter, an emoji with no context). If the sender (role is "trucker" or "supplier") sent something that could plausibly be about their job — a question, a problem, a status update you can't quite place — use "NEED_DATA", not "silent". NEED_DATA for a trucker/supplier gets escalated to the manager; "silent" gets no response at all, so default to NEED_DATA when unsure.
 - If the sender's role is "manager" or "team" and the message is a genuine question rather than a command (e.g. "why is DALA23991600 stuck", "how many bookings are unassigned from LA", "what does FCL mean", "which truckers do we have in Houston", "what's the busiest lane this week", "should I worry about anything today", "what's Jey's status"), ANSWER IT — using the ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE / SESSION / FACTS / URGENT context for anything Edge-Metals-specific, and your own general freight knowledge for anything else. Give a direct, specific answer via action "reply". Do not fall back to NEED_DATA just because the question isn't one of the defined command actions. NEED_DATA is ONLY for when a question needs Edge Metals' own specific data that genuinely isn't in the context above (including plausibly-archived bookings) — say specifically what's missing. It is never a valid response to a general knowledge question; if you know the answer generally, answer it.
+- Two DIFFERENT questions that sound similar — never blur them: (1) "who is THE supplier/trucker FOR BOOKING X" or "for the Oakland booking" means the contact actually ASSIGNED to that specific booking — check the booking's own supplier/trucker field in ALL ACTIVE BOOKINGS, and if it's empty, say clearly it isn't assigned yet. (2) "who is A supplier/trucker IN/AT/FOR [a city]" or "show me Oakland suppliers" means the roster — check TRUCKERS ON FILE / SUPPLIERS ON FILE for contacts whose locality matches, which has NOTHING to do with any specific booking's assignment. When answering (2), never phrase it as "X is THE supplier for [booking/city]" — that reads as an assignment claim. Say "X is a registered supplier based in [city]" instead, and if relevant, separately note whether any booking there is still unassigned.
 - If the manager is CORRECTING something you (or an earlier assistant turn in LAST 5 MESSAGES) got wrong, or giving a standing instruction/preference for the future (e.g. "no, always CC me on archives", "actually DALA numbers can have a dash", "from now on default follow-ups to 15 minutes"), use action "remember_fact" with a short, self-contained fact string in the "fact" field — written so it makes sense on its own later, without today's conversation. Still also use "reply" wording is not needed for this action; a brief confirmation is generated automatically. Do not use "remember_fact" for one-off operational commands (those already have real actions) — only for corrections or durable preferences that should change future behavior.
 - If the manager is sharing ongoing situational background that ISN'T a correction — e.g. "we're onboarding a new supplier in Houston this month", "trucker capacity is tight through the holidays" — use action "add_business_context" with the note in the "note" field, not "remember_fact". Distinction: remember_fact changes how you should BEHAVE (a rule/correction); add_business_context is just something true right now worth knowing about (a situation).
 
@@ -488,7 +524,7 @@ async function route(decision, ctx, sendMessage) {
         case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
         case 'show_bookings_all':      return actions.showBookingsAll(chatId);
         case 'show_bookings_urgent':   return actions.showBookingsUrgent(chatId);
-        case 'show_bookings_available':return actions.showBookingsAvailable(chatId);
+        case 'show_bookings_available':updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: 'unassigned' }); return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
         case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : askBkg(chatId, 'Which booking should I forward? e.g. "forward BK123456"', 'forward_booking');
@@ -499,12 +535,14 @@ async function route(decision, ctx, sendMessage) {
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'bookings_count_query': {
+            updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
             const list = count && count <= 10 ? `: ${bookings.join(', ')}` : '';
             return send(chatId, `${count} ${label}booking${count === 1 ? '' : 's'} from ${d.location}${list}`);
         }
         case 'bookings_list_query': {
+            updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, records } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'Unassigned (no supplier) ' : d.filter === 'assigned' ? 'Assigned ' : '';
             if (!count) return send(chatId, `No ${label.toLowerCase()}bookings from ${d.location}.`);
