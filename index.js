@@ -218,8 +218,13 @@ waState.setLogoutHandler(async () => {
                         // before the SESSION_PATH wipe a few lines down even runs.
     waReady = false;
     waState.setStatus('initializing');
+    let browserPid = null;
+    try { browserPid = client.pupBrowser?.process()?.pid || null; } catch {}
     try { await client.logout(); } catch (e) { console.warn('[WA] Logout error (ignoring):', e.message); }
     try { await client.destroy(); } catch (e) { console.warn('[WA] Destroy error (ignoring):', e.message); }
+    if (browserPid) {
+        try { process.kill(browserPid, 0); process.kill(browserPid, 'SIGKILL'); } catch {}
+    }
     try {
         const rimraf = require('fs').rmSync;
         rimraf(cfg.SESSION_PATH, { recursive: true, force: true });
@@ -255,7 +260,25 @@ client.on('message', async (msg) => {
 async function shutdown(signal) {
     shuttingDown = true;
     console.log(`[BOOT] ${signal} — shutting down`);
+    // Capture the underlying Chromium OS process before destroy() — some
+    // whatsapp-web.js/Puppeteer version combinations resolve destroy()'s
+    // promise without the actual Chromium process fully exiting, leaving a
+    // zombie that still holds the session profile. If that zombie is still
+    // alive when the NEXT launch starts a fresh Chromium against the same
+    // session, WhatsApp's multi-device backend can see two simultaneous live
+    // connections claiming the same linked device and force-terminate the
+    // session as a conflict — a real logout, not just a hang. Don't trust
+    // destroy() alone; verify the process is actually gone and kill it if not.
+    let browserPid = null;
+    try { browserPid = client.pupBrowser?.process()?.pid || null; } catch {}
     try { await client.destroy(); } catch {}
+    if (browserPid) {
+        try {
+            process.kill(browserPid, 0); // throws if the process no longer exists
+            console.warn(`[BOOT] Chromium (pid ${browserPid}) still alive after destroy() — force killing`);
+            process.kill(browserPid, 'SIGKILL');
+        } catch {} // already dead — nothing to do, this is the expected case
+    }
     process.exit(0);
 }
 process.on('SIGINT',  () => shutdown('SIGINT'));
