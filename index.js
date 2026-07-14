@@ -262,5 +262,37 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('unhandledRejection', (err) => console.error('[BOOT] Unhandled rejection:', err));
 
+// Clear stale Chromium singleton-instance lock files before launching.
+// If the previous process didn't shut down cleanly (crash, kill -9, OS sleep
+// interrupting it — anything short of a full graceful client.destroy()),
+// Chromium can leave SingletonLock/SingletonSocket/SingletonCookie behind in
+// the profile directory. The next launch sees those, assumes another Chrome
+// instance already owns the profile, and silently refuses to fully start —
+// no error, no 'qr', no 'ready', just an indefinite hang. These lock files
+// should only exist while Chromium is actively running; if WE are just
+// starting up, any pre-existing one is necessarily stale from a dead
+// process, and safe to remove. This clears ONLY the lock, never the actual
+// session credentials, so a normal restart doesn't need a QR rescan.
+function clearStaleChromiumLocks(rootDir) {
+    const LOCK_NAMES = new Set(['SingletonLock', 'SingletonSocket', 'SingletonCookie']);
+    let cleared = 0;
+    function walk(dir) {
+        let entries;
+        try { entries = require('fs').readdirSync(dir, { withFileTypes: true }); }
+        catch { return; }
+        for (const entry of entries) {
+            const full = require('path').join(dir, entry.name);
+            if (entry.isDirectory()) { walk(full); continue; }
+            if (LOCK_NAMES.has(entry.name)) {
+                try { require('fs').rmSync(full, { force: true }); cleared++; }
+                catch (e) { console.warn(`[BOOT] Could not clear lock ${full}:`, e.message); }
+            }
+        }
+    }
+    if (require('fs').existsSync(rootDir)) walk(rootDir);
+    if (cleared) console.log(`[BOOT] Cleared ${cleared} stale Chromium lock file(s) from a previous unclean shutdown`);
+}
+clearStaleChromiumLocks(cfg.SESSION_PATH);
+
 console.log('[BOOT] Initializing WhatsApp client…');
 client.initialize().catch(e => console.error('[BOOT] WA init failed:', e.message));
