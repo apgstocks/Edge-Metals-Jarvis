@@ -32,6 +32,7 @@ const GEMINI_MODEL   = process.env.GEMINI_MODEL   || 'gemini-2.5-flash-lite';
 const API_PORT       = parseInt(process.env.API_PORT || '8080');
 const API_TOKEN      = process.env.API_TOKEN || '';        // simple bearer token for dashboard API
 const APP_PASSWORD   = process.env.APP_PASSWORD || '';     // password gate for the web app (browser sessions)
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';   // separate, stronger password — gates WhatsApp QR + Facts admin panel
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
@@ -132,7 +133,7 @@ const BOOKINGS_MENU = [
 module.exports = {
     ROOT, DATA_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
-    API_PORT, API_TOKEN, APP_PASSWORD, SESSION_PATH,
+    API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
     GROUP_TRUCKER, GROUP_SUPPLIER,
     WORKFLOW_STAGES, STEP_LABELS, STAGE_INDEX, TERMINAL_STEPS,

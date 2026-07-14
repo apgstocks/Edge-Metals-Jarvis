@@ -100,7 +100,11 @@ scheduler.init({ sendToManager, sendToTeam, sendMessage });
 
 // ── HTTP up first — dashboard usable while WA scans QR ─────────────────────────
 const app = createApi();
-app.listen(cfg.API_PORT, () => console.log(`[BOOT] API + dashboard on :${cfg.API_PORT}`));
+app.listen(cfg.API_PORT, () => {
+    console.log(`[BOOT] API + dashboard on :${cfg.API_PORT}`);
+    console.log(`[BOOT] APP_PASSWORD:   ${cfg.APP_PASSWORD ? 'set (' + cfg.APP_PASSWORD.length + ' chars)' : 'NOT SET — logins will fail with 500'}`);
+    console.log(`[BOOT] ADMIN_PASSWORD: ${cfg.ADMIN_PASSWORD ? 'set (' + cfg.ADMIN_PASSWORD.length + ' chars)' : 'not set — no admin tier available'}`);
+});
 
 // ── WhatsApp events ────────────────────────────────────────────────────────────
 client.on('qr', (qr) => {
