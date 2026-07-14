@@ -96,19 +96,32 @@ const urgent = ctx.urgentBookings
     .map(b => `${b.booking_number} cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d)`)
     .join('\n') || '(none)';
 
-// Compact per-port aggregate — lets the AI answer counting/filter questions
-// ("how many are unassigned from LA") without needing every booking dumped
-// into the prompt. Deliberately terse: one line per port, not a full table.
+// Full operational knowledge base — every active booking + contact roster,
+// compact one-line-per-record so token cost stays flat as data grows.
+// This is deliberately NOT a raw JSON dump (fields, timestamps, ids) — just
+// enough for the AI to answer "what/how many/who" questions about anything
+// currently active. Archived/history bookings are NOT included here (kept
+// out to bound token cost) — a manager asking about a closed booking gets
+// told to check the dashboard → History, not silently missed.
 const byPort = {};
+const bookingRows = [];
 for (const b of Object.values(ctx.allBookings || {})) {
+    const wf = (ctx.allWorkflow || {})[b.booking_number] || {};
     const p = b.port_of_loading || '(no POL)';
     byPort[p] = byPort[p] || { total: 0, unassigned: 0 };
     byPort[p].total++;
     if (!b.supplier) byPort[p].unassigned++;
+    bookingRows.push(
+        `${b.booking_number} | ${p}→${b.port_of_discharge || '?'} | supplier:${b.supplier || wf.supplier || '—'} | trucker:${wf.trucker_name || '—'} | stage:${wf.step || 'not_started'} | cutoff:${b.cutoff_date || '—'}`
+    );
 }
 const portStats = Object.entries(byPort)
     .map(([p, s]) => `${p}: ${s.total} total, ${s.unassigned} unassigned`)
     .join('\n') || '(no active bookings)';
+const bookingsTable = bookingRows.join('\n') || '(no active bookings)';
+
+const truckerRoster  = (ctx.truckers  || []).map(t => `${t.name}${t.locality ? ' (' + t.locality + ')' : ''}`).join(', ') || '(none registered)';
+const supplierRoster = (ctx.suppliers || []).map(s => `${s.name}${s.locality ? ' (' + s.locality + ')' : ''}`).join(', ') || '(none registered)';
 
 return {
     now_la        : getLATime(),
@@ -128,6 +141,9 @@ return {
     facts,
     urgentBookings: urgent,
     portStats,
+    bookingsTable,
+    truckerRoster,
+    supplierRoster,
     message       : ctx.text,
     slots         : ctx.activeSlots.map(s => s.bkgNo).join(', ') || '(none)',
 };
