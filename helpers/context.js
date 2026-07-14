@@ -7,16 +7,47 @@ const { loadBookings, loadWorkflow, loadTruckers, loadSuppliers,
     loadBrain, loadTranscripts, loadFacts } = require('./json');
 const { getUrgentBookings, formatBookingFull }  = require('./booking');
 const { getLATime, daysUntil }                  = require('./time');
+const memory = require('./memory');
 const cfg = require('../config');
 
-// ── Sessions (volatile, per chat) ─────────────────────────────────────────────
+// ── Sessions — in-memory Map is the hot path (unchanged sync contract for
+// every existing caller), backed by memory.js for durability. On a cache
+// miss (cold start, or after a restart) we restore synchronously from disk —
+// loadJson is a plain sync read, so no caller anywhere needs to become async
+// for this to work. Writes persist in the background (fire-and-forget) so
+// updateSession's existing synchronous return value is untouched.
 const SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 const sessions = new Map();
 
 function getSession(chatId) {
-const s = sessions.get(chatId);
-if (!s) return null;
-if (Date.now() - s._touched > SESSION_TTL_MS) { sessions.delete(chatId); return null; }
+let s = sessions.get(chatId);
+if (!s) {
+    // Cold cache — try restoring the live state that was persisted before
+    // the last restart. summaryHistory is intentionally NOT restored into
+    // the hot session object; it's read separately via getRecentSummaries.
+    const persisted = memory.getSessionMemory(chatId);
+    if (persisted && (persisted.currentTopic || persisted.activeBooking || persisted.lastInstruction || persisted.unansweredQuestion || persisted.menuContext)) {
+        s = {
+            currentTopic: persisted.currentTopic ?? null,
+            activeBooking: persisted.activeBooking ?? null,
+            unansweredQuestion: persisted.unansweredQuestion ?? null,
+            lastInstruction: persisted.lastInstruction ?? null,
+            menuContext: persisted.menuContext ?? null,
+            _touched: Date.now(),
+        };
+        sessions.set(chatId, s);
+    } else {
+        return null;
+    }
+}
+if (Date.now() - s._touched > SESSION_TTL_MS) {
+    // Session idle-expired — archive a summary of it before dropping, so
+    // the conversation isn't just silently lost.
+    memory.archiveSessionSummary(chatId, s).catch(e => console.error('[MEMORY] archive failed:', e.message));
+    memory.clearSessionMemory(chatId).catch(e => console.error('[MEMORY] clear failed:', e.message));
+    sessions.delete(chatId);
+    return null;
+}
 return s;
 }
 
@@ -27,10 +58,17 @@ const s = getSession(chatId) || {
 };
 Object.assign(s, patch, { _touched: Date.now() });
 sessions.set(chatId, s);
+// Background persist — never blocks or changes this function's sync contract.
+memory.saveSessionMemory(chatId, s).catch(e => console.error('[MEMORY] save failed:', e.message));
 return s;
 }
 
-const clearSession = (chatId) => sessions.delete(chatId);
+function clearSession(chatId) {
+const s = sessions.get(chatId);
+if (s) memory.archiveSessionSummary(chatId, s).catch(e => console.error('[MEMORY] archive failed:', e.message));
+memory.clearSessionMemory(chatId).catch(e => console.error('[MEMORY] clear failed:', e.message));
+sessions.delete(chatId);
+}
 
 // ── Slot mapping — which bookings does this trucker/supplier chat own? ────────
 function findSlotsForGroup(chatId) {
@@ -92,6 +130,15 @@ const transcripts = loadTranscripts(ctx.chatId, 5)
 
 const facts = loadFacts().slice(-15).map(f => `- ${f.text}`).join('\n') || '(none)';
 
+// Business context — separate from facts: ongoing situations, not corrections.
+const businessContext = memory.loadBusinessContext().slice(-15).map(c => `- ${c.text}`).join('\n') || '(none)';
+
+// Recent summaries of past sessions with THIS chat — continuity across
+// restarts/idle gaps, e.g. "last time: booking DALA... | left open: ...".
+const recentSummaries = memory.getRecentSummaries(ctx.chatId, 3)
+    .map(s => `- (${new Date(s.closed_at).toLocaleDateString()}) ${s.text}`)
+    .join('\n') || '(none)';
+
 const urgent = ctx.urgentBookings
     .map(b => `${b.booking_number} cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d)`)
     .join('\n') || '(none)';
@@ -139,6 +186,8 @@ return {
     }),
     transcripts,
     facts,
+    businessContext,
+    recentSummaries,
     urgentBookings: urgent,
     portStats,
     bookingsTable,

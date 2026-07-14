@@ -180,6 +180,11 @@ function policyDecide(ctx) {
         if ((m = ctx.text.trim().match(/^(?:please\s+)?(?:remember|note)(?:\s+that)?:?\s+(.+)$/i)))
             return { intent: 'remember_fact', resolvedBy: 'policy', data: { fact: m[1].trim() } };
 
+        // "business context: X" / "context note: X" — durable situational notes,
+        // deliberately a different trigger phrase from remember/note (facts).
+        if ((m = ctx.text.trim().match(/^(?:business\s+context|context\s+note)\s*:\s*(.+)$/i)))
+            return { intent: 'add_business_context', resolvedBy: 'policy', data: { note: m[1].trim() } };
+
         // "check supplier BKG123" — pings the supplier for pickup readiness
         if ((m = t.match(/^check\s+supplier\s+(\S+)$/)))
             return { intent: 'check_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
@@ -366,6 +371,7 @@ STRICT RULES:
 - "silent" is ONLY for a trucker/supplier message that is clearly not operational (small talk, wrong-number chatter, an emoji with no context). If the sender (role is "trucker" or "supplier") sent something that could plausibly be about their job — a question, a problem, a status update you can't quite place — use "NEED_DATA", not "silent". NEED_DATA for a trucker/supplier gets escalated to the manager; "silent" gets no response at all, so default to NEED_DATA when unsure.
 - If the sender's role is "manager" or "team" and the message is a genuine question rather than a command (e.g. "why is DALA23991600 stuck", "how many bookings are unassigned from LA", "what does FCL mean", "which truckers do we have in Houston", "what's the busiest lane this week", "should I worry about anything today", "what's Jey's status"), ANSWER IT — using the ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE / SESSION / FACTS / URGENT context for anything Edge-Metals-specific, and your own general freight knowledge for anything else. Give a direct, specific answer via action "reply". Do not fall back to NEED_DATA just because the question isn't one of the defined command actions. NEED_DATA is ONLY for when a question needs Edge Metals' own specific data that genuinely isn't in the context above (including plausibly-archived bookings) — say specifically what's missing. It is never a valid response to a general knowledge question; if you know the answer generally, answer it.
 - If the manager is CORRECTING something you (or an earlier assistant turn in LAST 5 MESSAGES) got wrong, or giving a standing instruction/preference for the future (e.g. "no, always CC me on archives", "actually DALA numbers can have a dash", "from now on default follow-ups to 15 minutes"), use action "remember_fact" with a short, self-contained fact string in the "fact" field — written so it makes sense on its own later, without today's conversation. Still also use "reply" wording is not needed for this action; a brief confirmation is generated automatically. Do not use "remember_fact" for one-off operational commands (those already have real actions) — only for corrections or durable preferences that should change future behavior.
+- If the manager is sharing ongoing situational background that ISN'T a correction — e.g. "we're onboarding a new supplier in Houston this month", "trucker capacity is tight through the holidays" — use action "add_business_context" with the note in the "note" field, not "remember_fact". Distinction: remember_fact changes how you should BEHAVE (a rule/correction); add_business_context is just something true right now worth knowing about (a situation).
 
 ═══ RUNTIME CONTEXT ═══
 Time (LA): ${a.now_la}
@@ -385,8 +391,14 @@ ${a.sessionSummary}
 ═══ LAST 5 MESSAGES ═══
 ${a.transcripts}
 
-═══ FACTS ═══
+═══ FACTS (corrections / standing instructions) ═══
 ${a.facts}
+
+═══ BUSINESS CONTEXT (ongoing situations, not corrections) ═══
+${a.businessContext}
+
+═══ RECENT SESSIONS WITH THIS CHAT (continuity across restarts/idle gaps) ═══
+${a.recentSummaries}
 
 ═══ URGENT ═══
 ${a.urgentBookings}
@@ -411,7 +423,7 @@ forward_booking, assign_supplier, recall_booking, archive_booking,
 show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
-scale_ticket_received, ingate_received, schedule_followup, remember_fact,
+scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
 reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
@@ -424,6 +436,7 @@ Return ONLY this JSON:
   "target_name": null,
   "minutes": null,
   "fact": null,
+  "note": null,
   "reply": null,
   "reasoning": "one sentence"
 }`;
@@ -433,7 +446,7 @@ const SAFE_ACTIONS = new Set([
     'reply', 'silent', 'NEED_DATA', 'NEED_APPROVAL',
     'show_menu', 'bookings_menu', 'show_booking_status', 'show_bookings_all',
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
-    'show_contacts', 'check_supplier', 'remember_fact',
+    'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
 ]);
 
@@ -484,6 +497,7 @@ async function route(decision, ctx, sendMessage) {
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
+        case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'bookings_count_query': {
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
@@ -564,7 +578,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, reply: ai.reply },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply },
         };
     }
 

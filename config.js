@@ -11,6 +11,13 @@ const ROOT     = __dirname;
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// Memory lives in its own subfolder — deliberately separate from facts.json.
+// facts.json = corrections/standing instructions (accuracy for data answers).
+// memory/    = session continuity + rolling conversation summaries + durable
+//              business-context notes (ongoing situations, not corrections).
+const MEMORY_DIR = path.join(DATA_DIR, 'memory');
+if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
+
 const FILES = {
     BOOKINGS_FILE    : path.join(DATA_DIR, 'bookings.json'),
     WORKFLOW_FILE    : path.join(DATA_DIR, 'workflow.json'),
@@ -24,6 +31,8 @@ const FILES = {
     SETTINGS_FILE    : path.join(DATA_DIR, 'settings.json'),
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
+    MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
+    MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
@@ -131,7 +140,7 @@ const BOOKINGS_MENU = [
 ].join('\n');
 
 module.exports = {
-    ROOT, DATA_DIR, ...FILES,
+    ROOT, DATA_DIR, MEMORY_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,

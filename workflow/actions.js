@@ -10,6 +10,7 @@ const { loadBookings, loadWorkflow, loadTruckers, loadSuppliers,
 const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings, stepLabel } = require('../helpers/booking');
 const { getLATime, daysUntil } = require('../helpers/time');
+const memory = require('../helpers/memory');
 const { updateSession }        = require('../helpers/context');
 const truckers  = require('./truckers');
 const suppliers = require('./suppliers');
@@ -655,6 +656,16 @@ await _send(chatId, `Got it — I'll remember: "${clean}"`);
 return { action_taken: 'fact_stored' };
 }
 
+// ── Business context — durable, non-correction situational notes. Separate
+// store from facts.json (see helpers/memory.js for the distinction).
+async function addBusinessContext(chatId, text) {
+const clean = String(text || '').trim();
+if (!clean) { await _send(chatId, "What's the context note?"); return { action_taken: 'replied' }; }
+await memory.addBusinessContext(clean);
+await _send(chatId, `Noted for context: "${clean}"`);
+return { action_taken: 'context_stored' };
+}
+
 // ── Menu option 4 / "check supplier BKG123" — manager wants to know if a
 // container is ready for pickup. Pings the supplier directly with a yes/no
 // question and holds a pending state ON THE SUPPLIER'S CHAT (not the manager's)
@@ -740,6 +751,6 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, rememberFact, logKnowledgeGap,
+scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
 };

@@ -4,12 +4,15 @@
 // which is what actually prevents lost updates between WA handler / cron / API.
 
 const fs       = require('fs');
+const path     = require('path');
 const lockfile = require('proper-lockfile');
 const cfg      = require('../config');
 
 const LOCK_OPTS = { retries: { retries: 8, minTimeout: 40, maxTimeout: 400 }, stale: 10000, realpath: false };
 
 function ensureFile(filePath, defaultVal) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     if (!fs.existsSync(filePath)) {
         fs.writeFileSync(filePath, JSON.stringify(defaultVal, null, 2), 'utf8');
     }
