@@ -159,18 +159,18 @@ function policyDecide(ctx) {
         }
 
         // "how many bookings [are] unassigned from LA" / "how many bookings from LA" etc.
-        if ((m = t.match(/^how\s+many\s+(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:are\s+|do\s+we\s+have\s+)?(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
+        if ((m = t.match(/^how\s+many\s+(?:(unassigned|available|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:are\s+|do\s+we\s+have\s+)?(?:(unassigned|available|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
             const statusRaw = (m[1] || m[2] || '').trim();
-            const filter = /unassigned|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
+            const filter = /unassigned|available|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
                          : statusRaw === 'assigned' ? 'assigned' : null;
             return { intent: 'bookings_count_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
         }
 
         // "show/list [unassigned] bookings from LA" — same filter logic as above,
         // but returns the actual list, not just a count.
-        if ((m = t.match(/^(?:show(?:\s+me)?|list)\s+(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:that\s+are\s+)?(?:(unassigned|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
+        if ((m = t.match(/^(?:show(?:\s+me)?|list)\s+(?:(unassigned|available|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?bookings?\s*(?:that\s+are\s+)?(?:(unassigned|available|assigned|no\s+supplier|without\s+(?:a\s+)?supplier)\s+)?(?:from|at|in)\s+(.+?)\??$/))) {
             const statusRaw = (m[1] || m[2] || '').trim();
-            const filter = /unassigned|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
+            const filter = /unassigned|available|no\s+supplier|without/.test(statusRaw) ? 'unassigned'
                          : statusRaw === 'assigned' ? 'assigned' : null;
             return { intent: 'bookings_list_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
         }

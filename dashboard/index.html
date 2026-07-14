@@ -6,24 +6,25 @@
 <title>Jarvis — Booking Scoreboard</title>
 <style>
   :root {
-    /* Pastel dockside palette — grounded in weathered shipping-container paint:
-       coral, sea-glass teal, sandy paper, dusty plum. Same token NAMES as
-       before so every existing rule/JS reference keeps working unchanged. */
-    --steel-100:#FBF6EE; --steel-150:#F6ECD9; --steel-200:#EEDFC0; --steel-300:#D9C6A3;
-    --steel-400:#B39C7C; --steel-600:#8A7358; --steel-900:#4A3A5C; --steel-950:#3A2D4A;
-    --navy-900:#16324F; --navy-950:#102540;
-    --copper-50:#FDE8DC; --copper-200:#F6C6AC; --copper-400:#F4977A; --copper-600:#E8734F; --copper-700:#D65F3C;
-    --teal-50:#DCF3EA; --teal-400:#5FBFA8; --teal-600:#3D9C86;
-    --sky-50:#DFEFFA; --sky-400:#7FB8E0; --sky-600:#5090C0;
-    --lavender-50:#EFE6F7; --lavender-400:#B79FD1; --lavender-600:#9478B8;
-    --leaf-50:#E3F5EA; --leaf-400:#8ED1AA; --leaf-500:#6EC090; --leaf-600:#4FA873; --leaf-700:#2F7A50;
-    --danger:#C96B80; --danger-bg:#FBE1E6; --danger-text:#9C3F52;
-    --warning:#D9A23B; --warning-bg:#FBEFD1; --warning-text:#8A6212;
-    --card:#FFFFFF; --border:#F0E3D2; --border-mid:#E3D2B8;
-    --text-strong:#3A342E; --text-body:#5C5349; --text-muted:#8B8175; --text-faint:#B7AEA0;
-    --inv-muted:#DECBEE;
-    --radius-xs:5px; --radius-sm:11px; --radius-md:17px; --radius-lg:24px; --radius-pill:999px;
-    --shadow-sm:0 2px 10px rgba(232,115,79,.12); --shadow-md:0 10px 28px rgba(148,120,184,.18);
+    /* Vivid dockside palette v2 — same subject grounding, saturated instead of
+       muted: electric coral, indigo, teal, gold. Light canvas throughout, pills
+       everywhere. Same token NAMES as before so nothing downstream breaks. */
+    --steel-100:#F7F5FF; --steel-150:#F0ECFF; --steel-200:#E2DAFF; --steel-300:#C9B8FF;
+    --steel-400:#9F86E8; --steel-600:#5B4BC4; --steel-900:#6C4CE0; --steel-950:#5638C9;
+    --navy-900:#6C4CE0; --navy-950:#5638C9;
+    --copper-50:#FFE8E0; --copper-200:#FFB8A0; --copper-400:#FF7A52; --copper-600:#FF4E1F; --copper-700:#E23E12;
+    --teal-50:#D8FBF2; --teal-400:#00C9A7; --teal-600:#00A489;
+    --sky-50:#DFF1FF; --sky-400:#3DA9FC; --sky-600:#1E85E0;
+    --lavender-50:#F1E9FF; --lavender-400:#A78BFA; --lavender-600:#7C5CE0;
+    --leaf-50:#DFFAE8; --leaf-400:#2ED573; --leaf-500:#1DB85C; --leaf-600:#0FA34C; --leaf-700:#0B7A3A;
+    --danger:#FF4D6D; --danger-bg:#FFE1E7; --danger-text:#C0203D;
+    --warning:#FFB800; --warning-bg:#FFF3D1; --warning-text:#8A5E00;
+    --card:#FFFFFF; --border:#EEE9FF; --border-mid:#DCD1FF;
+    --text-strong:#211B3D; --text-body:#4A4270; --text-muted:#8981AC; --text-faint:#BBB4D6;
+    --inv-muted:#E7DFFF;
+    --sidebar-w:236px;
+    --radius-xs:6px; --radius-sm:12px; --radius-md:18px; --radius-lg:26px; --radius-pill:999px;
+    --shadow-sm:0 2px 12px rgba(108,76,224,.14); --shadow-md:0 12px 32px rgba(108,76,224,.20);
     --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
     --sans:ui-rounded,'SF Pro Rounded','Segoe UI Rounded',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
   }
@@ -33,18 +34,25 @@
   body { background:var(--steel-100); font-family:var(--sans); color:var(--text-body); min-height:100vh; }
   button { font:inherit; cursor:pointer; }
   .mono { font-family:var(--mono); }
-  .topbar { position:relative; background:var(--navy-900); padding:26px 40px; display:flex; align-items:center; justify-content:space-between; overflow:hidden; border-bottom:3px solid var(--sky-400); }
-  .brand { position:relative; display:flex; align-items:center; gap:16px; }
-  .brand-mark { width:44px; height:44px; border-radius:var(--radius-md); background:var(--navy-950); border:1px solid var(--copper-400); display:flex; align-items:center; justify-content:center; box-shadow:0 0 18px rgba(232,115,79,.5), inset 0 0 0 1px rgba(255,255,255,.08); font-family:var(--mono); font-weight:900; font-size:18px; color:#fff; }
-  .brand-eyebrow { font-family:var(--mono); font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:#fff; opacity:.85; margin-bottom:3px; }
-  .brand-title { font-weight:800; font-size:19px; letter-spacing:.08em; text-transform:uppercase; color:#fff; line-height:1; }
-  .live { display:flex; align-items:center; gap:7px; margin-top:8px; }
+  /* ── Sidebar — full layout rethink, replaces the old top tab bar ────────── */
+  .app-shell { display:flex; min-height:100vh; }
+  .sidebar { width:var(--sidebar-w); flex-shrink:0; background:linear-gradient(180deg,var(--steel-950),var(--lavender-600)); display:flex; flex-direction:column; position:sticky; top:0; height:100vh; overflow-y:auto; z-index:20; }
+  .sidebar-brand { padding:28px 22px 20px; }
+  .brand { display:flex; align-items:center; gap:13px; }
+  .brand-mark { width:42px; height:42px; border-radius:var(--radius-md); background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-weight:900; font-size:17px; color:#fff; }
+  .brand-eyebrow { font-family:var(--mono); font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:#fff; opacity:.72; margin-bottom:2px; }
+  .brand-title { font-weight:800; font-size:16px; letter-spacing:.04em; color:#fff; line-height:1.15; }
+  .live { display:flex; align-items:center; gap:7px; margin-top:14px; }
   .live-dot { width:6px; height:6px; border-radius:50%; background:var(--leaf-400); box-shadow:0 0 6px var(--leaf-400); }
   .live-dot.stale { background:var(--danger); box-shadow:0 0 6px var(--danger); }
-  .live-label { font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--inv-muted); }
-  .topbar-right { position:relative; text-align:right; }
-  .topbar-date { font-family:var(--mono); font-size:11.5px; color:var(--inv-muted); }
-  .topbar-count { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--steel-600); margin-top:4px; }
+  .live-label { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--inv-muted); }
+  .topbar-right { display:none; } /* legacy selector kept for JS compat, unused visually now */
+  .topbar-date, .topbar-count { display:none; }
+  .sidebar-footer { margin-top:auto; padding:16px 22px 22px; border-top:1px solid rgba(255,255,255,.14); }
+  .sidebar-footer .topbar-date, .sidebar-footer .topbar-count { display:block; }
+  .sidebar-footer .topbar-date { font-family:var(--mono); font-size:11px; color:var(--inv-muted); }
+  .sidebar-footer .topbar-count { font-family:var(--mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.55); margin-top:3px; }
+  .main-content { flex:1; min-width:0; }
   .container { max-width:1200px; margin:0 auto; padding:40px 32px 64px; }
   .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:36px; }
   .kpi { background:var(--card); border:1px solid var(--border); border-top:3px solid var(--steel-300); border-radius:var(--radius-md); padding:20px 22px; cursor:pointer; box-shadow:var(--shadow-sm); transition:box-shadow .15s ease, transform .15s ease; text-align:left; }
@@ -59,7 +67,7 @@
   .alert-card { background:linear-gradient(180deg,var(--copper-50),var(--card) 40%); border:1px solid var(--copper-200); border-left:4px solid var(--copper-600); border-radius:var(--radius-sm); padding:18px 20px; box-shadow:var(--shadow-sm); }
   .alert-top { display:flex; justify-content:space-between; align-items:center; }
   .alert-bkg { font-family:var(--mono); font-size:13.5px; font-weight:700; color:var(--text-strong); }
-  .alert-deadline { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:var(--danger); padding:3px 9px; border-radius:var(--radius-xs); }
+  .alert-deadline { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:var(--danger); padding:4px 12px; border-radius:var(--radius-pill); }
   .alert-issue { font-size:13.5px; color:var(--text-body); margin-top:9px; line-height:1.4; }
   .filters { display:flex; align-items:center; gap:8px; margin-bottom:22px; flex-wrap:wrap; }
   .chip { padding:9px 20px; border-radius:var(--radius-pill); border:1px solid var(--border-mid); background:var(--card); color:var(--text-body); font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; font-weight:600; }
@@ -84,39 +92,35 @@
   .status-owner { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:5px; letter-spacing:.08em; text-transform:uppercase; }
   .cell-deadline { text-align:right; padding-left:24px; }
   .deadline { font-family:var(--mono); font-size:13px; font-weight:600; white-space:nowrap; }
-  .risk-pill { display:inline-block; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); margin-top:8px; }
+  .risk-pill { display:inline-block; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:4px 12px; border-radius:var(--radius-pill); margin-top:8px; }
   .empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:13px; }
-  @media (max-width: 900px) { .container { padding:24px 14px 48px; } .kpis { grid-template-columns:repeat(2,1fr); } .row { grid-template-columns:1fr; row-gap:16px; } .cell-id, .cell-stage, .cell-status { border-right:none; padding:0; } .cell-deadline { text-align:left; padding-left:0; } .topbar { padding:20px 18px; } .form-grid { grid-template-columns:1fr; } .tabnav { padding:0 14px; overflow-x:auto; } }
-  .tabnav { max-width:1200px; margin:0 auto; padding:0 32px; display:flex; gap:6px; border-bottom:1px solid var(--border); background:var(--steel-100); position:sticky; top:0; z-index:10; }
-  .tab { background:transparent; border:none; font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; font-weight:700; color:var(--text-muted); padding:16px 20px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s ease, border-color .15s ease; }
-  .tab:hover { color:var(--text-strong); }
-  .tab.active { color:var(--copper-700); border-bottom-color:var(--copper-600); }
-  .tab-signout { margin-left:auto; align-self:center; }
-  .tab-signout button { background:transparent; border:1px solid var(--border-mid); color:var(--text-muted); font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; padding:7px 12px; border-radius:var(--radius-xs); cursor:pointer; }
+  @media (max-width: 900px) { .container { padding:24px 14px 48px; } .kpis { grid-template-columns:repeat(2,1fr); } .row { grid-template-columns:1fr; row-gap:16px; } .cell-id, .cell-stage, .cell-status { border-right:none; padding:0; } .cell-deadline { text-align:left; padding-left:0; } .form-grid { grid-template-columns:1fr; } }
+  /* ── Sidebar nav — pill-shaped items, the signature motif throughout ────── */
+  .tabnav { display:flex; flex-direction:column; gap:4px; padding:6px 14px; flex:1; }
+  .tab { background:transparent; border:none; font-family:var(--sans); font-size:13.5px; font-weight:600; color:rgba(255,255,255,.72); padding:11px 18px; cursor:pointer; border-radius:var(--radius-pill); text-align:left; transition:background .15s ease, color .15s ease; }
+  .tab:hover { background:rgba(255,255,255,.10); color:#fff; }
+  .tab.active { background:#fff; color:var(--steel-950); box-shadow:0 4px 14px rgba(0,0,0,.18); }
+  .tab-signout { margin-top:14px; }
+  .tab-signout button { width:100%; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.2); color:rgba(255,255,255,.75); font-family:var(--sans); font-size:12px; font-weight:600; padding:9px 14px; border-radius:var(--radius-pill); cursor:pointer; }
+  .tab-signout button:hover { background:rgba(255,80,80,.25); border-color:rgba(255,80,80,.5); color:#fff; }
 
-  /* ── Hamburger (mobile nav toggle) — hidden on desktop, shown under 860px ── */
-  .hamburger { display:none; flex-direction:column; justify-content:center; gap:4px; width:34px; height:34px; padding:0; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35); border-radius:var(--radius-sm); }
-  .hamburger span { display:block; height:2px; width:18px; margin:0 auto; background:#fff; border-radius:2px; transition:transform .2s ease, opacity .2s ease; }
+  /* ── Hamburger — visible only on mobile, opens the sidebar as a drawer ──── */
+  .mobile-topbar { display:none; align-items:center; justify-content:space-between; padding:16px 20px; background:var(--card); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:15; }
+  .mobile-brand { font-weight:800; font-size:16px; color:var(--text-strong); }
+  .hamburger { display:none; flex-direction:column; justify-content:center; gap:4px; width:36px; height:36px; padding:0; background:var(--steel-100); border:1px solid var(--border-mid); border-radius:var(--radius-sm); }
+  .hamburger span { display:block; height:2px; width:18px; margin:0 auto; background:var(--steel-950); border-radius:2px; transition:transform .2s ease, opacity .2s ease; }
   .hamburger.open span:nth-child(1) { transform:translateY(6px) rotate(45deg); }
   .hamburger.open span:nth-child(2) { opacity:0; }
   .hamburger.open span:nth-child(3) { transform:translateY(-6px) rotate(-45deg); }
-
-  /* ── Wave banner — the one creative signature flourish on the page ───────── */
-  .wave-banner { position:relative; background:linear-gradient(90deg,var(--teal-50),var(--sky-50) 50%,var(--lavender-50)); padding:10px 32px 22px; text-align:center; overflow:hidden; }
-  .wave-svg { position:absolute; left:0; right:0; top:0; width:100%; height:22px; }
-  .wave-svg path { fill:var(--card); }
-  .wave-banner-text { position:relative; font-size:12px; font-weight:600; color:var(--teal-600); letter-spacing:.01em; }
+  .sidebar-backdrop { display:none; }
 
   @media (max-width: 860px) {
+    .mobile-topbar { display:flex; }
     .hamburger { display:flex; }
-    .tabnav { flex-direction:column; align-items:stretch; gap:2px; max-height:0; overflow:hidden; padding:0 20px; transition:max-height .25s ease, padding .25s ease; }
-    .tabnav.mobile-open { max-height:600px; padding:10px 20px 16px; }
-    .tab { text-align:left; border-bottom:1px solid var(--border); border-radius:var(--radius-sm); }
-    .tab-signout { margin-top:6px; }
-    .topbar { padding:20px 20px; flex-wrap:wrap; }
-    .topbar-right { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; text-align:left; }
+    .sidebar { position:fixed; left:0; top:0; transform:translateX(-100%); transition:transform .25s ease; box-shadow:var(--shadow-md); }
+    .sidebar.mobile-open { transform:translateX(0); }
+    .sidebar-backdrop.mobile-open { display:block; position:fixed; inset:0; background:rgba(33,27,61,.45); z-index:19; }
   }
-  .tab-signout button:hover { border-color:var(--danger); color:var(--danger); }
   .tabpanel { display:none; }
   .tabpanel.active { display:block; }
   .bk-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:16px; flex-wrap:wrap; }
@@ -163,59 +167,66 @@
   .bk-cell-bkg { font-family:var(--mono); font-size:12.5px; font-weight:700; color:var(--text-strong); }
   .bk-cell-sub { font-size:12px; color:var(--text-body); }
   .bk-cell-mono { font-family:var(--mono); font-size:11px; color:var(--text-muted); }
-  .bk-cell-pill { display:inline-block; font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:var(--radius-xs); background:var(--steel-150); color:var(--text-body); }
+  .bk-cell-pill { display:inline-block; font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:var(--radius-pill); background:var(--steel-150); color:var(--text-body); }
   @media (max-width: 900px) { .bk-hdr { display:none; } .bk-row { grid-template-columns:1fr; gap:6px; } }
 </style>
 <script src="/qrcode.min.js"></script>
 </head>
 <body>
 
-<div class="topbar">
-  <div class="brand">
-    <div class="brand-mark">J</div>
-    <div>
-      <div class="brand-eyebrow">Edge Metals Inc</div>
-      <div class="brand-title">Jarvis — Booking Scoreboard</div>
-      <div class="live"><span class="live-dot" id="liveDot"></span><span class="live-label" id="liveLabel">Connecting…</span></div>
+<div class="app-shell">
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand">
+      <div class="brand-mark">J</div>
+      <div>
+        <div class="brand-eyebrow">Edge Metals Inc</div>
+        <div class="brand-title">Jarvis</div>
+      </div>
     </div>
+    <div class="live"><span class="live-dot" id="liveDot"></span><span class="live-label" id="liveLabel">Connecting…</span></div>
   </div>
-  <div class="topbar-right">
+
+  <nav class="tabnav" id="tabnav">
+    <button class="tab active" data-tab="board" type="button">Board</button>
+    <button class="tab" data-tab="bookings" type="button">Bookings</button>
+    <button class="tab" data-tab="truckers" type="button">Truckers</button>
+    <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
+    <button class="tab" data-tab="whatsapp" type="button" id="tabWhatsapp">WhatsApp</button>
+    <button class="tab" data-tab="settings" type="button" id="tabSettings">Settings</button>
+    <button class="tab" data-tab="bot" type="button">Bot</button>
+    <button class="tab" data-tab="tasks" type="button">Tasks</button>
+    <button class="tab" data-tab="facts" type="button" id="tabFacts" style="display:none;">Facts</button>
+  </nav>
+
+  <div class="sidebar-footer">
     <div class="topbar-date mono" id="todayLabel"></div>
     <div class="topbar-count" id="trackedCount"></div>
+    <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
+  </div>
+</aside>
+
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<main class="main-content">
+  <div class="mobile-topbar">
+    <div class="mobile-brand">Jarvis</div>
     <button type="button" id="hamburgerBtn" class="hamburger" aria-label="Menu" aria-expanded="false">
       <span></span><span></span><span></span>
     </button>
   </div>
-</div>
 
-<div class="wave-banner">
-  <svg viewBox="0 0 1200 40" preserveAspectRatio="none" class="wave-svg"><path d="M0,20 C150,40 350,0 600,18 C850,36 1050,4 1200,20 L1200,40 L0,40 Z"></path></svg>
-  <div class="wave-banner-text">⚓ Smooth sailing — every booking, one thread, zero surprises.</div>
-</div>
+  <div id="waBanner" style="display:none; padding:9px 32px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-align:center; cursor:pointer;" title="Click to open the WhatsApp tab">
+    <span id="waBannerDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle;"></span>
+    <span id="waBannerText"></span>
+  </div>
 
-<div class="tabnav" id="tabnav">
-  <button class="tab active" data-tab="board" type="button">Board</button>
-  <button class="tab" data-tab="bookings" type="button">Bookings</button>
-  <button class="tab" data-tab="truckers" type="button">Truckers</button>
-  <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
-  <button class="tab" data-tab="whatsapp" type="button" id="tabWhatsapp">WhatsApp</button>
-  <button class="tab" data-tab="settings" type="button" id="tabSettings">Settings</button>
-  <button class="tab" data-tab="bot" type="button">Bot</button>
-  <button class="tab" data-tab="tasks" type="button">Tasks</button>
-  <button class="tab" data-tab="facts" type="button" id="tabFacts" style="display:none;">Facts</button>
-  <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
-</div>
-
-<div id="waBanner" style="display:none; padding:9px 32px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-align:center; cursor:pointer;" title="Click to open the WhatsApp tab">
-  <span id="waBannerDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle;"></span>
-  <span id="waBannerText"></span>
-</div>
-
-<div class="tabpanel active" id="panel-board">
+  <div class="tabpanel active" id="panel-board">
 <div class="container">
   <div class="kpis" id="kpis"></div>
   <div id="alertsSection">
     <div class="rail-head"><span class="rail-title">Needs Attention</span><span class="rail-line"></span><span class="rail-count" id="alertCount">0</span></div>
+
     <div class="alerts" id="alerts"></div>
   </div>
   <div class="filters" id="filters"></div>
@@ -338,6 +349,9 @@
     <div id="f_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div>
   </div>
 </div>
+</div>
+
+</main>
 </div>
 
 <!-- Contact modal -->
@@ -561,15 +575,22 @@
       if (target === 'bot')       setTimeout(() => $('botInput').focus(), 50);
       if (target === 'tasks')     loadTasks();
       if (target === 'facts')     loadFacts();
-      $('tabnav').classList.remove('mobile-open');
+      $('sidebar').classList.remove('mobile-open');
+      $('sidebarBackdrop').classList.remove('mobile-open');
       $('hamburgerBtn').classList.remove('open');
     });
   });
 
   $('hamburgerBtn').addEventListener('click', () => {
-    const open = $('tabnav').classList.toggle('mobile-open');
+    const open = $('sidebar').classList.toggle('mobile-open');
+    $('sidebarBackdrop').classList.toggle('mobile-open', open);
     $('hamburgerBtn').classList.toggle('open', open);
     $('hamburgerBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  $('sidebarBackdrop').addEventListener('click', () => {
+    $('sidebar').classList.remove('mobile-open');
+    $('sidebarBackdrop').classList.remove('mobile-open');
+    $('hamburgerBtn').classList.remove('open');
   });
 
   $('btnSignout').addEventListener('click', async () => {

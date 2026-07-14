@@ -43,6 +43,9 @@ const client = new Client({
 });
 
 let waReady = false;
+let shuttingDown = false; // guards against a race between our own client.destroy()
+                          // and the 'disconnected' event it can trigger as a side
+                          // effect — see disconnected handler + shutdown() below.
 
 // ── Messaging primitives (everything sends through these) ─────────────────────
 async function sendMessage(chatId, text, media = null) {
@@ -121,10 +124,28 @@ client.on('ready', () => {
 });
 
 client.on('disconnected', (reason) => {
+    if (shuttingDown) {
+        // This disconnect is a side effect of OUR OWN client.destroy() call
+        // during a deliberate shutdown (Ctrl+C, SIGTERM) — not a real external
+        // logout. Racing to process.exit(1) here can cut off destroy()'s
+        // Puppeteer teardown mid-write, corrupting the session on disk even
+        // though the filenames survive. Let shutdown() finish and exit on its
+        // own terms instead.
+        console.log('[WA] Disconnected during deliberate shutdown — ignoring (expected)');
+        return;
+    }
     waReady = false;
     waState.setStatus('disconnected', { error: String(reason) });
-    console.error('[WA] Disconnected:', reason, '— reinitializing in 10s');
-    setTimeout(() => client.initialize().catch(e => console.error('[WA] Reinit failed:', e.message)), 10000);
+    console.error('[WA] Disconnected:', reason);
+    // Re-initializing the SAME Client instance after a disconnect hangs forever —
+    // puppeteer's browser session is already torn down (same root cause as the
+    // old Sign-out/Reset bug). A disconnect is NOT a logout: the LocalAuth
+    // credentials on disk are still valid, so we don't wipe SESSION_PATH here —
+    // we just need a fresh process + fresh Client to reconnect with them.
+    // Requires a process manager (pm2/systemd) to actually respawn; without one,
+    // this exit is permanent, same as any other crash. See ops note below.
+    console.error('[WA] Exiting for respawn — requires pm2/systemd, not plain node/nohup');
+    process.exit(1);
 });
 
 client.on('auth_failure', (msg) => {
@@ -191,6 +212,10 @@ waState.setCommonGroupsHandler(async (contactId) => {
 // destroy() hangs forever in "initializing" — puppeteer is already dead.
 waState.setLogoutHandler(async () => {
     console.log('[WA] Logout requested — wiping session and restarting process');
+    shuttingDown = true; // logout()/destroy() below can trigger the same
+                        // side-effect 'disconnected' event as a normal shutdown —
+                        // without this, that race could fire process.exit(1)
+                        // before the SESSION_PATH wipe a few lines down even runs.
     waReady = false;
     waState.setStatus('initializing');
     try { await client.logout(); } catch (e) { console.warn('[WA] Logout error (ignoring):', e.message); }
@@ -228,6 +253,7 @@ client.on('message', async (msg) => {
 
 // ── Graceful shutdown ──────────────────────────────────────────────────────────
 async function shutdown(signal) {
+    shuttingDown = true;
     console.log(`[BOOT] ${signal} — shutting down`);
     try { await client.destroy(); } catch {}
     process.exit(0);
