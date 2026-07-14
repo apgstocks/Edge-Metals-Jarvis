@@ -587,6 +587,61 @@ function getBookingField(bkgNo, field) {
 return loadBookings()?.[bkgNo]?.[field] || null;
 }
 
+// ── Follow-up scheduler — "please follow up with X in N minutes" ────────────
+// Resolves target name to trucker/supplier (falls back to manager if neither
+// matches — e.g. "follow up with the port" isn't a contact, tell the manager
+// rather than silently dropping the request). Reuses the existing persistent
+// task queue (helpers/tasks.js) — same infra as nudge_* tasks, survives restart.
+async function scheduleFollowup(chatId, targetName, minutes, bkgNo, requestedBy) {
+const tasks = require('../helpers/tasks');
+const name = String(targetName || '').trim();
+
+let target_kind = null, resolvedName = name;
+const t = truckers.getTrucker(name);
+const s = !t ? suppliers.getSupplier(name) : null;
+if (t)      { target_kind = 'trucker';  resolvedName = t.name; }
+else if (s) { target_kind = 'supplier'; resolvedName = s.name; }
+
+if (!target_kind) {
+    await _send(chatId, `I don't have a contact named "${name}". Check the spelling or add them from the dashboard first.`);
+    return { action_taken: 'replied' };
+}
+
+const mins = Number.isFinite(minutes) && minutes > 0 ? minutes : 30; // default 30 min if unspecified
+const fireAt = new Date(Date.now() + mins * 60 * 1000).toISOString();
+const label = bkgNo ? ` re ${bkgNo}` : '';
+const message = bkgNo
+    ? `Following up${label} — any update on status?`
+    : `Following up — any update?`;
+
+await tasks.enqueue({
+    type: 'generic_message',
+    target_kind,
+    target_name: resolvedName,
+    bkg_no: bkgNo || null,
+    message,
+    fire_at: fireAt,
+    created_by: requestedBy || 'brain',
+});
+
+const when = mins >= 60 ? `${Math.round(mins / 60 * 10) / 10}h` : `${mins}m`;
+await _send(chatId, `Scheduled — I'll follow up with ${resolvedName} in ${when}${label}.`);
+return { action_taken: 'replied' };
+}
+
+// ── Escalation — trucker/supplier said something the policy layer and the
+// AI fallback both couldn't classify. Per manager rule: never leave it
+// silent — a real reply sitting unread looks like Jarvis ignoring people.
+// Forward the raw text to the manager with sender + booking context so a
+// human can decide, instead of guessing.
+async function escalateUnclear(ctx) {
+const who = ctx.matchedTrucker?.name || ctx.matchedSupplier?.name || ctx.senderName || ctx.senderNumber || 'Unknown sender';
+const kind = ctx.isTrucker ? 'Trucker' : ctx.isSupplier ? 'Supplier' : 'Contact';
+const bkgLabel = ctx.activeBooking ? ` (re ${ctx.activeBooking})` : '';
+await _sendToManager(`${kind} ${who}${bkgLabel} sent something I couldn't understand: "${ctx.text}"`);
+return { action_taken: 'escalated' };
+}
+
 module.exports = {
 init,
 setPending, clearPending, getPending, resolvePending,
@@ -598,4 +653,5 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
+scheduleFollowup, escalateUnclear,
 };

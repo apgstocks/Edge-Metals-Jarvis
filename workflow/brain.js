@@ -131,6 +131,18 @@ function policyDecide(ctx) {
         if ((m = t.match(/^status\s+(\S+)$/)))
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
+        // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
+        // Duration is optional; scheduleFollowup defaults to 30 min if omitted.
+        if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {
+            const rawMins = m[2] ? parseInt(m[2], 10) : null;
+            const unit    = m[3] || '';
+            const minutes = rawMins != null ? (unit.startsWith('h') ? rawMins * 60 : rawMins) : null;
+            return {
+                intent: 'schedule_followup', resolvedBy: 'policy',
+                data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
+            };
+        }
+
         // Bare booking number → status
         const bkg = resolveBookingNumber(ctx.text);
         if (bkg && t.split(/\s+/).length === 1)
@@ -300,7 +312,8 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE. You cannot schedule follow-ups, set reminders, send delayed messages, make phone calls, or take any future/deferred action. If asked for any of these, use action "reply" with reply text that briefly declines and does NOT promise anything. Never say "I will follow up", "I'll remind you", "I'll check back", or similar — you have no such capability.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE. The ONLY future/deferred capability you have is "schedule_followup" (a WhatsApp nudge sent later to a trucker or supplier). You cannot set reminders for the manager, send emails, make phone calls, or do anything else deferred. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
 - When activeBooking is set AND the message clearly refers to an action verb ("forward", "assign", "recall", "archive", "status") WITHOUT naming a booking number, use activeBooking as bkg_no. Do NOT return NEED_DATA in this case.
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
 
@@ -336,7 +349,8 @@ forward_booking, assign_supplier, recall_booking, archive_booking,
 show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
-scale_ticket_received, ingate_received, reply, silent, NEED_DATA, NEED_APPROVAL
+scale_ticket_received, ingate_received, schedule_followup,
+reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -345,6 +359,8 @@ Return ONLY this JSON:
   "bkg_no": null,
   "supplier_name": null,
   "trucker_name": null,
+  "target_name": null,
+  "minutes": null,
   "reply": null,
   "reasoning": "one sentence"
 }`;
@@ -394,6 +410,7 @@ async function route(decision, ctx, sendMessage) {
         case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : askBkg(chatId, 'Which booking should I assign? e.g. "assign BK123456"', 'assign_supplier');
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
+        case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
         case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
@@ -417,7 +434,10 @@ async function route(decision, ctx, sendMessage) {
         case 'NEED_DATA':
         default:
             if (ctx.isManagerOrTeam) return ask(chatId, d.reply || "I couldn't pin that down. Type 'menu' for options or give me a booking number.");
-            return { action_taken: 'silent' }; // never confuse truckers/suppliers with meta-questions
+            // Trucker/supplier said something we couldn't classify — per manager rule,
+            // never leave a real reply unhandled. Escalate to manager instead of silence.
+            if (ctx.isTrucker || ctx.isSupplier) return actions.escalateUnclear(ctx);
+            return { action_taken: 'silent' }; // truly unknown sender — stay silent
     }
 }
 
@@ -443,7 +463,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, reply: ai.reply },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, reply: ai.reply },
         };
     }
 
