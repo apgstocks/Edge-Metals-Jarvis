@@ -6,19 +6,26 @@
 <title>Jarvis — Booking Scoreboard</title>
 <style>
   :root {
-    --steel-100:#EBEDEF; --steel-150:#DFE2E6; --steel-200:#CBD0D6; --steel-300:#A9B0B9;
-    --steel-400:#7E8793; --steel-600:#4C545F; --steel-900:#1C2026; --steel-950:#12151A;
-    --copper-50:#FBF1EA; --copper-200:#EBC7AC; --copper-400:#D98A4B; --copper-600:#C25E22; --copper-700:#A34D1B;
-    --leaf-50:#EAF4EC; --leaf-400:#5CB876; --leaf-500:#3F9E5C; --leaf-600:#2F8449; --leaf-700:#256B3B;
-    --danger:#B3362A; --danger-bg:#FAE2DE; --danger-text:#9A2C1F;
-    --warning:#C98A1B; --warning-bg:#FBEFD6; --warning-text:#8A6212;
-    --card:#FFFFFF; --border:#E2E5E9; --border-mid:#CBD0D6;
-    --text-strong:#181C22; --text-body:#3C434D; --text-muted:#6B7380; --text-faint:#98A0AB;
-    --inv-muted:#B9C0CA;
-    --radius-xs:3px; --radius-sm:6px; --radius-md:10px; --radius-pill:999px;
-    --shadow-sm:0 1px 3px rgba(18,21,26,.08); --shadow-md:0 6px 18px rgba(18,21,26,.12);
+    /* Pastel dockside palette — grounded in weathered shipping-container paint:
+       coral, sea-glass teal, sandy paper, dusty plum. Same token NAMES as
+       before so every existing rule/JS reference keeps working unchanged. */
+    --steel-100:#FBF6EE; --steel-150:#F6ECD9; --steel-200:#EEDFC0; --steel-300:#D9C6A3;
+    --steel-400:#B39C7C; --steel-600:#8A7358; --steel-900:#4A3A5C; --steel-950:#3A2D4A;
+    --navy-900:#16324F; --navy-950:#102540;
+    --copper-50:#FDE8DC; --copper-200:#F6C6AC; --copper-400:#F4977A; --copper-600:#E8734F; --copper-700:#D65F3C;
+    --teal-50:#DCF3EA; --teal-400:#5FBFA8; --teal-600:#3D9C86;
+    --sky-50:#DFEFFA; --sky-400:#7FB8E0; --sky-600:#5090C0;
+    --lavender-50:#EFE6F7; --lavender-400:#B79FD1; --lavender-600:#9478B8;
+    --leaf-50:#E3F5EA; --leaf-400:#8ED1AA; --leaf-500:#6EC090; --leaf-600:#4FA873; --leaf-700:#2F7A50;
+    --danger:#C96B80; --danger-bg:#FBE1E6; --danger-text:#9C3F52;
+    --warning:#D9A23B; --warning-bg:#FBEFD1; --warning-text:#8A6212;
+    --card:#FFFFFF; --border:#F0E3D2; --border-mid:#E3D2B8;
+    --text-strong:#3A342E; --text-body:#5C5349; --text-muted:#8B8175; --text-faint:#B7AEA0;
+    --inv-muted:#DECBEE;
+    --radius-xs:5px; --radius-sm:11px; --radius-md:17px; --radius-lg:24px; --radius-pill:999px;
+    --shadow-sm:0 2px 10px rgba(232,115,79,.12); --shadow-md:0 10px 28px rgba(148,120,184,.18);
     --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
-    --sans:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+    --sans:ui-rounded,'SF Pro Rounded','Segoe UI Rounded',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
   }
   * { box-sizing:border-box; margin:0; }
   ::-webkit-scrollbar { height:8px; width:8px; }
@@ -26,11 +33,10 @@
   body { background:var(--steel-100); font-family:var(--sans); color:var(--text-body); min-height:100vh; }
   button { font:inherit; cursor:pointer; }
   .mono { font-family:var(--mono); }
-  .topbar { position:relative; background:linear-gradient(135deg,var(--steel-950),var(--steel-900)); padding:26px 40px; display:flex; align-items:center; justify-content:space-between; overflow:hidden; border-bottom:2px solid var(--copper-700); }
-  .topbar::before { content:''; position:absolute; inset:0; opacity:.06; pointer-events:none; background-image:repeating-linear-gradient(-45deg,var(--copper-400) 0,var(--copper-400) 2px,transparent 2px,transparent 14px); }
+  .topbar { position:relative; background:var(--navy-900); padding:26px 40px; display:flex; align-items:center; justify-content:space-between; overflow:hidden; border-bottom:3px solid var(--sky-400); }
   .brand { position:relative; display:flex; align-items:center; gap:16px; }
-  .brand-mark { width:44px; height:44px; border-radius:var(--radius-sm); background:var(--steel-900); border:1px solid var(--copper-600); display:flex; align-items:center; justify-content:center; box-shadow:0 0 18px rgba(194,94,34,.4), inset 0 0 0 1px rgba(255,255,255,.03); font-family:var(--mono); font-weight:900; font-size:18px; color:var(--copper-400); }
-  .brand-eyebrow { font-family:var(--mono); font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-400); margin-bottom:3px; }
+  .brand-mark { width:44px; height:44px; border-radius:var(--radius-md); background:var(--navy-950); border:1px solid var(--copper-400); display:flex; align-items:center; justify-content:center; box-shadow:0 0 18px rgba(232,115,79,.5), inset 0 0 0 1px rgba(255,255,255,.08); font-family:var(--mono); font-weight:900; font-size:18px; color:#fff; }
+  .brand-eyebrow { font-family:var(--mono); font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:#fff; opacity:.85; margin-bottom:3px; }
   .brand-title { font-weight:800; font-size:19px; letter-spacing:.08em; text-transform:uppercase; color:#fff; line-height:1; }
   .live { display:flex; align-items:center; gap:7px; margin-top:8px; }
   .live-dot { width:6px; height:6px; border-radius:50%; background:var(--leaf-400); box-shadow:0 0 6px var(--leaf-400); }
@@ -87,6 +93,29 @@
   .tab.active { color:var(--copper-700); border-bottom-color:var(--copper-600); }
   .tab-signout { margin-left:auto; align-self:center; }
   .tab-signout button { background:transparent; border:1px solid var(--border-mid); color:var(--text-muted); font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; padding:7px 12px; border-radius:var(--radius-xs); cursor:pointer; }
+
+  /* ── Hamburger (mobile nav toggle) — hidden on desktop, shown under 860px ── */
+  .hamburger { display:none; flex-direction:column; justify-content:center; gap:4px; width:34px; height:34px; padding:0; background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35); border-radius:var(--radius-sm); }
+  .hamburger span { display:block; height:2px; width:18px; margin:0 auto; background:#fff; border-radius:2px; transition:transform .2s ease, opacity .2s ease; }
+  .hamburger.open span:nth-child(1) { transform:translateY(6px) rotate(45deg); }
+  .hamburger.open span:nth-child(2) { opacity:0; }
+  .hamburger.open span:nth-child(3) { transform:translateY(-6px) rotate(-45deg); }
+
+  /* ── Wave banner — the one creative signature flourish on the page ───────── */
+  .wave-banner { position:relative; background:linear-gradient(90deg,var(--teal-50),var(--sky-50) 50%,var(--lavender-50)); padding:10px 32px 22px; text-align:center; overflow:hidden; }
+  .wave-svg { position:absolute; left:0; right:0; top:0; width:100%; height:22px; }
+  .wave-svg path { fill:var(--card); }
+  .wave-banner-text { position:relative; font-size:12px; font-weight:600; color:var(--teal-600); letter-spacing:.01em; }
+
+  @media (max-width: 860px) {
+    .hamburger { display:flex; }
+    .tabnav { flex-direction:column; align-items:stretch; gap:2px; max-height:0; overflow:hidden; padding:0 20px; transition:max-height .25s ease, padding .25s ease; }
+    .tabnav.mobile-open { max-height:600px; padding:10px 20px 16px; }
+    .tab { text-align:left; border-bottom:1px solid var(--border); border-radius:var(--radius-sm); }
+    .tab-signout { margin-top:6px; }
+    .topbar { padding:20px 20px; flex-wrap:wrap; }
+    .topbar-right { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; text-align:left; }
+  }
   .tab-signout button:hover { border-color:var(--danger); color:var(--danger); }
   .tabpanel { display:none; }
   .tabpanel.active { display:block; }
@@ -105,24 +134,24 @@
   .modal-body { padding:24px 26px; }
   .modal-foot { padding:16px 26px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; background:var(--steel-100); border-radius:0 0 var(--radius-md) var(--radius-md); }
   .drop { border:2px dashed var(--border-mid); border-radius:var(--radius-md); padding:26px 20px; text-align:center; background:var(--steel-100); cursor:pointer; transition:border-color .15s, background .15s; }
-  .drop.drag { border-color:var(--copper-600); background:#FBF1EA; }
-  .drop.has-file { border-style:solid; border-color:#5CB876; background:#EAF4EC; cursor:default; }
+  .drop.drag { border-color:var(--copper-600); background:#FDE8DC; }
+  .drop.has-file { border-style:solid; border-color:#8ED1AA; background:#E3F5EA; cursor:default; }
   .drop-label { font-size:13px; color:var(--text-body); font-weight:500; }
   .drop-sub { font-size:11px; color:var(--text-faint); margin-top:4px; }
   .file-info { display:flex; align-items:center; gap:12px; justify-content:center; text-align:left; }
-  .file-name { font-family:var(--mono); font-size:12px; font-weight:700; color:#256B3B; }
+  .file-name { font-family:var(--mono); font-size:12px; font-weight:700; color:#2F7A50; }
   .file-size { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); }
   .file-remove { background:transparent; border:1px solid var(--border-mid); color:var(--danger); font-family:var(--mono); font-size:10px; padding:4px 8px; border-radius:var(--radius-xs); cursor:pointer; }
   .scan-btn { margin-top:10px; width:100%; padding:11px; background:var(--steel-950); color:#fff; border:none; border-radius:var(--radius-sm); font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; transition:background .15s; }
   .scan-btn:hover:not(:disabled) { background:var(--steel-900); }
   .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
-  .scanned-banner { margin-top:10px; padding:10px 14px; background:#EAF4EC; border:1px solid #5CB876; border-radius:var(--radius-sm); font-size:12.5px; color:#256B3B; font-weight:600; }
+  .scanned-banner { margin-top:10px; padding:10px 14px; background:#E3F5EA; border:1px solid #8ED1AA; border-radius:var(--radius-sm); font-size:12.5px; color:#2F7A50; font-weight:600; }
   .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px; }
   .form-grid .full { grid-column:1/-1; }
   label { display:block; font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); font-weight:600; margin-bottom:5px; }
   input, select, textarea { width:100%; padding:9px 12px; background:var(--card); border:1px solid var(--border-mid); border-radius:var(--radius-sm); font-size:13px; font-family:var(--sans); color:var(--text-strong); outline:none; transition:border-color .15s; box-sizing:border-box; }
   input:focus, select:focus, textarea:focus { border-color:var(--copper-600); }
-  .form-err { padding:10px 14px; background:#FAE2DE; border:1px solid var(--danger); border-radius:var(--radius-sm); color:var(--danger-text); font-size:12.5px; margin-top:14px; }
+  .form-err { padding:10px 14px; background:#FBE1E6; border:1px solid var(--danger); border-radius:var(--radius-sm); color:var(--danger-text); font-size:12.5px; margin-top:14px; }
   .spinner { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; margin-right:8px; vertical-align:middle; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .bk-list-empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:12.5px; background:var(--card); border-radius:var(--radius-md); border:1px dashed var(--border-mid); }
@@ -153,18 +182,27 @@
   <div class="topbar-right">
     <div class="topbar-date mono" id="todayLabel"></div>
     <div class="topbar-count" id="trackedCount"></div>
+    <button type="button" id="hamburgerBtn" class="hamburger" aria-label="Menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </div>
 
-<div class="tabnav">
+<div class="wave-banner">
+  <svg viewBox="0 0 1200 40" preserveAspectRatio="none" class="wave-svg"><path d="M0,20 C150,40 350,0 600,18 C850,36 1050,4 1200,20 L1200,40 L0,40 Z"></path></svg>
+  <div class="wave-banner-text">⚓ Smooth sailing — every booking, one thread, zero surprises.</div>
+</div>
+
+<div class="tabnav" id="tabnav">
   <button class="tab active" data-tab="board" type="button">Board</button>
   <button class="tab" data-tab="bookings" type="button">Bookings</button>
   <button class="tab" data-tab="truckers" type="button">Truckers</button>
   <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
-  <button class="tab" data-tab="whatsapp" type="button">WhatsApp</button>
-  <button class="tab" data-tab="settings" type="button">Settings</button>
+  <button class="tab" data-tab="whatsapp" type="button" id="tabWhatsapp">WhatsApp</button>
+  <button class="tab" data-tab="settings" type="button" id="tabSettings">Settings</button>
   <button class="tab" data-tab="bot" type="button">Bot</button>
   <button class="tab" data-tab="tasks" type="button">Tasks</button>
+  <button class="tab" data-tab="facts" type="button" id="tabFacts" style="display:none;">Facts</button>
   <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
 </div>
 
@@ -226,7 +264,7 @@
 <div class="container">
   <div class="bk-head"><h2>Settings</h2><button class="btn-primary" id="btnSaveSettings" type="button">Save changes</button></div>
   <div id="settingsError" class="form-err" style="display:none; margin-bottom:20px;"></div>
-  <div id="settingsSaved" style="display:none; margin-bottom:20px; padding:10px 14px; background:#EAF4EC; border:1px solid #5CB876; border-radius:var(--radius-sm); font-size:12.5px; color:#256B3B; font-weight:600;">Saved.</div>
+  <div id="settingsSaved" style="display:none; margin-bottom:20px; padding:10px 14px; background:#E3F5EA; border:1px solid #8ED1AA; border-radius:var(--radius-sm); font-size:12.5px; color:#2F7A50; font-weight:600;">Saved.</div>
   <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
     <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Manager</h3>
     <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
@@ -284,6 +322,21 @@
   </div>
   <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Pending</div><div id="t_pending_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div></div>
   <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">History</div><div id="t_history_list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-facts">
+<div class="container">
+  <div class="bk-head"><h2>Facts</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Jarvis's learned memory — fed into every AI answer. Admin-only.</div></div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Add a fact</div>
+    <div style="display:flex; gap:8px;"><input id="f_new_text" type="text" placeholder="e.g. DALA booking numbers can include a dash" style="flex:1;"><button class="btn-primary" id="f_add" type="button">Add</button></div>
+    <div id="f_add_err" style="color:var(--danger); font-size:12px; margin-top:6px;"></div>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">All facts (most recent first)</div>
+    <div id="f_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div>
+  </div>
 </div>
 </div>
 
@@ -481,6 +534,20 @@
   load();
   setInterval(load, 30000);
 
+  // Admin-only tabs (WhatsApp QR, Facts) are hidden entirely for non-admin
+  // sessions — not just visually de-emphasized. The backend also enforces
+  // this on the API side (requireAdmin), so hiding here is UX, not the
+  // security boundary — but it keeps regular users from even seeing these
+  // exist.
+  state.role = 'user';
+  fetch('/api/me').then(r => r.json()).then(me => {
+    state.role = me.role || 'user';
+    const isAdmin = state.role === 'admin';
+    $('tabWhatsapp').style.display = isAdmin ? '' : 'none';
+    $('tabFacts').style.display    = isAdmin ? '' : 'none';
+    $('tabSettings').style.display = isAdmin ? '' : 'none';
+  }).catch(() => {});
+
   document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => {
       const target = t.dataset.tab;
@@ -493,7 +560,16 @@
       if (target === 'settings')  loadSettings();
       if (target === 'bot')       setTimeout(() => $('botInput').focus(), 50);
       if (target === 'tasks')     loadTasks();
+      if (target === 'facts')     loadFacts();
+      $('tabnav').classList.remove('mobile-open');
+      $('hamburgerBtn').classList.remove('open');
     });
+  });
+
+  $('hamburgerBtn').addEventListener('click', () => {
+    const open = $('tabnav').classList.toggle('mobile-open');
+    $('hamburgerBtn').classList.toggle('open', open);
+    $('hamburgerBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
   $('btnSignout').addEventListener('click', async () => {
@@ -644,7 +720,7 @@
       </div>`).join('');
     if (isEditing) {
       const banner = document.createElement('div');
-      banner.style.cssText = 'padding:8px 12px; background:#FAE2DE; color:var(--danger-text); border-radius:var(--radius-sm); font-size:11.5px; margin-bottom:8px; line-height:1.4;';
+      banner.style.cssText = 'padding:8px 12px; background:#FBE1E6; color:var(--danger-text); border-radius:var(--radius-sm); font-size:11.5px; margin-bottom:8px; line-height:1.4;';
       banner.innerHTML = `<strong>Manual stage override:</strong> Changing a stage here does NOT send WhatsApp messages to trucker/supplier. Use only to correct out-of-sync bookings.`;
       wrap.insertBefore(banner, wrap.firstChild);
     }
@@ -894,9 +970,9 @@
   const WA_LABEL = {
     initializing : { title:'Starting up', sub:'Jarvis is booting the WhatsApp client…', color:'#98A0AB', bg:'var(--steel-100)', ic:'…' },
     qr           : { title:'Scan to connect', sub:'Open WhatsApp on the Jarvis phone and scan this QR.', color:'#C98A1B', bg:'#FBEFD6', ic:'📱' },
-    ready        : { title:'Connected', sub:'Jarvis is online and receiving messages.', color:'#3F9E5C', bg:'#EAF4EC', ic:'✓' },
-    disconnected : { title:'Disconnected', sub:'Lost connection — reconnecting shortly.', color:'#B3362A', bg:'#FAE2DE', ic:'⚠' },
-    auth_failure : { title:'Sign-in failed', sub:'WhatsApp rejected the session — click "Sign out & re-scan".', color:'#B3362A', bg:'#FAE2DE', ic:'⚠' },
+    ready        : { title:'Connected', sub:'Jarvis is online and receiving messages.', color:'#6EC090', bg:'#E3F5EA', ic:'✓' },
+    disconnected : { title:'Disconnected', sub:'Lost connection — reconnecting shortly.', color:'#C96B80', bg:'#FBE1E6', ic:'⚠' },
+    auth_failure : { title:'Sign-in failed', sub:'WhatsApp rejected the session — click "Sign out & re-scan".', color:'#C96B80', bg:'#FBE1E6', ic:'⚠' },
   };
   let waLastStatus = null;
   let waAutoOpened = false;
@@ -1037,8 +1113,8 @@
       const vr = await fetch('/api/whatsapp/verify-number', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ number: raw }) });
       const vd = await vr.json();
       if (!vr.ok) throw new Error(vd.error || 'verify failed');
-      if (!vd.registered) { result.style.background = '#FAE2DE'; result.style.color = 'var(--danger-text)'; result.textContent = '✗ Not on WhatsApp'; $('c_common_groups').style.display = 'none'; return; }
-      result.style.background = '#EAF4EC'; result.style.color = '#256B3B'; result.textContent = '✓ On WhatsApp' + (vd.formatted ? ' (' + vd.formatted + ')' : '');
+      if (!vd.registered) { result.style.background = '#FBE1E6'; result.style.color = 'var(--danger-text)'; result.textContent = '✗ Not on WhatsApp'; $('c_common_groups').style.display = 'none'; return; }
+      result.style.background = '#E3F5EA'; result.style.color = '#2F7A50'; result.textContent = '✓ On WhatsApp' + (vd.formatted ? ' (' + vd.formatted + ')' : '');
       const cg = await fetch('/api/whatsapp/common-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contactId: vd.contactId }) });
       const cd = await cg.json();
       if (!cg.ok) throw new Error(cd.error || 'common-groups failed');
@@ -1050,7 +1126,7 @@
         $('c_common_groups_list').innerHTML = groups.map(g => `<div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);"><div><div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(g.name)}</div><div class="mono" style="font-size:11px; color:var(--text-faint);">${esc(g.id)} ${g.participants ? '· ' + g.participants + ' members' : ''}</div></div><button type="button" class="btn-secondary" data-cg-pick="${esc(g.id)}" style="padding:6px 14px; font-size:10.5px;">Use this</button></div>`).join('');
         $('c_common_groups_list').querySelectorAll('[data-cg-pick]').forEach(b => { b.addEventListener('click', () => { $('c_group').value = b.dataset.cgPick; }); });
       }
-    } catch (e) { result.style.background = '#FAE2DE'; result.style.color = 'var(--danger-text)'; result.textContent = 'Verify failed: ' + e.message; }
+    } catch (e) { result.style.background = '#FBE1E6'; result.style.color = 'var(--danger-text)'; result.textContent = 'Verify failed: ' + e.message; }
     finally { btn.disabled = false; btn.textContent = originalLabel; }
   });
 
@@ -1145,6 +1221,46 @@
   });
   $('t_message').value = TASK_MESSAGE_DEFAULTS[$('t_type').value] || '';
 
+  async function loadFacts() {
+    try {
+      const r = await fetch('/api/facts');
+      if (r.status === 403) { $('f_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Admin access required.</div>`; return; }
+      const d = await r.json();
+      renderFacts(d.facts || []);
+    } catch (e) { $('f_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Failed to load: ${esc(e.message)}</div>`; }
+  }
+
+  function renderFacts(list) {
+    if (!list.length) { $('f_list').innerHTML = `<div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">No facts yet. Add one above, or say "remember X" to Jarvis on WhatsApp.</div>`; return; }
+    const indexed = list.map((f, i) => ({ ...f, _idx: i })).reverse(); // most recent first, index refers to original array position
+    $('f_list').innerHTML = indexed.map(f => `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:10px 12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);"><div style="flex:1; min-width:0;"><div style="font-size:12.5px; color:var(--text-strong);">${esc(f.text)}</div><div class="mono" style="font-size:10.5px; color:var(--text-faint); margin-top:3px;">${f.created_at ? new Date(f.created_at).toLocaleString() : ''}</div></div><button type="button" class="btn-secondary" data-f-del="${f._idx}" style="padding:5px 10px; font-size:10.5px; color:var(--danger); border-color:var(--danger); white-space:nowrap;">Delete</button></div>`).join('');
+    $('f_list').querySelectorAll('[data-f-del]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this fact?')) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch('/api/facts/' + btn.dataset.fDel, { method: 'DELETE' });
+          if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
+          loadFacts();
+        } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
+      });
+    });
+  }
+
+  $('f_add').addEventListener('click', async () => {
+    const text = $('f_new_text').value.trim();
+    $('f_add_err').textContent = '';
+    if (!text) { $('f_add_err').textContent = 'Enter a fact first.'; return; }
+    $('f_add').disabled = true;
+    try {
+      const r = await fetch('/api/facts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+      $('f_new_text').value = '';
+      loadFacts();
+    } catch (e) { $('f_add_err').textContent = e.message; }
+    finally { $('f_add').disabled = false; }
+  });
+
   async function loadTasks() {
     try {
       const r = await fetch('/api/tasks');
@@ -1179,7 +1295,7 @@
     if (!list.length) { $('t_history_list').innerHTML = `<div style="color:var(--text-faint); font-size:11.5px; padding:6px 0;">No history yet.</div>`; return; }
     list.sort((a,b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0));
     $('t_history_list').innerHTML = list.slice(0, 100).map(t => {
-      const badge = t.status === 'done' ? 'background:#EAF4EC; color:#256B3B;' : t.status === 'cancelled' ? 'background:var(--steel-150); color:var(--text-muted);' : 'background:#FAE2DE; color:var(--danger-text);';
+      const badge = t.status === 'done' ? 'background:#E3F5EA; color:#2F7A50;' : t.status === 'cancelled' ? 'background:var(--steel-150); color:var(--text-muted);' : 'background:#FBE1E6; color:var(--danger-text);';
       return `<div style="display:grid; grid-template-columns:80px 1fr 160px; gap:10px; padding:6px 10px; font-size:11px; border-bottom:1px solid var(--border);"><div><span class="bk-cell-pill" style="${badge}">${esc(t.status)}</span></div><div>${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')} ${t.bkg_no ? '· ' + esc(t.bkg_no) + (t.container_seq != null ? '/' + t.container_seq : '') : ''} <span style="color:var(--text-faint);">${esc(t.result_note || '')}</span></div><div class="mono" style="color:var(--text-faint);">${t.completed_at ? new Date(t.completed_at).toLocaleString() : '—'}</div></div>`;
     }).join('');
   }

@@ -8,7 +8,8 @@ const express = require('express');
 const path    = require('path');
 const crypto  = require('crypto');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
-        mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking } = require('./helpers/json');
+        mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking,
+        loadFacts, addFact } = require('./helpers/json');
 const { daysUntil }   = require('./helpers/time');
 const { listAlerts, snoozeAlert, muteBooking } = require('./alerts');
 const cfg = require('./config');
@@ -17,21 +18,22 @@ const cfg = require('./config');
 // Keys are random 32-byte hex; issued on /login, checked on every non-public
 // route via the sid cookie. Restart wipes sessions — acceptable, users just
 // log in again. Real auth (users, roles, hashed passwords) is Pass 3+.
-const sessions = new Map(); // sid → { issued: ms, ip }
+const sessions = new Map(); // sid → { issued: ms, ip, role: 'user' | 'admin' }
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 
-function issueSession(ip) {
+function issueSession(ip, role) {
     const sid = crypto.randomBytes(32).toString('hex');
-    sessions.set(sid, { issued: Date.now(), ip });
+    sessions.set(sid, { issued: Date.now(), ip, role });
     return sid;
 }
-function validSession(sid) {
-    if (!sid) return false;
+function getSession(sid) {
+    if (!sid) return null;
     const s = sessions.get(sid);
-    if (!s) return false;
-    if (Date.now() - s.issued > SESSION_TTL_MS) { sessions.delete(sid); return false; }
-    return true;
+    if (!s) return null;
+    if (Date.now() - s.issued > SESSION_TTL_MS) { sessions.delete(sid); return null; }
+    return s;
 }
+function validSession(sid) { return !!getSession(sid); }
 function parseCookie(header, name) {
     if (!header) return null;
     const m = header.split(';').map(x => x.trim()).find(x => x.startsWith(name + '='));
@@ -118,20 +120,24 @@ function createApi() {
 
     app.post('/login', (req, res) => {
         const pw = String(req.body?.password || '');
-        const expected = cfg.APP_PASSWORD;
-        if (!expected) {
+        const userPw  = cfg.APP_PASSWORD;
+        const adminPw = cfg.ADMIN_PASSWORD;
+        if (!userPw) {
             return res.status(500).json({ error: 'APP_PASSWORD not configured on the server' });
         }
-        // Constant-time compare so a wrong-length guess doesn't leak length via timing
-        const a = Buffer.from(pw);
-        const b = Buffer.from(expected);
-        const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-        if (!ok) return res.status(401).json({ error: 'wrong password' });
+        // Constant-time compare against both; admin checked first since it's the
+        // more privileged match. Same-length-mismatch short-circuits safely (no
+        // length leak) — timingSafeEqual requires equal-length buffers.
+        const eq = (a, b) => { const A = Buffer.from(a), B = Buffer.from(b); return A.length === B.length && crypto.timingSafeEqual(A, B); };
+        let role = null;
+        if (adminPw && eq(pw, adminPw))      role = 'admin';
+        else if (eq(pw, userPw))             role = 'user';
+        if (!role) return res.status(401).json({ error: 'wrong password' });
 
-        const sid = issueSession(req.ip);
+        const sid = issueSession(req.ip, role);
         res.setHeader('Set-Cookie',
             `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
-        res.json({ ok: true });
+        res.json({ ok: true, role });
     });
 
     app.post('/logout', (req, res) => {
@@ -147,11 +153,12 @@ function createApi() {
     //  2) API_TOKEN bearer header (machine-to-machine, unchanged from before)
     app.use((req, res, next) => {
         const sid = parseCookie(req.headers.cookie, 'sid');
-        if (validSession(sid)) return next();
+        const session = getSession(sid);
+        if (session) { req.role = session.role; return next(); }
 
         if (cfg.API_TOKEN) {
             const got = (req.headers.authorization || '').replace('Bearer ', '');
-            if (got === cfg.API_TOKEN) return next();
+            if (got === cfg.API_TOKEN) { req.role = 'admin'; return next(); } // trusted machine credential = full access
         }
 
         // Browser: redirect to /login. API: return 401 JSON.
@@ -161,6 +168,15 @@ function createApi() {
         }
         return res.redirect('/login');
     });
+
+    // Gate for admin-only routes (WhatsApp QR/reset, Facts panel). Must run
+    // after the session middleware above so req.role is already set.
+    function requireAdmin(req, res, next) {
+        if (req.role === 'admin') return next();
+        return res.status(403).json({ error: 'admin access required' });
+    }
+
+    app.get('/api/me', (req, res) => res.json({ role: req.role || 'user' }));
 
     // ── Dashboard payload ─────────────────────────────────────────────────────
     app.get('/api/dashboard', (req, res) => {
@@ -445,9 +461,9 @@ function createApi() {
         res.json({ ok: true });
     });
 
-    // ── Settings ──────────────────────────────────────────────────────────────
-    app.get('/api/settings', (req, res) => res.json(loadSettings()));
-    app.put('/api/settings', async (req, res) => {
+    // ── Settings ── admin-only: manager number, team roster, group IDs ─────────
+    app.get('/api/settings', requireAdmin, (req, res) => res.json(loadSettings()));
+    app.put('/api/settings', requireAdmin, async (req, res) => {
         await saveSettings({ ...loadSettings(), ...req.body });
         res.json({ ok: true });
     });
@@ -455,7 +471,7 @@ function createApi() {
     // ── WhatsApp status + re-scan ──────────────────────────────────────────────
     // Status is read from a shared in-memory module (helpers/wa-state), which is
     // written by index.js on every WA client event. Poll-friendly.
-    app.get('/api/whatsapp/status', (req, res) => {
+    app.get('/api/whatsapp/status', requireAdmin, (req, res) => {
         const waState = require('./helpers/wa-state');
         res.json(waState.get());
     });
@@ -464,7 +480,7 @@ function createApi() {
     // SECURITY NOTE: this is a hijack vector on a public dashboard. Anyone with
     // dashboard access can scan a QR with their OWN phone and take over Jarvis's
     // WhatsApp identity. Change APP_PASSWORD to something strong before exposing.
-    app.post('/api/whatsapp/reset', async (req, res) => {
+    app.post('/api/whatsapp/reset', requireAdmin, async (req, res) => {
         try {
             const waState = require('./helpers/wa-state');
             await waState.triggerLogout();
@@ -479,7 +495,7 @@ function createApi() {
     // Only returns groups Jarvis is a member of — you cannot validate a group
     // Jarvis hasn't been added to yet. Prerequisite: user adds Jarvis to the
     // group on their phone BEFORE clicking Validate here.
-    app.post('/api/whatsapp/find-groups', async (req, res) => {
+    app.post('/api/whatsapp/find-groups', requireAdmin, async (req, res) => {
         try {
             const waState = require('./helpers/wa-state');
             const groups = await waState.findGroups(req.body?.name || '');
@@ -493,7 +509,7 @@ function createApi() {
     // Verify a phone number has WhatsApp. Returns { registered, contactId, formatted }.
     // Rate-limit vector on public dashboards: someone could enumerate valid WhatsApp
     // numbers. Currently gated by APP_PASSWORD (set to a strong value before VM).
-    app.post('/api/whatsapp/verify-number', async (req, res) => {
+    app.post('/api/whatsapp/verify-number', requireAdmin, async (req, res) => {
         try {
             const waState = require('./helpers/wa-state');
             const result = await waState.verifyNumber(req.body?.number || '');
@@ -507,7 +523,7 @@ function createApi() {
     // List groups this contact shares with Jarvis. WhatsApp privacy: we cannot see
     // groups the contact is in that Jarvis isn't. If empty, Jarvis + contact are
     // not in any common group yet — user must add Jarvis to the target group first.
-    app.post('/api/whatsapp/common-groups', async (req, res) => {
+    app.post('/api/whatsapp/common-groups', requireAdmin, async (req, res) => {
         try {
             const waState = require('./helpers/wa-state');
             const groups = await waState.findCommonGroups(req.body?.contactId || '');
@@ -516,6 +532,34 @@ function createApi() {
             console.error('[API] whatsapp/common-groups failed:', err.message);
             res.status(500).json({ error: err.message });
         }
+    });
+
+    // ── Facts admin panel — admin-only. Facts are the durable "self-learning"
+    // store: explicit "remember X" commands and AI-detected corrections land
+    // here (see workflow/actions.js rememberFact), and every one is fed into
+    // every future Gemini prompt. Never exposed to non-admin dashboard users —
+    // this is operational/business memory, not something every viewer needs.
+    app.get('/api/facts', requireAdmin, (req, res) => {
+        res.json({ facts: loadFacts() });
+    });
+
+    app.post('/api/facts', requireAdmin, async (req, res) => {
+        const text = String(req.body?.text || '').trim();
+        if (!text) return res.status(400).json({ error: 'text required' });
+        await addFact(text);
+        res.json({ ok: true });
+    });
+
+    app.delete('/api/facts/:index', requireAdmin, async (req, res) => {
+        const idx = parseInt(req.params.index, 10);
+        if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'invalid index' });
+        let removed = false;
+        await mutateJson(cfg.FACTS_FILE, [], (facts) => {
+            if (idx < facts.length) { facts.splice(idx, 1); removed = true; }
+            return facts;
+        });
+        if (!removed) return res.status(404).json({ error: 'not found' });
+        res.json({ ok: true });
     });
 
     // ── Bot command surface — mimic WhatsApp interactions from the web ─────
