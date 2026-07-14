@@ -581,7 +581,7 @@ async function route(decision, ctx, sendMessage) {
                 // came back unresolved — not when Gemini itself was unavailable (that's an
                 // outage, not a knowledge gap) and not on trivial policy-layer misses.
                 if (decision.resolvedBy === 'ai' && d.reasoning !== 'AI unavailable') {
-                    try { await actions.logKnowledgeGap(ctx, d.reasoning); } catch (e) { console.error('[BRAIN] gap log failed:', e.message); }
+                    try { await actions.logKnowledgeGap(ctx, d.reasoning, false); } catch (e) { console.error('[BRAIN] gap log failed:', e.message); }
                 }
                 return ask(chatId, d.reply || "I couldn't pin that down. Type 'menu' for options or give me a booking number.");
             }
@@ -617,7 +617,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
         };
     }
 

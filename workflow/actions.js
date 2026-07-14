@@ -726,7 +726,7 @@ return { action_taken: 'replied' };
 // This is the visibility half of "self-learning": Apsara reviews recurring
 // gaps and decides whether to add a fact, a deterministic command, or new
 // context — a human-in-the-loop improvement cycle, not an automatic one.
-async function logKnowledgeGap(ctx, reasoning) {
+async function logKnowledgeGap(ctx, reasoning, notifyTeam = true) {
 const bkgLabel = ctx.activeBooking ? ` (re ${ctx.activeBooking})` : '';
 const note = reasoning || "couldn't answer from available data/knowledge";
 await _pushAlert({
@@ -735,9 +735,15 @@ await _pushAlert({
     message: `Manager asked: "${ctx.text}" — ${note}`,
     severity: 'info',
 });
-try {
-    await _sendToTeam(`Jarvis couldn't answer${bkgLabel}: "${ctx.text}" — ${note}. Logged for review.`);
-} catch (e) { console.error('[ACTIONS] gap notify failed:', e.message); }
+// Manager's own unanswered question doesn't need a separate WhatsApp ping
+// back to themselves — they already got the direct reply and see the
+// failure firsthand. WhatsApp escalation is reserved for trucker/supplier
+// messages (see escalateUnclear), where the manager genuinely wasn't there.
+if (notifyTeam) {
+    try {
+        await _sendToTeam(`Jarvis couldn't answer${bkgLabel}: "${ctx.text}" — ${note}. Logged for review.`);
+    } catch (e) { console.error('[ACTIONS] gap notify failed:', e.message); }
+}
 }
 
 module.exports = {
