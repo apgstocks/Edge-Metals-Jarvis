@@ -6,7 +6,7 @@
 //   - Risky/irreversible actions go through pending confirmation (yes/no).
 
 const { loadBookings, loadWorkflow, loadTruckers, loadSuppliers,
-    mutateBrain, loadBrain, updateWorkflow, archiveBooking } = require('../helpers/json');
+    mutateBrain, loadBrain, updateWorkflow, archiveBooking, addFact } = require('../helpers/json');
 const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings, stepLabel } = require('../helpers/booking');
 const { getLATime, daysUntil } = require('../helpers/time');
@@ -642,6 +642,93 @@ await _sendToManager(`${kind} ${who}${bkgLabel} sent something I couldn't unders
 return { action_taken: 'escalated' };
 }
 
+// ── Feedback loop — "remember X" or an AI-detected correction ───────────────
+// Persists to facts.json (already fed into every AI prompt, last 15 — see
+// helpers/context.js formatForAI). This is how corrections and standing
+// instructions survive across conversations without a code change: no
+// retraining happens, this is durable prompt-context, not model weights.
+async function rememberFact(chatId, text) {
+const clean = String(text || '').trim();
+if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
+await addFact(clean);
+await _send(chatId, `Got it — I'll remember: "${clean}"`);
+return { action_taken: 'fact_stored' };
+}
+
+// ── Menu option 4 / "check supplier BKG123" — manager wants to know if a
+// container is ready for pickup. Pings the supplier directly with a yes/no
+// question and holds a pending state ON THE SUPPLIER'S CHAT (not the manager's)
+// so their reply routes correctly regardless of role — see brain.js section A0.
+async function checkSupplierReadiness(managerChatId, bkgNo, containerSeq) {
+const b = loadBookings()[bkgNo];
+if (!b) { await _send(managerChatId, `Booking ${bkgNo} not found.`); return { action_taken: 'replied' }; }
+const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
+if (!supplierChat) { await _send(managerChatId, `${bkgNo} has no supplier assigned yet — nothing to check.`); return { action_taken: 'replied' }; }
+
+const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+await _send(supplierChat, `${label}: checking in — is the container ready for pickup? Reply yes or no.`);
+await setPending(supplierChat, { type: 'await_ready_check', stage: 'yesno', bkg_no: bkgNo, container_seq: containerSeq ?? null, requested_by: managerChatId });
+await _send(managerChatId, `Pinged the supplier on ${label} — I'll let you know what they say.`);
+return { action_taken: 'replied' };
+}
+
+async function resolveReadyCheckYes(supplierChatId, pending) {
+const { bkg_no, container_seq, requested_by } = pending;
+await clearPending(supplierChatId);
+const supplierName = suppliers.matchSupplierByChat(supplierChatId)?.name || 'Supplier';
+await _send(supplierChatId, `Thanks — noted.`);
+// Feed straight into the real state machine (same as the organic "load ready"
+// keyword flow) so this check-in actually advances the booking, not just chat.
+const result = await loadReadyReceived(bkg_no, supplierName, container_seq);
+const label = container_seq != null ? `${bkg_no}/${container_seq}` : bkg_no;
+const notifyTo = requested_by || (cfg.getManagerNumber() ? cfg.getManagerNumber() + '@c.us' : null);
+if (notifyTo) await _send(notifyTo, `${label}: supplier confirmed READY for pickup. Trucker notified.`);
+return result;
+}
+
+async function resolveReadyCheckNo(supplierChatId, pending) {
+await setPending(supplierChatId, { ...pending, stage: 'date' });
+await _send(supplierChatId, `Got it — when do you expect it to be ready?`);
+return { action_taken: 'replied' };
+}
+
+async function resolveReadyCheckDate(supplierChatId, pending, dateText) {
+const { bkg_no, container_seq, requested_by } = pending;
+await clearPending(supplierChatId);
+const supplierName = suppliers.matchSupplierByChat(supplierChatId)?.name || 'Supplier';
+const label = container_seq != null ? `${bkg_no}/${container_seq}` : bkg_no;
+await _send(supplierChatId, `Thanks, noted.`);
+// Surface on the dashboard's existing pending/owner display (decorateBooking
+// in api.js already reads wf.pending_note / wf.pending_owner when set).
+await updateWorkflow(bkg_no, { pending_note: `Supplier expects ready: ${dateText}`, pending_owner: supplierName });
+const notifyTo = requested_by || (cfg.getManagerNumber() ? cfg.getManagerNumber() + '@c.us' : null);
+if (notifyTo) await _send(notifyTo, `${label}: NOT ready yet — supplier expects it ready ${dateText}.`);
+await _pushAlert({ type: 'ready_check_delayed', bkgNo: bkg_no, message: `${label}: supplier says not ready — expected ${dateText}`, severity: 'info' });
+return { action_taken: 'replied' };
+}
+
+// ── Knowledge-gap log — manager asked something Jarvis genuinely couldn't
+// answer (not missing grammar, missing DATA/KNOWLEDGE). Flags to two places:
+// (1) WhatsApp to the manager, so it's seen immediately, not just archived;
+// (2) dashboard alert log ('info' severity — visible on Needs Attention rail
+// without also paging via alerts.js's high-severity auto-notify path).
+// This is the visibility half of "self-learning": Apsara reviews recurring
+// gaps and decides whether to add a fact, a deterministic command, or new
+// context — a human-in-the-loop improvement cycle, not an automatic one.
+async function logKnowledgeGap(ctx, reasoning) {
+const bkgLabel = ctx.activeBooking ? ` (re ${ctx.activeBooking})` : '';
+const note = reasoning || "couldn't answer from available data/knowledge";
+await _pushAlert({
+    type: 'knowledge_gap',
+    bkgNo: ctx.activeBooking || null,
+    message: `Manager asked: "${ctx.text}" — ${note}`,
+    severity: 'info',
+});
+try {
+    await _sendToTeam(`Jarvis couldn't answer${bkgLabel}: "${ctx.text}" — ${note}. Logged for review.`);
+} catch (e) { console.error('[ACTIONS] gap notify failed:', e.message); }
+}
+
 module.exports = {
 init,
 setPending, clearPending, getPending, resolvePending,
@@ -653,5 +740,6 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear,
+scheduleFollowup, escalateUnclear, rememberFact, logKnowledgeGap,
+checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
 };

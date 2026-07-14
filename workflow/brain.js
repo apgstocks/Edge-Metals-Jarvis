@@ -78,6 +78,24 @@ function resolveListSelection(text, options) {
 function policyDecide(ctx) {
     const t = ctx.textLower;
 
+    // ── A0. Ready-check pending — applies to whoever the question was sent to
+    // (the supplier), not just manager/team. Runs before everything else so a
+    // supplier's yes/no/date reply is never mis-routed to the keyword grammar
+    // in section D. ──────────────────────────────────────────────────────────
+    if (ctx.pendingAction?.type === 'await_ready_check') {
+        const p = ctx.pendingAction;
+        if (p.stage === 'yesno') {
+            if (/(yes|ready|loaded|done|good to go)/.test(t) && !/not\s+ready/.test(t))
+                return { intent: 'ready_check_yes', resolvedBy: 'policy', data: {} };
+            if (/(no|not\s+ready|not\s+yet|delay)/.test(t))
+                return { intent: 'ready_check_no', resolvedBy: 'policy', data: {} };
+            return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Sorry, is the container ready for pickup? Reply yes or no.' } };
+        }
+        if (p.stage === 'date') {
+            return { intent: 'ready_check_date', resolvedBy: 'policy', data: { date_text: ctx.text.trim() } };
+        }
+    }
+
     // ── A. Pending action always wins — never chat-history string matching ────
     if (ctx.isManagerOrTeam && ctx.pendingAction) {
         const p = ctx.pendingAction;
@@ -147,6 +165,15 @@ function policyDecide(ctx) {
                          : statusRaw === 'assigned' ? 'assigned' : null;
             return { intent: 'bookings_count_query', resolvedBy: 'policy', data: { location: m[3].trim(), filter } };
         }
+
+        // "remember X" / "note X" / "remember that X" — explicit standing-fact capture.
+        // ctx.text (not lowercased t) preserves the original casing of the fact itself.
+        if ((m = ctx.text.trim().match(/^(?:please\s+)?(?:remember|note)(?:\s+that)?:?\s+(.+)$/i)))
+            return { intent: 'remember_fact', resolvedBy: 'policy', data: { fact: m[1].trim() } };
+
+        // "check supplier BKG123" — pings the supplier for pickup readiness
+        if ((m = t.match(/^check\s+supplier\s+(\S+)$/)))
+            return { intent: 'check_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
         // Bare booking number → status
         const bkg = resolveBookingNumber(ctx.text);
@@ -329,6 +356,7 @@ STRICT RULES:
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
 - "silent" is ONLY for a trucker/supplier message that is clearly not operational (small talk, wrong-number chatter, an emoji with no context). If the sender (role is "trucker" or "supplier") sent something that could plausibly be about their job — a question, a problem, a status update you can't quite place — use "NEED_DATA", not "silent". NEED_DATA for a trucker/supplier gets escalated to the manager; "silent" gets no response at all, so default to NEED_DATA when unsure.
 - If the sender's role is "manager" or "team" and the message is a genuine question rather than a command (e.g. "why is DALA23991600 stuck", "how many bookings are unassigned from LA", "what does FCL mean", "which truckers do we have in Houston", "what's the busiest lane this week", "should I worry about anything today", "what's Jey's status"), ANSWER IT — using the ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE / SESSION / FACTS / URGENT context for anything Edge-Metals-specific, and your own general freight knowledge for anything else. Give a direct, specific answer via action "reply". Do not fall back to NEED_DATA just because the question isn't one of the defined command actions. NEED_DATA is ONLY for when a question needs Edge Metals' own specific data that genuinely isn't in the context above (including plausibly-archived bookings) — say specifically what's missing. It is never a valid response to a general knowledge question; if you know the answer generally, answer it.
+- If the manager is CORRECTING something you (or an earlier assistant turn in LAST 5 MESSAGES) got wrong, or giving a standing instruction/preference for the future (e.g. "no, always CC me on archives", "actually DALA numbers can have a dash", "from now on default follow-ups to 15 minutes"), use action "remember_fact" with a short, self-contained fact string in the "fact" field — written so it makes sense on its own later, without today's conversation. Still also use "reply" wording is not needed for this action; a brief confirmation is generated automatically. Do not use "remember_fact" for one-off operational commands (those already have real actions) — only for corrections or durable preferences that should change future behavior.
 
 ═══ RUNTIME CONTEXT ═══
 Time (LA): ${a.now_la}
@@ -374,7 +402,7 @@ forward_booking, assign_supplier, recall_booking, archive_booking,
 show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
-scale_ticket_received, ingate_received, schedule_followup,
+scale_ticket_received, ingate_received, schedule_followup, remember_fact,
 reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
@@ -386,6 +414,7 @@ Return ONLY this JSON:
   "trucker_name": null,
   "target_name": null,
   "minutes": null,
+  "fact": null,
   "reply": null,
   "reasoning": "one sentence"
 }`;
@@ -395,7 +424,7 @@ const SAFE_ACTIONS = new Set([
     'reply', 'silent', 'NEED_DATA', 'NEED_APPROVAL',
     'show_menu', 'bookings_menu', 'show_booking_status', 'show_bookings_all',
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
-    'show_contacts', 'check_supplier',
+    'show_contacts', 'check_supplier', 'remember_fact',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
 ]);
 
@@ -445,6 +474,7 @@ async function route(decision, ctx, sendMessage) {
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
+        case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'bookings_count_query': {
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
@@ -458,7 +488,10 @@ async function route(decision, ctx, sendMessage) {
         case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName, d.container_seq);
         case 'ask_which_container':    return actions.askWhichContainer(chatId, d);
         case 'ask_which_booking':      return actions.askWhichBooking(chatId, d, ctx.matchedTrucker?.name || ctx.matchedSupplier?.name, ctx.isSupplier ? 'supplier' : 'trucker');
-        case 'check_supplier':         return ask(chatId, 'Which booking? I will ping its supplier for pickup status.');
+        case 'check_supplier':         return bkg ? actions.checkSupplierReadiness(chatId, bkg, d.container_seq) : askBkg(chatId, 'Which booking? I will ping its supplier for pickup status.', 'check_supplier');
+        case 'ready_check_yes':        return actions.resolveReadyCheckYes(chatId, ctx.pendingAction);
+        case 'ready_check_no':         return actions.resolveReadyCheckNo(chatId, ctx.pendingAction);
+        case 'ready_check_date':       return actions.resolveReadyCheckDate(chatId, ctx.pendingAction, d.date_text);
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
@@ -474,7 +507,15 @@ async function route(decision, ctx, sendMessage) {
         case 'NEED_APPROVAL':          return ask(chatId, `This needs your explicit confirmation. ${d.reply || 'Please restate the exact action.'}`);
         case 'NEED_DATA':
         default:
-            if (ctx.isManagerOrTeam) return ask(chatId, d.reply || "I couldn't pin that down. Type 'menu' for options or give me a booking number.");
+            if (ctx.isManagerOrTeam) {
+                // Only log as a "gap to learn from" when this genuinely reached Gemini and
+                // came back unresolved — not when Gemini itself was unavailable (that's an
+                // outage, not a knowledge gap) and not on trivial policy-layer misses.
+                if (decision.resolvedBy === 'ai' && d.reasoning !== 'AI unavailable') {
+                    try { await actions.logKnowledgeGap(ctx, d.reasoning); } catch (e) { console.error('[BRAIN] gap log failed:', e.message); }
+                }
+                return ask(chatId, d.reply || "I couldn't pin that down. Type 'menu' for options or give me a booking number.");
+            }
             // Trucker/supplier said something we genuinely couldn't classify (reached here via
             // AI fallback, not the policy-layer keyword-silence above). Escalate, don't ignore.
             if (ctx.isTrucker || ctx.isSupplier) return actions.escalateUnclear(ctx);
@@ -495,7 +536,10 @@ async function process(rawEvent, sendMessage) {
 
     console.log(`[BRAIN] ${inbound.role} | ${inbound.chatId} | "${String(inbound.text).slice(0, 60)}"`);
 
-    const pending = inbound.isManagerOrTeam ? actions.getPending(inbound.chatId) : null;
+    // Pending state now applies to any authorized chat, not just manager/team —
+    // the "check supplier" ready flow needs a pending question on the SUPPLIER's
+    // own chat (awaiting yes/no, then possibly a date).
+    const pending = actions.getPending(inbound.chatId);
     const ctx     = buildContext(inbound, pending);
 
     let decision = policyDecide(ctx);
@@ -504,7 +548,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, reply: ai.reply },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, reply: ai.reply },
         };
     }
 
