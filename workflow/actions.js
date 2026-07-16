@@ -1051,3 +1051,33 @@ showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
 };
+// ── Paste this block into workflow/actions.js — anywhere alongside the other
+// action handlers (e.g. right after checkSupplierReadiness/resolveReadyCheckDate).
+// Standalone: only depends on _send (already defined/injected at the top of
+// the file via init()) and helpers/pricelist.js. Doesn't touch or call
+// anything else in actions.js, so it's safe to append without needing the
+// rest of the file's content.
+
+// ── Price list — "send price list to X" from brain.js ───────────────────────
+async function sendPriceListTo(chatId, targetNameOrNumber) {
+    const pricelist = require('../helpers/pricelist');
+    const result = await pricelist.sendPriceListTo(targetNameOrNumber);
+    if (!result.ok && result.reason === 'not_found') {
+        await _send(chatId, `Couldn't find a saved contact or valid number for "${targetNameOrNumber}". Add them via /api/pricelist/contacts first, or give me a full WhatsApp number.`);
+        return { action_taken: 'not_found' };
+    }
+    await _send(chatId, result.ok ? `Price list sent to ${result.target}.` : `Send to ${result.target} failed — check WhatsApp connection.`);
+    return { action_taken: result.ok ? 'pricelist_sent' : 'send_failed' };
+}
+
+// ── Then find the module.exports block at the very bottom of the file.
+// I verified its exact tail via GitHub — it currently ends with:
+//
+//   checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
+//   };
+//
+// Change those two lines to:
+//
+//   checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
+//   sendPriceListTo,
+//   };

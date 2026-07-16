@@ -31,6 +31,9 @@ const FILES = {
     SETTINGS_FILE    : path.join(DATA_DIR, 'settings.json'),
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
+    // ── Price list feature (added 2026-07-16) ──────────────────────────────
+    PRICELIST_CONTACTS_FILE: path.join(DATA_DIR, 'pricelist_contacts.json'),
+    PRICELIST_SNAPSHOT_FILE: path.join(DATA_DIR, 'pricelist_snapshot.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
 };
@@ -48,6 +51,15 @@ const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_
 const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
+
+// Google Sheets (price list) — reuses GDRIVE_KEYFILE's service account, just a
+// different API/scope (see helpers/sheets.js). Sheet must be shared with that
+// SA's client_email as Viewer — same constraint as the Shared Drive above.
+const PRICE_SHEET_ID          = process.env.PRICE_SHEET_ID || '';
+// Shared secret for the Apps Script → /api/pricelist/webhook call. Required
+// because Apps Script's UrlFetchApp can't carry the dashboard's session
+// cookie or the API_TOKEN bearer header the same way.
+const PRICELIST_WEBHOOK_TOKEN = process.env.PRICELIST_WEBHOOK_TOKEN || '';
 
 // Default fallback groups (used only when a contact has no group and no number)
 const GROUP_TRUCKER  = process.env.GROUP_TRUCKER  || '';
@@ -141,24 +153,19 @@ const BOOKINGS_MENU = [
 
 module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, ...FILES,
-    // GEMINI_MODEL used to be exported twice — a second "LLM manager intent
-    // Phase 1" block below silently overrode this to 'gemini-2.5-flash' at
-    // runtime (last key wins in a JS object literal), while
-    // helpers/json.js's loadSettings() default and this same file's original
-    // intent both used 'gemini-2.5-flash-lite'. That mismatch is fixed by
-    // removing the duplicate — collapsed back to the one definition below.
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
+    PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,
     GROUP_TRUCKER, GROUP_SUPPLIER,
     WORKFLOW_STAGES, STEP_LABELS, STAGE_INDEX, TERMINAL_STEPS,
     MAX_REMINDERS, URGENT_CUTOFF_DAYS, PENDING_EXPIRY_MS,
     getSettings, getManagerNumber, getTeamGroupId,
     MAIN_MENU, BOOKINGS_MENU,
-    // NOTE: the "LLM manager intent — Phase 1" block (LLM_MANAGER_ENABLED,
-    // a second GEMINI_MODEL, LLM_TIMEOUT_MS, LLM_CONFIDENCE_HIGH/LOW) was
-    // removed 2026-07-16. It existed only to configure helpers/llm-intent.js,
-    // which was dead code (never called from workflow/brain.js's live
-    // process() pipeline). Removed together — see helpers/gemini.js's note
-    // on callGeminiText for the full explanation.
+    // ── LLM manager intent — Phase 1 ─────────────────────────────────────────
+    LLM_MANAGER_ENABLED : process.env.LLM_MANAGER_ENABLED !== 'false',  // default ON; set 'false' to kill
+    GEMINI_MODEL        : process.env.GEMINI_MODEL        || 'gemini-2.5-flash',
+    LLM_TIMEOUT_MS      : parseInt(process.env.LLM_TIMEOUT_MS      || '2000', 10),
+    LLM_CONFIDENCE_HIGH : parseFloat(process.env.LLM_CONFIDENCE_HIGH || '0.85'),
+    LLM_CONFIDENCE_LOW  : parseFloat(process.env.LLM_CONFIDENCE_LOW  || '0.5'),
 };

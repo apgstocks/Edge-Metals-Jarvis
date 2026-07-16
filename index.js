@@ -17,6 +17,7 @@ const brain     = require('./workflow/brain');
 const actions   = require('./workflow/actions');
 const alerts    = require('./alerts');
 const scheduler = require('./scheduler');
+const pricelist = require('./helpers/pricelist');
 const { createApi } = require('./api');
 const { loadJson, saveJson } = require('./helpers/json');
 
@@ -94,6 +95,7 @@ async function sendToTeam(text) {
 // ── Wire modules ───────────────────────────────────────────────────────────────
 alerts.init({ sendToManager });
 actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAlert });
+pricelist.init({ sendMessage });
 
 // Bridge for the /api/bot/command endpoint — brain.process() takes a sendMessage
 // argument, and api.js needs to pass the SAME sendMessage that has the capture
@@ -155,7 +157,9 @@ client.on('auth_failure', (msg) => {
 });
 
 // Called by POST /api/whatsapp/find-groups — case-insensitive substring match on group names.
-// Only returns groups where Jarvis is currently a member (getChats returns only member chats).
+// Only returns groups Jarvis is a member of — you cannot validate a group
+// Jarvis hasn't been added to yet. Prerequisite: user adds Jarvis to the
+// group on their phone BEFORE clicking Validate here.
 waState.setGroupsLookupHandler(async (nameFragment) => {
     if (!waReady) throw new Error('WhatsApp not ready');
     const q = String(nameFragment || '').toLowerCase().trim();

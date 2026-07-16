@@ -68,18 +68,9 @@ async function morningDigest() {
         lines.push(...stuck.map(([bkgNo, wf]) => `- ${bkgNo} at ${stepLabel(wf.step)}`));
     }
 
-    // FIX: only mark as sent if the WhatsApp send actually succeeded. Previously
-    // this ran unconditionally, so a transient failure (WA reconnecting, manager
-    // number not yet configured, etc.) at 8:00am silently swallowed the digest
-    // for the rest of the day — cron only fires this once daily, so there was no
-    // other chance to retry. See the hourly catch-up call in urgentWatch() below.
-    const sent = await _sendToManager(lines.join('\n'));
-    if (sent) {
-        await markSent(key);
-        console.log('[SCHED] Morning digest sent');
-    } else {
-        console.warn('[SCHED] Morning digest send FAILED — not marked sent, will retry on next hourly catch-up');
-    }
+    await _sendToManager(lines.join('\n'));
+    await markSent(key);
+    console.log('[SCHED] Morning digest sent');
 }
 
 // ── Hourly 9–17 — urgent cutoff watch ─────────────────────────────────────────
@@ -87,16 +78,6 @@ async function morningDigest() {
 // on single-container bookings. Booking is considered done when ALL containers
 // reach a terminal stage (per user rule: cutoff is booking-level).
 async function urgentWatch() {
-    // Catch-up: if today's morning digest never got marked sent (send failed,
-    // WA not ready, manager number missing at 8am, etc.), retry it here.
-    // urgentWatch already runs hourly 9am-5pm, so this gives the digest up to
-    // 8 more chances the same day instead of silently waiting until tomorrow.
-    const digestKey = `daily_digest_${todayKey()}`;
-    if (!alreadySent(digestKey)) {
-        try { await morningDigest(); }
-        catch (e) { console.error('[SCHED] digest catch-up failed:', e.message); }
-    }
-
     const workflow = loadWorkflow();
     const { laggingContainers, allContainersTerminal } = require('./helpers/containers');
 
@@ -125,21 +106,8 @@ async function urgentWatch() {
             message,
             severity: d <= 1 ? 'high' : 'warning',
         });
-        // FIX: markSent used to run unconditionally even when the d<=1 team
-        // escalation failed to send — the dedupe key would then block every
-        // remaining hourly run (9am-5pm) for the rest of the day even though
-        // the message never went out. Only suppress future runs once the send
-        // actually succeeds (or wasn't needed because d>1 and pushAlert's own
-        // dashboard/alert-log write, which never fails on WA state, is enough).
-        let escalationOk = true;
-        if (d <= 1) {
-            escalationOk = await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
-        }
-        if (escalationOk) {
-            await markSent(key);
-        } else {
-            console.warn(`[SCHED] Urgent escalation send FAILED for ${b.booking_number} — not marked sent, will retry next hourly run`);
-        }
+        if (d <= 1) await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
+        await markSent(key);
     }
 }
 
@@ -181,6 +149,22 @@ async function autoArchive() {
     await _sendToTeam(msg);
     await _sendToManager(msg);
     await pushAlert({ type: 'auto_archived', bkgNo: null, message: `Auto-archived: ${archived.join(', ')}`, severity: 'info' });
+}
+
+// ── 6AM — price list fallback reconciliation ──────────────────────────────
+// Safety net for the real-time Apps Script webhook (helpers/pricelist.js +
+// POST /api/pricelist/webhook): if the webhook never fires — VM down, trigger
+// misconfigured on the Sheet side, token mismatch, transient network failure —
+// this catches any missed price change within 24h instead of drifting
+// silently forever. One Sheets read/day, negligible cost either way.
+async function pricelistFallback() {
+    try {
+        const pricelist = require('./helpers/pricelist');
+        const result = await pricelist.checkForChangesAndNotify();
+        if (result.changed) console.log('[SCHED] Price list fallback caught a missed change:', result.changes);
+    } catch (err) {
+        console.error('[SCHED] pricelist fallback failed:', err.message);
+    }
 }
 
 // ── Task runner — fires persistent tasks whose fire_at has passed ─────────
@@ -268,9 +252,10 @@ async function taskRunner() {
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => urgentWatch().catch(e => console.error('[SCHED] urgent:', e)),   TZ);
+    cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
-    console.log('[SCHED] Jobs registered (8AM digest, hourly urgent 9-17, 11PM archive, minute task-runner — LA time)');
+    console.log('[SCHED] Jobs registered (8AM digest, hourly urgent 9-17, 6AM pricelist, 11PM archive, minute task-runner — LA time)');
 }
 
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner };
+module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback };

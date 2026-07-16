@@ -12,6 +12,7 @@ const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         loadFacts, addFact } = require('./helpers/json');
 const { daysUntil }   = require('./helpers/time');
 const { listAlerts, snoozeAlert, muteBooking } = require('./alerts');
+const pricelist = require('./helpers/pricelist');
 const cfg = require('./config');
 
 // ── Session auth (in-memory, single process) ────────────────────────────────
@@ -112,6 +113,25 @@ function createApi() {
 
     // ── Public routes (no auth) ───────────────────────────────────────────────
     app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+
+    // Price-change webhook — hit by the Apps Script trigger bound to the price
+    // Sheet on every edit. MUST stay public: Apps Script's UrlFetchApp can't
+    // carry the dashboard's session cookie or the API_TOKEN bearer header, so
+    // auth here is a shared secret in the query string instead. Same public
+    // tier as /health and /login — nothing here mutates bookings/workflow,
+    // only reads the Sheet and (maybe) sends WhatsApp messages.
+    app.post('/api/pricelist/webhook', async (req, res) => {
+        if (!cfg.PRICELIST_WEBHOOK_TOKEN || req.query.token !== cfg.PRICELIST_WEBHOOK_TOKEN) {
+            return res.status(401).json({ error: 'invalid token' });
+        }
+        try {
+            const result = await pricelist.checkForChangesAndNotify();
+            res.json(result);
+        } catch (err) {
+            console.error('[API] pricelist webhook failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
 
     // Login page — inline HTML so it works before the dashboard static mount
     app.get('/login', (req, res) => {
@@ -466,6 +486,42 @@ function createApi() {
     app.put('/api/settings', requireAdmin, async (req, res) => {
         await saveSettings({ ...loadSettings(), ...req.body });
         res.json({ ok: true });
+    });
+
+    // ── Price list — recipients + ad hoc send ─────────────────────────────────
+    // Recipients live in their own file (helpers/pricelist.js), deliberately
+    // separate from truckers.json/suppliers.json — these are buyers/customers,
+    // not operational contacts. "standing: true" marks the 3 people who get
+    // auto-notified by the webhook/fallback cron on a real price change;
+    // non-standing contacts can still be targeted by name via /send.
+    app.get('/api/pricelist/contacts', requireAdmin, (req, res) => res.json(pricelist.loadContacts()));
+
+    app.post('/api/pricelist/contacts', requireAdmin, async (req, res) => {
+        try {
+            await pricelist.addContact(req.body?.name, req.body?.whatsapp, !!req.body?.standing);
+            res.json({ ok: true });
+        } catch (err) {
+            res.status(400).json({ error: err.message });
+        }
+    });
+
+    app.delete('/api/pricelist/contacts/:name', requireAdmin, async (req, res) => {
+        await pricelist.removeContact(req.params.name);
+        res.json({ ok: true });
+    });
+
+    // Ad hoc send — "whoever I tell": a saved contact name OR a raw WhatsApp number.
+    app.post('/api/pricelist/send', requireAdmin, async (req, res) => {
+        try {
+            const result = await pricelist.sendPriceListTo(req.body?.to);
+            if (!result.ok && result.reason === 'not_found') {
+                return res.status(404).json({ error: `no contact or valid number matching "${req.body?.to}"` });
+            }
+            res.json(result);
+        } catch (err) {
+            console.error('[API] pricelist/send failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
     });
 
     // ── WhatsApp status + re-scan ──────────────────────────────────────────────
