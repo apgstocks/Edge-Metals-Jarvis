@@ -242,18 +242,27 @@ waState.setLogoutHandler(async () => {
 client.on('message', async (msg) => {
     try {
         if (msg.fromMe) return;
-        const chat    = await msg.getChat();
-        const contact = await msg.getContact();
+
+        // getChat()/getContact() intermittently crash inside whatsapp-web.js's
+        // Puppeteer evaluate() call (documented library fragility — most common
+        // on a contact's first-ever message to this session, before WhatsApp
+        // Web's internal Store has fully synced that chat). msg.from/msg.author
+        // are already present synchronously on the Message object with no extra
+        // round-trip, so fall back to those instead of dropping the whole
+        // message when the enrichment calls break.
+        let chat = null, contact = null;
+        try { chat = await msg.getChat(); } catch (e) { console.warn('[WA] getChat failed, falling back:', e.message); }
+        try { contact = await msg.getContact(); } catch (e) { console.warn('[WA] getContact failed, falling back:', e.message); }
 
         await brain.process({
             messageId   : msg.id?._serialized,
-            chatId      : chat.id?._serialized,
-            senderNumber: contact.id?._serialized || msg.author || msg.from,
-            senderName  : contact.pushname || contact.name || contact.number || 'Unknown',
+            chatId      : chat?.id?._serialized || msg.from,
+            senderNumber: contact?.id?._serialized || msg.author || msg.from,
+            senderName  : contact?.pushname || contact?.name || contact?.number || 'Unknown',
             text        : msg.body || '',
             hasMedia    : msg.hasMedia,
             mediaType   : msg.type,
-            isGroup     : chat.isGroup,
+            isGroup     : chat?.isGroup ?? String(msg.from || '').endsWith('@g.us'),
         }, sendMessage);
     } catch (err) {
         console.error('[WA] Message handler crashed:', err);
