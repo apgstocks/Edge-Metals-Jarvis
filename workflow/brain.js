@@ -4,8 +4,6 @@
 // Policy resolves everything it can without Gemini: pending yes/no + list
 // selections, exact commands, booking numbers, role-scoped media. AI is the
 // fallback for ambiguity, never the first resort.
-const llmIntent = require('../helpers/llm-intent');
-const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
 const { resolveBookingNumber, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
@@ -652,45 +650,16 @@ async function process(rawEvent, sendMessage) {
 
     console.log(`[BRAIN] ${decision.intent} → ${result?.action_taken} (${Date.now() - started}ms)`);
 }
-// ── LLM fallback for manager/team messages ──────────────────────────────────
-// Called ONLY when deterministic policy layer returns unresolved.
-// Returns { intent, data, resolvedBy, confidence } for router, or null to
-// fall through to menu / "I don't understand".
-async function handleManagerLLMFallback(text, chatId, sendMessage) {
-    const decision = await llmIntent.extractManagerIntent(text);
-    const verdict  = llmIntent.gate(decision);
 
-    if (verdict === 'fallthrough') return null;
-
-    if (verdict === 'fire') {
-        return {
-            intent     : decision.intent,
-            data       : decision.data,
-            resolvedBy : 'llm',
-            confidence : decision.confidence,
-        };
-    }
-
-    // verdict === 'confirm' — stash pending, ask yes/no
-    const brain = loadBrain();
-    const key   = `llm_confirm_${Date.now()}`;
-    brain.pending_actions = brain.pending_actions || {};
-    brain.pending_actions[key] = {
-        description : llmIntent.describeIntent(decision),
-        data        : { intent: decision.intent, data: decision.data },
-        expected    : 'yes_no',
-        source      : 'llm',
-        created_at  : new Date().toISOString(),
-        expires_at  : new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    };
-    saveBrain(brain);
-
-    await sendMessage(chatId,
-        `Did you mean: ${llmIntent.describeIntent(decision)}?\n\n` +
-        `Reply 1 to confirm, 2 to cancel.`
-    );
-
-    return { intent: 'awaiting_confirmation', resolvedBy: 'llm', data: {}, confidence: decision.confidence };
-}
+// NOTE (2026-07-16 cleanup): removed handleManagerLLMFallback() and the
+// helpers/llm-intent.js import it depended on. That function was dead code —
+// it was never called from process() above (which uses policyDecide() →
+// aiDecide() → callGeminiJSON() as its actual regex→Gemini fallback, complete
+// with session/transcript/facts context via formatForAI()). Confirmed via
+// repo-wide grep that nothing in index.js or api.js called it either.
+// If a confidence-gated, grounded, whitelist-only intent parser is wanted
+// again for manager commands specifically, helpers/llm-intent.js is still in
+// git history — reintroduce it deliberately and wire it into process(), don't
+// silently resurrect it unused.
 
 module.exports = { process, normalize, policyDecide };

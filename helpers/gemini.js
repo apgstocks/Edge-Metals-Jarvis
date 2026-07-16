@@ -51,21 +51,6 @@ async function callGeminiJSON(prompt, retries = 2) {
     return null;
 }
 
-// Plain-text call (used for digest summaries only, never routing)
-async function callGeminiText(prompt) {
-    try {
-        const model  = getClient().getGenerativeModel({
-            model: getModelName(),
-            generationConfig: { temperature: 0.3 },
-        });
-        const result = await model.generateContent(prompt);
-        return result.response.text().trim();
-    } catch (err) {
-        console.error('[GEMINI] Text call failed:', err.message);
-        return null;
-    }
-}
-
 // ── Multimodal: extract booking fields from a PDF ─────────────────────────────
 // Sends the PDF bytes directly to Gemini. Used by the Bookings tab.
 // Fields extracted match the shape used by POST /api/bookings.
@@ -129,26 +114,18 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
     if (lastErr) throw lastErr;
     return null;
 }
-// ── Text-in / text-out call for intent parsing ──────────────────────────────
-// Separate from PDF extraction path so response formats don't leak.
-async function callGeminiText(prompt, maxTokens = 300) {
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const cfg = require('../config');
-
-    const apiKey = process.env.GEMINI_API_KEY || cfg.GEMINI_API_KEY;
-    if (!apiKey) throw new Error('GEMINI_API_KEY missing');
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-        model: cfg.GEMINI_MODEL || 'gemini-1.5-flash',
-        generationConfig: {
-            temperature       : 0.1,
-            maxOutputTokens   : maxTokens,
-            responseMimeType  : 'application/json',
-        },
-    });
-
-    const result = await model.generateContent(prompt);
-    return result.response.text();
-}
-module.exports = { callGeminiJSON, callGeminiText, extractPdfFields };
+// NOTE: callGeminiText() was removed here (2026-07-16 cleanup). It had been
+// declared TWICE in this file — once above returning a trimmed string, once
+// down here returning raw JSON text with its own separate GoogleGenerativeAI
+// client and a hardcoded 'gemini-1.5-flash' fallback instead of cfg.GEMINI_MODEL
+// (the second declaration silently won at runtime; the first was dead). Its
+// only caller was helpers/llm-intent.js's extractManagerIntent(), which was
+// itself dead code — never invoked from workflow/brain.js's actual process()
+// pipeline (brain.js has its own handleManagerLLMFallback() that called it,
+// but that function was never called either). Both were removed together.
+// The live regex→Gemini fallback for manager/booking messages is
+// workflow/brain.js: policyDecide() → aiDecide() → callGeminiJSON(), which
+// already includes full chat context (session, last 5 messages, facts,
+// business context). If a lighter-weight text-only Gemini call is needed
+// again later, re-add it deliberately — don't restore this dead pair as-is.
+module.exports = { callGeminiJSON, extractPdfFields };

@@ -141,6 +141,12 @@ const BOOKINGS_MENU = [
 
 module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, ...FILES,
+    // GEMINI_MODEL used to be exported twice — a second "LLM manager intent
+    // Phase 1" block below silently overrode this to 'gemini-2.5-flash' at
+    // runtime (last key wins in a JS object literal), while
+    // helpers/json.js's loadSettings() default and this same file's original
+    // intent both used 'gemini-2.5-flash-lite'. That mismatch is fixed by
+    // removing the duplicate — collapsed back to the one definition below.
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
@@ -149,10 +155,10 @@ module.exports = {
     MAX_REMINDERS, URGENT_CUTOFF_DAYS, PENDING_EXPIRY_MS,
     getSettings, getManagerNumber, getTeamGroupId,
     MAIN_MENU, BOOKINGS_MENU,
-    // ── LLM manager intent — Phase 1 ─────────────────────────────────────────
-    LLM_MANAGER_ENABLED : process.env.LLM_MANAGER_ENABLED !== 'false',  // default ON; set 'false' to kill
-    GEMINI_MODEL        : process.env.GEMINI_MODEL        || 'gemini-2.5-flash',
-    LLM_TIMEOUT_MS      : parseInt(process.env.LLM_TIMEOUT_MS      || '2000', 10),
-    LLM_CONFIDENCE_HIGH : parseFloat(process.env.LLM_CONFIDENCE_HIGH || '0.85'),
-    LLM_CONFIDENCE_LOW  : parseFloat(process.env.LLM_CONFIDENCE_LOW  || '0.5'),
+    // NOTE: the "LLM manager intent — Phase 1" block (LLM_MANAGER_ENABLED,
+    // a second GEMINI_MODEL, LLM_TIMEOUT_MS, LLM_CONFIDENCE_HIGH/LOW) was
+    // removed 2026-07-16. It existed only to configure helpers/llm-intent.js,
+    // which was dead code (never called from workflow/brain.js's live
+    // process() pipeline). Removed together — see helpers/gemini.js's note
+    // on callGeminiText for the full explanation.
 };

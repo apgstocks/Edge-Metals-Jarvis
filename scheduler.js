@@ -68,9 +68,18 @@ async function morningDigest() {
         lines.push(...stuck.map(([bkgNo, wf]) => `- ${bkgNo} at ${stepLabel(wf.step)}`));
     }
 
-    await _sendToManager(lines.join('\n'));
-    await markSent(key);
-    console.log('[SCHED] Morning digest sent');
+    // FIX: only mark as sent if the WhatsApp send actually succeeded. Previously
+    // this ran unconditionally, so a transient failure (WA reconnecting, manager
+    // number not yet configured, etc.) at 8:00am silently swallowed the digest
+    // for the rest of the day — cron only fires this once daily, so there was no
+    // other chance to retry. See the hourly catch-up call in urgentWatch() below.
+    const sent = await _sendToManager(lines.join('\n'));
+    if (sent) {
+        await markSent(key);
+        console.log('[SCHED] Morning digest sent');
+    } else {
+        console.warn('[SCHED] Morning digest send FAILED — not marked sent, will retry on next hourly catch-up');
+    }
 }
 
 // ── Hourly 9–17 — urgent cutoff watch ─────────────────────────────────────────
@@ -78,6 +87,16 @@ async function morningDigest() {
 // on single-container bookings. Booking is considered done when ALL containers
 // reach a terminal stage (per user rule: cutoff is booking-level).
 async function urgentWatch() {
+    // Catch-up: if today's morning digest never got marked sent (send failed,
+    // WA not ready, manager number missing at 8am, etc.), retry it here.
+    // urgentWatch already runs hourly 9am-5pm, so this gives the digest up to
+    // 8 more chances the same day instead of silently waiting until tomorrow.
+    const digestKey = `daily_digest_${todayKey()}`;
+    if (!alreadySent(digestKey)) {
+        try { await morningDigest(); }
+        catch (e) { console.error('[SCHED] digest catch-up failed:', e.message); }
+    }
+
     const workflow = loadWorkflow();
     const { laggingContainers, allContainersTerminal } = require('./helpers/containers');
 
@@ -106,8 +125,21 @@ async function urgentWatch() {
             message,
             severity: d <= 1 ? 'high' : 'warning',
         });
-        if (d <= 1) await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
-        await markSent(key);
+        // FIX: markSent used to run unconditionally even when the d<=1 team
+        // escalation failed to send — the dedupe key would then block every
+        // remaining hourly run (9am-5pm) for the rest of the day even though
+        // the message never went out. Only suppress future runs once the send
+        // actually succeeds (or wasn't needed because d>1 and pushAlert's own
+        // dashboard/alert-log write, which never fails on WA state, is enough).
+        let escalationOk = true;
+        if (d <= 1) {
+            escalationOk = await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
+        }
+        if (escalationOk) {
+            await markSent(key);
+        } else {
+            console.warn(`[SCHED] Urgent escalation send FAILED for ${b.booking_number} — not marked sent, will retry next hourly run`);
+        }
     }
 }
 

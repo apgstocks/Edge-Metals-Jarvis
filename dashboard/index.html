@@ -4,29 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jarvis — Booking Scoreboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Poppins:wght@700;800;900&display=swap" rel="stylesheet">
 <style>
   :root {
-    /* Vivid dockside palette v2 — same subject grounding, saturated instead of
-       muted: electric coral, indigo, teal, gold. Light canvas throughout, pills
-       everywhere. Same token NAMES as before so nothing downstream breaks. */
-    --steel-100:#F7F5FF; --steel-150:#F0ECFF; --steel-200:#E2DAFF; --steel-300:#C9B8FF;
-    --steel-400:#9F86E8; --steel-600:#5B4BC4; --steel-900:#6C4CE0; --steel-950:#5638C9;
-    --navy-900:#6C4CE0; --navy-950:#5638C9;
-    --copper-50:#FFE8E0; --copper-200:#FFB8A0; --copper-400:#FF7A52; --copper-600:#FF4E1F; --copper-700:#E23E12;
-    --teal-50:#D8FBF2; --teal-400:#00C9A7; --teal-600:#00A489;
-    --sky-50:#DFF1FF; --sky-400:#3DA9FC; --sky-600:#1E85E0;
-    --lavender-50:#F1E9FF; --lavender-400:#A78BFA; --lavender-600:#7C5CE0;
-    --leaf-50:#DFFAE8; --leaf-400:#2ED573; --leaf-500:#1DB85C; --leaf-600:#0FA34C; --leaf-700:#0B7A3A;
-    --danger:#FF4D6D; --danger-bg:#FFE1E7; --danger-text:#C0203D;
-    --warning:#FFB800; --warning-bg:#FFF3D1; --warning-text:#8A5E00;
-    --card:#FFFFFF; --border:#EEE9FF; --border-mid:#DCD1FF;
-    --text-strong:#211B3D; --text-body:#4A4270; --text-muted:#8981AC; --text-faint:#BBB4D6;
-    --inv-muted:#E7DFFF;
+    /* Edge Metals brand tokens (2026-07-16 reskin) — steel neutrals grounded
+       by the brand's signature recycling-green accent, with molten copper as
+       the secondary warm tone. Same token NAMES as before so nothing else in
+       this stylesheet or the script below needs to change. Deliberately does
+       NOT include a live ticker/"Live yard" strip — not part of this dashboard. */
+    --steel-100:#E5E9EC; --steel-150:#DCE1E5; --steel-200:#CBD1D6; --steel-300:#A7B0B7;
+    --steel-400:#7E8891; --steel-600:#3C454D; --steel-900:#14181B; --steel-950:#0C0E10;
+    --copper-50:#FBF1E9; --copper-200:#EDBE99; --copper-400:#D77E3D; --copper-600:#C25E22; --copper-700:#A54A17;
+    --leaf-50:#ECF8EA; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F; --leaf-700:#226620;
+    --danger:#C5402F; --danger-bg:#FBE4E0; --danger-text:#8F2D1F;
+    --warning:#D99A2B; --warning-bg:#FBF0DC; --warning-text:#7A5615;
+    --card:#FFFFFF; --border:#CBD1D6; --border-mid:#A7B0B7;
+    --text-strong:#0C0E10; --text-body:#2B3239; --text-muted:#57616A; --text-faint:#7E8891;
+    --inv-muted:#A7B0B7;
     --sidebar-w:236px;
-    --radius-xs:6px; --radius-sm:12px; --radius-md:18px; --radius-lg:26px; --radius-pill:999px;
-    --shadow-sm:0 2px 12px rgba(108,76,224,.14); --shadow-md:0 12px 32px rgba(108,76,224,.20);
-    --mono:'SF Mono',ui-monospace,'Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
-    --sans:ui-rounded,'SF Pro Rounded','Segoe UI Rounded',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+    --radius-xs:2px; --radius-sm:4px; --radius-md:6px; --radius-lg:10px; --radius-pill:999px;
+    --shadow-sm:0 1px 3px rgba(12,14,16,.10), 0 1px 2px rgba(12,14,16,.06);
+    --shadow-md:0 6px 16px rgba(12,14,16,.10), 0 2px 6px rgba(12,14,16,.06);
+    --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular','Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
+    --sans:'DM Sans',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+    --display:'Poppins',var(--sans);
   }
   * { box-sizing:border-box; margin:0; }
   ::-webkit-scrollbar { height:8px; width:8px; }
@@ -36,12 +39,12 @@
   .mono { font-family:var(--mono); }
   /* ── Sidebar — full layout rethink, replaces the old top tab bar ────────── */
   .app-shell { display:flex; min-height:100vh; }
-  .sidebar { width:var(--sidebar-w); flex-shrink:0; background:linear-gradient(180deg,var(--steel-950),var(--lavender-600)); display:flex; flex-direction:column; position:sticky; top:0; height:100vh; overflow-y:auto; z-index:20; }
+  .sidebar { width:var(--sidebar-w); flex-shrink:0; background:linear-gradient(180deg,var(--steel-950),var(--steel-800,#1E2429)); display:flex; flex-direction:column; position:sticky; top:0; height:100vh; overflow-y:auto; z-index:20; }
   .sidebar-brand { padding:28px 22px 20px; }
   .brand { display:flex; align-items:center; gap:13px; }
   .brand-mark { width:42px; height:42px; border-radius:var(--radius-md); background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-weight:900; font-size:17px; color:#fff; }
   .brand-eyebrow { font-family:var(--mono); font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:#fff; opacity:.72; margin-bottom:2px; }
-  .brand-title { font-weight:800; font-size:16px; letter-spacing:.04em; color:#fff; line-height:1.15; }
+  .brand-title { font-family:var(--display); font-weight:800; font-size:16px; letter-spacing:.04em; color:#fff; line-height:1.15; }
   .live { display:flex; align-items:center; gap:7px; margin-top:14px; }
   .live-dot { width:6px; height:6px; border-radius:50%; background:var(--leaf-400); box-shadow:0 0 6px var(--leaf-400); }
   .live-dot.stale { background:var(--danger); box-shadow:0 0 6px var(--danger); }
@@ -54,6 +57,9 @@
   .sidebar-footer .topbar-count { font-family:var(--mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.55); margin-top:3px; }
   .main-content { flex:1; min-width:0; }
   .container { max-width:1200px; margin:0 auto; padding:40px 32px 64px; }
+  .hero-head { margin-bottom:28px; }
+  .hero-eyebrow { font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-600); margin-bottom:10px; }
+  .hero-title { font-family:var(--display); font-size:clamp(24px,2.4vw,34px); font-weight:800; letter-spacing:-0.01em; text-transform:uppercase; color:var(--text-strong); line-height:1.08; margin:0; }
   .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:36px; }
   .kpi { background:var(--card); border:1px solid var(--border); border-top:3px solid var(--steel-300); border-radius:var(--radius-md); padding:20px 22px; cursor:pointer; box-shadow:var(--shadow-sm); transition:box-shadow .15s ease, transform .15s ease; text-align:left; }
   .kpi:hover { box-shadow:var(--shadow-md); transform:translateY(-3px); }
@@ -223,6 +229,10 @@
 
   <div class="tabpanel active" id="panel-board">
 <div class="container">
+  <div class="hero-head">
+    <div class="hero-eyebrow">// Booking scoreboard</div>
+    <h1 class="hero-title">Every load,<br>accounted for.</h1>
+  </div>
   <div class="kpis" id="kpis"></div>
   <div id="alertsSection">
     <div class="rail-head"><span class="rail-title">Needs Attention</span><span class="rail-line"></span><span class="rail-count" id="alertCount">0</span></div>
