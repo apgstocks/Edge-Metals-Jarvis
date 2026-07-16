@@ -74,8 +74,27 @@ function getBookingsThisWeek() {
     });
 }
 
+// A booking counts as "has a supplier" if EITHER the legacy flat field
+// (b.supplier — pre-container-model bookings) OR the workflow record's
+// supplier field (wf.supplier — what executeAssign() in workflow/actions.js
+// actually writes on every real assignment, container-based or not) is set.
+// BUG FIX (2026-07-16): getAvailableBookings() and queryBookingsByLocation()
+// below used to check b.supplier ONLY. Since the app moved to the
+// per-container assignment model, executeAssign() never writes b.supplier —
+// only wf.supplier and the container's own .supplier field — so every
+// booking assigned since then was permanently misreported as "unassigned"
+// by these two functions specifically (api.js's dashboard decorateBooking()
+// already checked wf.supplier || b.supplier correctly; these two just never
+// got updated to match when the schema changed). Confirmed live: booking
+// 272766480 had Dave assigned as supplier (wf.supplier = 'Dave') but kept
+// showing up under "available"/"unassigned" queries on WhatsApp.
+function hasSupplierAssigned(b, wf) {
+    return !!(wf?.supplier || b.supplier);
+}
+
 function getAvailableBookings() {
-    return Object.values(loadBookings()).filter(b => !b.supplier);
+    const workflow = loadWorkflow();
+    return Object.values(loadBookings()).filter(b => !hasSupplierAssigned(b, workflow[b.booking_number]));
 }
 
 // Loose substring match — mirrors the same rule used in dashboard/index.html
@@ -95,9 +114,10 @@ function localityMatchesPort(loc, port) {
 //   'assigned'   → has a supplier
 //   null         → no status filter, just count bookings at that location
 function queryBookingsByLocation(location, filter) {
+    const workflow = loadWorkflow();
     const all = Object.values(loadBookings()).filter(b => localityMatchesPort(b.port_of_loading, location));
-    const filtered = filter === 'unassigned' ? all.filter(b => !b.supplier)
-                    : filter === 'assigned'   ? all.filter(b => !!b.supplier)
+    const filtered = filter === 'unassigned' ? all.filter(b => !hasSupplierAssigned(b, workflow[b.booking_number]))
+                    : filter === 'assigned'   ? all.filter(b => hasSupplierAssigned(b, workflow[b.booking_number]))
                     : all;
     return { count: filtered.length, bookings: filtered.map(b => b.booking_number), records: filtered };
 }
@@ -131,5 +151,5 @@ module.exports = {
     formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
-    queryBookingsByLocation,
+    queryBookingsByLocation, hasSupplierAssigned,
 };

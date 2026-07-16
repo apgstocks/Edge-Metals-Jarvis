@@ -184,8 +184,12 @@ const truckerChat = truckers.getTruckerChatId(truckerName);
 const t           = truckers.getTrucker(truckerName);
 const label       = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-await _send(truckerChat,
-    [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
+const forwardMsg = [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n');
+// FIX (2026-07-16): this send's result used to be discarded — if WhatsApp
+// wasn't ready (still booting, reconnecting), the trucker silently never got
+// notified while the manager saw a clean "forwarded to X" confirmation with
+// no indication anything went wrong. Now captured and surfaced + auto-retried.
+const truckerNotified = await _send(truckerChat, forwardMsg);
 
 // PDF side track — never blocks the forward
 try {
@@ -221,8 +225,26 @@ await updateWorkflow(bkgNo, {
     forwarded_at    : new Date().toISOString(),
 });
 
-await _send(chatId, `${label} forwarded to ${truckerName}.`);
-_pushAlert({ type: 'forwarded', bkgNo, message: `${label} forwarded to ${truckerName}`, severity: 'info' });
+if (truckerNotified) {
+    await _send(chatId, `${label} forwarded to ${truckerName}.`);
+} else {
+    await _send(chatId, `${label} forwarded to ${truckerName} in the system, but the WhatsApp notification to ${truckerName} did NOT go through (WhatsApp not connected). Queued for automatic retry — will notify them once reconnected.`);
+    try {
+        const tasks = require('../helpers/tasks');
+        await tasks.enqueue({
+            type: 'generic_message', target_kind: 'trucker', target_name: truckerName,
+            bkg_no: bkgNo, container_seq: containerSeq, message: forwardMsg,
+            fire_at: new Date(Date.now() + 60 * 1000).toISOString(),
+            created_by: 'system_retry_forward',
+        });
+    } catch (e) { console.error('[ACTIONS] Failed to enqueue forward retry:', e.message); }
+}
+_pushAlert({ type: 'forwarded', bkgNo, message: `${label} forwarded to ${truckerName}${truckerNotified ? '' : ' (notification pending retry)'}`, severity: 'info' });
+// FIX (2026-07-16): activeBooking used to only get set by showBookingStatus(),
+// so "this"/"it" pronoun resolution (e.g. "assign this to Rudy") almost never
+// had anything to resolve against right after a real action. Every
+// booking-scoped action should refresh it.
+updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'forward' });
 return { action_taken: 'forwarded' };
 }
 
@@ -283,8 +305,13 @@ const supplierChat = suppliers.getSupplierChatId(supplierName);
 const s            = suppliers.getSupplier(supplierName);
 const label        = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-await _send(supplierChat,
-    [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
+const assignMsg = [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n');
+// FIX (2026-07-16): same issue as executeForward above — the send result was
+// discarded, so "WA not ready" silently dropped the supplier notification
+// while the manager still saw a clean "assigned" confirmation. See the live
+// example: 2026-07-16 boot log — assign fired 4.3s into startup, before the
+// WhatsApp client was ready, and Rudy was never actually notified.
+const supplierNotified = await _send(supplierChat, assignMsg);
 
 // Per-container: write supplier + stage onto the target container.
 if (containerSeq != null) {
@@ -312,9 +339,138 @@ await updateWorkflow(bkgNo, {
     assigned_at      : new Date().toISOString(),
 });
 
-await _send(chatId, `${label} assigned to ${supplierName}.`);
-_pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierName}`, severity: 'info' });
+if (supplierNotified) {
+    await _send(chatId, `${label} assigned to ${supplierName}.`);
+} else {
+    await _send(chatId, `${label} assigned to ${supplierName} in the system, but the WhatsApp notification to ${supplierName} did NOT go through (WhatsApp not connected). Queued for automatic retry — will notify them once reconnected.`);
+    try {
+        const tasks = require('../helpers/tasks');
+        await tasks.enqueue({
+            type: 'generic_message', target_kind: 'supplier', target_name: supplierName,
+            bkg_no: bkgNo, container_seq: containerSeq, message: assignMsg,
+            fire_at: new Date(Date.now() + 60 * 1000).toISOString(),
+            created_by: 'system_retry_assign',
+        });
+    } catch (e) { console.error('[ACTIONS] Failed to enqueue assign retry:', e.message); }
+}
+_pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierName}${supplierNotified ? '' : ' (notification pending retry)'}`, severity: 'info' });
+updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'assign' });
 return { action_taken: 'assigned' };
+}
+
+// ── Smart assign — "assign this/it to NAME" (2026-07-16) ──────────────────
+// Spec from Apsara: resolve NAME against BOTH the trucker and supplier
+// rosters, narrow multi-city name collisions by the booking's own port of
+// loading, and — if NAME hits both rosters — use which role still has an
+// open (unassigned) container on THIS booking to break the tie. Only ask the
+// manager outright when that still doesn't resolve it. If the resolved
+// role's containers are ALL already assigned (nothing pending), don't
+// silently overwrite — confirm first, and show the current stage so a
+// mid-flight reassignment (trucker already picked up, etc.) isn't invisible.
+// Decisions locked in 2026-07-16: plain yes/no confirm regardless of stage
+// (just surface the stage in the prompt, don't block); do NOT notify the
+// outgoing trucker/supplier that they were replaced.
+async function smartAssign(chatId, bkgNo, name) {
+const { booking } = getBooking(bkgNo);
+if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+if (!name) { await _send(chatId, 'Assign to whom? e.g. "assign this to Rudy".'); return { action_taken: 'no_name' }; }
+
+const pol = booking.port_of_loading || '';
+const narrowByLocality = (list) => {
+    if (list.length <= 1) return list;
+    const local = list.filter(x => suppliers.localityMatchesPort(x.locality, pol));
+    return local.length ? local : list; // locality narrowed to nobody — better to ask than to silently drop every candidate
+};
+
+const supplierCandidates = narrowByLocality(suppliers.getSuppliersByName(name));
+const truckerCandidates  = narrowByLocality(truckers.getTruckersByName(name));
+
+if (!supplierCandidates.length && !truckerCandidates.length) {
+    await _send(chatId, `No trucker or supplier named "${name}" found. Check the Truckers/Suppliers tab.`);
+    return { action_taken: 'name_not_found' };
+}
+
+const containersMod = require('../helpers/containers');
+const supplierPending = !!containersMod.nextUnassignedContainer(booking, 'supplier');
+const truckerPending  = !!containersMod.nextUnassignedContainer(booking, 'trucker');
+
+let role;
+if (supplierCandidates.length && truckerCandidates.length) {
+    // Name hits both rosters. Use this booking's own pending state to break
+    // the tie — if only one role still has an open slot, that's almost
+    // certainly what was meant. Only ask when it's genuinely ambiguous
+    // (both pending, or both already fully assigned).
+    if (supplierPending && !truckerPending)      role = 'supplier';
+    else if (truckerPending && !supplierPending) role = 'trucker';
+    else {
+        await setPending(chatId, { type: 'await_role_choice', bkg_no: bkgNo, name, options: ['trucker', 'supplier'] });
+        await _send(chatId, `"${name}" is both a trucker and a supplier. Assign as trucker or supplier for ${bkgNo}? Reply "trucker" or "supplier".`);
+        return { action_taken: 'awaiting_role_choice' };
+    }
+} else {
+    role = supplierCandidates.length ? 'supplier' : 'trucker';
+}
+
+return resolveSmartAssignRole(chatId, bkgNo, role, role === 'supplier' ? supplierCandidates : truckerCandidates);
+}
+
+// Shared tail for smartAssign() and the await_role_choice / await_candidate_choice
+// pending resolutions below — once we have exactly one role and a candidate
+// list, this decides fresh-assign vs reassign-confirm vs name-collision ask.
+async function resolveSmartAssignRole(chatId, bkgNo, role, candidates) {
+const { booking } = getBooking(bkgNo);
+if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+if (!candidates.length) { await _send(chatId, `No ${role} found for that name.`); return { action_taken: 'name_not_found' }; }
+
+if (candidates.length > 1) {
+    // Same name, multiple contacts, locality didn't narrow it to one.
+    await setPending(chatId, { type: 'await_candidate_choice', bkg_no: bkgNo, role, options: candidates.map(c => c.name) });
+    await _send(chatId, [`Multiple ${role}s match:`, '', ...candidates.map((c, i) => `${i + 1}. ${c.name}${c.locality ? ' · ' + c.locality : ''}`), '', 'Reply with a number or name.'].join('\n'));
+    return { action_taken: 'awaiting_' + role + '_selection' };
+}
+
+const resolvedName = candidates[0].name;
+const containersMod = require('../helpers/containers');
+const pendingContainer = containersMod.nextUnassignedContainer(booking, role);
+
+if (pendingContainer) {
+    // Open slot for this role — just fill it. No confirmation needed
+    // (matches existing forward/assign behavior for a fresh assignment).
+    return role === 'supplier'
+        ? executeAssign(chatId, bkgNo, resolvedName, null)
+        : executeForward(chatId, bkgNo, resolvedName, null);
+}
+
+// Every container already has this role filled — this is a REASSIGNMENT,
+// not a fresh assignment. Confirm before overwriting.
+const assignedContainers = (booking.containers || []).filter(c => c[role]);
+if (!assignedContainers.length) {
+    // Defensive: nextUnassignedContainer said full but nothing is actually
+    // assigned (shouldn't happen) — fall back to a fresh assign on #1.
+    return role === 'supplier'
+        ? executeAssign(chatId, bkgNo, resolvedName, booking.containers?.[0]?.seq ?? null)
+        : executeForward(chatId, bkgNo, resolvedName, booking.containers?.[0]?.seq ?? null);
+}
+
+if (assignedContainers.length === 1) {
+    const c = assignedContainers[0];
+    const current = c[role];
+    const label = booking.containers.length > 1 ? `${bkgNo}/${c.seq}` : bkgNo;
+    if (String(current).toLowerCase() === resolvedName.toLowerCase()) {
+        await _send(chatId, `${label} is already assigned to ${resolvedName} as ${role}. Nothing to do.`);
+        return { action_taken: 'already_assigned_same' };
+    }
+    const stageNote = (c.stage && c.stage !== 'not_started') ? ` — currently at "${stepLabel(c.stage)}"` : '';
+    await setPending(chatId, { type: 'await_reassign_confirm', bkg_no: bkgNo, role, new_name: resolvedName, container_seq: c.seq });
+    await _send(chatId, `${label} is already assigned to ${current} as ${role}${stageNote}. Reassign to ${resolvedName}? (yes/no)`);
+    return { action_taken: 'awaiting_reassign_confirm' };
+}
+
+// Multiple containers already have this role filled — ask which one.
+await setPending(chatId, { type: 'await_reassign_confirm', bkg_no: bkgNo, role, new_name: resolvedName, options: assignedContainers.map(c => String(c.seq)) });
+const list = assignedContainers.map(c => `#${c.seq} → ${c[role]}${c.stage && c.stage !== 'not_started' ? ` (${stepLabel(c.stage)})` : ''}`).join(', ');
+await _send(chatId, `${bkgNo} has multiple containers already assigned as ${role}: ${list}. Reply with a container number to reassign to ${resolvedName}, or "no" to cancel.`);
+return { action_taken: 'awaiting_reassign_confirm' };
 }
 
 // ── Phase 4a: disambiguation prompts to trucker/supplier ──────────────────
@@ -468,6 +624,7 @@ if (truckerChat) await _send(truckerChat, `${bkgNo} has been RECALLED. Please st
 await updateWorkflow(bkgNo, { step: 'not_started', trucker_name: null, trucker_group_id: null, recalled_at: new Date().toISOString() });
 await _send(chatId, `${bkgNo} recalled.`);
 _pushAlert({ type: 'recalled', bkgNo, message: `${bkgNo} recalled from trucker`, severity: 'warning' });
+updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'recall' });
 return { action_taken: 'recalled' };
 }
 
@@ -563,6 +720,42 @@ switch (pending.type) {
         // person_name is derived from chatId at fire time — but we didn't stash it here.
         // We rely on the state handlers not needing it (they use byName only for team-notify text).
         return fireResolvedStateIntent(pending.intent_to_resolve, pending.bkg_no, seq, null, pending.has_media);
+    }
+
+    // ── Smart-assign follow-ups (2026-07-16) ────────────────────────────────
+    // Manager told us WHICH role ("trucker" or "supplier") when a name hit
+    // both rosters and the booking's pending state didn't break the tie.
+    case 'await_role_choice': {
+        await clearPending(chatId);
+        const role = String(selection || '').toLowerCase();
+        if (role !== 'trucker' && role !== 'supplier') {
+            await _send(chatId, 'Reply "trucker" or "supplier".');
+            return { action_taken: 'awaiting_role_choice' };
+        }
+        const { booking } = getBooking(pending.bkg_no);
+        if (!booking) { await _send(chatId, `No booking found for ${pending.bkg_no}.`); return { action_taken: 'not_found' }; }
+        const pol = booking.port_of_loading || '';
+        const raw = role === 'supplier' ? suppliers.getSuppliersByName(pending.name) : truckers.getTruckersByName(pending.name);
+        const local = raw.length > 1 ? raw.filter(x => suppliers.localityMatchesPort(x.locality, pol)) : raw;
+        return resolveSmartAssignRole(chatId, pending.bkg_no, role, local.length ? local : raw);
+    }
+    // Manager picked which of several same-named contacts (name collision
+    // within one role, e.g. two "Rudy"s and locality didn't narrow it).
+    case 'await_candidate_choice':
+        await clearPending(chatId);
+        return resolveSmartAssignRole(chatId, pending.bkg_no, pending.role, [{ name: selection }]);
+    // Manager confirmed (or picked a container for) a reassignment onto a
+    // role that was already fully assigned on this booking.
+    case 'await_reassign_confirm': {
+        await clearPending(chatId);
+        let seq = pending.container_seq ?? null;
+        if (pending.options && selection) {
+            const asNum = parseInt(selection, 10);
+            if (!isNaN(asNum)) seq = asNum;
+        }
+        return pending.role === 'supplier'
+            ? executeAssign(chatId, pending.bkg_no, pending.new_name, seq)
+            : executeForward(chatId, pending.bkg_no, pending.new_name, seq);
     }
 
     default:
@@ -753,6 +946,7 @@ showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,
+smartAssign,
 emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived,
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,

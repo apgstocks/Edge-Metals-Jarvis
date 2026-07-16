@@ -54,6 +54,17 @@ function getTrucker(truckerName) {
     return loadTruckers().find(x => (x.name || '').toLowerCase() === String(truckerName || '').toLowerCase()) || null;
 }
 
+// ── ALL matches by name (2026-07-16, for smartAssign) — mirror of the
+// identical addition in workflow/suppliers.js. See that file's comment. ─────
+function getTruckersByName(name) {
+    const lower = String(name || '').trim().toLowerCase();
+    if (!lower) return [];
+    const all = loadTruckers();
+    const exact = all.filter(x => (x.name || '').toLowerCase() === lower);
+    if (exact.length) return exact;
+    return all.filter(x => (x.name || '').toLowerCase().includes(lower));
+}
+
 function getTruckerGroupIdForBooking(bkgNo) {
     const wf = loadWorkflow()[bkgNo] || {};
     if (wf.trucker_group_id) return wf.trucker_group_id;
@@ -84,6 +95,6 @@ function buildTruckerSelectionMessage(bkgNo) {
 }
 
 module.exports = {
-    matchTruckerByChat, getTruckerChatId, getTrucker,
-    getTruckerGroupIdForBooking, buildTruckerSelectionMessage,
+    matchTruckerByChat, getTruckerChatId, getTrucker, getTruckersByName,
+    getTruckerGroupIdForBooking, buildTruckerSelectionMessage, localityMatchesPort,
 };

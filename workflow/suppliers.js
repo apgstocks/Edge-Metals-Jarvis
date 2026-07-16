@@ -48,6 +48,20 @@ function getSupplier(supplierName) {
     return loadSuppliers().find(x => (x.name || '').toLowerCase() === String(supplierName || '').toLowerCase()) || null;
 }
 
+// ── ALL matches by name (2026-07-16, for smartAssign) ─────────────────────────
+// getSupplier() above returns only the first hit — fine when names are unique,
+// silently wrong when two suppliers share a name in different cities. Exact
+// match first; only fall back to substring match if exact finds nothing, so
+// "Rudy" doesn't accidentally also pull in an unrelated "Rudyard Freight Co."
+function getSuppliersByName(name) {
+    const lower = String(name || '').trim().toLowerCase();
+    if (!lower) return [];
+    const all = loadSuppliers();
+    const exact = all.filter(x => (x.name || '').toLowerCase() === lower);
+    if (exact.length) return exact;
+    return all.filter(x => (x.name || '').toLowerCase().includes(lower));
+}
+
 function getSupplierGroupIdForBooking(bkgNo) {
     const wf = loadWorkflow()[bkgNo] || {};
     if (wf.supplier_group_id) return wf.supplier_group_id;
@@ -79,6 +93,6 @@ function buildSupplierSelectionMessage(bkgNo) {
 }
 
 module.exports = {
-    matchSupplierByChat, getSupplierChatId, getSupplier,
-    getSupplierGroupIdForBooking, buildSupplierSelectionMessage,
+    matchSupplierByChat, getSupplierChatId, getSupplier, getSuppliersByName,
+    getSupplierGroupIdForBooking, buildSupplierSelectionMessage, localityMatchesPort,
 };

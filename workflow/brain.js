@@ -105,7 +105,10 @@ function policyDecide(ctx) {
         }
         if (p.type === 'await_bkg_no') {
             const bkgResolved = resolveBookingNumber(ctx.text);
-            if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved } };
+            // p.name carries through for smart_assign's "which booking should I
+            // assign this to?" flow — harmless no-op for every other nextIntent,
+            // which never reads a "name" field from data.
+            if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved, name: p.name } };
         }
         // fall through — the manager may be asking something else mid-pending
     }
@@ -138,21 +141,56 @@ function policyDecide(ctx) {
         // whichever captured token actually matches the booking-number FORMAT wins,
         // regardless of position. Without this, "assign him to DALA52325500" silently
         // treated "him" as the booking and DALA52325500 as the supplier name.
+        // FIX (2026-07-16): both blocks below used to fall back to
+        // first.toUpperCase() as the booking number whenever NEITHER token
+        // matched the booking-number format — so "assign trucker" (no real
+        // booking anywhere in the message) confidently became
+        // bkg_no="TRUCKER" and produced "No booking found for TRUCKER"
+        // instead of asking a sensible question. Now, when neither token
+        // resolves to a real booking number, the block simply doesn't match
+        // and falls through to the AI fallback at the bottom of this
+        // function — which has session/chat context to actually figure out
+        // what was meant, or ask a real clarifying question.
         if ((m = t.match(/^forward\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
             const [first, seq, second] = [m[1], m[2], m[3]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);
-            const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
-            const trucker_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
-            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
+            if (firstIsBkg || secondIsBkg) {
+                const bkg_no = firstIsBkg || secondIsBkg;
+                const trucker_name = firstIsBkg ? (second || null) : first;
+                return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
+            }
         }
         if ((m = t.match(/^assign\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
             const [first, seq, second] = [m[1], m[2], m[3]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);
-            const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
-            const supplier_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
-            return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, supplier_name } };
+            if (firstIsBkg || secondIsBkg) {
+                const bkg_no = firstIsBkg || secondIsBkg;
+                const supplier_name = firstIsBkg ? (second || null) : first;
+                return { intent: 'assign_supplier', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, supplier_name } };
+            }
+        }
+        // "assign this to rudy" / "assign it to rudy" / "assign to rudy" —
+        // role-agnostic (2026-07-16). Distinct from the explicit assign/
+        // forward grammar above, which requires a real booking number in the
+        // message; this one leans on activeBooking. actions.smartAssign()
+        // resolves whether "rudy" means the trucker, the supplier, or is
+        // ambiguous, using both rosters + this booking's own pending state.
+        if ((m = t.match(/^assign\s+(?:this|it)\s+to\s+(.+)$/)) || (m = t.match(/^assign\s+to\s+(.+)$/))) {
+            return { intent: 'smart_assign', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking || null, name: m[1].trim() } };
+        }
+        // Bare "assign <name>" — same smart resolution, but ONLY when there's
+        // an active booking to anchor it to AND the captured word isn't an
+        // obvious role/pronoun filler ("assign trucker" is a fragment, not a
+        // name — let that fall through to AI instead of failing a roster
+        // lookup on the literal word "trucker").
+        if ((m = t.match(/^assign\s+(.+)$/)) && ctx.activeBooking) {
+            const candidate = m[1].trim();
+            const NOT_A_NAME = new Set(['trucker', 'truckers', 'supplier', 'suppliers', 'someone', 'somebody', 'anybody', 'him', 'her', 'them', 'it', 'this', 'that']);
+            if (!NOT_A_NAME.has(candidate.toLowerCase())) {
+                return { intent: 'smart_assign', resolvedBy: 'policy', data: { bkg_no: ctx.activeBooking, name: candidate } };
+            }
         }
         if ((m = t.match(/^recall\s+(\S+)$/)))
             return { intent: 'recall_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
@@ -454,12 +492,14 @@ ${a.supplierRoster}
 "${a.message}"
 
 ═══ AVAILABLE ACTIONS ═══
-forward_booking, assign_supplier, recall_booking, archive_booking,
+forward_booking, assign_supplier, smart_assign, recall_booking, archive_booking,
 show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
 reply, silent, NEED_DATA, NEED_APPROVAL
+
+- "smart_assign": use this — NOT forward_booking or assign_supplier — whenever the manager names a person WITHOUT saying whether they mean the trucker or the supplier (e.g. "assign this to Rudy", "give it to Rudy", "Rudy should take this one"). Put the person's name in target_name and bkg_no (use activeBooking if not restated). The system resolves whether Rudy is the trucker or supplier, checks for name collisions and already-assigned conflicts, and asks the manager directly if it's genuinely ambiguous — you don't need to figure that part out, just route the name and booking through.
 
 Return ONLY this JSON:
 {
@@ -508,8 +548,8 @@ async function route(decision, ctx, sendMessage) {
 
     const send = async (id, text) => { await sendMessage(id, text); return { action_taken: 'replied' }; };
     const ask  = (id, text) => send(id, text);
-    const askBkg = async (id, text, nextIntent) => {
-        await actions.setPending(id, { type: 'await_bkg_no', nextIntent });
+    const askBkg = async (id, text, nextIntent, extra = {}) => {
+        await actions.setPending(id, { type: 'await_bkg_no', nextIntent, ...extra });
         return send(id, text);
     };
     if (ctx.pendingAction?.type === 'await_bkg_no') {
@@ -528,6 +568,12 @@ async function route(decision, ctx, sendMessage) {
         case 'show_contacts':          return actions.showContacts(chatId);
         case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : askBkg(chatId, 'Which booking should I forward? e.g. "forward BK123456"', 'forward_booking');
         case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : askBkg(chatId, 'Which booking should I assign? e.g. "assign BK123456"', 'assign_supplier');
+        case 'smart_assign': {
+            // Policy layer puts the name in d.name; the AI path only produces
+            // target_name (see process()'s decision.data mapping) — accept either.
+            const name = d.name || d.target_name;
+            return bkg ? actions.smartAssign(chatId, bkg, name) : askBkg(chatId, 'Which booking should I assign this to?', 'smart_assign', { name });
+        }
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
