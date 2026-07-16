@@ -1081,3 +1081,28 @@ async function sendPriceListTo(chatId, targetNameOrNumber) {
 //   checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
 //   sendPriceListTo,
 //   };
+// ── Price list — "send price list to X" from brain.js (appended safely) ────
+async function sendPriceListTo(chatId, targetNameOrNumber) {
+    const pricelist = require('../helpers/pricelist');
+    const result = await pricelist.sendPriceListTo(targetNameOrNumber);
+    if (!result.ok && result.reason === 'not_found') {
+        await _send(chatId, `Couldn't find a saved contact or valid number for "${targetNameOrNumber}". Add them via /api/pricelist/contacts first, or give me a full WhatsApp number.`);
+        return { action_taken: 'not_found' };
+    }
+    await _send(chatId, result.ok ? `Price list sent to ${result.target}.` : `Send to ${result.target} failed — check WhatsApp connection.`);
+    return { action_taken: result.ok ? 'pricelist_sent' : 'send_failed' };
+}
+module.exports.sendPriceListTo = sendPriceListTo;
+
+// ── Price list — single-city send, "send price list" asks which city first ─
+async function sendPriceListCity(chatId, city, targetNameOrNumber) {
+    const pricelist = require('../helpers/pricelist');
+    const result = await pricelist.sendPriceListCityTo(targetNameOrNumber, city, chatId);
+    if (!result.ok && result.reason === 'not_found') {
+        await _send(chatId, `Couldn't find a saved contact or valid number for "${targetNameOrNumber}". Add them via /api/pricelist/contacts first, or give me a full WhatsApp number.`);
+        return { action_taken: 'not_found' };
+    }
+    await _send(chatId, result.ok ? `${city} price list sent to ${result.target}.` : `Send to ${result.target} failed — check WhatsApp connection.`);
+    return { action_taken: result.ok ? 'pricelist_sent' : 'send_failed' };
+}
+module.exports.sendPriceListCity = sendPriceListCity;

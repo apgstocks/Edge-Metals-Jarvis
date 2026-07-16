@@ -109,6 +109,14 @@ function policyDecide(ctx) {
             const bkgResolved = resolveBookingNumber(ctx.text);
             if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved } };
         }
+        // "send price list" asked which city — this reply should be 1/2/3 or a
+        // partial city name. Self-contained: doesn't touch actions.resolvePending
+        // at all, same pattern as await_bkg_no above.
+        if (p.type === 'await_pricelist_city') {
+            const cityMatch = resolveListSelection(ctx.text, ['Los Angeles', 'Houston', 'San Antonio']);
+            if (cityMatch) return { intent: 'send_pricelist_city', resolvedBy: 'policy', data: { city: cityMatch, target_name: p.target_name || null } };
+            return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply 1 for Los Angeles, 2 for Houston, or 3 for San Antonio.' } };
+        }
         // fall through — the manager may be asking something else mid-pending
     }
 
@@ -205,14 +213,16 @@ function policyDecide(ctx) {
         if ((m = t.match(/^check\s+supplier\s+(\S+)$/)))
             return { intent: 'check_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
-        // "send price list to X" / "send prices to X" / "price list X" — X is
-        // either a saved pricelist contact name or a raw WhatsApp number.
-        // Resolution happens in actions.sendPriceListTo / helpers/pricelist.js,
-        // not here — policy only extracts the target string. Deliberately kept
-        // OUT of the Gemini/llm-intent path (see helpers/pricelist.js header).
-        if ((m = t.match(/^(?:send\s+)?price\s*list\s+(?:to\s+)?(.+)$/)) ||
-            (m = t.match(/^send\s+prices?\s+to\s+(.+)$/)))
-            return { intent: 'send_pricelist', resolvedBy: 'policy', data: { target_name: m[1].trim() } };
+        // "send price list" / "send price list to X" / "price list" — always
+        // asks which city (Los Angeles / Houston / San Antonio) before sending,
+        // regardless of whether a target was named. Target is optional — if
+        // omitted, the list goes back to whoever asked. Resolution happens in
+        // actions.js/helpers/pricelist.js, not here — policy only extracts the
+        // target string (if any). Deliberately kept OUT of the Gemini/llm-intent
+        // path (see helpers/pricelist.js header).
+        if ((m = t.match(/^(?:send\s+)?price\s*list(?:\s+(?:to\s+)?(.+))?$/)) ||
+            (m = t.match(/^send\s+prices?(?:\s+to\s+(.+))?$/)))
+            return { intent: 'ask_pricelist_city', resolvedBy: 'policy', data: { target_name: m[1] ? m[1].trim() : null } };
 
         // Bare booking number → status
         const bkg = resolveBookingNumber(ctx.text);
@@ -526,6 +536,12 @@ async function route(decision, ctx, sendMessage) {
     if (ctx.pendingAction?.type === 'await_bkg_no') {
         try { await actions.clearPending(chatId); } catch {}
     }
+    // Same clear needed for the price-list city prompt — otherwise it never
+    // resolves and every message after the first "which city?" answer keeps
+    // getting re-interpreted as another city reply.
+    if (ctx.pendingAction?.type === 'await_pricelist_city') {
+        try { await actions.clearPending(chatId); } catch {}
+    }
 
     switch (decision.intent) {
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection);
@@ -544,7 +560,11 @@ async function route(decision, ctx, sendMessage) {
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
-        case 'send_pricelist':         return d.target_name ? actions.sendPriceListTo(chatId, d.target_name) : ask(chatId, 'Send the price list to whom? Give me a name or WhatsApp number.');
+        case 'ask_pricelist_city': {
+            await actions.setPending(chatId, { type: 'await_pricelist_city', target_name: d.target_name || null });
+            return send(chatId, 'Which price list?\n1. Los Angeles\n2. Houston\n3. San Antonio');
+        }
+        case 'send_pricelist_city':    return actions.sendPriceListCity(chatId, d.city, d.target_name);
         case 'bookings_count_query': {
             updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);

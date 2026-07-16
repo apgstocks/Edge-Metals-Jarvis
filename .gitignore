@@ -4,3 +4,4 @@ data/
 bookings.json
 *.log
 .DS_Store
+.wwebjs_cache/

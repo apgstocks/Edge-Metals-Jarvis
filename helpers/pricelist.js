@@ -93,6 +93,35 @@ async function sendPriceListTo(nameOrNumber) {
     return { ok, target: target.label };
 }
 
+// ── Single-city variant — "send price list" now asks which city first ───────
+// city must be one of PRICE_TABS' exact strings (brain.js resolves the user's
+// reply — a number or partial name — against that list before calling this).
+function formatSingleCity(data, city) {
+    const rows = data[city] || [];
+    const lines = [`*Edge Metals — ${city} Price List*`,
+        `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, ''];
+    if (!rows.length) return lines.concat(['(no items found for this sheet)']).join('\n');
+    for (const r of rows) lines.push(`${r.item}  ${r.priceRaw}`);
+    return lines.join('\n');
+}
+
+// targetNameOrNumber may be null — in that case send back to fallbackChatId
+// (the chat that asked), which is the common case for "send price list" with
+// no recipient specified.
+async function sendPriceListCityTo(targetNameOrNumber, city, fallbackChatId) {
+    const data = await readPriceSheet();
+    const text = formatSingleCity(data, city);
+
+    if (!targetNameOrNumber) {
+        const ok = await _send(fallbackChatId, text);
+        return { ok, target: 'you' };
+    }
+    const target = resolveTarget(targetNameOrNumber);
+    if (!target) return { ok: false, reason: 'not_found' };
+    const ok = await _send(target.chatId, text);
+    return { ok, target: target.label };
+}
+
 // ── Change detection ──────────────────────────────────────────────────────────
 // Snapshot = last-known {city: [{item, priceRaw}]}. Diffs on item+priceRaw only
 // (ignores row order / unrelated columns). Returns a human-readable diff list,
@@ -148,4 +177,5 @@ module.exports = {
     init, loadContacts, addContact, removeContact,
     resolveTarget, standingContacts, formatPriceList,
     sendPriceListTo, diffPriceData, checkForChangesAndNotify,
+    formatSingleCity, sendPriceListCityTo,
 };
