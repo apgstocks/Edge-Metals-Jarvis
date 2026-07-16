@@ -511,6 +511,7 @@ function createApi() {
     });
 
     // Ad hoc send — "whoever I tell": a saved contact name OR a raw WhatsApp number.
+    // Sends ALL cities combined. Kept for backward compat / scripting use.
     app.post('/api/pricelist/send', requireAdmin, async (req, res) => {
         try {
             const result = await pricelist.sendPriceListTo(req.body?.to);
@@ -520,6 +521,27 @@ function createApi() {
             res.json(result);
         } catch (err) {
             console.error('[API] pricelist/send failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Single-city send — mirrors the WhatsApp "send price list" flow (which
+    // always asks which city before sending). Dashboard passes the city the
+    // user picked from a dropdown, so no free-text city parsing needed here.
+    app.post('/api/pricelist/send-city', requireAdmin, async (req, res) => {
+        const CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
+        const city = req.body?.city;
+        if (!CITIES.includes(city)) {
+            return res.status(400).json({ error: `city must be one of: ${CITIES.join(', ')}` });
+        }
+        try {
+            const result = await pricelist.sendPriceListCityTo(req.body?.to, city, null);
+            if (!result.ok && result.reason === 'not_found') {
+                return res.status(404).json({ error: `no contact or valid number matching "${req.body?.to}"` });
+            }
+            res.json(result);
+        } catch (err) {
+            console.error('[API] pricelist/send-city failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });

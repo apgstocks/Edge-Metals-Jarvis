@@ -3,1374 +3,761 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jarvis — Booking Scoreboard</title>
+<title>Jarvis — Edge Metals Ops</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Poppins:wght@700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800;900&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    /* Edge Metals brand tokens (2026-07-16 reskin) — steel neutrals grounded
-       by the brand's signature recycling-green accent, with molten copper as
-       the secondary warm tone. Same token NAMES as before so nothing else in
-       this stylesheet or the script below needs to change. Deliberately does
-       NOT include a live ticker/"Live yard" strip — not part of this dashboard. */
-    --steel-100:#E5E9EC; --steel-150:#DCE1E5; --steel-200:#CBD1D6; --steel-300:#A7B0B7;
-    --steel-400:#7E8891; --steel-600:#3C454D; --steel-900:#14181B; --steel-950:#0C0E10;
-    --copper-50:#FBF1E9; --copper-200:#EDBE99; --copper-400:#D77E3D; --copper-600:#C25E22; --copper-700:#A54A17;
-    --leaf-50:#ECF8EA; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F; --leaf-700:#226620;
-    --danger:#C5402F; --danger-bg:#FBE4E0; --danger-text:#8F2D1F;
-    --warning:#D99A2B; --warning-bg:#FBF0DC; --warning-text:#7A5615;
-    --card:#FFFFFF; --border:#CBD1D6; --border-mid:#A7B0B7;
-    --text-strong:#0C0E10; --text-body:#2B3239; --text-muted:#57616A; --text-faint:#7E8891;
-    --inv-muted:#A7B0B7;
-    --sidebar-w:236px;
-    --radius-xs:2px; --radius-sm:4px; --radius-md:6px; --radius-lg:10px; --radius-pill:999px;
-    --shadow-sm:0 1px 3px rgba(12,14,16,.10), 0 1px 2px rgba(12,14,16,.06);
-    --shadow-md:0 6px 16px rgba(12,14,16,.10), 0 2px 6px rgba(12,14,16,.06);
-    --mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular','Cascadia Mono','Roboto Mono',Menlo,Consolas,monospace;
-    --sans:'DM Sans',-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
-    --display:'Poppins',var(--sans);
-  }
-  * { box-sizing:border-box; margin:0; }
-  ::-webkit-scrollbar { height:8px; width:8px; }
-  ::-webkit-scrollbar-thumb { background:var(--steel-300); border-radius:4px; }
-  body { background:var(--steel-100); font-family:var(--sans); color:var(--text-body); min-height:100vh; }
-  button { font:inherit; cursor:pointer; }
-  .mono { font-family:var(--mono); }
-  /* ── Sidebar — full layout rethink, replaces the old top tab bar ────────── */
-  .app-shell { display:flex; min-height:100vh; }
-  .sidebar { width:var(--sidebar-w); flex-shrink:0; background:linear-gradient(180deg,var(--steel-950),var(--steel-800,#1E2429)); display:flex; flex-direction:column; position:sticky; top:0; height:100vh; overflow-y:auto; z-index:20; }
-  .sidebar-brand { padding:28px 22px 20px; }
-  .brand { display:flex; align-items:center; gap:13px; }
-  .brand-mark { width:42px; height:42px; border-radius:var(--radius-md); background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-weight:900; font-size:17px; color:#fff; }
-  .brand-eyebrow { font-family:var(--mono); font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:#fff; opacity:.72; margin-bottom:2px; }
-  .brand-title { font-family:var(--display); font-weight:800; font-size:16px; letter-spacing:.04em; color:#fff; line-height:1.15; }
-  .live { display:flex; align-items:center; gap:7px; margin-top:14px; }
-  .live-dot { width:6px; height:6px; border-radius:50%; background:var(--leaf-400); box-shadow:0 0 6px var(--leaf-400); }
-  .live-dot.stale { background:var(--danger); box-shadow:0 0 6px var(--danger); }
-  .live-label { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--inv-muted); }
-  .topbar-right { display:none; } /* legacy selector kept for JS compat, unused visually now */
-  .topbar-date, .topbar-count { display:none; }
-  .sidebar-footer { margin-top:auto; padding:16px 22px 22px; border-top:1px solid rgba(255,255,255,.14); }
-  .sidebar-footer .topbar-date, .sidebar-footer .topbar-count { display:block; }
-  .sidebar-footer .topbar-date { font-family:var(--mono); font-size:11px; color:var(--inv-muted); }
-  .sidebar-footer .topbar-count { font-family:var(--mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.55); margin-top:3px; }
-  .main-content { flex:1; min-width:0; }
-  .container { max-width:1200px; margin:0 auto; padding:40px 32px 64px; }
-  .hero-head { margin-bottom:28px; }
-  .hero-eyebrow { font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-600); margin-bottom:10px; }
-  .hero-title { font-family:var(--display); font-size:clamp(24px,2.4vw,34px); font-weight:800; letter-spacing:-0.01em; text-transform:uppercase; color:var(--text-strong); line-height:1.08; margin:0; }
-  .kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:36px; }
-  .kpi { background:var(--card); border:1px solid var(--border); border-top:3px solid var(--steel-300); border-radius:var(--radius-md); padding:20px 22px; cursor:pointer; box-shadow:var(--shadow-sm); transition:box-shadow .15s ease, transform .15s ease; text-align:left; }
-  .kpi:hover { box-shadow:var(--shadow-md); transform:translateY(-3px); }
-  .kpi-count { font-family:var(--mono); font-size:34px; font-weight:700; color:var(--text-strong); line-height:1; }
-  .kpi-label { font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; margin-top:10px; }
-  .rail-head { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
-  .rail-title { font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-600); font-weight:700; }
-  .rail-line { flex:1; height:1px; background:var(--border); }
-  .rail-count { font-family:var(--mono); font-size:11px; color:var(--text-faint); }
-  .alerts { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin-bottom:40px; }
-  .alert-card { background:linear-gradient(180deg,var(--copper-50),var(--card) 40%); border:1px solid var(--copper-200); border-left:4px solid var(--copper-600); border-radius:var(--radius-sm); padding:18px 20px; box-shadow:var(--shadow-sm); }
-  .alert-top { display:flex; justify-content:space-between; align-items:center; }
-  .alert-bkg { font-family:var(--mono); font-size:13.5px; font-weight:700; color:var(--text-strong); }
-  .alert-deadline { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#fff; background:var(--danger); padding:4px 12px; border-radius:var(--radius-pill); }
-  .alert-issue { font-size:13.5px; color:var(--text-body); margin-top:9px; line-height:1.4; }
-  .filters { display:flex; align-items:center; gap:8px; margin-bottom:22px; flex-wrap:wrap; }
-  .chip { padding:9px 20px; border-radius:var(--radius-pill); border:1px solid var(--border-mid); background:var(--card); color:var(--text-body); font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; font-weight:600; }
-  .chip.active { background:var(--steel-950); color:#fff; border-color:var(--steel-950); box-shadow:var(--shadow-sm); }
-  .rows { display:flex; flex-direction:column; gap:12px; }
-  .row { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--steel-300); border-radius:var(--radius-md); padding:22px 26px; display:grid; grid-template-columns:170px 1fr 200px 120px; align-items:center; box-shadow:var(--shadow-sm); transition:box-shadow .15s ease, transform .15s ease; }
-  .row:hover { box-shadow:var(--shadow-md); transform:translateY(-3px); }
-  .cell-id { padding-right:24px; border-right:1px solid var(--border); }
-  .cell-eyebrow { font-family:var(--mono); font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px; }
-  .cell-bkg { font-family:var(--mono); font-size:15px; font-weight:700; color:var(--text-strong); }
-  .cell-buyer { font-size:12.5px; color:var(--text-body); margin-top:5px; }
-  .cell-container { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:2px; }
-  .cell-stage { padding:0 28px; border-right:1px solid var(--border); }
-  .track { position:relative; height:4px; background:var(--steel-150); border-radius:2px; margin:2px 6px 12px; }
-  .track-fill { position:absolute; top:0; left:0; height:100%; background:var(--steel-400); border-radius:2px; }
-  .dot { position:absolute; top:50%; transform:translate(-50%,-50%); border-radius:50%; border:2px solid var(--card); }
-  .stage-line { display:flex; align-items:baseline; gap:8px; }
-  .stage-name { font-family:var(--mono); font-size:12.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-strong); }
-  .stage-sub { font-size:11.5px; color:var(--text-muted); }
-  .cell-status { padding:0 28px; border-right:1px solid var(--border); }
-  .status-pending { font-size:13px; line-height:1.4; }
-  .status-owner { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:5px; letter-spacing:.08em; text-transform:uppercase; }
-  .cell-deadline { text-align:right; padding-left:24px; }
-  .deadline { font-family:var(--mono); font-size:13px; font-weight:600; white-space:nowrap; }
-  .risk-pill { display:inline-block; font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; padding:4px 12px; border-radius:var(--radius-pill); margin-top:8px; }
-  .empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:13px; }
-  @media (max-width: 900px) { .container { padding:24px 14px 48px; } .kpis { grid-template-columns:repeat(2,1fr); } .row { grid-template-columns:1fr; row-gap:16px; } .cell-id, .cell-stage, .cell-status { border-right:none; padding:0; } .cell-deadline { text-align:left; padding-left:0; } .form-grid { grid-template-columns:1fr; } }
-  /* ── Sidebar nav — pill-shaped items, the signature motif throughout ────── */
-  .tabnav { display:flex; flex-direction:column; gap:4px; padding:6px 14px; flex:1; }
-  .tab { background:transparent; border:none; font-family:var(--sans); font-size:13.5px; font-weight:600; color:rgba(255,255,255,.72); padding:11px 18px; cursor:pointer; border-radius:var(--radius-pill); text-align:left; transition:background .15s ease, color .15s ease; }
-  .tab:hover { background:rgba(255,255,255,.10); color:#fff; }
-  .tab.active { background:#fff; color:var(--steel-950); box-shadow:0 4px 14px rgba(0,0,0,.18); }
-  .tab-signout { margin-top:14px; }
-  .tab-signout button { width:100%; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.2); color:rgba(255,255,255,.75); font-family:var(--sans); font-size:12px; font-weight:600; padding:9px 14px; border-radius:var(--radius-pill); cursor:pointer; }
-  .tab-signout button:hover { background:rgba(255,80,80,.25); border-color:rgba(255,80,80,.5); color:#fff; }
+/* ── Edge Metals — Color tokens (from design mockup) ─────────────────────── */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
 
-  /* ── Hamburger — visible only on mobile, opens the sidebar as a drawer ──── */
-  .mobile-topbar { display:none; align-items:center; justify-content:space-between; padding:16px 20px; background:var(--card); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:15; }
-  .mobile-brand { font-weight:800; font-size:16px; color:var(--text-strong); }
-  .hamburger { display:none; flex-direction:column; justify-content:center; gap:4px; width:36px; height:36px; padding:0; background:var(--steel-100); border:1px solid var(--border-mid); border-radius:var(--radius-sm); }
-  .hamburger span { display:block; height:2px; width:18px; margin:0 auto; background:var(--steel-950); border-radius:2px; transition:transform .2s ease, opacity .2s ease; }
-  .hamburger.open span:nth-child(1) { transform:translateY(6px) rotate(45deg); }
-  .hamburger.open span:nth-child(2) { opacity:0; }
-  .hamburger.open span:nth-child(3) { transform:translateY(-6px) rotate(-45deg); }
-  .sidebar-backdrop { display:none; }
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
 
-  @media (max-width: 860px) {
-    .mobile-topbar { display:flex; }
-    .hamburger { display:flex; }
-    .sidebar { position:fixed; left:0; top:0; transform:translateX(-100%); transition:transform .25s ease; box-shadow:var(--shadow-md); }
-    .sidebar.mobile-open { transform:translateX(0); }
-    .sidebar-backdrop.mobile-open { display:block; position:fixed; inset:0; background:rgba(33,27,61,.45); z-index:19; }
-  }
-  .tabpanel { display:none; }
-  .tabpanel.active { display:block; }
-  .bk-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; gap:16px; flex-wrap:wrap; }
-  .bk-head h2 { font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-600); font-weight:700; }
-  .btn-primary { background:var(--copper-600); color:#fff; border:none; padding:10px 18px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; cursor:pointer; transition:background .15s; }
-  .btn-primary:hover:not(:disabled) { background:var(--copper-700); }
-  .btn-primary:disabled { opacity:.5; cursor:not-allowed; }
-  .btn-secondary { background:var(--card); color:var(--text-body); border:1px solid var(--border-mid); padding:10px 18px; border-radius:var(--radius-sm); font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; cursor:pointer; transition:border-color .15s; }
-  .btn-secondary:hover { border-color:var(--steel-600); }
-  .modal-back { position:fixed; inset:0; background:rgba(18,21,26,.55); z-index:50; display:flex; align-items:flex-start; justify-content:center; padding:60px 20px; overflow-y:auto; }
-  .modal { background:var(--card); border-radius:var(--radius-md); width:100%; max-width:720px; box-shadow:var(--shadow-md); }
-  .modal-head { display:flex; align-items:center; justify-content:space-between; padding:22px 26px; border-bottom:1px solid var(--border); }
-  .modal-head h3 { font-size:15px; font-weight:700; color:var(--text-strong); font-family:var(--mono); letter-spacing:.08em; text-transform:uppercase; }
-  .modal-close { background:none; border:none; font-size:24px; color:var(--text-faint); cursor:pointer; line-height:1; padding:0; }
-  .modal-body { padding:24px 26px; }
-  .modal-foot { padding:16px 26px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; background:var(--steel-100); border-radius:0 0 var(--radius-md) var(--radius-md); }
-  .drop { border:2px dashed var(--border-mid); border-radius:var(--radius-md); padding:26px 20px; text-align:center; background:var(--steel-100); cursor:pointer; transition:border-color .15s, background .15s; }
-  .drop.drag { border-color:var(--copper-600); background:#FDE8DC; }
-  .drop.has-file { border-style:solid; border-color:#8ED1AA; background:#E3F5EA; cursor:default; }
-  .drop-label { font-size:13px; color:var(--text-body); font-weight:500; }
-  .drop-sub { font-size:11px; color:var(--text-faint); margin-top:4px; }
-  .file-info { display:flex; align-items:center; gap:12px; justify-content:center; text-align:left; }
-  .file-name { font-family:var(--mono); font-size:12px; font-weight:700; color:#2F7A50; }
-  .file-size { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); }
-  .file-remove { background:transparent; border:1px solid var(--border-mid); color:var(--danger); font-family:var(--mono); font-size:10px; padding:4px 8px; border-radius:var(--radius-xs); cursor:pointer; }
-  .scan-btn { margin-top:10px; width:100%; padding:11px; background:var(--steel-950); color:#fff; border:none; border-radius:var(--radius-sm); font-family:var(--mono); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; transition:background .15s; }
-  .scan-btn:hover:not(:disabled) { background:var(--steel-900); }
-  .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
-  .scanned-banner { margin-top:10px; padding:10px 14px; background:#E3F5EA; border:1px solid #8ED1AA; border-radius:var(--radius-sm); font-size:12.5px; color:#2F7A50; font-weight:600; }
-  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px; }
-  .form-grid .full { grid-column:1/-1; }
-  label { display:block; font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); font-weight:600; margin-bottom:5px; }
-  input, select, textarea { width:100%; padding:9px 12px; background:var(--card); border:1px solid var(--border-mid); border-radius:var(--radius-sm); font-size:13px; font-family:var(--sans); color:var(--text-strong); outline:none; transition:border-color .15s; box-sizing:border-box; }
-  input:focus, select:focus, textarea:focus { border-color:var(--copper-600); }
-  .form-err { padding:10px 14px; background:#FBE1E6; border:1px solid var(--danger); border-radius:var(--radius-sm); color:var(--danger-text); font-size:12.5px; margin-top:14px; }
-  .spinner { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; margin-right:8px; vertical-align:middle; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  .bk-list-empty { text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--mono); font-size:12.5px; background:var(--card); border-radius:var(--radius-md); border:1px dashed var(--border-mid); }
-  .bk-table { background:var(--card); border-radius:var(--radius-md); border:1px solid var(--border); overflow:hidden; }
-  .bk-row { display:grid; grid-template-columns:130px 1fr 100px 90px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border); align-items:center; }
-  .bk-row:last-child { border-bottom:none; }
-  .bk-row:hover { background:var(--steel-100); }
-  .bk-hdr { background:var(--steel-100); font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); font-weight:700; padding:12px 18px; display:grid; grid-template-columns:130px 1fr 100px 90px 130px; gap:14px; }
-  .bk-cell-bkg { font-family:var(--mono); font-size:12.5px; font-weight:700; color:var(--text-strong); }
-  .bk-cell-sub { font-size:12px; color:var(--text-body); }
-  .bk-cell-mono { font-family:var(--mono); font-size:11px; color:var(--text-muted); }
-  .bk-cell-pill { display:inline-block; font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 10px; border-radius:var(--radius-pill); background:var(--steel-150); color:var(--text-body); }
-  @media (max-width: 900px) { .bk-hdr { display:none; } .bk-row { grid-template-columns:1fr; gap:6px; } }
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+
+  --bg-base: var(--steel-50); --bg-panel: var(--white);
+  --surface-card: var(--white); --surface-sunken: var(--steel-100);
+  --text-strong: var(--steel-950); --text-body: var(--steel-700); --text-muted: var(--steel-500);
+  --text-faint: var(--steel-400);
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: var(--leaf-50);
+  --warm: var(--copper-500);
+  --border-subtle: var(--steel-200); --border-default: var(--steel-300);
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+
+  --font-display: 'Poppins', system-ui, sans-serif;
+  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-xs: 0 1px 2px rgba(12,14,16,.06);
+  --shadow-sm: 0 1px 3px rgba(12,14,16,.10), 0 1px 2px rgba(12,14,16,.06);
+  --shadow-md: 0 6px 16px rgba(12,14,16,.10), 0 2px 6px rgba(12,14,16,.06);
+  --shadow-lg: 0 18px 40px rgba(12,14,16,.16), 0 6px 14px rgba(12,14,16,.08);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; overflow:hidden; }
+h1,h2,h3,h4 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:800; line-height:1.18; letter-spacing:-.02em; }
+a { color:var(--leaf-600); text-decoration:none; }
+a:hover { color:var(--leaf-700); text-decoration:underline; text-underline-offset:3px; }
+button { font:inherit; }
+input, select { font-family:var(--font-sans); font-size:14px; }
+::selection { background:var(--leaf-200); color:var(--steel-950); }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--steel-300); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-track { background:transparent; }
+@keyframes jarvis-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn-danger { background:var(--surface-card); color:var(--status-danger); border-color:var(--border-default); }
+.btn-danger:hover { border-color:var(--status-danger); }
+.btn-dark { background:var(--steel-800); color:#fff; border-color:var(--steel-700); }
+.btn-dark:hover { background:var(--steel-700); }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
+.field input, .field select { width:100%; padding:11px 12px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
+.field input:focus, .field select:focus { border-color:var(--accent); }
+.badge { display:inline-block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); }
+.hidden { display:none !important; }
+.spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.nav-btn:hover { background:var(--steel-800); color:#fff; }
+.nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
+.row-hover:hover { background:var(--steel-50); }
 </style>
-<script src="/qrcode.min.js"></script>
 </head>
 <body>
 
-<div class="app-shell">
-<aside class="sidebar" id="sidebar">
-  <div class="sidebar-brand">
-    <div class="brand">
-      <div class="brand-mark">J</div>
-      <div>
-        <div class="brand-eyebrow">Edge Metals Inc</div>
-        <div class="brand-title">Jarvis</div>
-      </div>
-    </div>
-    <div class="live"><span class="live-dot" id="liveDot"></span><span class="live-label" id="liveLabel">Connecting…</span></div>
-  </div>
+<div style="display:flex; height:100vh; overflow:hidden;">
 
-  <nav class="tabnav" id="tabnav">
-    <button class="tab active" data-tab="board" type="button">Board</button>
-    <button class="tab" data-tab="bookings" type="button">Bookings</button>
-    <button class="tab" data-tab="truckers" type="button">Truckers</button>
-    <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
-    <button class="tab" data-tab="whatsapp" type="button" id="tabWhatsapp">WhatsApp</button>
-    <button class="tab" data-tab="settings" type="button" id="tabSettings">Settings</button>
-    <button class="tab" data-tab="bot" type="button">Bot</button>
-    <button class="tab" data-tab="tasks" type="button">Tasks</button>
-    <button class="tab" data-tab="facts" type="button" id="tabFacts" style="display:none;">Facts</button>
-  </nav>
-
-  <div class="sidebar-footer">
-    <div class="topbar-date mono" id="todayLabel"></div>
-    <div class="topbar-count" id="trackedCount"></div>
-    <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
-  </div>
-</aside>
-
-<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
-
-<main class="main-content">
-  <div class="mobile-topbar">
-    <div class="mobile-brand">Jarvis</div>
-    <button type="button" id="hamburgerBtn" class="hamburger" aria-label="Menu" aria-expanded="false">
-      <span></span><span></span><span></span>
-    </button>
-  </div>
-
-  <div id="waBanner" style="display:none; padding:9px 32px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-align:center; cursor:pointer;" title="Click to open the WhatsApp tab">
-    <span id="waBannerDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle;"></span>
-    <span id="waBannerText"></span>
-  </div>
-
-  <div class="tabpanel active" id="panel-board">
-<div class="container">
-  <div class="hero-head">
-    <div class="hero-eyebrow">// Booking scoreboard</div>
-    <h1 class="hero-title">Every load,<br>accounted for.</h1>
-  </div>
-  <div class="kpis" id="kpis"></div>
-  <div id="alertsSection">
-    <div class="rail-head"><span class="rail-title">Needs Attention</span><span class="rail-line"></span><span class="rail-count" id="alertCount">0</span></div>
-
-    <div class="alerts" id="alerts"></div>
-  </div>
-  <div class="filters" id="filters"></div>
-  <div class="rows" id="rows"></div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-bookings">
-<div class="container">
-  <div class="bk-head"><h2>Bookings</h2><button class="btn-primary" id="btnAddBooking" type="button">+ Add booking</button></div>
-  <div id="bkList"></div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-truckers">
-<div class="container">
-  <div class="bk-head"><h2>Truckers</h2><button class="btn-primary" id="btnAddTrucker" type="button">+ Add trucker</button></div>
-  <div id="truckerList"></div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-suppliers">
-<div class="container">
-  <div class="bk-head"><h2>Suppliers</h2><button class="btn-primary" id="btnAddSupplier" type="button">+ Add supplier</button></div>
-  <div id="supplierList"></div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-whatsapp">
-<div class="container">
-  <div class="bk-head"><h2>WhatsApp connection</h2><button class="btn-secondary" id="btnWaReset" type="button">Sign out &amp; re-scan</button></div>
-  <div id="waState" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:32px 28px; text-align:center;">
-    <div id="waStateIcon" style="font-size:32px; margin-bottom:14px;">…</div>
-    <div id="waStateTitle" style="font-family:var(--mono); font-size:14px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin-bottom:6px; color:var(--text-strong);">Loading</div>
-    <div id="waStateSub" style="font-size:12.5px; color:var(--text-muted);">Checking WhatsApp status…</div>
-    <div id="waQrHolder" style="margin-top:22px; display:none;">
-      <div id="waQr" style="display:inline-block; padding:16px; background:#fff; border:1px solid var(--border); border-radius:var(--radius-sm);"></div>
-      <div style="margin-top:14px; font-size:12px; color:var(--text-muted);">On the phone that will be Jarvis: WhatsApp &rarr; Settings &rarr; Linked Devices &rarr; Link a Device &rarr; scan.</div>
-    </div>
-    <div id="waMetaLine" style="margin-top:18px; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); letter-spacing:.06em;"></div>
-  </div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-settings">
-<div class="container">
-  <div class="bk-head"><h2>Settings</h2><button class="btn-primary" id="btnSaveSettings" type="button">Save changes</button></div>
-  <div id="settingsError" class="form-err" style="display:none; margin-bottom:20px;"></div>
-  <div id="settingsSaved" style="display:none; margin-bottom:20px; padding:10px 14px; background:#E3F5EA; border:1px solid #8ED1AA; border-radius:var(--radius-sm); font-size:12.5px; color:#2F7A50; font-weight:600;">Saved.</div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
-    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Manager</h3>
-    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
-    <div class="form-grid"><div class="full"><label for="s_manager_number">Manager WhatsApp number</label><input id="s_manager_number" type="text" placeholder="e.g. 918056944193 (country code + number, no + or spaces)"></div></div>
-  </div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
-      <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</h3>
-      <button class="btn-secondary" id="btnAddTeamMember" type="button" style="padding:6px 14px; font-size:10px;">+ Add member</button>
-    </div>
-    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">People who can send commands and receive alerts. Role is a free-text label — not enforced by routing yet.</div>
-    <div id="teamList"></div>
-  </div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px;">
-    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Team WhatsApp group</h3>
-    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages go here. <strong style="color:var(--text-body);">Prerequisite:</strong> add the Jarvis phone to the group first — Validate can only find groups Jarvis is already a member of.</div>
-    <div class="form-grid">
-      <div class="full">
-        <label for="s_group_name">Group name (partial match)</label>
-        <div style="display:flex; gap:8px;"><input id="s_group_name" type="text" placeholder="e.g. Ops Team" style="flex:1;"><button class="btn-secondary" id="btnValidateGroup" type="button" style="white-space:nowrap;">Validate</button></div>
-      </div>
-      <div class="full"><div id="groupPicker" style="display:none; margin-top:10px; padding:14px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Matches — pick one:</div><div id="groupPickerList"></div></div></div>
-      <div class="full"><label for="s_group_id">Team group ID (auto-filled by Validate, or paste manually)</label><input id="s_group_id" type="text" placeholder="e.g. 120363123456789012@g.us" style="font-family:var(--mono);"></div>
-    </div>
-  </div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-bot">
-<div class="container">
-  <div class="bk-head"><h2>Bot</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Commands fire <strong style="color:var(--danger);">for real</strong> — same effect as messaging Jarvis on WhatsApp.</div></div>
-  <div id="botLog" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); min-height:340px; max-height:60vh; overflow-y:auto; padding:18px 20px; margin-bottom:14px; display:flex; flex-direction:column; gap:10px;">
-    <div style="color:var(--text-faint); font-family:var(--mono); font-size:11.5px; text-align:center; padding:40px 0;">Type a command below. Try <code>menu</code>, <code>urgent</code>, or <code>status DALA23991600</code>.</div>
-  </div>
-  <div style="display:flex; gap:8px;"><input id="botInput" type="text" placeholder="Type command and press Enter (e.g. forward DALA23991600 to Dave)" style="flex:1; font-family:var(--mono);"><button class="btn-primary" id="botSend" type="button" style="white-space:nowrap;">Send</button></div>
-  <div style="margin-top:8px; font-size:11px; color:var(--text-faint); font-family:var(--mono);">⚠ No confirmation prompt — destructive commands (forward, assign, archive) fire immediately.</div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-tasks">
-<div class="container">
-  <div class="bk-head"><h2>Tasks</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Persistent follow-ups. Fires at scheduled time. Auto-cancels if the answer arrives first.</div></div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
-    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Create task</div>
-    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-      <div><label for="t_type">Type</label><select id="t_type"><option value="nudge_scale_ticket">Nudge for scale ticket</option><option value="nudge_load_ready">Nudge for load ready</option><option value="nudge_empty_drop">Nudge for empty drop</option><option value="nudge_ingate">Nudge for ingate</option><option value="nudge_pickup">Nudge for pickup</option><option value="generic_message">Custom message</option></select></div>
-      <div><label for="t_target_kind">Target</label><select id="t_target_kind"><option value="trucker">Trucker</option><option value="supplier">Supplier</option><option value="manager">Manager (me)</option></select></div>
-      <div><label for="t_target_name">Name (leave blank for manager)</label><input id="t_target_name" type="text" placeholder="e.g. Dave R."></div>
-      <div><label for="t_bkg">Booking (optional, enables auto-cancel)</label><input id="t_bkg" type="text" placeholder="DALA23991600" style="font-family:var(--mono);"></div>
-      <div><label for="t_container_seq">Container # (optional)</label><input id="t_container_seq" type="number" min="1" placeholder="e.g. 2 for BKG/2" style="font-family:var(--mono);"></div>
-      <div><label for="t_delay">Fire in (minutes)</label><input id="t_delay" type="number" min="1" value="60"></div>
-      <div><label for="t_message">Message</label><input id="t_message" type="text" placeholder="Auto-filled from type — edit freely"></div>
-    </div>
-    <div style="display:flex; gap:8px; margin-top:12px;"><button class="btn-primary" id="t_create" type="button">Create task</button><div id="t_create_err" style="color:var(--danger); font-size:12px; align-self:center;"></div></div>
-  </div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Pending</div><div id="t_pending_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div></div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">History</div><div id="t_history_list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div></div>
-</div>
-</div>
-
-<div class="tabpanel" id="panel-facts">
-<div class="container">
-  <div class="bk-head"><h2>Facts</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Jarvis's learned memory — fed into every AI answer. Admin-only.</div></div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
-    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Add a fact</div>
-    <div style="display:flex; gap:8px;"><input id="f_new_text" type="text" placeholder="e.g. DALA booking numbers can include a dash" style="flex:1;"><button class="btn-primary" id="f_add" type="button">Add</button></div>
-    <div id="f_add_err" style="color:var(--danger); font-size:12px; margin-top:6px;"></div>
-  </div>
-  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;">
-    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">All facts (most recent first)</div>
-    <div id="f_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div>
-  </div>
-</div>
-</div>
-
-</main>
-</div>
-
-<!-- Contact modal -->
-<div class="modal-back" id="contactModal" style="display:none">
-  <div class="modal">
-    <div class="modal-head"><h3 id="contactModalTitle">New contact</h3><button class="modal-close" id="contactModalClose" type="button" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div class="form-grid">
-        <div class="full"><label for="c_name">Name *</label><input id="c_name" type="text" placeholder="e.g. Dave R." required></div>
-        <div class="full">
-          <label for="c_locality">Location (city or port)</label>
-          <input id="c_locality" type="text" placeholder="e.g. Los Angeles">
-          <div style="margin-top:4px; font-size:10.5px; color:var(--text-faint); font-family:var(--mono);">Used to filter this contact into bookings with matching POL. Leave blank to always show.</div>
-        </div>
+  <!-- ══ SIDEBAR ══ -->
+  <aside style="width:252px; flex-shrink:0; background:var(--steel-950); display:flex; flex-direction:column;">
+    <div style="height:5px; flex-shrink:0; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
+    <div style="padding:26px 22px 20px; border-bottom:1px solid var(--steel-800);">
+      <div style="display:flex; align-items:center; gap:13px;">
+        <div style="width:42px; height:42px; border-radius:8px; background:var(--steel-900); border:1px solid var(--copper-500); display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:900; color:var(--copper-400); font-size:18px;">J</div>
         <div>
-          <label for="c_whatsapp">WhatsApp number</label>
-          <div style="display:flex; gap:8px;"><input id="c_whatsapp" type="text" placeholder="e.g. 14155551234 (no + or spaces)" style="flex:1;"><button class="btn-secondary" id="c_verify_number" type="button" style="white-space:nowrap;">Verify</button></div>
-          <div id="c_verify_result" style="display:none; margin-top:8px; padding:8px 10px; border-radius:var(--radius-sm); font-size:12px; font-family:var(--mono);"></div>
+          <div style="font-family:var(--font-mono); font-size:9.5px; font-weight:500; letter-spacing:.2em; text-transform:uppercase; color:var(--steel-400);">// Edge Metals · Ops</div>
+          <div style="font-family:var(--font-display); font-size:21px; font-weight:800; letter-spacing:.08em; color:#fff; text-transform:uppercase;">Jarvis</div>
         </div>
-        <div><label for="c_email">Email</label><input id="c_email" type="email" placeholder="dave@example.com"></div>
-        <div class="full">
-          <label>WhatsApp group (optional)</label>
-          <div id="c_common_groups" style="display:none; padding:12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border); margin-bottom:10px;">
-            <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Shared groups with Jarvis:</div>
-            <div id="c_common_groups_list"></div>
-            <div id="c_common_groups_empty" style="display:none; padding:8px 0; font-size:12px; color:var(--text-muted); line-height:1.5;"><strong>Shared groups: 0.</strong> WhatsApp only lets Jarvis see groups that both Jarvis <em>and</em> this contact belong to. If you want to route via a group, add both to the same group on your phone first, then re-verify.</div>
-          </div>
-        </div>
-        <div class="full"><label for="c_group">Group ID (auto-filled by selection above, or paste manually)</label><input id="c_group" type="text" placeholder="e.g. 120363123456@g.us" style="font-family:var(--mono);"></div>
-        <div><label for="c_mode">Preferred contact mode</label><select id="c_mode"><option value="whatsapp" selected>WhatsApp</option><option value="email">Email (routing not yet wired)</option></select></div>
       </div>
-      <div class="form-err" id="contactErr" style="display:none"></div>
-      <div style="margin-top:14px; font-size:11.5px; color:var(--text-faint); font-family:var(--mono);">Note: WhatsApp routing uses group ID first, else the number. Email routing is stored but not yet used by the forward flow.</div>
+      <div id="waStatusLine" style="display:flex; align-items:center; gap:8px; margin-top:16px;">
+        <span id="waStatusDot" style="width:7px; height:7px; border-radius:50%; background:var(--steel-600); flex-shrink:0;"></span>
+        <span id="waStatusText" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--steel-300);">Checking…</span>
+      </div>
     </div>
-    <div class="modal-foot"><button class="btn-secondary" id="contactCancel" type="button">Cancel</button><button class="btn-primary" id="contactSave" type="button">Save</button></div>
-  </div>
+
+    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:14px 12px; display:flex; flex-direction:column; gap:2px;"></nav>
+
+    <div style="padding:16px 22px 20px; border-top:1px solid var(--steel-800);">
+      <div id="todayLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--steel-300);"></div>
+      <div id="roleLabel" style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--steel-500); margin-top:4px;"></div>
+      <button id="btnSignout" class="btn btn-dark" style="width:100%; margin-top:14px; background:transparent; border-color:var(--steel-700); color:var(--steel-300);">Sign out</button>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <main style="flex:1; min-width:0; display:flex; flex-direction:column;">
+    <button id="linkDownBanner" class="hidden" style="flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:10px; padding:9px 20px; background:var(--copper-500); color:#fff; border:none; cursor:pointer; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase;">
+      <span>⚠</span><span id="linkDownText"></span><span style="text-decoration:underline; text-underline-offset:3px;">Open WhatsApp tab</span>
+    </button>
+
+    <div id="viewRoot" style="flex:1; overflow-y:auto;"></div>
+  </main>
 </div>
 
-<!-- Booking Add/Edit modal -->
-<div class="modal-back" id="modalBack" style="display:none">
-  <div class="modal">
-    <div class="modal-head"><h3 id="modalTitle">New booking</h3><button class="modal-close" id="modalClose" type="button" aria-label="Close">&times;</button></div>
-    <div class="modal-body">
-      <div class="drop" id="dropZone"><div class="drop-label">Drop booking PDF here or click to upload</div><div class="drop-sub">Jarvis will extract the fields automatically</div><input type="file" id="fileInput" accept="application/pdf" style="display:none"></div>
-      <button class="scan-btn" id="scanBtn" type="button" style="display:none" disabled>Scan &amp; auto-fill fields</button>
-      <div class="scanned-banner" id="scannedBanner" style="display:none">Fields extracted — review and edit below</div>
-      <div class="form-grid">
-        <div class="full"><label for="f_bkg">Booking number *</label><input id="f_bkg" type="text" placeholder="e.g. BK-2602" required></div>
-        <div><label for="f_carrier">Carrier</label><input id="f_carrier" type="text" placeholder="MSC, Maersk…"></div>
-        <div><label for="f_pol">Port of loading</label><input id="f_pol" type="text" placeholder="Houston"></div>
-        <div><label for="f_pod">Port of discharge</label><input id="f_pod" type="text" placeholder="Busan"></div>
-        <div><label for="f_erd">ERD date</label><input id="f_erd" type="text" placeholder="MM/DD/YYYY"></div>
-        <div><label for="f_cutoff">Cutoff date</label><input id="f_cutoff" type="text" placeholder="MM/DD/YYYY"></div>
-        <div class="full"><label for="f_vessel">Vessel / voyage</label><input id="f_vessel" type="text" placeholder="MSC AURORA 226E"></div>
-        <div><label for="f_buyer">Buyer</label><input id="f_buyer" type="text"></div>
-        <div class="full" style="margin-top:6px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;"><label style="margin-bottom:0;">Containers</label><button type="button" class="btn-secondary" id="f_add_container" style="padding:5px 10px; font-size:10px;">+ Add container</button></div>
-          <div id="f_containers_list" style="display:flex; flex-direction:column; gap:8px;"></div>
-        </div>
+<!-- ══ ADD BOOKING MODAL ══ -->
+<div id="bookingModal" class="hidden" style="position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:56px 24px; overflow-y:auto;">
+  <div style="background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:700px; box-shadow:var(--shadow-lg); overflow:hidden;">
+    <div style="height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle);">
+      <div>
+        <div class="eyebrow" style="margin-bottom:3px;">// New booking</div>
+        <div style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">Log a booking</div>
       </div>
-      <div class="form-err" id="formErr" style="display:none"></div>
+      <button id="btnCloseModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
     </div>
-    <div class="modal-foot"><button class="btn-secondary" id="btnCancel" type="button">Cancel</button><button class="btn-primary" id="btnSave" type="button">Save booking</button></div>
+    <div style="padding:24px 26px;">
+      <label style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:20px 22px; background:var(--surface-sunken); cursor:pointer;">
+        <input type="file" id="pdfInput" accept="application/pdf" class="hidden">
+        <span style="color:var(--accent); font-size:20px;">⇪</span>
+        <div>
+          <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="pdfDropLabel">Drop the carrier's booking PDF here</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis extracts booking no, ports, ERD, cutoff, and containers automatically</div>
+        </div>
+      </label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px;">
+        <div class="field" style="grid-column:1/-1;"><label>Booking number *</label><input id="f_bkg" placeholder="e.g. DALA23991600"></div>
+        <div class="field"><label>Carrier</label><input id="f_carrier" placeholder="MSC, Maersk…"></div>
+        <div class="field"><label>Vessel / voyage</label><input id="f_vessel" placeholder="MSC AURORA 226E"></div>
+        <div class="field"><label>Port of loading</label><input id="f_pol" placeholder="Los Angeles"></div>
+        <div class="field"><label>Port of discharge</label><input id="f_pod" placeholder="Busan"></div>
+        <div class="field"><label>ERD date</label><input id="f_erd" placeholder="YYYY-MM-DD"></div>
+        <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="YYYY-MM-DD"></div>
+      </div>
+      <div id="modalError" style="color:var(--status-danger); font-size:12.5px; margin-top:12px;"></div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken);">
+      <button id="btnCancelModal" class="btn btn-secondary">Cancel</button>
+      <button id="btnSaveBooking" class="btn btn-primary">Save booking</button>
+    </div>
   </div>
 </div>
 
 <script>
-(function () {
-  'use strict';
+// ══════════════════════════════════════════════════════════════════════════
+// Jarvis dashboard — plain HTML/vanilla JS, no build step, no framework.
+// Every tab fetches from the REAL api.js endpoints already running on this
+// server. Visual design matches the "Jarvis Ops" mockup; the LME/live-yard
+// ticker strip from that mockup is intentionally omitted per request.
+// ══════════════════════════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let ROLE = 'user';
+let CURRENT_TAB = 'board';
 
-  const RISK = {
-    high:   { label:'At Risk',  color:'var(--danger)',     bg:'var(--danger-bg)',  text:'var(--danger-text)'  },
-    medium: { label:'Watch',    color:'var(--warning)',    bg:'var(--warning-bg)', text:'var(--warning-text)' },
-    low:    { label:'On Track', color:'var(--leaf-600)',   bg:'var(--leaf-50)',    text:'var(--leaf-700)'     },
-    done:   { label:'Complete', color:'var(--steel-300)',  bg:'var(--steel-100)',  text:'var(--text-muted)'   },
-  };
-  const FILTERS = [
-    { key:'all', label:'All' }, { key:'high', label:'At Risk' }, { key:'medium', label:'Watch' },
-    { key:'low', label:'On Track' }, { key:'done', label:'Complete' },
+const NAV_ITEMS = [
+  { id: 'board',     label: 'Board' },
+  { id: 'bookings',  label: 'Bookings' },
+  { id: 'truckers',  label: 'Truckers' },
+  { id: 'suppliers', label: 'Suppliers' },
+  { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true }, // /api/whatsapp/* is requireAdmin server-side — a non-admin login would 403 on this tab
+  { id: 'settings',  label: 'Settings', adminOnly: true },
+  { id: 'bot',       label: 'Bot' },
+  { id: 'tasks',     label: 'Tasks' },
+];
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+function renderNav() {
+  const nav = $('sideNav');
+  nav.innerHTML = NAV_ITEMS.filter(n => !n.adminOnly || ROLE === 'admin').map(n => `
+    <button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>
+  `).join('');
+  nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+}
+
+function switchTab(tab) {
+  CURRENT_TAB = tab;
+  renderNav();
+  loadTab(tab);
+}
+
+async function loadTab(tab) {
+  const root = $('viewRoot');
+  root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
+  try {
+    if (tab === 'board') return renderBoard(await api('/api/dashboard'));
+    if (tab === 'bookings') return renderBookings(await api('/api/bookings'));
+    if (tab === 'truckers') return renderContacts('truckers', 'Drayage roster', '+ Add trucker', await api('/api/truckers'));
+    if (tab === 'suppliers') return renderContacts('suppliers', 'Yard network', '+ Add supplier', await api('/api/suppliers'));
+    if (tab === 'whatsapp') return renderWhatsapp();
+    if (tab === 'settings') return renderSettings(await api('/api/settings'));
+    if (tab === 'bot') return renderBot();
+    if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
+  } catch (err) {
+    root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`;
+  }
+}
+
+// ── BOARD ─────────────────────────────────────────────────────────────────
+const RISK_COLOR = { high: 'var(--status-danger)', medium: 'var(--status-warning)', low: 'var(--accent)', done: 'var(--steel-400)' };
+function renderBoard(data) {
+  const { counts, alerts, bookings } = data;
+  const kpiDefs = [
+    { key: 'high', label: 'High risk' }, { key: 'medium', label: 'Medium risk' },
+    { key: 'low', label: 'On track' }, { key: 'done', label: 'Complete' },
   ];
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:30px;">
+        <div>
+          <div class="eyebrow">// Booking scoreboard</div>
+          <h1 style="font-size:clamp(26px,2.6vw,36px); text-transform:uppercase; line-height:1.05;">Every load,<br>accounted for.</h1>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-family:var(--font-mono); font-size:44px; font-weight:600; color:var(--text-strong); line-height:1;">${bookings.length}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-top:6px;">Active bookings</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:36px;">
+        ${kpiDefs.map(k => `
+          <div class="card" style="border-top:3px solid ${RISK_COLOR[k.key]}; padding:18px 20px 16px;">
+            <span style="font-family:var(--font-mono); font-size:34px; font-weight:600; color:var(--text-strong);">${counts[k.key] || 0}</span>
+            <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:${RISK_COLOR[k.key]}; margin-top:12px;">${k.label}</div>
+          </div>
+        `).join('')}
+      </div>
+      ${alerts.length ? `
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+          <span style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--copper-500);">// Needs attention</span>
+          <span style="flex:1; height:1px; background-image:repeating-linear-gradient(-45deg, var(--copper-300) 0, var(--copper-300) 2px, transparent 2px, transparent 8px);"></span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-bottom:40px;">
+          ${alerts.map(a => `
+            <div style="position:relative; background:var(--steel-950); border-radius:var(--radius-sm); padding:16px 18px 16px 26px;">
+              <div style="position:absolute; left:0; top:0; bottom:0; width:8px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 10px);"></div>
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <span style="font-family:var(--font-mono); font-size:13.5px; font-weight:600; color:#fff;">${esc(a.bookingNo)}</span>
+                <span class="badge" style="color:#fff; background:var(--status-danger);">${esc(a.deadlineLabel)}</span>
+              </div>
+              <div style="font-size:13px; color:var(--steel-300); margin-top:9px;">${esc(a.issue || '')}</div>
+            </div>
+          `).join('')}
+        </div>` : ''}
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        ${bookings.length ? bookings.map(b => `
+          <div class="card" style="border-left:4px solid ${RISK_COLOR[b.risk]}; padding:20px 24px; display:grid; grid-template-columns:minmax(150px,200px) minmax(180px,1fr) minmax(160px,250px) minmax(110px,140px); align-items:center;">
+            <div style="padding-right:22px; border-right:1px solid var(--border-subtle);">
+              <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px;">${esc(b.container || '—')}</div>
+              <div style="font-family:var(--font-mono); font-size:14.5px; font-weight:600; color:var(--text-strong);">${esc(b.bookingNo)}</div>
+              <div style="font-size:12.5px; color:var(--text-body); margin-top:5px;">${esc(b.route)}</div>
+            </div>
+            <div style="padding:0 28px; border-right:1px solid var(--border-subtle);">
+              <div style="display:flex; align-items:baseline; gap:8px;">
+                <span style="font-family:var(--font-mono); font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-strong);">${esc(b.stageName)}</span>
+                ${b.subBranch ? `<span style="font-size:11.5px; color:var(--text-muted);">${esc(b.subBranch)}</span>` : ''}
+              </div>
+            </div>
+            <div style="padding:0 26px; border-right:1px solid var(--border-subtle);">
+              <div style="font-size:13px; line-height:1.45;">${esc(b.pending || '—')}</div>
+              <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-top:6px;">${esc(b.owner || '')}</div>
+            </div>
+            <div style="text-align:right; padding-left:22px;">
+              <div style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:${RISK_COLOR[b.risk]};">${esc(b.deadlineLabel)}</div>
+            </div>
+          </div>
+        `).join('') : '<div style="text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--font-mono); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm);">No bookings in this view.</div>'}
+      </div>
+    </section>`;
+}
 
-  let state = { filter:'all', data:null };
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-  // ── Locality helpers ───────────────────────────────────────────────────
-  const normLoc = (s) => String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
-  function localityMatchesPort(loc, port) {
-    const l = normLoc(loc), p = normLoc(port);
-    if (!l || !p) return false;
-    return l.includes(p) || p.includes(l);
-  }
-  function splitByLocality(contacts, port) {
-    const p = normLoc(port);
-    if (!p) return { local: [], universal: contacts, other: [] };
-    const local = [], universal = [], other = [];
-    for (const c of contacts) {
-      const loc = normLoc(c.locality);
-      if (!loc) universal.push(c);
-      else if (localityMatchesPort(loc, p)) local.push(c);
-      else other.push(c);
-    }
-    return { local, universal, other };
-  }
-  function buildContactOptions(contacts, selectedName, port) {
-    const p = normLoc(port);
-    // Strict locality filter: when the booking has a POL, show ONLY contacts whose
-    // locality matches that port. If no POL is set yet (new booking), show all.
-    // The currently-selected contact is always included so a POL change doesn't
-    // silently drop the existing selection.
-    const visible = p
-      ? contacts.filter(c => localityMatchesPort(c.locality, p) || (selectedName && c.name === selectedName))
-      : contacts;
-    const optOf = (c) => `<option value="${esc(c.name)}" ${selectedName === c.name ? 'selected' : ''}>${esc(c.name)}${c.locality ? ' · ' + esc(c.locality) : ''}</option>`;
-    let html = `<option value="">—</option>`;
-    html += visible.map(optOf).join('');
-    return html;
-  }
-
-  function deadlineColor(b) {
-    if (b.risk === 'done') return 'var(--text-faint)';
-    if (b.risk === 'high') return 'var(--danger)';
-    if (b.risk === 'medium') return 'var(--warning)';
-    return 'var(--text-muted)';
-  }
-
-  function renderKpis(counts) {
-    $('kpis').innerHTML = ['high','medium','low','done'].map(k => {
-      const r = RISK[k];
-      return `<button class="kpi" style="border-top-color:${r.color}" data-filter="${k}"><div class="kpi-count">${counts[k] ?? 0}</div><div class="kpi-label" style="color:${r.color}">${r.label}</div></button>`;
-    }).join('');
-  }
-
-  function renderAlerts(alerts) {
-    $('alertCount').textContent = alerts.length;
-    $('alertsSection').style.display = alerts.length ? '' : 'none';
-    $('alerts').innerHTML = alerts.map(a => `<div class="alert-card"><div class="alert-top"><span class="alert-bkg">${esc(a.bookingNo)}</span><span class="alert-deadline">${esc(a.deadlineLabel)}</span></div><div class="alert-issue">${esc(a.issue || 'Needs review')}</div></div>`).join('');
-  }
-
-  function renderFilters() {
-    $('filters').innerHTML = FILTERS.map(f => `<button class="chip ${state.filter === f.key ? 'active' : ''}" data-filter="${f.key}">${f.label}</button>`).join('');
-  }
-
-  function renderDots(b, stages) {
-    const last = stages.length - 1;
-    const pct  = (b.stageIndex / last) * 100;
-    const dots = stages.map((label, i) => {
-      const size  = i === b.stageIndex ? 13 : 8;
-      const color = i < b.stageIndex ? 'var(--steel-400)' : i === b.stageIndex ? 'var(--copper-600)' : 'var(--steel-200)';
-      return `<div class="dot" title="${esc(label)}" style="left:${(i/last)*100}%;width:${size}px;height:${size}px;background:${color}"></div>`;
-    }).join('');
-    return `<div class="track"><div class="track-fill" style="width:${pct}%"></div>${dots}</div>`;
-  }
-
-  function renderRows() {
-    const d = state.data;
-    if (!d) return;
-    const list = state.filter === 'all' ? d.bookings : d.bookings.filter(b => b.risk === state.filter);
-    if (!list.length) { $('rows').innerHTML = `<div class="empty">No bookings in this view.</div>`; return; }
-    $('rows').innerHTML = list.map(b => {
-      const r = RISK[b.risk];
-      return `<div class="row" style="border-left-color:${b.risk==='done' ? 'var(--steel-300)' : r.color}"><div class="cell-id"><div class="cell-eyebrow">Booking</div><div class="cell-bkg">${esc(b.bookingNo)}</div><div class="cell-buyer">${esc(b.route)}</div><div class="cell-container">${esc(b.container)}</div></div><div class="cell-stage">${renderDots(b, d.stages)}<div class="stage-line"><span class="stage-name">${esc(b.stageName)}</span>${b.subBranch ? `<span class="stage-sub">· ${esc(b.subBranch)}</span>` : ''}</div></div><div class="cell-status"><div class="status-pending" style="color:${b.pending ? 'var(--text-body)' : 'var(--text-faint)'}">${esc(b.pending || 'No open items')}</div><div class="status-owner">${esc(b.owner)}</div></div><div class="cell-deadline"><div class="deadline" style="color:${deadlineColor(b)}">${esc(b.deadlineLabel)}</div><span class="risk-pill" style="background:${r.bg};color:${r.text}">${r.label}</span></div></div>`;
-    }).join('');
-  }
-
-  function renderAll() {
-    const d = state.data;
-    renderKpis(d.counts); renderAlerts(d.alerts); renderFilters(); renderRows();
-    $('trackedCount').textContent = `${d.bookings.length} booking${d.bookings.length === 1 ? '' : 's'} tracked`;
-  }
-
-  async function load() {
-    try {
-      const res = await fetch('/api/dashboard');
-      if (!res.ok) throw new Error(res.status);
-      state.data = await res.json();
-      $('liveDot').classList.remove('stale');
-      $('liveLabel').textContent = 'Live · synced from WhatsApp';
-      renderAll();
-    } catch (e) {
-      $('liveDot').classList.add('stale');
-      $('liveLabel').textContent = 'Connection lost — retrying';
-    }
-  }
-
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-filter]');
-    if (!btn) return;
-    state.filter = btn.dataset.filter;
-    renderFilters(); renderRows();
-  });
-
-  $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
-  load();
-  setInterval(load, 30000);
-
-  // Admin-only tabs (WhatsApp QR, Facts) are hidden entirely for non-admin
-  // sessions — not just visually de-emphasized. The backend also enforces
-  // this on the API side (requireAdmin), so hiding here is UX, not the
-  // security boundary — but it keeps regular users from even seeing these
-  // exist.
-  state.role = 'user';
-  fetch('/api/me').then(r => r.json()).then(me => {
-    state.role = me.role || 'user';
-    const isAdmin = state.role === 'admin';
-    $('tabWhatsapp').style.display = isAdmin ? '' : 'none';
-    $('tabFacts').style.display    = isAdmin ? '' : 'none';
-    $('tabSettings').style.display = isAdmin ? '' : 'none';
-  }).catch(() => {});
-
-  document.querySelectorAll('.tab').forEach(t => {
-    t.addEventListener('click', () => {
-      const target = t.dataset.tab;
-      document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
-      document.querySelectorAll('.tabpanel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + target));
-      if (target === 'bookings')  loadBookings();
-      if (target === 'truckers')  loadContacts('truckers');
-      if (target === 'suppliers') loadContacts('suppliers');
-      if (target === 'whatsapp')  loadWhatsappStatus();
-      if (target === 'settings')  loadSettings();
-      if (target === 'bot')       setTimeout(() => $('botInput').focus(), 50);
-      if (target === 'tasks')     loadTasks();
-      if (target === 'facts')     loadFacts();
-      $('sidebar').classList.remove('mobile-open');
-      $('sidebarBackdrop').classList.remove('mobile-open');
-      $('hamburgerBtn').classList.remove('open');
-    });
-  });
-
-  $('hamburgerBtn').addEventListener('click', () => {
-    const open = $('sidebar').classList.toggle('mobile-open');
-    $('sidebarBackdrop').classList.toggle('mobile-open', open);
-    $('hamburgerBtn').classList.toggle('open', open);
-    $('hamburgerBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
-  $('sidebarBackdrop').addEventListener('click', () => {
-    $('sidebar').classList.remove('mobile-open');
-    $('sidebarBackdrop').classList.remove('mobile-open');
-    $('hamburgerBtn').classList.remove('open');
-  });
-
-  $('btnSignout').addEventListener('click', async () => {
-    try { await fetch('/logout', { method: 'POST' }); } catch {}
-    location.href = '/login';
-  });
-
-  async function loadBookings() {
-    try {
-      const [bkRes, wfRes] = await Promise.all([fetch('/api/bookings'), fetch('/api/workflow')]);
-      const bookings = await bkRes.json();
-      const workflow = await wfRes.json();
-      renderBookingsList(bookings, workflow);
-    } catch { renderBookingsList({}, {}); }
-  }
-
-  function renderBookingsList(bookings, workflow) {
-    const list = Object.values(bookings);
-    if (!list.length) { $('bkList').innerHTML = `<div class="bk-list-empty">No bookings yet. Click "Add booking" to upload a PDF.</div>`; return; }
-    const rows = list.map(b => {
-      const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{seq:1, size:b.container_size, container_number:b.container_number, stage:'not_started'}];
-      const cCount = containers.length;
-      const cLabel = cCount === 1 ? '1 container' : `${cCount} containers`;
-      const stagesSet = new Set(containers.map(c => c.stage || 'not_started'));
-      const stageLabel = stagesSet.size === 1 ? [...stagesSet][0].replace(/_/g,' ') : `${stagesSet.size} stages`;
-      const containerRows = containers.map(c => {
-        const assigned = c.supplier || c.trucker;
-        const assignedLabel = c.supplier && c.trucker ? `${c.supplier} → ${c.trucker}` : (c.supplier || c.trucker || '—');
-        return `<div style="display:grid; grid-template-columns:60px 1fr 140px 120px 90px; gap:12px; padding:9px 18px 9px 44px; border-top:1px solid var(--border); align-items:center; font-size:12px; background:var(--steel-100);"><div class="bk-cell-mono" style="color:var(--copper-700); font-weight:700;">#${c.seq}</div><div class="bk-cell-mono">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div><div class="bk-cell-mono" style="color:${assigned ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(assignedLabel)}</div><div><span class="bk-cell-pill">${esc((c.stage || 'not_started').replace(/_/g,' '))}</span></div><div></div></div>`;
-      }).join('');
-      return `<div class="bk-row-group" data-bkg="${esc(b.booking_number)}"><div class="bk-row" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 130px; cursor:pointer;" data-bk-expand="${esc(b.booking_number)}"><div style="text-align:center; color:var(--text-faint); font-family:var(--mono);">▸</div><div class="bk-cell-bkg">${esc(b.booking_number)}</div><div class="bk-cell-sub"><span class="bk-cell-mono">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</span><br><span class="bk-cell-mono" style="color:var(--text-faint);">${esc(cLabel)}</span></div><div class="bk-cell-mono">${esc(b.erd_date || '—')}</div><div class="bk-cell-mono">${esc(b.cutoff_date || '—')}</div><div><span class="bk-cell-pill">${esc(stageLabel)}</span></div><div style="display:flex; gap:5px; justify-content:flex-end;"><button type="button" class="btn-secondary" data-bk-edit="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px;" onclick="event.stopPropagation();">Edit</button><button type="button" class="btn-secondary" data-bk-delete="${esc(b.booking_number)}" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger);" onclick="event.stopPropagation();">Delete</button></div></div><div class="bk-containers" style="display:none;">${containerRows}</div></div>`;
-    }).join('');
-    $('bkList').innerHTML = `<div class="bk-table"><div class="bk-hdr" style="grid-template-columns:30px 130px 1fr 90px 90px 110px 130px;"><div></div><div>Booking</div><div>Route / Containers</div><div>ERD</div><div>Cutoff</div><div>Stage</div><div></div></div>${rows}</div>`;
-
-    $('bkList').querySelectorAll('[data-bk-expand]').forEach(row => {
-      row.addEventListener('click', () => {
-        const wrap = row.closest('.bk-row-group');
-        const detail = wrap.querySelector('.bk-containers');
-        const chev = row.querySelector('div:first-child');
-        const isOpen = detail.style.display !== 'none';
-        detail.style.display = isOpen ? 'none' : 'block';
-        chev.textContent = isOpen ? '▸' : '▾';
-      });
-    });
-
-    $('bkList').querySelectorAll('[data-bk-delete]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const bkg = btn.dataset.bkDelete;
-        if (!confirm(`Delete booking ${bkg}?`)) return;
-        btn.disabled = true; btn.textContent = 'Deleting…';
-        try {
-          const r = await fetch('/api/bookings/' + encodeURIComponent(bkg), { method: 'DELETE' });
-          if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
-          await loadBookings(); await load();
-        } catch (e2) { alert('Delete failed: ' + e2.message); btn.disabled = false; btn.textContent = 'Delete'; }
-      });
-    });
-
-    $('bkList').querySelectorAll('[data-bk-edit]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await modal.openForEdit(btn.dataset.bkEdit, bookings);
-      });
-    });
-  }
-
-  const modal = {
-    back: $('modalBack'),
-    open() { modal.reset(); modal.back.style.display = 'flex'; },
-    close() { modal.back.style.display = 'none'; editingBookingNumber = null; },
-    async openForEdit(bkg, allBookings) {
-      modal.reset();
-      const b = allBookings[bkg];
-      if (!b) { alert('Booking not found.'); return; }
-      editingBookingNumber = bkg;
-      await loadModalContacts();
-      $('f_bkg').value    = b.booking_number || '';
-      $('f_bkg').disabled = true;
-      $('f_carrier').value = b.carrier || '';
-      $('f_pol').value    = b.port_of_loading || '';
-      $('f_pod').value    = b.port_of_discharge || '';
-      $('f_erd').value    = b.erd_date || '';
-      $('f_cutoff').value = b.cutoff_date || '';
-      $('f_vessel').value = b.vessel_voyage || '';
-      $('f_buyer').value  = b.buyer || b.consignee || '';
-      modalContainers = (b.containers || []).map(c => ({
-        seq: c.seq, size: c.size || '', container_number: c.container_number || '',
-        supplier: c.supplier || '', trucker: c.trucker || '', stage: c.stage || 'not_started',
-        _locked: ['forwarded','empty_dropped','load_ready','picked_up','ingate_received','done'].includes(c.stage || ''),
-      }));
-      renderContainersInModal();
-      const dropZone = $('dropZone'); if (dropZone) dropZone.style.display = '';
-      $('scanBtn').style.display = 'none';
-      const titleEl = document.getElementById('modalTitle'); if (titleEl) titleEl.textContent = `Edit booking — ${bkg}`;
-      const saveBtn = document.getElementById('btnSave'); if (saveBtn) saveBtn.textContent = 'Save changes';
-      modal.back.style.display = 'flex';
-    },
-    reset() {
-      modalPdfBase64 = null; modalPdfFile = null; editingBookingNumber = null;
-      ['f_bkg','f_carrier','f_pol','f_pod','f_erd','f_cutoff','f_vessel','f_buyer'].forEach(id => { $(id).value = ''; });
-      $('f_bkg').disabled = false;
-      modalContainers = [{ seq:1, size:'40HC', container_number:'', supplier:'', trucker:'', stage:'not_started' }];
-      renderContainersInModal();
-      $('formErr').style.display = 'none';
-      $('scannedBanner').style.display = 'none';
-      $('scanBtn').style.display = 'none'; $('scanBtn').disabled = true;
-      const dropZone = $('dropZone'); if (dropZone) dropZone.style.display = '';
-      const titleEl = document.getElementById('modalTitle'); if (titleEl) titleEl.textContent = 'New booking';
-      const saveBtn = document.getElementById('btnSave'); if (saveBtn) saveBtn.textContent = 'Save booking';
-      renderDrop();
-    },
-  };
-  let modalPdfBase64 = null, modalPdfFile = null;
-  let modalContainers = [];
-  let editingBookingNumber = null;
-
-  // Full contact objects (need locality field)
-  let modalSuppliersList = [];
-  let modalTruckersList  = [];
-  async function loadModalContacts() {
-    try {
-      const [ts, ss] = await Promise.all([
-        fetch('/api/truckers').then(r => r.json()),
-        fetch('/api/suppliers').then(r => r.json()),
-      ]);
-      modalTruckersList  = Array.isArray(ts) ? ts.filter(t => t && t.name) : [];
-      modalSuppliersList = Array.isArray(ss) ? ss.filter(s => s && s.name) : [];
-    } catch {}
-  }
-
-  function renderContainersInModal() {
-    const wrap = $('f_containers_list');
-    const SIZES  = ['20GP','40GP','40HC','20RF','40RF','45HC'];
-    const STAGES = ['not_started','supplier_assigned','forwarded','empty_dropped','load_ready','picked_up','ingate_received','done'];
-    const stageLabel = (s) => s.replace(/_/g,' ');
-    const pol = $('f_pol')?.value || '';
-    const isEditing = !!editingBookingNumber;
-    wrap.innerHTML = modalContainers.map((c, i) => `
-      <div style="display:grid; grid-template-columns:50px 80px 1fr 1fr 1fr ${isEditing ? '130px' : ''} 30px; gap:8px; align-items:end; padding:8px 10px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);">
-        <div><label style="font-size:9px;">Seq</label><div class="bk-cell-mono" style="padding:9px 12px; font-weight:700; color:var(--copper-700);">#${c.seq}</div></div>
-        <div><label style="font-size:9px;">Size</label><select data-c-field="size" data-c-idx="${i}"><option value="">—</option>${SIZES.map(s => `<option ${c.size === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
-        <div><label style="font-size:9px;">Container #</label><input type="text" data-c-field="container_number" data-c-idx="${i}" value="${esc(c.container_number || '')}" placeholder="TCLU8841207"></div>
-        <div><label style="font-size:9px;">Supplier</label><select data-c-field="supplier" data-c-idx="${i}">${buildContactOptions(modalSuppliersList, c.supplier, pol)}</select></div>
-        <div><label style="font-size:9px;">Trucker</label><select data-c-field="trucker" data-c-idx="${i}">${buildContactOptions(modalTruckersList, c.trucker, pol)}</select></div>
-        ${isEditing ? `<div><label style="font-size:9px; color:var(--danger);" title="Manual override skips WhatsApp notifications">Stage (manual)</label><select data-c-field="stage" data-c-idx="${i}" style="border-color:var(--danger);">${STAGES.map(s => `<option value="${s}" ${(c.stage || 'not_started') === s ? 'selected' : ''}>${stageLabel(s)}</option>`).join('')}</select></div>` : ''}
-        <div><button type="button" class="btn-secondary" data-c-remove="${i}" style="padding:9px 8px; font-size:11px; color:var(--danger); border-color:var(--danger);" title="Remove container" ${modalContainers.length <= 1 ? 'disabled' : ''}>×</button></div>
-      </div>`).join('');
-    if (isEditing) {
-      const banner = document.createElement('div');
-      banner.style.cssText = 'padding:8px 12px; background:#FBE1E6; color:var(--danger-text); border-radius:var(--radius-sm); font-size:11.5px; margin-bottom:8px; line-height:1.4;';
-      banner.innerHTML = `<strong>Manual stage override:</strong> Changing a stage here does NOT send WhatsApp messages to trucker/supplier. Use only to correct out-of-sync bookings.`;
-      wrap.insertBefore(banner, wrap.firstChild);
-    }
-    wrap.querySelectorAll('[data-c-field]').forEach(el => {
-      const handler = (e) => { modalContainers[+e.target.dataset.cIdx][e.target.dataset.cField] = e.target.value; };
-      el.addEventListener('input', handler);
-      el.addEventListener('change', handler);
-    });
-    wrap.querySelectorAll('[data-c-remove]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (modalContainers.length <= 1) return;
-        modalContainers.splice(+btn.dataset.cRemove, 1);
-        modalContainers.forEach((c, i) => { c.seq = i + 1; });
-        renderContainersInModal();
-      });
-    });
-  }
-
-  // Re-render container dropdowns when POL changes (debounced)
-  let polDebounce = null;
-  $('f_pol').addEventListener('input', () => {
-    clearTimeout(polDebounce);
-    polDebounce = setTimeout(renderContainersInModal, 250);
-  });
-
-  $('f_add_container').addEventListener('click', () => {
-    const nextSeq = modalContainers.length ? Math.max(...modalContainers.map(c => c.seq)) + 1 : 1;
-    const defaultSize = modalContainers[0]?.size || '40HC';
-    modalContainers.push({ seq: nextSeq, size: defaultSize, container_number: '', supplier: '', trucker: '', stage: 'not_started' });
-    renderContainersInModal();
-  });
-
-  function renderDrop() {
-    const dz = $('dropZone');
-    if (modalPdfFile) {
-      dz.classList.add('has-file');
-      dz.innerHTML = `<div class="file-info"><div><div class="file-name">${esc(modalPdfFile.name)}</div><div class="file-size">${(modalPdfFile.size/1024).toFixed(1)} KB · ready to scan</div></div><button type="button" class="file-remove" id="fileRemove">Remove</button></div>`;
-      $('fileRemove').addEventListener('click', (e) => { e.stopPropagation(); clearFile(); });
-    } else {
-      dz.classList.remove('has-file');
-      dz.innerHTML = `<div class="drop-label">Drop booking PDF here or click to upload</div><div class="drop-sub">Jarvis will extract the fields automatically</div><input type="file" id="fileInput" accept="application/pdf" style="display:none">`;
-      $('fileInput').addEventListener('change', (e) => handleFile(e.target.files[0]));
-    }
-  }
-  function clearFile() { modalPdfFile = null; modalPdfBase64 = null; $('scanBtn').style.display = 'none'; $('scannedBanner').style.display = 'none'; renderDrop(); }
-  function handleFile(f) {
-    if (!f || f.type !== 'application/pdf') return;
-    modalPdfFile = f;
-    const reader = new FileReader();
-    reader.onload = () => { modalPdfBase64 = reader.result.split(',')[1]; $('scanBtn').style.display = 'block'; $('scanBtn').disabled = false; $('scannedBanner').style.display = 'none'; renderDrop(); };
-    reader.readAsDataURL(f);
-  }
-
-  $('btnAddBooking').addEventListener('click', async () => { await loadModalContacts(); modal.open(); });
-  $('modalClose').addEventListener('click', modal.close);
-  $('btnCancel').addEventListener('click', modal.close);
-  modal.back.addEventListener('click', (e) => { if (e.target === modal.back) modal.close(); });
-
-  $('dropZone').addEventListener('click', () => { if (!modalPdfFile) document.getElementById('fileInput')?.click(); });
-  $('dropZone').addEventListener('dragover', (e) => { e.preventDefault(); $('dropZone').classList.add('drag'); });
-  $('dropZone').addEventListener('dragleave', () => $('dropZone').classList.remove('drag'));
-  $('dropZone').addEventListener('drop', (e) => { e.preventDefault(); $('dropZone').classList.remove('drag'); if (modalPdfFile) return; handleFile(e.dataTransfer.files[0]); });
-
-  $('scanBtn').addEventListener('click', async () => {
-    if (!modalPdfBase64) return;
-    const btn = $('scanBtn');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Scanning document…';
-    try {
-      const r = await fetch('/api/documents/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pdf_base64: modalPdfBase64 }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'scan failed');
-      const f = d.fields || {};
-      if (f.booking_number)   $('f_bkg').value       = f.booking_number;
-      if (f.carrier)          $('f_carrier').value   = f.carrier;
-      if (f.port_of_loading)  $('f_pol').value       = f.port_of_loading;
-      if (f.port_of_discharge)$('f_pod').value       = f.port_of_discharge;
-      if (f.erd_date)         $('f_erd').value       = f.erd_date;
-      if (f.cutoff_date)      $('f_cutoff').value    = f.cutoff_date;
-      if (f.vessel_voyage)    $('f_vessel').value    = f.vessel_voyage;
-      if (f.buyer)            $('f_buyer').value     = f.buyer;
-      else if (f.consignee)   $('f_buyer').value     = f.consignee;
-      if (f.container_size) {
-        const raw = String(f.container_size).trim();
-        const m = raw.match(/^\s*(\d+[A-Z]{2,3})\s*[xX*]\s*(\d+)\s*$/);
-        let size, count;
-        if (m) { size = m[1]; count = parseInt(m[2], 10) || 1; } else { size = raw; count = 1; }
-        modalContainers = [];
-        for (let i = 1; i <= count; i++) {
-          modalContainers.push({ seq: i, size, container_number: (i === 1 && f.container_number) ? f.container_number : '', supplier: '', trucker: '', stage: 'not_started' });
-        }
-        renderContainersInModal();
-      } else if (f.container_number) {
-        modalContainers[0].container_number = f.container_number;
-        renderContainersInModal();
-      }
-      $('scannedBanner').style.display = 'block';
-      $('scanBtn').style.display = 'none';
-    } catch (err) {
-      $('formErr').textContent = 'Scan failed: ' + err.message;
-      $('formErr').style.display = 'block';
-      btn.disabled = false; btn.innerHTML = 'Scan &amp; auto-fill fields';
-    }
-  });
-
-  $('btnSave').addEventListener('click', async () => {
-    const isEditing = !!editingBookingNumber;
-    const savedLabel = isEditing ? 'Save changes' : 'Save booking';
-    let bkg = $('f_bkg').value.trim().toUpperCase();
-    if (!bkg && editingBookingNumber) bkg = editingBookingNumber.toUpperCase();
-    console.log('[SAVE] editing:', editingBookingNumber, '| bkg:', bkg, '| containers:', JSON.parse(JSON.stringify(modalContainers)));
-    if (!bkg) { $('formErr').textContent = 'Booking number is required.'; $('formErr').style.display = 'block'; return; }
-    $('formErr').style.display = 'none';
-    const save = $('btnSave');
-    save.disabled = true; save.innerHTML = '<span class="spinner"></span>Saving…';
-    try {
-      const payload = {
-        booking_number: bkg,
-        carrier: $('f_carrier').value.trim() || null,
-        port_of_loading: $('f_pol').value.trim() || null,
-        port_of_discharge: $('f_pod').value.trim() || null,
-        erd_date: $('f_erd').value.trim() || null,
-        cutoff_date: $('f_cutoff').value.trim() || null,
-        vessel_voyage: $('f_vessel').value.trim() || null,
-        buyer: $('f_buyer').value.trim() || null,
-        containers: modalContainers.map(c => ({
-          seq: c.seq, size: c.size || null,
-          container_number: (c.container_number || '').trim() || null,
-          supplier: c.supplier || null, trucker: c.trucker || null,
-          stage: c.stage || 'not_started',
-        })),
-      };
-      const bkRes = isEditing
-        ? await fetch('/api/bookings/' + encodeURIComponent(editingBookingNumber), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-        : await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!bkRes.ok) throw new Error((await bkRes.json()).error || 'save failed');
-      if (modalPdfBase64) {
-        try {
-          const up = await fetch('/api/bookings/upload-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bkg, pdf_base64: modalPdfBase64, original_filename: modalPdfFile?.name }) });
-          if (!up.ok) {
-            const e = await up.json();
-            $('formErr').textContent = 'Booking saved. PDF upload failed: ' + (e.error || 'unknown');
-            $('formErr').style.display = 'block';
-            save.disabled = false; save.textContent = savedLabel;
-            await loadBookings(); await load();
-            return;
-          }
-        } catch (e) { console.warn('[UPLOAD]', e); }
-      }
-      modal.close();
-      await loadBookings(); await load();
-    } catch (err) {
-      console.error('[SAVE] failed:', err);
-      $('formErr').textContent = err.message;
-      $('formErr').style.display = 'block';
-      save.disabled = false; save.textContent = savedLabel;
-    }
-  });
-
-  let contactKind = null;
-  async function loadContacts(kind) {
-    try {
-      const r = await fetch('/api/' + kind);
-      const list = await r.json();
-      renderContactList(kind, Array.isArray(list) ? list : []);
-    } catch { renderContactList(kind, []); }
-  }
-
-  function renderContactList(kind, list) {
-    const wrap = $(kind === 'truckers' ? 'truckerList' : 'supplierList');
-    if (!list.length) { wrap.innerHTML = `<div class="bk-list-empty">No ${kind} yet.</div>`; return; }
-    const rows = list.map(c => {
-      const modeLabel = (c.preferred_mode === 'email') ? 'Email' : 'WhatsApp';
-      const modeColor = (c.preferred_mode === 'email') ? 'var(--text-muted)' : 'var(--copper-700)';
-      const dest = c.group_id ? `Group: ${c.group_id}` : (c.whatsapp ? c.whatsapp : '(no WhatsApp)');
-      const locCell = c.locality ? `<span class="bk-cell-pill" style="background:var(--copper-50); color:var(--copper-700);">${esc(c.locality)}</span>` : `<span class="bk-cell-mono" style="color:var(--text-faint);">—</span>`;
-      return `<div class="bk-row" style="grid-template-columns:160px 130px 1fr 100px 160px;"><div class="bk-cell-bkg">${esc(c.name)}</div><div>${locCell}</div><div class="bk-cell-sub">${esc(c.email || '—')}<br><span class="bk-cell-mono">${esc(dest)}</span></div><div class="bk-cell-mono" style="color:${modeColor}">${modeLabel}</div><div><button type="button" class="btn-secondary" style="padding:5px 10px; font-size:10px;" data-edit="${esc(c.name)}">Edit</button><button type="button" class="btn-secondary" style="padding:5px 10px; font-size:10px; color:var(--danger); border-color:var(--danger); margin-left:4px;" data-delete="${esc(c.name)}">Delete</button></div></div>`;
-    }).join('');
-    wrap.innerHTML = `<div class="bk-table"><div class="bk-hdr" style="grid-template-columns:160px 130px 1fr 100px 160px;"><div>Name</div><div>Location</div><div>Email / WhatsApp</div><div>Preferred</div><div>Actions</div></div>${rows}</div>`;
-    wrap.querySelectorAll('[data-edit]').forEach(btn => btn.addEventListener('click', () => openContactModal(kind, list.find(c => c.name === btn.dataset.edit))));
-    wrap.querySelectorAll('[data-delete]').forEach(btn => btn.addEventListener('click', () => deleteContact(kind, btn.dataset.delete)));
-  }
-
-  function openContactModal(kind, existing) {
-    contactKind = kind;
-    const label = kind.slice(0, -1);
-    $('contactModalTitle').textContent = existing ? `Edit ${label}` : `New ${label}`;
-    $('c_name').value     = existing?.name     || '';
-    $('c_name').disabled  = !!existing;
-    $('c_locality').value = existing?.locality || '';
-    $('c_whatsapp').value = existing?.whatsapp || '';
-    $('c_email').value    = existing?.email    || '';
-    $('c_group').value    = existing?.group_id || '';
-    $('c_mode').value     = existing?.preferred_mode || 'whatsapp';
-    $('c_verify_result').style.display = 'none';
-    $('c_verify_result').textContent = '';
-    $('c_common_groups').style.display = 'none';
-    $('c_common_groups_list').innerHTML = '';
-    $('c_common_groups_empty').style.display = 'none';
-    $('contactErr').style.display = 'none';
-    const saveBtn = $('contactSave'); saveBtn.disabled = false; saveBtn.textContent = 'Save';
-    $('contactModal').style.display = 'flex';
-  }
-
-  function closeContactModal() { $('contactModal').style.display = 'none'; $('c_name').disabled = false; contactKind = null; }
-
-  async function deleteContact(kind, name) {
-    if (!confirm(`Delete ${kind.slice(0,-1)} "${name}"?`)) return;
-    try {
-      const r = await fetch(`/api/${kind}/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      if (!r.ok) throw new Error('delete failed');
-      await loadContacts(kind);
-    } catch (e) { alert('Delete failed: ' + e.message); }
-  }
-
-  $('btnAddTrucker').addEventListener('click',  () => openContactModal('truckers', null));
-  $('btnAddSupplier').addEventListener('click', () => openContactModal('suppliers', null));
-  $('contactModalClose').addEventListener('click', closeContactModal);
-  $('contactCancel').addEventListener('click', closeContactModal);
-  $('contactModal').addEventListener('click', (e) => { if (e.target === $('contactModal')) closeContactModal(); });
-
-  $('contactSave').addEventListener('click', async () => {
-    const name = $('c_name').value.trim();
-    if (!name) { $('contactErr').textContent = 'Name is required.'; $('contactErr').style.display = 'block'; return; }
-    const whatsapp = $('c_whatsapp').value.trim().replace(/\D/g, '');
-    const email    = $('c_email').value.trim();
-    const mode     = $('c_mode').value;
-    const locality = $('c_locality').value.trim();
-    if (mode === 'whatsapp' && !whatsapp && !$('c_group').value.trim()) { $('contactErr').textContent = 'For WhatsApp preferred mode, provide a number or group ID.'; $('contactErr').style.display = 'block'; return; }
-    if (mode === 'email' && !email) { $('contactErr').textContent = 'For Email preferred mode, provide an email address.'; $('contactErr').style.display = 'block'; return; }
-    $('contactErr').style.display = 'none';
-    const btn = $('contactSave');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
-    try {
-      const payload = { name, locality: locality || null, whatsapp: whatsapp || null, email: email || null, group_id: $('c_group').value.trim() || null, preferred_mode: mode };
-      const r = await fetch('/api/' + contactKind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
-      const kind = contactKind;
-      closeContactModal();
-      await loadContacts(kind);
-    } catch (e) {
-      $('contactErr').textContent = e.message; $('contactErr').style.display = 'block';
-    } finally {
-      btn.disabled = false; btn.textContent = 'Save';
-    }
-  });
-
-  const WA_LABEL = {
-    initializing : { title:'Starting up', sub:'Jarvis is booting the WhatsApp client…', color:'#98A0AB', bg:'var(--steel-100)', ic:'…' },
-    qr           : { title:'Scan to connect', sub:'Open WhatsApp on the Jarvis phone and scan this QR.', color:'#C98A1B', bg:'#FBEFD6', ic:'📱' },
-    ready        : { title:'Connected', sub:'Jarvis is online and receiving messages.', color:'#6EC090', bg:'#E3F5EA', ic:'✓' },
-    disconnected : { title:'Disconnected', sub:'Lost connection — reconnecting shortly.', color:'#C96B80', bg:'#FBE1E6', ic:'⚠' },
-    auth_failure : { title:'Sign-in failed', sub:'WhatsApp rejected the session — click "Sign out & re-scan".', color:'#C96B80', bg:'#FBE1E6', ic:'⚠' },
-  };
-  let waLastStatus = null;
-  let waAutoOpened = false;
-
-  async function loadWhatsappStatus() {
-    try {
-      const r = await fetch('/api/whatsapp/status');
-      const d = await r.json();
-      renderWaState(d); renderWaBanner(d);
-      waLastStatus = d.status;
-    } catch {
-      renderWaState({ status:'disconnected', lastError:'Cannot reach server' });
-      renderWaBanner({ status:'disconnected' });
-    }
-  }
-
-  function renderWaBanner(d) {
-    const banner = $('waBanner');
-    if (d.status === 'ready') { banner.style.display = 'none'; return; }
-    const l = WA_LABEL[d.status] || WA_LABEL.disconnected;
-    banner.style.display = 'block';
-    banner.style.background = l.bg; banner.style.color = l.color;
-    $('waBannerDot').style.background = l.color;
-    $('waBannerText').textContent = l.title + ' — click to open WhatsApp tab';
-    banner.onclick = () => { document.querySelector('.tab[data-tab="whatsapp"]').click(); };
-  }
-
-  function renderWaState(d) {
-    const l = WA_LABEL[d.status] || WA_LABEL.disconnected;
-    $('waStateIcon').textContent  = l.ic;
-    $('waStateTitle').textContent = l.title;
-    $('waStateSub').textContent   = d.lastError || l.sub;
-    $('waStateTitle').style.color = l.color;
-    const holder = $('waQrHolder');
-    if (d.status === 'qr' && d.qr) {
-      holder.style.display = 'block';
-      if (typeof QRCode !== 'undefined') {
-        $('waQr').innerHTML = '';
-        QRCode.toCanvas(d.qr, { width: 260, margin: 1 }, (err, canvas) => {
-          if (!err && canvas) $('waQr').appendChild(canvas);
-          else $('waQr').textContent = 'QR render failed — check console';
-        });
-      } else {
-        $('waQr').textContent = 'QR library not loaded (qrcode.min.js missing from dashboard/)';
-      }
-    } else { holder.style.display = 'none'; }
-    $('waMetaLine').textContent = d.lastChange ? 'Last change: ' + new Date(d.lastChange).toLocaleTimeString() : '';
-  }
-
-  $('btnWaReset').addEventListener('click', async () => {
-    if (!confirm('Sign out of WhatsApp and force a new QR scan?')) return;
-    const btn = $('btnWaReset');
-    btn.disabled = true; btn.textContent = 'Signing out…';
-    try {
-      const r = await fetch('/api/whatsapp/reset', { method: 'POST' });
-      if (!r.ok) throw new Error((await r.json()).error || 'reset failed');
-    } catch (e) { alert('Reset failed: ' + e.message); }
-    btn.disabled = false; btn.textContent = 'Sign out & re-scan';
-    setTimeout(loadWhatsappStatus, 800);
-  });
-
-  loadWhatsappStatus();
-  setInterval(loadWhatsappStatus, 3000);
-  setTimeout(() => {
-    if (!waAutoOpened && waLastStatus && waLastStatus !== 'ready') {
-      waAutoOpened = true;
-      document.querySelector('.tab[data-tab="whatsapp"]').click();
-    }
-  }, 1500);
-
-  let teamMembers = [];
-  async function loadSettings() {
-    try {
-      const r = await fetch('/api/settings');
-      const s = await r.json();
-      $('s_manager_number').value = s.manager_number || '';
-      $('s_group_id').value       = s.team_group_id  || '';
-      teamMembers = Array.isArray(s.internal_team) ? s.internal_team.map(x => (typeof x === 'string' ? { name: '', whatsapp: x, role: '' } : x)) : [];
-      renderTeamList();
-      $('settingsError').style.display = 'none';
-      $('settingsSaved').style.display = 'none';
-      $('groupPicker').style.display   = 'none';
-    } catch (e) { $('settingsError').textContent = 'Could not load settings: ' + e.message; $('settingsError').style.display = 'block'; }
-  }
-
-  function renderTeamList() {
-    if (!teamMembers.length) { $('teamList').innerHTML = `<div style="font-family:var(--mono); font-size:12px; color:var(--text-faint); padding:14px; text-align:center; border:1px dashed var(--border-mid); border-radius:var(--radius-sm);">No team members.</div>`; return; }
-    $('teamList').innerHTML = teamMembers.map((m, i) => `
-      <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:10px; align-items:end; margin-bottom:10px;">
-        <div><label>Name</label><input type="text" data-team-field="name" data-team-index="${i}" value="${esc(m.name || '')}" placeholder="Full name"></div>
-        <div><label>WhatsApp</label><input type="text" data-team-field="whatsapp" data-team-index="${i}" value="${esc(m.whatsapp || '')}" placeholder="e.g. 918056944193"></div>
-        <div><label>Role</label><input type="text" data-team-field="role" data-team-index="${i}" value="${esc(m.role || '')}" placeholder="e.g. Ops Lead"></div>
-        <button type="button" class="btn-secondary" data-team-remove="${i}" style="padding:8px 12px; font-size:11px; color:var(--danger); border-color:var(--danger);">Remove</button>
-      </div>`).join('');
-    $('teamList').querySelectorAll('[data-team-field]').forEach(inp => {
-      inp.addEventListener('input', (e) => { teamMembers[+e.target.dataset.teamIndex][e.target.dataset.teamField] = e.target.value; });
-    });
-    $('teamList').querySelectorAll('[data-team-remove]').forEach(btn => {
-      btn.addEventListener('click', () => { teamMembers.splice(+btn.dataset.teamRemove, 1); renderTeamList(); });
-    });
-  }
-
-  $('btnAddTeamMember').addEventListener('click', () => { teamMembers.push({ name: '', whatsapp: '', role: '' }); renderTeamList(); });
-
-  async function runGroupValidator({ btnId, queryInputId, pickerId, pickerListId, targetInputId, errorHandler }) {
-    const q = $(queryInputId).value.trim();
-    if (!q) { if (errorHandler) errorHandler('Type a group name (or part of one) to validate.'); return; }
-    if (errorHandler) errorHandler(null);
-    const btn = $(btnId);
-    const originalLabel = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Searching…';
-    try {
-      const r = await fetch('/api/whatsapp/find-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: q }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'lookup failed');
-      const groups = d.groups || [];
-      const list = $(pickerListId);
-      if (!groups.length) list.innerHTML = `<div style="font-size:12.5px; color:var(--text-muted);">No matches.</div>`;
-      else {
-        list.innerHTML = groups.map(g => `<div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);"><div><div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(g.name)}</div><div class="mono" style="font-size:11px; color:var(--text-faint);">${esc(g.id)} ${g.participants ? '· ' + g.participants + ' members' : ''}</div></div><button type="button" class="btn-secondary" data-pick-group="${esc(g.id)}" style="padding:6px 14px; font-size:10.5px;">Use this</button></div>`).join('');
-        list.querySelectorAll('[data-pick-group]').forEach(b => { b.addEventListener('click', () => { $(targetInputId).value = b.dataset.pickGroup; $(pickerId).style.display = 'none'; }); });
-      }
-      $(pickerId).style.display = 'block';
-    } catch (e) { if (errorHandler) errorHandler('Validate failed: ' + e.message); }
-    finally { btn.disabled = false; btn.textContent = originalLabel; }
-  }
-
-  $('c_verify_number').addEventListener('click', async () => {
-    const raw = $('c_whatsapp').value.trim().replace(/\D/g, '');
-    if (raw.length < 8) { $('contactErr').textContent = 'Enter a full WhatsApp number.'; $('contactErr').style.display = 'block'; return; }
-    $('contactErr').style.display = 'none';
-    const btn = $('c_verify_number');
-    const originalLabel = btn.textContent;
-    btn.disabled = true; btn.textContent = 'Checking…';
-    const result = $('c_verify_result');
-    result.style.display = 'block'; result.style.background = 'var(--steel-100)'; result.style.color = 'var(--text-muted)'; result.textContent = 'Contacting WhatsApp…';
-    try {
-      const vr = await fetch('/api/whatsapp/verify-number', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ number: raw }) });
-      const vd = await vr.json();
-      if (!vr.ok) throw new Error(vd.error || 'verify failed');
-      if (!vd.registered) { result.style.background = '#FBE1E6'; result.style.color = 'var(--danger-text)'; result.textContent = '✗ Not on WhatsApp'; $('c_common_groups').style.display = 'none'; return; }
-      result.style.background = '#E3F5EA'; result.style.color = '#2F7A50'; result.textContent = '✓ On WhatsApp' + (vd.formatted ? ' (' + vd.formatted + ')' : '');
-      const cg = await fetch('/api/whatsapp/common-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contactId: vd.contactId }) });
-      const cd = await cg.json();
-      if (!cg.ok) throw new Error(cd.error || 'common-groups failed');
-      const groups = cd.groups || [];
-      $('c_common_groups').style.display = 'block';
-      if (!groups.length) { $('c_common_groups_list').innerHTML = ''; $('c_common_groups_empty').style.display = 'block'; }
-      else {
-        $('c_common_groups_empty').style.display = 'none';
-        $('c_common_groups_list').innerHTML = groups.map(g => `<div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border);"><div><div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(g.name)}</div><div class="mono" style="font-size:11px; color:var(--text-faint);">${esc(g.id)} ${g.participants ? '· ' + g.participants + ' members' : ''}</div></div><button type="button" class="btn-secondary" data-cg-pick="${esc(g.id)}" style="padding:6px 14px; font-size:10.5px;">Use this</button></div>`).join('');
-        $('c_common_groups_list').querySelectorAll('[data-cg-pick]').forEach(b => { b.addEventListener('click', () => { $('c_group').value = b.dataset.cgPick; }); });
-      }
-    } catch (e) { result.style.background = '#FBE1E6'; result.style.color = 'var(--danger-text)'; result.textContent = 'Verify failed: ' + e.message; }
-    finally { btn.disabled = false; btn.textContent = originalLabel; }
-  });
-
-  $('btnValidateGroup').addEventListener('click', () => runGroupValidator({
-    btnId: 'btnValidateGroup', queryInputId: 's_group_name', pickerId: 'groupPicker', pickerListId: 'groupPickerList', targetInputId: 's_group_id',
-    errorHandler: (msg) => { if (msg) { $('settingsError').textContent = msg; $('settingsError').style.display = 'block'; } else { $('settingsError').style.display = 'none'; } },
+// ── BOOKINGS ──────────────────────────────────────────────────────────────
+function renderBookings(bookingsObj) {
+  const list = Object.values(bookingsObj);
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
+        <div><div class="eyebrow">// Bookings</div><h2 style="font-size:24px; text-transform:uppercase;">Booking ledger</h2></div>
+        <button id="btnAddBooking" class="btn btn-primary">+ Add booking</button>
+      </div>
+      <div class="card" style="overflow:hidden;">
+        <div style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+          <div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
+        </div>
+        ${list.length ? list.map(b => `
+          <div class="row-hover" style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
+            <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
+            <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${Array.isArray(b.containers) ? b.containers.length : 1}</div>
+            <div style="display:flex; gap:6px; justify-content:flex-end;">
+              <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
+            </div>
+          </div>
+        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
+      </div>
+    </section>`;
+  $('btnAddBooking').addEventListener('click', openBookingModal);
+  document.querySelectorAll('.btn-del-booking').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm(`Archive booking ${btn.dataset.bkg}?`)) return;
+    await api(`/api/bookings/${encodeURIComponent(btn.dataset.bkg)}`, { method: 'DELETE' });
+    loadTab('bookings');
   }));
+}
+
+function openBookingModal() {
+  $('modalError').textContent = '';
+  ['f_bkg','f_carrier','f_vessel','f_pol','f_pod','f_erd','f_cutoff'].forEach(id => $(id).value = '');
+  $('bookingModal').style.display = 'flex';
+}
+function closeBookingModal() { $('bookingModal').style.display = 'none'; }
+
+// ── TRUCKERS / SUPPLIERS (shared shape) ──────────────────────────────────
+function renderContacts(kind, title, addLabel, list) {
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1080px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
+        <div><div class="eyebrow">// ${esc(kind[0].toUpperCase() + kind.slice(1))}</div><h2 style="font-size:24px; text-transform:uppercase;">${esc(title)}</h2></div>
+        <button id="btnAddContact" class="btn btn-primary">${esc(addLabel)}</button>
+      </div>
+      <div class="card" style="overflow:hidden; margin-bottom:16px;">
+        <div style="display:grid; grid-template-columns:190px 150px 1fr 120px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+          <div>Name</div><div>Locality</div><div>WhatsApp / Group</div><div style="text-align:right;">Actions</div>
+        </div>
+        ${list.length ? list.map(p => `
+          <div class="row-hover" style="display:grid; grid-template-columns:190px 150px 1fr 120px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
+            <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(p.name)}</div>
+            <div>${p.locality ? `<span style="font-family:var(--font-mono); font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; background:var(--accent-soft); color:var(--leaf-700); padding:4px 9px; border-radius:var(--radius-xs);">${esc(p.locality)}</span>` : '—'}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(p.group_id || p.whatsapp || '—')}</div>
+            <div style="display:flex; gap:6px; justify-content:flex-end;">
+              <button class="btn btn-danger btn-del-contact" data-name="${esc(p.name)}" style="padding:6px 12px; font-size:10px;">Del</button>
+            </div>
+          </div>
+        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">None registered yet.</div>'}
+      </div>
+    </section>`;
+  $('btnAddContact').addEventListener('click', async () => {
+    const name = prompt('Name:'); if (!name) return;
+    const whatsapp = prompt('WhatsApp number (digits only):') || '';
+    const locality = prompt('Locality (e.g. Los Angeles):') || '';
+    await api(`/api/${kind}`, { method: 'POST', body: JSON.stringify({ name, whatsapp, locality }) });
+    loadTab(kind);
+  });
+  document.querySelectorAll('.btn-del-contact').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm(`Remove ${btn.dataset.name}?`)) return;
+    await api(`/api/${kind}/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
+    loadTab(kind);
+  }));
+}
+
+// ── WHATSAPP ──────────────────────────────────────────────────────────────
+async function renderWhatsapp() {
+  const root = $('viewRoot');
+  let status;
+  try { status = await api('/api/whatsapp/status'); }
+  catch (e) { status = { status: 'unknown' }; }
+  const isReady = status.status === 'ready';
+  const isQr = status.status === 'qr';
+  const isDown = status.status === 'disconnected' || status.status === 'auth_failure';
+  root.innerHTML = `
+    <section style="max-width:760px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// WhatsApp link</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Connection</h2>
+      <div style="background:var(--steel-950); border-radius:var(--radius-md); padding:44px 36px; text-align:center; position:relative; overflow:hidden;">
+        <div style="position:absolute; left:0; right:0; top:0; height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
+        ${isReady ? `
+          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(87,190,73,.12); border:1px solid var(--leaf-700); align-items:center; justify-content:center; color:var(--leaf-400); font-size:28px; margin-bottom:18px;">✓</div>
+          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:#fff;">Connected</div>
+          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">Jarvis is online and receiving WhatsApp messages.</div>
+        ` : isQr ? `
+          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-warning); margin-bottom:10px;">Scan to connect</div>
+          <div style="font-size:13px; color:var(--steel-400);">Check the server terminal/logs for the QR code, or restart the process — this dashboard doesn't render the QR image itself yet.</div>
+        ` : `
+          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(197,64,47,.14); border:1px solid var(--status-danger); align-items:center; justify-content:center; color:var(--status-danger); font-size:28px; margin-bottom:18px;">⚠</div>
+          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-danger);">${esc(status.status || 'Disconnected')}</div>
+          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">${esc(status.error || 'Not connected.')}</div>
+        `}
+        <div style="margin-top:20px;">
+          ${ROLE === 'admin' ? '<button id="btnWaReset" class="btn btn-dark">Sign out &amp; re-scan</button>' : ''}
+        </div>
+      </div>
+    </section>`;
+  if ($('btnWaReset')) $('btnWaReset').addEventListener('click', async () => {
+    if (!confirm('This logs Jarvis out of WhatsApp and requires a fresh QR scan. Continue?')) return;
+    await api('/api/whatsapp/reset', { method: 'POST' });
+    alert('Reset triggered — check server logs for the new QR code.');
+  });
+  updateWaBadge(status);
+}
+
+function updateWaBadge(status) {
+  const dot = $('waStatusDot'), text = $('waStatusText'), banner = $('linkDownBanner'), bannerText = $('linkDownText');
+  if (status.status === 'ready') {
+    dot.style.background = 'var(--leaf-400)'; dot.style.boxShadow = '0 0 8px var(--leaf-400)'; dot.style.animation = 'jarvis-pulse 2.4s ease-in-out infinite';
+    text.textContent = 'Live · synced from WhatsApp';
+    banner.classList.add('hidden');
+  } else if (status.status === 'qr') {
+    dot.style.background = 'var(--status-warning)'; dot.style.boxShadow = '0 0 8px var(--status-warning)';
+    text.textContent = 'QR scan needed';
+    bannerText.textContent = 'WhatsApp needs a QR scan to connect.'; banner.classList.remove('hidden');
+  } else {
+    dot.style.background = 'var(--status-danger)'; dot.style.boxShadow = '0 0 8px var(--status-danger)';
+    text.textContent = 'Link down — retrying';
+    bannerText.textContent = 'WhatsApp link is down.'; banner.classList.remove('hidden');
+  }
+}
+
+// ── SETTINGS (admin only) ─────────────────────────────────────────────────
+function renderSettings(s) {
+  let team = Array.isArray(s.internal_team) ? s.internal_team.map(x => typeof x === 'string' ? { name: '', whatsapp: x, role: '' } : x) : [];
+  function teamRowsHtml() {
+    return team.map((m, i) => `
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:12px;" data-idx="${i}">
+        <div class="field" style="margin-bottom:0;"><label>Name</label><input class="tm_name" value="${esc(m.name || '')}"></div>
+        <div class="field" style="margin-bottom:0;"><label>WhatsApp</label><input class="tm_whatsapp" value="${esc(m.whatsapp || '')}"></div>
+        <div class="field" style="margin-bottom:0;"><label>Role</label><input class="tm_role" value="${esc(m.role || '')}"></div>
+        <button class="btn btn-danger btn-remove-team" data-idx="${i}">Remove</button>
+      </div>`).join('');
+  }
+  $('viewRoot').innerHTML = `
+    <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
+        <div><div class="eyebrow">// Settings</div><h2 style="font-size:24px; text-transform:uppercase;">Routing &amp; roles</h2></div>
+        <button id="btnSaveSettings" class="btn btn-primary">Save changes</button>
+      </div>
+      <div id="settingsError" style="color:var(--status-danger); font-size:12.5px; margin-bottom:14px; display:none;"></div>
+      <div id="settingsSaved" style="color:var(--leaf-600); font-size:12.5px; margin-bottom:14px; display:none;">Saved.</div>
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Manager</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
+          <div class="field"><label>Manager WhatsApp number</label><input id="s_manager" value="${esc(s.manager_number || '')}" placeholder="e.g. 918056944193"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</div>
+            <button id="btnAddTeam" class="btn btn-secondary" style="padding:7px 14px;">+ Add member</button>
+          </div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">People who can send commands and receive alerts — same access level as the manager, including price list.</div>
+          <div id="teamRows">${teamRowsHtml()}</div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Team WhatsApp group</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages route here instead of the manager's DM. Jarvis must already be a member of the group before it can find it — add it on your phone first, then search by name below.</div>
+          <div class="field"><label>Team group ID</label><input id="s_group" value="${esc(s.team_group_id || '')}" placeholder="120363123456789012@g.us"></div>
+          <div style="display:flex; gap:10px; align-items:end; margin-top:12px;">
+            <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input id="groupSearch" placeholder="e.g. Edge Metals Ops"></div>
+            <button id="btnFindGroup" class="btn btn-secondary">Search</button>
+          </div>
+          <div id="groupResults" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+            <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Price list contacts</div>
+            <button id="btnAddPriceContact" class="btn btn-secondary" style="padding:7px 14px;">+ Add contact</button>
+          </div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Save a name once, then just say "send price list to &lt;name&gt;" on WhatsApp instead of typing a number. "Standing" contacts also get the auto-notify when a price changes.</div>
+          <div id="priceContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+        </div>
+      </div>
+    </section>`;
+
+  function refreshTeamRows() { $('teamRows').innerHTML = teamRowsHtml(); wireTeamRemove(); }
+  function wireTeamRemove() {
+    document.querySelectorAll('.btn-remove-team').forEach(btn => btn.addEventListener('click', () => {
+      team.splice(Number(btn.dataset.idx), 1); refreshTeamRows();
+    }));
+  }
+  wireTeamRemove();
+  $('btnAddTeam').addEventListener('click', () => { team.push({ name: '', whatsapp: '', role: '' }); refreshTeamRows(); });
 
   $('btnSaveSettings').addEventListener('click', async () => {
-    $('settingsError').style.display = 'none';
-    $('settingsSaved').style.display = 'none';
-    const managerNum = $('s_manager_number').value.trim().replace(/\D/g, '');
+    $('settingsError').style.display = 'none'; $('settingsSaved').style.display = 'none';
+    document.querySelectorAll('#teamRows [data-idx]').forEach((row, i) => {
+      team[i] = {
+        name: row.querySelector('.tm_name').value.trim(),
+        whatsapp: row.querySelector('.tm_whatsapp').value.replace(/\D/g, ''),
+        role: row.querySelector('.tm_role').value.trim(),
+      };
+    });
+    const managerNum = $('s_manager').value.trim().replace(/\D/g, '');
     if (!managerNum) { $('settingsError').textContent = 'Manager number is required.'; $('settingsError').style.display = 'block'; return; }
-    const cleanedTeam = teamMembers
-      .filter(m => (m.name && m.name.trim()) || (m.whatsapp && m.whatsapp.trim()))
-      .map(m => ({ name: (m.name || '').trim(), whatsapp: (m.whatsapp || '').replace(/\D/g, ''), role: (m.role || '').trim() }));
-    const payload = { manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group_id').value.trim() };
-    const btn = $('btnSaveSettings');
-    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
+    const cleanedTeam = team.filter(m => (m.name && m.name.trim()) || (m.whatsapp && m.whatsapp.trim()));
     try {
-      const r = await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
+      await api('/api/settings', { method: 'PUT', body: JSON.stringify({ manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group').value.trim() }) });
       $('settingsSaved').style.display = 'block';
-      setTimeout(() => { $('settingsSaved').style.display = 'none'; }, 2500);
-      await loadSettings();
     } catch (e) { $('settingsError').textContent = e.message; $('settingsError').style.display = 'block'; }
-    finally { btn.disabled = false; btn.textContent = 'Save changes'; }
   });
 
-  function botAppend(kind, text, media) {
-    const log = $('botLog');
-    if (log.querySelector('div[style*="Type a command"]')) log.innerHTML = '';
-    const wrap = document.createElement('div');
-    const isMe = kind === 'me';
-    wrap.style.cssText = `display:flex; ${isMe ? 'justify-content:flex-end;' : 'justify-content:flex-start;'}`;
-    const bubble = document.createElement('div');
-    bubble.style.cssText = `max-width:75%; padding:9px 13px; border-radius:${isMe ? '14px 14px 3px 14px' : '14px 14px 14px 3px'}; background:${isMe ? 'var(--copper-600)' : 'var(--steel-100)'}; color:${isMe ? '#fff' : 'var(--text-strong)'}; font-family:${isMe ? 'var(--mono)' : 'var(--sans)'}; font-size:${isMe ? '12.5px' : '13px'}; line-height:1.45; white-space:pre-wrap; word-break:break-word;`;
-    bubble.textContent = text || '';
-    if (media) {
-      const attach = document.createElement('div');
-      attach.style.cssText = 'margin-top:6px; padding:6px 8px; background:rgba(0,0,0,.08); border-radius:6px; font-size:11px; font-family:var(--mono);';
-      attach.textContent = '📎 ' + (media.filename || '(attachment)');
-      bubble.appendChild(attach);
+  // Group finder — calls /api/whatsapp/find-groups (requireAdmin, matches api.js).
+  // Only surfaces groups Jarvis is already in; that's a WhatsApp privacy limit,
+  // not a bug — the helper text above explains it.
+  $('btnFindGroup').addEventListener('click', async () => {
+    const name = $('groupSearch').value.trim();
+    const box = $('groupResults');
+    box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">Searching…</div>';
+    try {
+      const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
+      if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">No matching groups — make sure Jarvis has been added to it on WhatsApp first.</div>'; return; }
+      box.innerHTML = groups.map(g => `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+          <div><div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(g.name || g.subject || '(unnamed)')}</div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</div></div>
+          <button class="btn btn-secondary btn-use-group" data-id="${esc(g.id || g.chatId || '')}" style="padding:6px 12px; font-size:10px;">Use this</button>
+        </div>`).join('');
+      document.querySelectorAll('.btn-use-group').forEach(btn => btn.addEventListener('click', () => { $('s_group').value = btn.dataset.id; }));
+    } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);">${esc(e.message)}</div>`; }
+  });
+
+  // Price-list contacts — GET/POST/DELETE /api/pricelist/contacts, send via the
+  // new /api/pricelist/send-city route (mirrors the WhatsApp ask-city-first flow
+  // so a website send behaves identically to a WhatsApp send).
+  const PRICE_CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
+  async function loadPriceContacts() {
+    const rows = $('priceContactRows');
+    try {
+      const contacts = await api('/api/pricelist/contacts');
+      rows.innerHTML = contacts.length ? contacts.map(c => `
+        <div style="display:grid; grid-template-columns:1fr auto auto auto auto; gap:10px; align-items:center; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(c.name)}">
+          <div>
+            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)} ${c.standing ? '<span class="badge" style="background:var(--accent-soft); color:var(--leaf-700); margin-left:6px;">Standing</span>' : ''}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.whatsapp)}</div>
+          </div>
+          <select class="pc_city" style="padding:7px 10px; border:1px solid var(--border-default); border-radius:var(--radius-xs); font-size:12px;">
+            ${PRICE_CITIES.map(city => `<option value="${esc(city)}">${esc(city)}</option>`).join('')}
+          </select>
+          <button class="btn btn-primary btn-send-price" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Send</button>
+          <span class="pc_status" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted);"></span>
+          <button class="btn btn-danger btn-del-price-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
+        </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
+
+      document.querySelectorAll('.btn-send-price').forEach(btn => btn.addEventListener('click', async () => {
+        const row = btn.closest('[data-name]');
+        const city = row.querySelector('.pc_city').value;
+        const statusEl = row.querySelector('.pc_status');
+        statusEl.textContent = 'Sending…';
+        try {
+          const result = await api('/api/pricelist/send-city', { method: 'POST', body: JSON.stringify({ to: btn.dataset.name, city }) });
+          statusEl.textContent = result.ok ? `Sent to ${result.target}` : 'Failed';
+          statusEl.style.color = result.ok ? 'var(--leaf-600)' : 'var(--status-danger)';
+        } catch (e) { statusEl.textContent = e.message; statusEl.style.color = 'var(--status-danger)'; }
+      }));
+      document.querySelectorAll('.btn-del-price-contact').forEach(btn => btn.addEventListener('click', async () => {
+        if (!confirm(`Remove ${btn.dataset.name} from price list contacts?`)) return;
+        await api(`/api/pricelist/contacts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
+        loadPriceContacts();
+      }));
+    } catch (e) {
+      rows.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
     }
-    wrap.appendChild(bubble);
-    log.appendChild(wrap);
-    log.scrollTop = log.scrollHeight;
   }
-
-  async function botSend() {
-    const text = $('botInput').value.trim();
-    if (!text) return;
-    $('botInput').value = '';
-    botAppend('me', text, null);
-    const btn = $('botSend');
-    btn.disabled = true;
+  $('btnAddPriceContact').addEventListener('click', async () => {
+    const name = prompt('Contact name:'); if (!name) return;
+    const whatsapp = prompt('WhatsApp number (digits only, e.g. 918056944193):'); if (!whatsapp) return;
+    const standing = confirm('Should this contact also get the auto price-change notification (one of the 3 standing recipients)?');
     try {
-      const r = await fetch('/api/bot/command', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'command failed');
-      if (!d.replies?.length) botAppend('bot', '(no reply from Jarvis)', null);
-      else d.replies.forEach(rep => botAppend('bot', rep.text, rep.media));
-    } catch (e) { botAppend('bot', '⚠ ' + e.message, null); }
-    finally { btn.disabled = false; $('botInput').focus(); }
-  }
-
-  $('botSend').addEventListener('click', botSend);
-  $('botInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); botSend(); } });
-
-  const TASK_MESSAGE_DEFAULTS = {
-    nudge_scale_ticket: 'Hey — following up on the scale ticket. Can you send it when you get a moment?',
-    nudge_load_ready  : 'Checking in — is the load ready for pickup?',
-    nudge_empty_drop  : 'Hey — has the empty container been dropped yet?',
-    nudge_ingate      : 'Following up — has the container been ingated at port yet?',
-    nudge_pickup      : 'Any update on the pickup?',
-    generic_message   : '',
-  };
-  const TASK_TYPE_TO_CONDITION = {
-    nudge_scale_ticket: (bkg) => bkg ? { type:'workflow_flag_true', flag:'scale_ticket', bkg_no: bkg } : null,
-    nudge_load_ready  : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'load_ready', bkg_no: bkg } : null,
-    nudge_empty_drop  : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'empty_dropped', bkg_no: bkg } : null,
-    nudge_ingate      : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'ingate_received', bkg_no: bkg } : null,
-    nudge_pickup      : (bkg) => bkg ? { type:'workflow_step_at_or_past', step:'picked_up', bkg_no: bkg } : null,
-    generic_message   : () => null,
-  };
-
-  $('t_type').addEventListener('change', () => {
-    const type = $('t_type').value;
-    const cur  = $('t_message').value.trim();
-    const defaults = Object.values(TASK_MESSAGE_DEFAULTS);
-    if (!cur || defaults.includes(cur)) $('t_message').value = TASK_MESSAGE_DEFAULTS[type] || '';
+      await api('/api/pricelist/contacts', { method: 'POST', body: JSON.stringify({ name, whatsapp, standing }) });
+      loadPriceContacts();
+    } catch (e) { alert(e.message); }
   });
-  $('t_message').value = TASK_MESSAGE_DEFAULTS[$('t_type').value] || '';
+  loadPriceContacts();
+}
 
-  async function loadFacts() {
+// ── BOT CONSOLE ───────────────────────────────────────────────────────────
+let botLog = [];
+function renderBot() {
+  $('viewRoot').innerHTML = `
+    <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// Bot console</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Jarvis terminal</h2>
+      <div style="background:var(--steel-950); border-radius:var(--radius-sm); overflow:hidden;">
+        <div style="display:flex; align-items:center; gap:10px; padding:10px 18px; background:var(--steel-900); border-bottom:1px solid var(--steel-800);">
+          <span style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--steel-300);">Commands fire for real — same effect as messaging Jarvis on WhatsApp</span>
+        </div>
+        <div id="botLogEl" style="height:380px; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:10px;"></div>
+        <div style="display:flex; gap:10px; padding:14px 18px; background:var(--steel-900); border-top:1px solid var(--steel-800);">
+          <input id="botInput" placeholder="forward DALA23991600 to Dave" style="flex:1; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-xs); padding:10px 14px; font-family:var(--font-mono); font-size:12.5px; color:var(--steel-100); outline:none;">
+          <button id="btnBotSend" class="btn btn-primary">Send</button>
+        </div>
+      </div>
+    </section>`;
+  renderBotLog();
+  $('btnBotSend').addEventListener('click', sendBotCommand);
+  $('botInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendBotCommand(); });
+}
+function renderBotLog() {
+  const el = $('botLogEl');
+  if (!botLog.length) { el.innerHTML = `<div style="margin:auto; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--steel-500); line-height:2;">Type a command below.<br>Try <span style="color:var(--leaf-400);">menu</span>, <span style="color:var(--leaf-400);">urgent</span>, or <span style="color:var(--leaf-400);">send price list</span>.</div>`; return; }
+  el.innerHTML = botLog.map(ln => `<div style="display:flex; gap:10px;"><span style="font-family:var(--font-mono); font-size:12.5px; color:${ln.color}; flex-shrink:0;">${ln.prompt}</span><span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(ln.text)}</span></div>`).join('');
+  el.scrollTop = el.scrollHeight;
+}
+async function sendBotCommand() {
+  const input = $('botInput'); const text = input.value.trim(); if (!text) return;
+  botLog.push({ prompt: '&gt;', color: 'var(--leaf-400)', text }); input.value = ''; renderBotLog();
+  try {
+    const res = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
+    (res.replies || []).forEach(r => botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: r.text || '(no text)' }));
+    if (!res.replies || !res.replies.length) botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: '(no reply)' });
+  } catch (e) { botLog.push({ prompt: 'error', color: 'var(--status-danger)', text: e.message }); }
+  renderBotLog();
+}
+
+// ── TASKS ─────────────────────────────────────────────────────────────────
+function renderTasks(data) {
+  const pending = data.pending || [], history = data.history || [];
+  $('viewRoot').innerHTML = `
+    <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// Tasks</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Follow-ups</h2>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Persistent nudges. Fire at the scheduled time — auto-cancel if the answer arrives first.</div>
+      <div class="card" style="padding:20px 22px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:14px;">Create task</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+          <div class="field"><label>Target name (trucker/supplier)</label><input id="tk_target"></div>
+          <div class="field"><label>Booking (enables auto-cancel)</label><input id="tk_bkg" placeholder="DALA23991600"></div>
+          <div class="field"><label>Fire in (minutes)</label><input id="tk_delay" value="60"></div>
+          <div class="field"><label>Message</label><input id="tk_msg" placeholder="Following up — can you send an update?"></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
+          <button id="btnCreateTask" class="btn btn-primary">Create task</button>
+          <span id="taskErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span>
+        </div>
+      </div>
+      <div class="card" style="padding:20px 22px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:14px;">Pending — ${pending.length}</div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          ${pending.length ? pending.map(t => `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:14px; padding:12px 14px; background:var(--surface-sunken); border-left:3px solid var(--status-warning); border-radius:var(--radius-xs);">
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(t.type || 'task')} → ${esc(t.target_name || t.target_chat || '')}</div>
+                <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(t.bkg_no || '')} · fires ${esc(t.fire_at || '')}</div>
+                <div style="font-size:12px; color:var(--text-body); margin-top:5px; font-style:italic;">"${esc(t.message || '')}"</div>
+              </div>
+              <button class="btn btn-danger btn-cancel-task" data-id="${esc(t.id)}" style="white-space:nowrap;">Cancel</button>
+            </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:14px 0; text-align:center;">No pending tasks.</div>'}
+        </div>
+      </div>
+      <div class="card" style="padding:20px 22px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">History</div>
+        ${history.slice(-20).reverse().map(h => `
+          <div style="display:grid; grid-template-columns:110px 1fr 150px; gap:12px; padding:9px 4px; border-bottom:1px solid var(--border-subtle); align-items:center;">
+            <span class="badge" style="background:var(--steel-100); color:var(--steel-700);">${esc(h.status || '')}</span>
+            <span style="font-size:12px; color:var(--text-body);">${esc(h.message || '')} <span style="color:var(--text-faint);">${esc(h.result_note || '')}</span></span>
+            <span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); text-align:right;">${esc(h.fire_at || '')}</span>
+          </div>`).join('') || '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No history yet.</div>'}
+      </div>
+    </section>`;
+  $('btnCreateTask').addEventListener('click', async () => {
+    $('taskErr').textContent = '';
     try {
-      const r = await fetch('/api/facts');
-      if (r.status === 403) { $('f_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Admin access required.</div>`; return; }
-      const d = await r.json();
-      renderFacts(d.facts || []);
-    } catch (e) { $('f_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Failed to load: ${esc(e.message)}</div>`; }
-  }
-
-  function renderFacts(list) {
-    if (!list.length) { $('f_list').innerHTML = `<div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">No facts yet. Add one above, or say "remember X" to Jarvis on WhatsApp.</div>`; return; }
-    const indexed = list.map((f, i) => ({ ...f, _idx: i })).reverse(); // most recent first, index refers to original array position
-    $('f_list').innerHTML = indexed.map(f => `<div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:10px 12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);"><div style="flex:1; min-width:0;"><div style="font-size:12.5px; color:var(--text-strong);">${esc(f.text)}</div><div class="mono" style="font-size:10.5px; color:var(--text-faint); margin-top:3px;">${f.created_at ? new Date(f.created_at).toLocaleString() : ''}</div></div><button type="button" class="btn-secondary" data-f-del="${f._idx}" style="padding:5px 10px; font-size:10.5px; color:var(--danger); border-color:var(--danger); white-space:nowrap;">Delete</button></div>`).join('');
-    $('f_list').querySelectorAll('[data-f-del]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Delete this fact?')) return;
-        btn.disabled = true;
-        try {
-          const r = await fetch('/api/facts/' + btn.dataset.fDel, { method: 'DELETE' });
-          if (!r.ok) throw new Error((await r.json()).error || 'delete failed');
-          loadFacts();
-        } catch (e) { alert('Failed: ' + e.message); btn.disabled = false; }
-      });
-    });
-  }
-
-  $('f_add').addEventListener('click', async () => {
-    const text = $('f_new_text').value.trim();
-    $('f_add_err').textContent = '';
-    if (!text) { $('f_add_err').textContent = 'Enter a fact first.'; return; }
-    $('f_add').disabled = true;
-    try {
-      const r = await fetch('/api/facts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
-      if (!r.ok) throw new Error((await r.json()).error || 'save failed');
-      $('f_new_text').value = '';
-      loadFacts();
-    } catch (e) { $('f_add_err').textContent = e.message; }
-    finally { $('f_add').disabled = false; }
+      await api('/api/tasks', { method: 'POST', body: JSON.stringify({
+        type: 'generic_message', target_kind: 'trucker', target_name: $('tk_target').value.trim() || null,
+        bkg_no: $('tk_bkg').value.trim() || null, delay_minutes: Number($('tk_delay').value) || 60,
+        message: $('tk_msg').value.trim(), created_by: 'dashboard',
+      }) });
+      loadTab('tasks');
+    } catch (e) { $('taskErr').textContent = e.message; }
   });
+  document.querySelectorAll('.btn-cancel-task').forEach(btn => btn.addEventListener('click', async () => {
+    await api(`/api/tasks/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+    loadTab('tasks');
+  }));
+}
 
-  async function loadTasks() {
+// ── Modal wiring (Add booking) ───────────────────────────────────────────
+$('btnCloseModal').addEventListener('click', closeBookingModal);
+$('btnCancelModal').addEventListener('click', closeBookingModal);
+$('pdfInput').addEventListener('change', async () => {
+  const file = $('pdfInput').files[0]; if (!file) return;
+  $('pdfDropLabel').textContent = 'Scanning…';
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const b64 = reader.result.split(',')[1];
     try {
-      const r = await fetch('/api/tasks');
-      const d = await r.json();
-      renderTasksPending(d.pending || []);
-      renderTasksHistory(d.history || []);
-    } catch (e) { $('t_pending_list').innerHTML = `<div style="color:var(--danger); font-size:12.5px;">Failed to load: ${esc(e.message)}</div>`; }
-  }
-
-  function renderTasksPending(list) {
-    if (!list.length) { $('t_pending_list').innerHTML = `<div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">No pending tasks.</div>`; return; }
-    list.sort((a,b) => new Date(a.fire_at) - new Date(b.fire_at));
-    $('t_pending_list').innerHTML = list.map(t => {
-      const fireIn = Math.round((new Date(t.fire_at) - new Date()) / 60000);
-      const when   = fireIn > 0 ? `in ${fireIn} min` : (fireIn < -60 ? `${Math.abs(Math.round(fireIn/60))}h overdue` : 'now');
-      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);"><div style="flex:1; min-width:0;"><div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')}</div><div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:2px;">${t.bkg_no ? esc(t.bkg_no) + (t.container_seq != null ? '/' + t.container_seq : '') + ' · ' : ''}${when} · fires ${new Date(t.fire_at).toLocaleString()}</div><div style="font-size:11.5px; color:var(--text-body); margin-top:4px; font-style:italic;">"${esc(t.message.slice(0, 100))}${t.message.length > 100 ? '…' : ''}"</div></div><button type="button" class="btn-secondary" data-t-cancel="${esc(t.id)}" style="padding:5px 10px; font-size:10.5px; color:var(--danger); border-color:var(--danger); white-space:nowrap;">Cancel</button></div>`;
-    }).join('');
-    $('t_pending_list').querySelectorAll('[data-t-cancel]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        if (!confirm('Cancel this task?')) return;
-        btn.disabled = true;
-        try {
-          const r = await fetch('/api/tasks/' + encodeURIComponent(btn.dataset.tCancel), { method:'DELETE' });
-          if (!r.ok) throw new Error((await r.json()).error || 'cancel failed');
-          await loadTasks();
-        } catch (e) { alert('Cancel failed: ' + e.message); btn.disabled = false; }
-      });
-    });
-  }
-
-  function renderTasksHistory(list) {
-    if (!list.length) { $('t_history_list').innerHTML = `<div style="color:var(--text-faint); font-size:11.5px; padding:6px 0;">No history yet.</div>`; return; }
-    list.sort((a,b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0));
-    $('t_history_list').innerHTML = list.slice(0, 100).map(t => {
-      const badge = t.status === 'done' ? 'background:#E3F5EA; color:#2F7A50;' : t.status === 'cancelled' ? 'background:var(--steel-150); color:var(--text-muted);' : 'background:#FBE1E6; color:var(--danger-text);';
-      return `<div style="display:grid; grid-template-columns:80px 1fr 160px; gap:10px; padding:6px 10px; font-size:11px; border-bottom:1px solid var(--border);"><div><span class="bk-cell-pill" style="${badge}">${esc(t.status)}</span></div><div>${esc(t.type.replace(/_/g,' '))} → ${esc(t.target_kind)} ${esc(t.target_name || '')} ${t.bkg_no ? '· ' + esc(t.bkg_no) + (t.container_seq != null ? '/' + t.container_seq : '') : ''} <span style="color:var(--text-faint);">${esc(t.result_note || '')}</span></div><div class="mono" style="color:var(--text-faint);">${t.completed_at ? new Date(t.completed_at).toLocaleString() : '—'}</div></div>`;
-    }).join('');
-  }
-
-  const TASK_TYPE_TO_CONTAINER_CONDITION = {
-    nudge_scale_ticket: (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'picked_up',       bkg_no: bkg, container_seq: seq } : null,
-    nudge_load_ready  : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'load_ready',      bkg_no: bkg, container_seq: seq } : null,
-    nudge_empty_drop  : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'empty_dropped',   bkg_no: bkg, container_seq: seq } : null,
-    nudge_ingate      : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'ingate_received', bkg_no: bkg, container_seq: seq } : null,
-    nudge_pickup      : (bkg, seq) => bkg && seq ? { type:'container_stage_at_or_past', step:'picked_up',       bkg_no: bkg, container_seq: seq } : null,
-    generic_message   : () => null,
+      const { fields } = await api('/api/documents/scan', { method: 'POST', body: JSON.stringify({ pdf_base64: b64 }) });
+      if (fields) {
+        if (fields.booking_number) $('f_bkg').value = fields.booking_number;
+        if (fields.carrier) $('f_carrier').value = fields.carrier;
+        if (fields.vessel) $('f_vessel').value = fields.vessel;
+        if (fields.port_of_loading) $('f_pol').value = fields.port_of_loading;
+        if (fields.port_of_discharge) $('f_pod').value = fields.port_of_discharge;
+        if (fields.erd_date) $('f_erd').value = fields.erd_date;
+        if (fields.cutoff_date) $('f_cutoff').value = fields.cutoff_date;
+      }
+      $('pdfDropLabel').textContent = 'Extracted — review below and save.';
+    } catch (e) {
+      $('modalError').textContent = e.message;
+      $('pdfDropLabel').textContent = "Drop the carrier's booking PDF here";
+    }
   };
+  reader.readAsDataURL(file);
+});
+$('btnSaveBooking').addEventListener('click', async () => {
+  $('modalError').textContent = '';
+  const bkg = $('f_bkg').value.trim();
+  if (!bkg) { $('modalError').textContent = 'Booking number is required.'; return; }
+  try {
+    await api('/api/bookings', { method: 'POST', body: JSON.stringify({
+      booking_number: bkg, carrier: $('f_carrier').value.trim(), vessel: $('f_vessel').value.trim(),
+      port_of_loading: $('f_pol').value.trim(), port_of_discharge: $('f_pod').value.trim(),
+      erd_date: $('f_erd').value.trim(), cutoff_date: $('f_cutoff').value.trim(),
+    }) });
+    closeBookingModal();
+    if (CURRENT_TAB === 'bookings') loadTab('bookings');
+  } catch (e) { $('modalError').textContent = e.message; }
+});
 
-  $('t_create').addEventListener('click', async () => {
-    const type = $('t_type').value;
-    const target_kind = $('t_target_kind').value;
-    const target_name = $('t_target_name').value.trim();
-    const bkg_no = $('t_bkg').value.trim().toUpperCase();
-    const container_seq_raw = $('t_container_seq').value.trim();
-    const container_seq = container_seq_raw ? parseInt(container_seq_raw, 10) : null;
-    const delay_minutes = parseInt($('t_delay').value, 10);
-    const message = $('t_message').value.trim();
-    $('t_create_err').textContent = '';
-    if (target_kind !== 'manager' && !target_name) { $('t_create_err').textContent = 'Name required for trucker/supplier.'; return; }
-    if (!message) { $('t_create_err').textContent = 'Message required.'; return; }
-    if (!delay_minutes || delay_minutes < 1) { $('t_create_err').textContent = 'Delay must be at least 1 minute.'; return; }
-    if (container_seq_raw && (isNaN(container_seq) || container_seq < 1)) { $('t_create_err').textContent = 'Container # must be a positive number.'; return; }
-    if (container_seq && !bkg_no) { $('t_create_err').textContent = 'Container # requires a booking number.'; return; }
-    const btn = $('t_create'); btn.disabled = true; btn.textContent = 'Creating…';
-    try {
-      let condition = null;
-      if (container_seq && bkg_no && TASK_TYPE_TO_CONTAINER_CONDITION[type]) condition = TASK_TYPE_TO_CONTAINER_CONDITION[type](bkg_no, container_seq);
-      else if (bkg_no && TASK_TYPE_TO_CONDITION[type]) condition = TASK_TYPE_TO_CONDITION[type](bkg_no);
-      const r = await fetch('/api/tasks', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type, target_kind, target_name: target_name || null, bkg_no: bkg_no || null, container_seq: container_seq || null, delay_minutes, message, condition }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'create failed');
-      $('t_target_name').value = ''; $('t_bkg').value = ''; $('t_container_seq').value = '';
-      $('t_message').value = TASK_MESSAGE_DEFAULTS[type] || '';
-      await loadTasks();
-    } catch (e) { $('t_create_err').textContent = e.message; }
-    finally { btn.disabled = false; btn.textContent = 'Create task'; }
-  });
+// ── Sign out ──────────────────────────────────────────────────────────────
+$('btnSignout').addEventListener('click', async () => {
+  await fetch('/logout', { method: 'POST' });
+  location.href = '/login';
+});
 
-})();
+// ── Boot ──────────────────────────────────────────────────────────────────
+async function boot() {
+  $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
+  try {
+    const me = await api('/api/me');
+    ROLE = me.role || 'user';
+  } catch {}
+  $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : 'Standard access';
+  renderNav();
+  loadTab(CURRENT_TAB);
+  // /api/whatsapp/status is requireAdmin server-side (api.js) — only poll it for
+  // admins. A non-admin login would get a 403 here, which would otherwise show
+  // as a false "link down" in the sidebar even when WhatsApp is fine.
+  if (ROLE === 'admin') {
+    const poll = async () => { try { updateWaBadge(await api('/api/whatsapp/status')); } catch {} };
+    poll();
+    setInterval(poll, 15000);
+  } else {
+    $('waStatusText').textContent = 'Signed in';
+    $('waStatusDot').style.background = 'var(--steel-500)';
+  }
+}
+boot();
 </script>
 </body>
 </html>
