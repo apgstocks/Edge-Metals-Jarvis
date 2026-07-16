@@ -110,6 +110,14 @@ function policyDecide(ctx) {
             // which never reads a "name" field from data.
             if (bkgResolved) return { intent: p.nextIntent, resolvedBy: 'policy', data: { bkg_no: bkgResolved, name: p.name } };
         }
+        // Follow-up timeframe reply (2026-07-16) — could be a preset ("15"),
+        // a phrase ("2 hours"), or garbage. Don't try to validate the shape
+        // here; hand the raw text to resolvePending/actions.js, which owns
+        // the actual minutes-parsing logic (single source of truth) and can
+        // re-prompt without clearing the pending if it doesn't parse.
+        if (p.type === 'await_followup_minutes') {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: ctx.text } };
+        }
         // fall through — the manager may be asking something else mid-pending
     }
 
@@ -403,11 +411,32 @@ function policyDecide(ctx) {
     // Guarded tightly: only fires for manager/team, only right after a bookings
     // query, and only for short alphabetic text — avoids treating "thanks" or
     // "ok" typed right after a listing as a location.
-    if (ctx.isManagerOrTeam && ctx.session?.lastInstruction === 'bookings_query') {
+    //
+    // FIX (2026-07-16): both guards below were softer than the comment above
+    // claimed. Real transcript: "show available bookings" set lastInstruction
+    // once; much later (after unrelated assign/remind commands, same session —
+    // lastInstruction is never cleared by other actions) the manager typed
+    // "No right now" in reply to something else entirely, and this heuristic
+    // fired because (a) lastInstruction was still stuck on 'bookings_query'
+    // with no recency check despite the comment saying "right after", and
+    // (b) the exclude list only rejected an EXACT match against 'no', not a
+    // phrase merely containing it ("no right now" !== "no"). Result: Jarvis
+    // replied "No bookings from no right now." — a real production example of
+    // exactly the "guess instead of asking" failure mode already flagged
+    // elsewhere in this codebase. Two independent fixes: (1) require the
+    // bookings_query instruction to be recent (within 3 min — long enough for
+    // a natural "from Oakland" follow-up, short enough that it can't still be
+    // armed after several unrelated commands), (2) reject on a leading-word
+    // match against the filler list, not just a full-string match.
+    const RECENT_INSTRUCTION_MS = 3 * 60 * 1000;
+    const instructionIsRecent = ctx.session?.lastInstructionAt
+        && (Date.now() - ctx.session.lastInstructionAt) < RECENT_INSTRUCTION_MS;
+    if (ctx.isManagerOrTeam && ctx.session?.lastInstruction === 'bookings_query' && instructionIsRecent) {
         const stripped = t.replace(/^(?:from|at|in)\s+/, '').trim();
         const wordCount = stripped.split(/\s+/).filter(Boolean).length;
+        const FILLER_LEAD = /^(yes|no|nope|nah|not|ok|okay|thanks?|thank\s+you|hi|hello|hey|menu|cancel|never\s*mind|nvm)\b/i;
         const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && /^[a-z\s.'-]+$/i.test(stripped)
-            && !['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel'].includes(stripped);
+            && !FILLER_LEAD.test(stripped);
         if (looksLikeLocation) {
             return {
                 intent: 'bookings_list_query', resolvedBy: 'policy',
@@ -563,7 +592,7 @@ async function route(decision, ctx, sendMessage) {
         case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
         case 'show_bookings_all':      return actions.showBookingsAll(chatId);
         case 'show_bookings_urgent':   return actions.showBookingsUrgent(chatId);
-        case 'show_bookings_available':updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: 'unassigned' }); return actions.showBookingsAvailable(chatId);
+        case 'show_bookings_available':updateSession(chatId, { lastInstruction: 'bookings_query', lastInstructionAt: Date.now(), lastBookingsFilter: 'unassigned' }); return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
         case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : askBkg(chatId, 'Which booking should I forward? e.g. "forward BK123456"', 'forward_booking');
@@ -580,14 +609,14 @@ async function route(decision, ctx, sendMessage) {
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'bookings_count_query': {
-            updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
+            updateSession(chatId, { lastInstruction: 'bookings_query', lastInstructionAt: Date.now(), lastBookingsFilter: d.filter });
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
             const list = count && count <= 10 ? `: ${bookings.join(', ')}` : '';
             return send(chatId, `${count} ${label}booking${count === 1 ? '' : 's'} from ${d.location}${list}`);
         }
         case 'bookings_list_query': {
-            updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
+            updateSession(chatId, { lastInstruction: 'bookings_query', lastInstructionAt: Date.now(), lastBookingsFilter: d.filter });
             const { count, records } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'Unassigned (no supplier) ' : d.filter === 'assigned' ? 'Assigned ' : '';
             if (!count) return send(chatId, `No ${label.toLowerCase()}bookings from ${d.location}.`);

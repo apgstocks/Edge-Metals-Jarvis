@@ -111,8 +111,15 @@ return { action_taken: 'contacts_shown' };
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
-const { booking } = getBooking(bkgNo);
+const { booking, status } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+// FIX (2026-07-16): getBooking() intentionally also returns archived records
+// (needed for read-only status checks like showBookingStatus), but every
+// mutation path must reject them explicitly — otherwise a closed booking
+// gets forwarded, a real WhatsApp message goes to the trucker about a dead
+// load, and updateWorkflow() auto-creates a phantom workflow.json entry for
+// a booking that archiveBooking() already deleted from it.
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't forward. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 
 const containers = require('../helpers/containers');
 const cList = Array.isArray(booking.containers) ? booking.containers : [];
@@ -177,8 +184,12 @@ return { action_taken: 'awaiting_confirmation' };
 // Executes after manager confirms.
 // containerSeq (optional): write the trucker onto that specific container.
 async function executeForward(chatId, bkgNo, truckerName, containerSeq) {
-const { booking } = getBooking(bkgNo);
+const { booking, status } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
+// FIX (2026-07-16): see forwardBooking() above — same guard needed here since
+// this is also reached directly from resolvePending('confirm_forward') and
+// the smart-assign path, both of which bypass forwardBooking()'s own check.
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't forward. Not notifying the trucker.`); return { action_taken: 'archived_blocked' }; }
 
 const truckerChat = truckers.getTruckerChatId(truckerName);
 const t           = truckers.getTrucker(truckerName);
@@ -250,8 +261,9 @@ return { action_taken: 'forwarded' };
 
 // ── Assign supplier ───────────────────────────────────────────────────────────
 async function assignSupplier(chatId, bkgNo, supplierName, containerSeq) {
-const { booking } = getBooking(bkgNo);
+const { booking, status } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign a supplier. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 
 const containersMod = require('../helpers/containers');
 const cList = Array.isArray(booking.containers) ? booking.containers : [];
@@ -298,8 +310,14 @@ return { action_taken: 'awaiting_confirmation' };
 }
 
 async function executeAssign(chatId, bkgNo, supplierName, containerSeq) {
-const { booking } = getBooking(bkgNo);
-if (!booking) return { action_taken: 'not_found' };
+const { booking, status } = getBooking(bkgNo);
+if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
+// FIX (2026-07-16): same archived guard as executeForward — reached directly
+// from resolvePending('confirm_assign') and the smart-assign path, both of
+// which bypass assignSupplier()'s own check. (Also fixed the previous silent
+// return-with-no-message on a vanished booking while touching this block —
+// executeForward already messaged the manager in that case, this didn't.)
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign a supplier. Not notifying anyone.`); return { action_taken: 'archived_blocked' }; }
 
 const supplierChat = suppliers.getSupplierChatId(supplierName);
 const s            = suppliers.getSupplier(supplierName);
@@ -371,8 +389,9 @@ return { action_taken: 'assigned' };
 // (just surface the stage in the prompt, don't block); do NOT notify the
 // outgoing trucker/supplier that they were replaced.
 async function smartAssign(chatId, bkgNo, name) {
-const { booking } = getBooking(bkgNo);
+const { booking, status } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 if (!name) { await _send(chatId, 'Assign to whom? e.g. "assign this to Rudy".'); return { action_taken: 'no_name' }; }
 
 const pol = booking.port_of_loading || '';
@@ -418,8 +437,14 @@ return resolveSmartAssignRole(chatId, bkgNo, role, role === 'supplier' ? supplie
 // pending resolutions below — once we have exactly one role and a candidate
 // list, this decides fresh-assign vs reassign-confirm vs name-collision ask.
 async function resolveSmartAssignRole(chatId, bkgNo, role, candidates) {
-const { booking } = getBooking(bkgNo);
+const { booking, status } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+// FIX (2026-07-16): this is also reached after a round-trip through
+// await_role_choice / await_candidate_choice — the booking could have been
+// archived (manually, or by the 11pm auto-archive job) in the gap between
+// the manager being asked "trucker or supplier?" and them replying. Re-check
+// here, don't just trust smartAssign()'s earlier check.
+if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 if (!candidates.length) { await _send(chatId, `No ${role} found for that name.`); return { action_taken: 'name_not_found' }; }
 
 if (candidates.length > 1) {
@@ -612,13 +637,33 @@ return { action_taken: 'ingated' };
 }
 
 // ── Recall / archive ──────────────────────────────────────────────────────────
+// FIX (2026-07-16): recallBooking/executeRecall had ZERO existence check —
+// worse than the archived-booking gap above, because there wasn't even a
+// check for "does this booking exist at all". Any typo'd or fabricated
+// booking number would still go through confirm → executeRecall, and
+// getTruckerGroupIdForBooking('') for a booking with no workflow entry falls
+// through to cfg.GROUP_TRUCKER (the default fallback group) — so a bogus
+// recall sent a real "BKGXXX has been RECALLED" message to the whole default
+// trucker group, plus created a phantom workflow.json entry via
+// updateWorkflow's auto-create. Recall only makes sense on an active
+// booking — an archived one is already closed, so treat that the same as
+// "not found" (no separate archived-specific message needed here).
 async function recallBooking(chatId, bkgNo) {
+const { booking, status } = getBooking(bkgNo);
+if (!booking || status === 'archived') { await _send(chatId, `No active booking found for ${bkgNo}. Check the booking number — it may not exist, or may already be archived.`); return { action_taken: 'not_found' }; }
 await setPending(chatId, { type: 'confirm_recall', bkg_no: bkgNo });
 await _send(chatId, `Recall ${bkgNo} from the trucker and reset to Not Started? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
 }
 
 async function executeRecall(chatId, bkgNo) {
+// Re-check at execute time too (same reasoning as resolveSmartAssignRole) —
+// the booking could have been archived in the gap between the yes/no ask
+// and the manager's reply (e.g. the 11pm auto-archive job, or a manual
+// archive from the dashboard in another tab).
+const { booking, status } = getBooking(bkgNo);
+if (!booking || status === 'archived') { await _send(chatId, `${bkgNo} is no longer an active booking — nothing to recall. Not notifying anyone.`); return { action_taken: 'not_found' }; }
+
 const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
 if (truckerChat) await _send(truckerChat, `${bkgNo} has been RECALLED. Please stop work on this booking.`);
 await updateWorkflow(bkgNo, { step: 'not_started', trucker_name: null, trucker_group_id: null, recalled_at: new Date().toISOString() });
@@ -732,8 +777,9 @@ switch (pending.type) {
             await _send(chatId, 'Reply "trucker" or "supplier".');
             return { action_taken: 'awaiting_role_choice' };
         }
-        const { booking } = getBooking(pending.bkg_no);
+        const { booking, status } = getBooking(pending.bkg_no);
         if (!booking) { await _send(chatId, `No booking found for ${pending.bkg_no}.`); return { action_taken: 'not_found' }; }
+        if (status === 'archived') { await _send(chatId, `${pending.bkg_no} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
         const pol = booking.port_of_loading || '';
         const raw = role === 'supplier' ? suppliers.getSuppliersByName(pending.name) : truckers.getTruckersByName(pending.name);
         const local = raw.length > 1 ? raw.filter(x => suppliers.localityMatchesPort(x.locality, pol)) : raw;
@@ -756,6 +802,22 @@ switch (pending.type) {
         return pending.role === 'supplier'
             ? executeAssign(chatId, pending.bkg_no, pending.new_name, seq)
             : executeForward(chatId, pending.bkg_no, pending.new_name, seq);
+    }
+
+    // Manager answering "how long before I follow up?" (2026-07-16). Reply
+    // could be a preset (5/15/30/60), any other plain number, or a phrase
+    // like "2 hours". If it doesn't parse, re-prompt WITHOUT clearing the
+    // pending — same pattern as await_role_choice's invalid-reply branch —
+    // so a stray reply doesn't silently drop the follow-up request.
+    case 'await_followup_minutes': {
+        const raw = String(selection || answer || '').trim();
+        const mins = parseMinutesReply(raw);
+        if (!mins) {
+            await _send(chatId, `Didn't catch a time frame — reply with a number of minutes (e.g. 15) or something like "2 hours". Reply "no" to cancel.`);
+            return { action_taken: 'awaiting_followup_minutes' };
+        }
+        await clearPending(chatId);
+        return fireFollowup(chatId, pending.target_kind, pending.resolved_name, pending.bkg_no, mins, pending.requested_by);
     }
 
     default:
@@ -786,8 +848,21 @@ return loadBookings()?.[bkgNo]?.[field] || null;
 // matches — e.g. "follow up with the port" isn't a contact, tell the manager
 // rather than silently dropping the request). Reuses the existing persistent
 // task queue (helpers/tasks.js) — same infra as nudge_* tasks, survives restart.
+//
+// Parses a manager's reply to "how long?" into minutes. Accepts a bare
+// number (interpreted as minutes — matches the 5/15/30/60 presets we offer,
+// but any positive integer works too, e.g. "20"), or "N min(s)"/"N hr(s)"/
+// "N hour(s)". Returns null if it doesn't parse — caller re-prompts rather
+// than guessing.
+function parseMinutesReply(raw) {
+const s = String(raw || '').trim().toLowerCase();
+if (/^\d+$/.test(s)) { const n = parseInt(s, 10); return n > 0 ? n : null; }
+const m = s.match(/^(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours)$/);
+if (m) { const n = parseInt(m[1], 10); return n > 0 ? (m[2].startsWith('h') ? n * 60 : n) : null; }
+return null;
+}
+
 async function scheduleFollowup(chatId, targetName, minutes, bkgNo, requestedBy) {
-const tasks = require('../helpers/tasks');
 const name = String(targetName || '').trim();
 
 let target_kind = null, resolvedName = name;
@@ -801,7 +876,29 @@ if (!target_kind) {
     return { action_taken: 'replied' };
 }
 
-const mins = Number.isFinite(minutes) && minutes > 0 ? minutes : 30; // default 30 min if unspecified
+// FIX (2026-07-16): this used to silently default to 30 minutes whenever no
+// explicit time was given (e.g. "Remind AP to share the scale ticket" has
+// no "in N minutes"). Per Apsara: never auto-assume a timeframe on her
+// behalf — ask, same principle as smart_assign asking instead of guessing
+// trucker-vs-supplier. Only skip the ask when minutes came through already
+// resolved (e.g. "follow up with X in 20 minutes" — policy regex parsed it).
+if (!Number.isFinite(minutes) || minutes <= 0) {
+    await setPending(chatId, {
+        type: 'await_followup_minutes', target_kind, resolved_name: resolvedName,
+        bkg_no: bkgNo || null, requested_by: requestedBy || null,
+    });
+    await _send(chatId, `How long before I follow up with ${resolvedName}${bkgNo ? ' re ' + bkgNo : ''}? Reply 5, 15, 30, or 60 (minutes) — or tell me a specific time, e.g. "2 hours".`);
+    return { action_taken: 'awaiting_followup_minutes' };
+}
+
+return fireFollowup(chatId, target_kind, resolvedName, bkgNo, minutes, requestedBy);
+}
+
+// Shared tail for scheduleFollowup() (explicit minutes given up front) and
+// resolvePending's 'await_followup_minutes' case (minutes given on the ask).
+async function fireFollowup(chatId, target_kind, resolvedName, bkgNo, minutes, requestedBy) {
+const tasks = require('../helpers/tasks');
+const mins = minutes;
 const fireAt = new Date(Date.now() + mins * 60 * 1000).toISOString();
 const label = bkgNo ? ` re ${bkgNo}` : '';
 const message = bkgNo
