@@ -88,9 +88,17 @@ function formatPriceRows(rows) {
     // "looking" different. Normalizing every cell to plain ASCII spaces before
     // measuring/padding removes that whole class of cross-client bug.
     const clean = s => String(s).replace(/[\s\u00A0\u200B\u2007\u202F]+/g, ' ').trim();
+    // Confirmed on-device: WhatsApp Android's text classifier auto-detects
+    // "$X.XX"-shaped substrings as currency amounts and re-renders that span
+    // letter-spaced -- but only inside a monospace/code block (the exact same
+    // text sent as a plain message renders "$1.00" correctly). A zero-width
+    // non-joiner right after "$" is invisible to a human but breaks the
+    // "$" + digit adjacency the classifier's pattern match needs, so the
+    // whole span stops getting flagged as currency.
+    const breakCurrencyDetection = s => s.replace(/\$/, '$&\u200C');
     const items = rows.map(r => clean(r.item));
     const width = Math.max(...items.map(s => s.length)) + 2;
-    return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${clean(r.priceRaw)}`).join('\n') + '\n```';
+    return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${breakCurrencyDetection(clean(r.priceRaw))}`).join('\n') + '\n```';
 }
 
 function formatPriceList(data, { title = 'Edge Metals — Price List' } = {}) {
