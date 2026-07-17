@@ -70,14 +70,35 @@ function standingContacts() {
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
+// WhatsApp renders normal text with a proportional font, so plain space-padding
+// never lines up — "Auto cast" and "Al rims(Dirty)" take different pixel widths
+// even with the same number of spaces after them. Wrapping the block in a
+// ```triple-backtick``` fence forces WhatsApp to render it in its fixed-width
+// font, so padding every item name to the same character width actually lines
+// the prices up in a column on every device.
+function formatPriceRows(rows) {
+    if (!rows.length) return '';
+    // Google Sheets copy/paste routinely smuggles in non-breaking spaces, tabs,
+    // or other invisible whitespace inside cell text — invisible in a normal
+    // font, but a phone's monospace fallback font can render e.g. an NBSP at a
+    // different width than a plain ASCII space. That's enough to silently
+    // throw off every padEnd() column after it, which is exactly a bug that
+    // would look perfect on desktop (broader font coverage) and ragged on
+    // mobile (narrower monospace fallback) without the underlying text ever
+    // "looking" different. Normalizing every cell to plain ASCII spaces before
+    // measuring/padding removes that whole class of cross-client bug.
+    const clean = s => String(s).replace(/[\s\u00A0\u200B\u2007\u202F]+/g, ' ').trim();
+    const items = rows.map(r => clean(r.item));
+    const width = Math.max(...items.map(s => s.length)) + 2;
+    return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${clean(r.priceRaw)}`).join('\n') + '\n```';
+}
+
 function formatPriceList(data, { title = 'Edge Metals — Price List' } = {}) {
     const lines = [title, `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, ''];
     for (const [city, rows] of Object.entries(data)) {
         if (!rows.length) continue;
         lines.push(`*${city}*`);
-        for (const r of rows) {
-            lines.push(`${r.item}  ${r.priceRaw}`);
-        }
+        lines.push(formatPriceRows(rows));
         lines.push('');
     }
     return lines.join('\n').trim();
@@ -101,7 +122,7 @@ function formatSingleCity(data, city) {
     const lines = [`*Edge Metals — ${city} Price List*`,
         `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, ''];
     if (!rows.length) return lines.concat(['(no items found for this sheet)']).join('\n');
-    for (const r of rows) lines.push(`${r.item}  ${r.priceRaw}`);
+    lines.push(formatPriceRows(rows));
     return lines.join('\n');
 }
 
