@@ -12,8 +12,16 @@ const { loadJson, mutateJson } = require('./json');
 
 // ── Messaging injected at boot by index.js (same wiring pattern as actions.js) ─
 let _send = async () => { console.warn('[PRICELIST] sendMessage not wired yet'); return false; };
-function init({ sendMessage }) {
+// _getBrowser resolves the SAME Puppeteer browser instance whatsapp-web.js
+// already runs for the WhatsApp Web connection (client.pupBrowser). Injected
+// as a getter, not a value, because it doesn't exist yet at boot time — only
+// once client.initialize() has actually launched Chromium. Used only by
+// renderPriceListImage() below; every other function in this file works
+// without it.
+let _getBrowser = () => null;
+function init({ sendMessage, getBrowser } = {}) {
     if (sendMessage) _send = sendMessage;
+    if (getBrowser) _getBrowser = getBrowser;
 }
 
 // ── Contacts (the "3 people" + anyone added ad hoc) ──────────────────────────
@@ -69,36 +77,28 @@ function standingContacts() {
     return loadContacts().filter(c => c.standing);
 }
 
-// ── Formatting ────────────────────────────────────────────────────────────────
+// ── Text formatting (fallback path — see renderPriceListImage for primary) ───
 // WhatsApp renders normal text with a proportional font, so plain space-padding
 // never lines up — "Auto cast" and "Al rims(Dirty)" take different pixel widths
 // even with the same number of spaces after them. Wrapping the block in a
 // ```triple-backtick``` fence forces WhatsApp to render it in its fixed-width
-// font, so padding every item name to the same character width actually lines
-// the prices up in a column on every device.
+// font, so padding every item name to the same character width lines the
+// prices up in a column — on WhatsApp Web. Confirmed on-device that WhatsApp
+// Android's monospace/code-block renderer injects extra spacing into price
+// digits that plain (non-code-block) text does not get, and that survived a
+// zero-width-character workaround — so this text path is kept only as a
+// fallback for when image rendering isn't available (see below), not as the
+// primary way prices get sent.
 function formatPriceRows(rows) {
     if (!rows.length) return '';
     // Google Sheets copy/paste routinely smuggles in non-breaking spaces, tabs,
     // or other invisible whitespace inside cell text — invisible in a normal
     // font, but a phone's monospace fallback font can render e.g. an NBSP at a
-    // different width than a plain ASCII space. That's enough to silently
-    // throw off every padEnd() column after it, which is exactly a bug that
-    // would look perfect on desktop (broader font coverage) and ragged on
-    // mobile (narrower monospace fallback) without the underlying text ever
-    // "looking" different. Normalizing every cell to plain ASCII spaces before
-    // measuring/padding removes that whole class of cross-client bug.
+    // different width than a plain ASCII space, throwing off padEnd() columns.
     const clean = s => String(s).replace(/[\s\u00A0\u200B\u2007\u202F]+/g, ' ').trim();
-    // Confirmed on-device: WhatsApp Android's text classifier auto-detects
-    // "$X.XX"-shaped substrings as currency amounts and re-renders that span
-    // letter-spaced -- but only inside a monospace/code block (the exact same
-    // text sent as a plain message renders "$1.00" correctly). A zero-width
-    // non-joiner right after "$" is invisible to a human but breaks the
-    // "$" + digit adjacency the classifier's pattern match needs, so the
-    // whole span stops getting flagged as currency.
-    const breakCurrencyDetection = s => s.replace(/\$/, '$&\u200C');
     const items = rows.map(r => clean(r.item));
     const width = Math.max(...items.map(s => s.length)) + 2;
-    return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${breakCurrencyDetection(clean(r.priceRaw))}`).join('\n') + '\n```';
+    return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${clean(r.priceRaw)}`).join('\n') + '\n```';
 }
 
 function formatPriceList(data, { title = 'Edge Metals — Price List' } = {}) {
@@ -110,6 +110,57 @@ function formatPriceList(data, { title = 'Edge Metals — Price List' } = {}) {
         lines.push('');
     }
     return lines.join('\n').trim();
+}
+
+// ── Image rendering (primary path — guaranteed cross-client alignment) ───────
+// A PNG looks pixel-identical on every WhatsApp client: no font substitution,
+// no on-device text classifier, nothing left to differ between Web and
+// mobile. Renders via the SAME Chromium instance whatsapp-web.js already
+// runs (client.pupBrowser, injected through init() above) — no new
+// dependency, no second browser process. Throws if the browser isn't
+// available yet (e.g. WhatsApp still reconnecting); callers catch that and
+// fall back to the text path.
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function renderPriceListImage(rows, title, subtitle) {
+    const browser = _getBrowser();
+    if (!browser) throw new Error('WhatsApp browser not ready — cannot render price list image');
+
+    const rowsHtml = rows.map(r => `
+        <tr>
+            <td class="item">${escapeHtml(r.item)}</td>
+            <td class="price">${escapeHtml(r.priceRaw)}</td>
+        </tr>`).join('');
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #ffffff; padding: 24px; width: 480px; }
+    h1 { font-size: 22px; color: #111111; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #666666; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 8px 4px; font-size: 16px; border-bottom: 1px solid #eeeeee; }
+    .item { color: #222222; text-align: left; }
+    .price { color: #111111; font-weight: 700; text-align: right; white-space: nowrap; padding-left: 16px; }
+    tr:last-child td { border-bottom: none; }
+</style></head>
+<body>
+    <h1>${escapeHtml(title)}</h1>
+    <div class="subtitle">${escapeHtml(subtitle)}</div>
+    <table>${rowsHtml}</table>
+</body></html>`;
+
+    const page = await browser.newPage();
+    try {
+        await page.setViewport({ width: 480, height: 100 });
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
+        const base64 = await page.screenshot({ type: 'png', fullPage: true, encoding: 'base64' });
+        return base64;
+    } finally {
+        await page.close().catch(() => {});
+    }
 }
 
 // ── Send current price list to one resolved target ───────────────────────────
@@ -136,18 +187,36 @@ function formatSingleCity(data, city) {
 
 // targetNameOrNumber may be null — in that case send back to fallbackChatId
 // (the chat that asked), which is the common case for "send price list" with
-// no recipient specified.
+// no recipient specified. Tries the image path first (see
+// renderPriceListImage); falls back to the old text format if the browser
+// isn't ready or rendering fails for any reason, so this never hard-fails
+// just because the image path had a bad moment.
 async function sendPriceListCityTo(targetNameOrNumber, city, fallbackChatId) {
     const data = await readPriceSheet();
-    const text = formatSingleCity(data, city);
+    const rows = data[city] || [];
+    const updatedLine = `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`;
+
+    let media = null;
+    let text = null;
+    if (rows.length) {
+        try {
+            const base64 = await renderPriceListImage(rows, `Edge Metals — ${city} Price List`, updatedLine);
+            media = { mimetype: 'image/png', base64, filename: `${city.replace(/\s+/g, '_')}_pricelist.png` };
+        } catch (err) {
+            console.warn('[PRICELIST] Image render failed, falling back to text:', err.message);
+        }
+    }
+    if (!media) {
+        text = formatSingleCity(data, city);
+    }
 
     if (!targetNameOrNumber) {
-        const ok = await _send(fallbackChatId, text);
+        const ok = await _send(fallbackChatId, text, media);
         return { ok, target: 'you' };
     }
     const target = resolveTarget(targetNameOrNumber);
     if (!target) return { ok: false, reason: 'not_found' };
-    const ok = await _send(target.chatId, text);
+    const ok = await _send(target.chatId, text, media);
     return { ok, target: target.label };
 }
 

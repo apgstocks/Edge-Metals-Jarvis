@@ -95,7 +95,7 @@ async function sendToTeam(text) {
 // ── Wire modules ───────────────────────────────────────────────────────────────
 alerts.init({ sendToManager });
 actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAlert });
-pricelist.init({ sendMessage });
+pricelist.init({ sendMessage, getBrowser: () => client.pupBrowser });
 
 // Bridge for the /api/bot/command endpoint — brain.process() takes a sendMessage
 // argument, and api.js needs to pass the SAME sendMessage that has the capture
