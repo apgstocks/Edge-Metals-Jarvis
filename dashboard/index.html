@@ -264,6 +264,7 @@ input::placeholder { color:var(--steel-500); }
   </div>
 </div>
 
+<script src="/qrcode.min.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════════════
 // Jarvis dashboard — plain HTML/vanilla JS, no build step, no framework.
@@ -283,6 +284,7 @@ function localityMatchesPort(loc, port) {
 }
 let ROLE = 'user';
 let CURRENT_TAB = 'board';
+let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pending — WA rotates the QR string every ~20-30s until scanned
 
 const NAV_ITEMS = [
   { id: 'board',     label: 'Board' },
@@ -338,6 +340,7 @@ function switchTab(tab) {
 
 async function loadTab(tab) {
   const root = $('viewRoot');
+  if (tab !== 'whatsapp' && waQrRefreshTimer) { clearInterval(waQrRefreshTimer); waQrRefreshTimer = null; }
   root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
   try {
     if (tab === 'board') return renderBoard(await api('/api/dashboard'));
@@ -939,7 +942,10 @@ async function renderWhatsapp() {
           <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">Jarvis is on the wire. Every trucker, supplier, and team group routes through this link.</div>
         ` : isQr ? `
           <h1 style="margin:0; font-family:var(--font-display); font-size:clamp(36px,5vw,58px); font-weight:900; text-transform:uppercase; letter-spacing:-.03em; line-height:.98; color:#fff; text-shadow:0 0 80px rgba(217,154,43,.4);">Scan to connect<span style="color:var(--status-warning);">.</span></h1>
-          <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">Check the server terminal/logs for the QR code.</div>
+          <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">Open WhatsApp on the linked phone → Settings → Linked devices → Link a device, then scan this code. No need to sign out of this dashboard — this only resets Jarvis's WhatsApp link.</div>
+          <div style="display:inline-block; margin-top:16px; padding:14px; background:rgba(20,24,27,.9); border:1px solid #2B3239; border-radius:8px; backdrop-filter:blur(6px);">
+            <div id="waQrBox" style="display:inline-block; background:#fff; padding:10px; border-radius:4px; line-height:0;"></div>
+          </div>
         ` : `
           <h1 style="margin:0; font-family:var(--font-display); font-size:clamp(46px,6vw,80px); font-weight:900; text-transform:uppercase; letter-spacing:-.03em; line-height:.94; color:#fff; text-shadow:0 0 80px rgba(197,64,47,.5);">Link down<span style="color:var(--status-danger);">.</span></h1>
           <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">${esc(status.error || 'The wire went quiet. Jarvis is retrying.')}</div>
@@ -955,11 +961,37 @@ async function renderWhatsapp() {
         ${ROLE === 'admin' ? '<button id="btnWaReset" class="btn btn-dark" style="border-color:#2B3239;">Sign out &amp; re-scan</button>' : ''}
       </div>
     </div>`;
+  // Render the actual scannable QR image (dashboard/qrcode.min.js — the browser
+  // build of the "qrcode" npm package: create/toCanvas/toDataURL/toString, NOT
+  // a davidshimjs-style `new QRCode(el, opts)` constructor). Verified against
+  // this exact bundled file: toDataURL(text, cb) alone throws "You need to
+  // specify a canvas element" in this build — it only works via toCanvas(el,
+  // text, opts, cb) with a real <canvas> passed in. status.qr is the raw
+  // string wa-state.js stores off the client's 'qr' event; /api/whatsapp/status
+  // was already returning it, the dashboard just never drew it.
+  if (isQr && status.qr && $('waQrBox')) {
+    const box = $('waQrBox');
+    box.innerHTML = '';
+    const canvas = document.createElement('canvas');
+    box.appendChild(canvas);
+    QRCode.toCanvas(canvas, status.qr, { width: 200, margin: 1 }, (err) => {
+      if (err) box.innerHTML = `<div style="color:var(--status-danger); font-size:12px; padding:8px;">QR render failed: ${esc(err.message)}</div>`;
+    });
+  }
   if ($('btnWaReset')) $('btnWaReset').addEventListener('click', async () => {
     if (!confirm('This logs Jarvis out of WhatsApp and requires a fresh QR scan. Continue?')) return;
     await api('/api/whatsapp/reset', { method: 'POST' });
-    alert('Reset triggered — check server logs for the new QR code.');
+    alert('Reset triggered — the process is restarting. Stay on this tab (no need to sign out) — the new QR will appear automatically in a few seconds.');
   });
+  // WhatsApp's QR rotates every ~20-30s until scanned, and after a reset the
+  // process has to fully respawn (pm2) before a new one exists. Keep polling
+  // status + re-rendering this tab, only while it's the active tab, until we
+  // land on 'ready' — so reconnecting never requires leaving this dashboard
+  // session or hunting through server logs.
+  if (waQrRefreshTimer) { clearInterval(waQrRefreshTimer); waQrRefreshTimer = null; }
+  if (status.status !== 'ready') {
+    waQrRefreshTimer = setInterval(() => { if (CURRENT_TAB === 'whatsapp') renderWhatsapp(); }, 20000);
+  }
   updateWaBadge(status);
 }
 function updateWaBadge(status) {
