@@ -6,9 +6,9 @@
 <title>Jarvis — Edge Metals Ops</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800;900&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-/* ── Edge Metals — Color tokens (from design mockup) ─────────────────────── */
+/* ── Edge Metals — Color tokens (dark theme, "Jarvis Ops" mockup pass 2) ──── */
 :root {
   --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
   --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
@@ -22,44 +22,57 @@
 
   --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
 
-  --bg-base: var(--steel-50); --bg-panel: var(--white);
-  --surface-card: var(--white); --surface-sunken: var(--steel-100);
-  --text-strong: var(--steel-950); --text-body: var(--steel-700); --text-muted: var(--steel-500);
-  --text-faint: var(--steel-400);
-  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: var(--leaf-50);
-  --warm: var(--copper-500);
-  --border-subtle: var(--steel-200); --border-default: var(--steel-300);
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7;
+  --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --warm: var(--copper-400);
+  --copper-soft: rgba(194,94,34,.15); --copper-onSoft: var(--copper-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
   --status-success: var(--green-500); --status-warning: var(--amber-500);
   --status-danger: var(--red-500); --status-info: var(--blue-500);
   --ring: var(--leaf-500);
 
-  --font-display: 'Poppins', system-ui, sans-serif;
-  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
 
   --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px;
-  --shadow-xs: 0 1px 2px rgba(12,14,16,.06);
-  --shadow-sm: 0 1px 3px rgba(12,14,16,.10), 0 1px 2px rgba(12,14,16,.06);
-  --shadow-md: 0 6px 16px rgba(12,14,16,.10), 0 2px 6px rgba(12,14,16,.06);
-  --shadow-lg: 0 18px 40px rgba(12,14,16,.16), 0 6px 14px rgba(12,14,16,.08);
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.35);
+  --shadow-md: 0 10px 30px rgba(0,0,0,.45);
+  --shadow-lg: 0 24px 60px rgba(0,0,0,.55);
   --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
 }
 * , *::before, *::after { box-sizing: border-box; }
 body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; overflow:hidden; }
-h1,h2,h3,h4 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:800; line-height:1.18; letter-spacing:-.02em; }
-a { color:var(--leaf-600); text-decoration:none; }
-a:hover { color:var(--leaf-700); text-decoration:underline; text-underline-offset:3px; }
+h1,h2,h3,h4 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+a:hover { color:var(--leaf-300); text-decoration:underline; text-underline-offset:3px; }
 button { font:inherit; }
 input, select { font-family:var(--font-sans); font-size:14px; }
-::selection { background:var(--leaf-200); color:var(--steel-950); }
+input::placeholder { color:var(--steel-500); }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
 :focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
 ::-webkit-scrollbar { width:10px; height:10px; }
-::-webkit-scrollbar-thumb { background:var(--steel-300); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb { background:var(--steel-700); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
 ::-webkit-scrollbar-track { background:transparent; }
 @keyframes jarvis-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
-.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
+@keyframes emGlow { 0%,100% { opacity:1; } 50% { opacity:.55; } }
+@keyframes emSpin { to { transform:rotate(360deg); } }
+@keyframes emSpinRev { to { transform:rotate(-360deg); } }
+@keyframes emPing { 0% { transform:scale(.6); opacity:.8; } 100% { transform:scale(2.6); opacity:0; } }
+@keyframes emOrbit { from { transform:rotateX(72deg) rotateZ(0deg); } to { transform:rotateX(72deg) rotateZ(360deg); } }
+@keyframes emOrbitRev { from { transform:rotateX(72deg) rotateZ(360deg); } to { transform:rotateX(72deg) rotateZ(0deg); } }
+@keyframes emBeam { to { background-position-x:120px; } }
+@keyframes emFloat { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-10px); } }
+@keyframes emView { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+.view-in { animation: emView .35s var(--ease-out); }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
 .btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
-.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
 .btn-primary:hover { background:var(--accent-hover); }
 .btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
 .btn-secondary:hover { border-color:var(--steel-600); }
@@ -67,9 +80,10 @@ input, select { font-family:var(--font-sans); font-size:14px; }
 .btn-danger:hover { border-color:var(--status-danger); }
 .btn-dark { background:var(--steel-800); color:#fff; border-color:var(--steel-700); }
 .btn-dark:hover { background:var(--steel-700); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
 .card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
 .field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
-.field input, .field select { width:100%; padding:11px 12px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
+.field input, .field select { width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
 .field input:focus, .field select:focus { border-color:var(--accent); }
 .badge { display:inline-block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); }
 .hidden { display:none !important; }
@@ -78,22 +92,62 @@ input, select { font-family:var(--font-sans); font-size:14px; }
 .nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .nav-btn:hover { background:var(--steel-800); color:#fff; }
 .nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
-.row-hover:hover { background:var(--steel-50); }
+.row-hover:hover { background:var(--surface-hover); }
+.chip { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:8px 14px; border-radius:20px; border:1px solid var(--border-default); background:var(--surface-card); color:var(--text-muted); cursor:pointer; }
+.chip.active { background:var(--leaf-500); color:#fff; border-color:var(--leaf-500); }
+.modal-overlay { position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:44px 24px; overflow-y:auto; }
+.modal-shell { background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:760px; box-shadow:var(--shadow-lg); overflow:hidden; }
+.modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
+.modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
+.modal-body { padding:24px 26px; max-height:62vh; overflow-y:auto; }
+.modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
+
+/* ── Collapsible sidebar for phone widths ─────────────────────────────────
+   Desktop: sidebar sits in normal flex flow, always visible, unchanged.
+   Phone (≤860px): sidebar becomes a fixed off-canvas panel that slides in
+   over the content instead of permanently eating ~2/3 of a phone screen. */
+#sidebar { transition: transform 220ms var(--ease-out); }
+#hamburgerBtn { display:none; }
+#sidebarBackdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:39; }
+@media (max-width: 860px) {
+  #sidebar { position:fixed; inset:0 auto 0 0; z-index:40; width:min(82vw,300px); transform:translateX(-100%); box-shadow:0 0 50px rgba(0,0,0,.6); }
+  #sidebar.mobile-open { transform:translateX(0); }
+  #sidebarBackdrop.mobile-open { display:block; }
+  #hamburgerBtn { display:flex; }
+  main { padding-top:58px; }
+}
+#hamburgerBtn { position:fixed; top:14px; left:14px; z-index:41; width:40px; height:40px; align-items:center; justify-content:center; flex-direction:column; gap:5px; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-sm); cursor:pointer; }
+.hamburger-line { display:block; width:18px; height:2px; background:#fff; border-radius:2px; transition:transform 200ms var(--ease-out), opacity 200ms; }
+#hamburgerBtn.open .hamburger-line:nth-child(1) { transform:translateY(7px) rotate(45deg); }
+#hamburgerBtn.open .hamburger-line:nth-child(2) { opacity:0; }
+#hamburgerBtn.open .hamburger-line:nth-child(3) { transform:translateY(-7px) rotate(-45deg); }
 </style>
 </head>
 <body>
 
+<button id="hamburgerBtn" aria-label="Toggle menu" aria-expanded="false">
+  <span class="hamburger-line"></span><span class="hamburger-line"></span><span class="hamburger-line"></span>
+</button>
+<div id="sidebarBackdrop"></div>
+
 <div style="display:flex; height:100vh; overflow:hidden;">
 
   <!-- ══ SIDEBAR ══ -->
-  <aside style="width:252px; flex-shrink:0; background:var(--steel-950); display:flex; flex-direction:column;">
+  <aside id="sidebar" style="width:252px; flex-shrink:0; background:var(--steel-950); display:flex; flex-direction:column;">
     <div style="height:5px; flex-shrink:0; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
     <div style="padding:26px 22px 20px; border-bottom:1px solid var(--steel-800);">
       <div style="display:flex; align-items:center; gap:13px;">
-        <div style="width:42px; height:42px; border-radius:8px; background:var(--steel-900); border:1px solid var(--copper-500); display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:900; color:var(--copper-400); font-size:18px;">J</div>
+        <div style="position:relative; width:44px; height:44px; flex-shrink:0;">
+          <span style="position:absolute; inset:-8px; border-radius:50%; background:radial-gradient(circle, rgba(215,126,61,.45), transparent 68%); animation:emGlow 2.2s ease-in-out infinite;"></span>
+          <span style="position:absolute; inset:0; border-radius:50%; background:repeating-conic-gradient(rgba(215,126,61,.9) 0deg 14deg, transparent 14deg 36deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); animation:emSpin 9s linear infinite;"></span>
+          <span style="position:absolute; inset:3px; border-radius:50%; background:conic-gradient(from 0deg, transparent 0 64%, rgba(255,214,170,.95)); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); animation:emSpin 2.4s linear infinite;"></span>
+          <span style="position:absolute; inset:7px; border-radius:50%; background:repeating-conic-gradient(rgba(87,190,73,.7) 0deg 3deg, transparent 3deg 15deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); animation:emSpinRev 6s linear infinite;"></span>
+          <span style="position:absolute; inset:12px; border-radius:50%; border:1px solid rgba(255,214,170,.7); animation:emPing 2.2s cubic-bezier(.2,.7,.2,1) infinite;"></span>
+          <span style="position:absolute; left:50%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; background:radial-gradient(circle at 40% 38%, #FFFFFF, #FFE7CB 40%, #FFB877 70%, #D77E3D 100%); box-shadow:0 0 26px rgba(255,214,170,1), 0 0 56px rgba(215,126,61,.6);"></span>
+        </div>
         <div>
           <div style="font-family:var(--font-mono); font-size:9.5px; font-weight:500; letter-spacing:.2em; text-transform:uppercase; color:var(--steel-400);">// Edge Metals · Ops</div>
-          <div style="font-family:var(--font-display); font-size:21px; font-weight:800; letter-spacing:.08em; color:#fff; text-transform:uppercase;">Jarvis</div>
+          <div style="font-family:var(--font-display); font-size:21px; font-weight:900; letter-spacing:.08em; color:#fff; text-transform:uppercase;">Jarvis</div>
         </div>
       </div>
       <div id="waStatusLine" style="display:flex; align-items:center; gap:8px; margin-top:16px;">
@@ -121,27 +175,27 @@ input, select { font-family:var(--font-sans); font-size:14px; }
   </main>
 </div>
 
-<!-- ══ ADD BOOKING MODAL ══ -->
-<div id="bookingModal" class="hidden" style="position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:56px 24px; overflow-y:auto;">
-  <div style="background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:700px; box-shadow:var(--shadow-lg); overflow:hidden;">
-    <div style="height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-    <div style="display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle);">
-      <div>
-        <div class="eyebrow" style="margin-bottom:3px;">// New booking</div>
-        <div style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">Log a booking</div>
-      </div>
-      <button id="btnCloseModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
+<!-- ══ BOOKING MODAL (add + edit) ══ -->
+<div id="bookingModal" class="hidden modal-overlay">
+  <div class="modal-shell">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div><div class="eyebrow" style="margin-bottom:3px;">// Booking</div><div id="bookingModalTitle" style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">New booking</div></div>
+      <button id="btnCloseBookingModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
     </div>
-    <div style="padding:24px 26px;">
-      <label style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:20px 22px; background:var(--surface-sunken); cursor:pointer;">
+    <div class="modal-body">
+      <label id="pdfDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
         <input type="file" id="pdfInput" accept="application/pdf" class="hidden">
         <span style="color:var(--accent); font-size:20px;">⇪</span>
         <div>
           <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="pdfDropLabel">Drop the carrier's booking PDF here</div>
-          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis extracts booking no, ports, ERD, cutoff, and containers automatically</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis extracts fields automatically — review before saving</div>
         </div>
       </label>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px;">
+      <button id="scanBtn" class="btn btn-secondary hidden" style="margin-top:12px;">Scan &amp; auto-fill fields</button>
+      <div id="scannedBanner" class="hidden" style="margin-top:10px; padding:8px 12px; background:var(--accent-soft); color:var(--accent-onSoft); border-radius:var(--radius-xs); font-size:12px;">Fields extracted — review and edit below.</div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:18px;">
         <div class="field" style="grid-column:1/-1;"><label>Booking number *</label><input id="f_bkg" placeholder="e.g. DALA23991600"></div>
         <div class="field"><label>Carrier</label><input id="f_carrier" placeholder="MSC, Maersk…"></div>
         <div class="field"><label>Vessel / voyage</label><input id="f_vessel" placeholder="MSC AURORA 226E"></div>
@@ -149,12 +203,63 @@ input, select { font-family:var(--font-sans); font-size:14px; }
         <div class="field"><label>Port of discharge</label><input id="f_pod" placeholder="Busan"></div>
         <div class="field"><label>ERD date</label><input id="f_erd" placeholder="YYYY-MM-DD"></div>
         <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="YYYY-MM-DD"></div>
+        <div class="field"><label>Buyer</label><input id="f_buyer"></div>
       </div>
-      <div id="modalError" style="color:var(--status-danger); font-size:12.5px; margin-top:12px;"></div>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; margin:18px 0 10px;">
+        <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-strong);">Containers</div>
+        <button id="btnAddContainer" class="btn btn-secondary" style="padding:6px 12px;">+ Add container</button>
+      </div>
+      <div id="containersList" style="display:flex; flex-direction:column; gap:8px;"></div>
+
+      <div id="modalError" style="color:var(--status-danger); font-size:12.5px; margin-top:14px;"></div>
     </div>
-    <div style="display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken);">
-      <button id="btnCancelModal" class="btn btn-secondary">Cancel</button>
+    <div class="modal-foot">
+      <button id="btnCancelBooking" class="btn btn-secondary">Cancel</button>
       <button id="btnSaveBooking" class="btn btn-primary">Save booking</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ CONTACT MODAL (trucker + supplier, add + edit) ══ -->
+<div id="contactModal" class="hidden modal-overlay">
+  <div class="modal-shell" style="max-width:600px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div><div class="eyebrow" style="margin-bottom:3px;">// Contact</div><div id="contactModalTitle" style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">New contact</div></div>
+      <button id="btnCloseContactModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="field"><label>Name *</label><input id="ct_name"></div>
+      <div class="field"><label>Locality (city / port)</label><input id="ct_locality" placeholder="e.g. Los Angeles">
+        <div style="font-size:11px; color:var(--text-faint); margin-top:4px;">Used to filter this contact into bookings with a matching port of loading. Leave blank to always show.</div>
+      </div>
+      <div class="field">
+        <label>WhatsApp number</label>
+        <div style="display:flex; gap:8px;"><input id="ct_whatsapp" placeholder="e.g. 14155551234" style="flex:1;"><button id="ct_verify" class="btn btn-secondary" style="white-space:nowrap;">Verify</button></div>
+        <div id="ct_verify_result" class="hidden" style="margin-top:8px; padding:8px 10px; border-radius:var(--radius-xs); font-size:12px; font-family:var(--font-mono);"></div>
+      </div>
+      <div class="field"><label>Email</label><input id="ct_email" type="email"></div>
+      <div id="ct_common_groups" class="hidden" style="padding:12px; background:var(--surface-sunken); border-radius:var(--radius-sm); border:1px solid var(--border-subtle); margin-bottom:14px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Shared groups with Jarvis</div>
+        <div id="ct_common_groups_list"></div>
+        <div id="ct_common_groups_empty" class="hidden" style="font-size:12px; color:var(--text-muted); line-height:1.5;">No shared groups. WhatsApp only lets Jarvis see groups both it and this contact belong to — add both to a group on your phone, then verify again.</div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+        <div class="field" style="margin-bottom:0;"><label>Group name</label><input class="grp-name-target" id="ct_group_name" readonly style="background:var(--surface-sunken);"></div>
+        <div class="field" style="margin-bottom:0;"><label>Group ID</label><input class="grp-id-target" id="ct_group_id" placeholder="120363...@g.us" style="font-family:var(--font-mono);"></div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:end; margin-top:12px;">
+        <div class="field" style="flex:1; margin-bottom:0;"><label>Or find a group by name</label><input class="grp-search-input" id="ct_group_search" placeholder="e.g. ABC Trucking Dispatch"></div>
+        <button class="btn btn-secondary grp-search-btn" id="ct_group_search_btn">Search</button>
+      </div>
+      <div class="grp-search-results" id="ct_group_search_results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+      <div class="field" style="margin-top:14px;"><label>Preferred contact mode</label><select id="ct_mode"><option value="whatsapp">WhatsApp</option><option value="email">Email (routing not yet wired)</option></select></div>
+      <div id="ct_error" style="color:var(--status-danger); font-size:12.5px; margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btnCancelContact" class="btn btn-secondary">Cancel</button>
+      <button id="btnSaveContact" class="btn btn-primary">Save</button>
     </div>
   </div>
 </div>
@@ -162,12 +267,20 @@ input, select { font-family:var(--font-sans); font-size:14px; }
 <script>
 // ══════════════════════════════════════════════════════════════════════════
 // Jarvis dashboard — plain HTML/vanilla JS, no build step, no framework.
-// Every tab fetches from the REAL api.js endpoints already running on this
-// server. Visual design matches the "Jarvis Ops" mockup; the LME/live-yard
-// ticker strip from that mockup is intentionally omitted per request.
+// Rebuilt twice this pass: (1) to match the "Jarvis Ops" visual mockup, then
+// (2) to restore functional depth from the real original dashboard that the
+// first pass dropped — contact Verify/common-groups, booking edit + per-
+// container management, task nudge types with auto-cancel conditions, and
+// the Facts tab. Every fetch() call is checked against the live api.js.
 // ══════════════════════════════════════════════════════════════════════════
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const normLoc = (s) => String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
+function localityMatchesPort(loc, port) {
+  const l = normLoc(loc), p = normLoc(port);
+  if (!l || !p) return false;
+  return l.includes(p) || p.includes(l);
+}
 let ROLE = 'user';
 let CURRENT_TAB = 'board';
 
@@ -176,10 +289,12 @@ const NAV_ITEMS = [
   { id: 'bookings',  label: 'Bookings' },
   { id: 'truckers',  label: 'Truckers' },
   { id: 'suppliers', label: 'Suppliers' },
-  { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true }, // /api/whatsapp/* is requireAdmin server-side — a non-admin login would 403 on this tab
+  { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true },
+  { id: 'contacts',  label: 'Contacts', adminOnly: true },
   { id: 'settings',  label: 'Settings', adminOnly: true },
   { id: 'bot',       label: 'Bot' },
   { id: 'tasks',     label: 'Tasks' },
+  { id: 'facts',     label: 'Facts', adminOnly: true },
 ];
 
 async function api(path, opts = {}) {
@@ -195,8 +310,25 @@ function renderNav() {
   nav.innerHTML = NAV_ITEMS.filter(n => !n.adminOnly || ROLE === 'admin').map(n => `
     <button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>
   `).join('');
-  nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+  nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { switchTab(b.dataset.tab); closeMobileSidebar(); }));
 }
+
+// ── Mobile off-canvas sidebar (phone widths only — desktop sidebar is
+// always visible via the media query above, these handlers are harmless
+// no-ops on desktop since the classes have no visual effect there). ───────
+function closeMobileSidebar() {
+  $('sidebar').classList.remove('mobile-open');
+  $('sidebarBackdrop').classList.remove('mobile-open');
+  $('hamburgerBtn').classList.remove('open');
+  $('hamburgerBtn').setAttribute('aria-expanded', 'false');
+}
+$('hamburgerBtn').addEventListener('click', () => {
+  const open = $('sidebar').classList.toggle('mobile-open');
+  $('sidebarBackdrop').classList.toggle('mobile-open', open);
+  $('hamburgerBtn').classList.toggle('open', open);
+  $('hamburgerBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+$('sidebarBackdrop').addEventListener('click', closeMobileSidebar);
 
 function switchTab(tab) {
   CURRENT_TAB = tab;
@@ -213,9 +345,11 @@ async function loadTab(tab) {
     if (tab === 'truckers') return renderContacts('truckers', 'Drayage roster', '+ Add trucker', await api('/api/truckers'));
     if (tab === 'suppliers') return renderContacts('suppliers', 'Yard network', '+ Add supplier', await api('/api/suppliers'));
     if (tab === 'whatsapp') return renderWhatsapp();
+    if (tab === 'contacts') return renderPriceContacts();
     if (tab === 'settings') return renderSettings(await api('/api/settings'));
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
+    if (tab === 'facts') return renderFacts(await api('/api/facts'));
   } catch (err) {
     root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`;
   }
@@ -223,12 +357,15 @@ async function loadTab(tab) {
 
 // ── BOARD ─────────────────────────────────────────────────────────────────
 const RISK_COLOR = { high: 'var(--status-danger)', medium: 'var(--status-warning)', low: 'var(--accent)', done: 'var(--steel-400)' };
-function renderBoard(data) {
+const RISK_LABEL = { high: 'High risk', medium: 'Medium risk', low: 'On track', done: 'Complete' };
+let boardData = null;
+let boardFilter = 'all';
+function renderBoard(data) { boardData = data; boardFilter = 'all'; renderBoardView(); }
+function renderBoardView() {
+  const data = boardData;
   const { counts, alerts, bookings } = data;
-  const kpiDefs = [
-    { key: 'high', label: 'High risk' }, { key: 'medium', label: 'Medium risk' },
-    { key: 'low', label: 'On track' }, { key: 'done', label: 'Complete' },
-  ];
+  const filtered = boardFilter === 'all' ? bookings : bookings.filter(b => b.risk === boardFilter);
+  const kpiDefs = ['high', 'medium', 'low', 'done'];
   $('viewRoot').innerHTML = `
     <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
       <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:30px;">
@@ -241,22 +378,26 @@ function renderBoard(data) {
           <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-top:6px;">Active bookings</div>
         </div>
       </div>
+      <div style="display:flex; gap:8px; margin-bottom:18px;">
+        <button class="chip board-filter ${boardFilter === 'all' ? 'active' : ''}" data-filter="all">All</button>
+        ${kpiDefs.map(k => `<button class="chip board-filter ${boardFilter === k ? 'active' : ''}" data-filter="${k}">${RISK_LABEL[k]}</button>`).join('')}
+      </div>
       <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:36px;">
         ${kpiDefs.map(k => `
-          <div class="card" style="border-top:3px solid ${RISK_COLOR[k.key]}; padding:18px 20px 16px;">
-            <span style="font-family:var(--font-mono); font-size:34px; font-weight:600; color:var(--text-strong);">${counts[k.key] || 0}</span>
-            <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:${RISK_COLOR[k.key]}; margin-top:12px;">${k.label}</div>
-          </div>
+          <button class="card board-filter" data-filter="${k}" style="text-align:left; cursor:pointer; border-top:3px solid ${RISK_COLOR[k]}; padding:18px 20px 16px; ${boardFilter === k ? 'box-shadow:0 0 0 2px ' + RISK_COLOR[k] + ' inset;' : ''}">
+            <span style="font-family:var(--font-mono); font-size:34px; font-weight:600; color:var(--text-strong);">${counts[k] || 0}</span>
+            <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:${RISK_COLOR[k]}; margin-top:12px;">${RISK_LABEL[k]}</div>
+          </button>
         `).join('')}
       </div>
       ${alerts.length ? `
         <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-          <span style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--copper-500);">// Needs attention</span>
+          <span style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--copper-400);">// Needs attention</span>
           <span style="flex:1; height:1px; background-image:repeating-linear-gradient(-45deg, var(--copper-300) 0, var(--copper-300) 2px, transparent 2px, transparent 8px);"></span>
         </div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-bottom:40px;">
           ${alerts.map(a => `
-            <div style="position:relative; background:var(--steel-950); border-radius:var(--radius-sm); padding:16px 18px 16px 26px;">
+            <div style="position:relative; background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:16px 18px 16px 26px;">
               <div style="position:absolute; left:0; top:0; bottom:0; width:8px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 10px);"></div>
               <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
                 <span style="font-family:var(--font-mono); font-size:13.5px; font-weight:600; color:#fff;">${esc(a.bookingNo)}</span>
@@ -267,7 +408,7 @@ function renderBoard(data) {
           `).join('')}
         </div>` : ''}
       <div style="display:flex; flex-direction:column; gap:12px;">
-        ${bookings.length ? bookings.map(b => `
+        ${filtered.length ? filtered.map(b => `
           <div class="card" style="border-left:4px solid ${RISK_COLOR[b.risk]}; padding:20px 24px; display:grid; grid-template-columns:minmax(150px,200px) minmax(180px,1fr) minmax(160px,250px) minmax(110px,140px); align-items:center;">
             <div style="padding-right:22px; border-right:1px solid var(--border-subtle);">
               <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px;">${esc(b.container || '—')}</div>
@@ -291,10 +432,214 @@ function renderBoard(data) {
         `).join('') : '<div style="text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--font-mono); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm);">No bookings in this view.</div>'}
       </div>
     </section>`;
+  document.querySelectorAll('.board-filter').forEach(el => el.addEventListener('click', () => { boardFilter = el.dataset.filter; renderBoardView(); }));
+}
+
+// ── Shared: contact-option builder for booking container dropdowns ────────
+function buildContactOptions(list, selectedName, port) {
+  const p = normLoc(port);
+  const visible = p ? list.filter(c => localityMatchesPort(c.locality, p) || (selectedName && c.name === selectedName)) : list;
+  let html = '<option value="">—</option>';
+  html += visible.map(c => `<option value="${esc(c.name)}" ${selectedName === c.name ? 'selected' : ''}>${esc(c.name)}${c.locality ? ' · ' + esc(c.locality) : ''}</option>`).join('');
+  return html;
 }
 
 // ── BOOKINGS ──────────────────────────────────────────────────────────────
+let modalContainers = [];
+let editingBookingNumber = null;
+let modalPdfBase64 = null, modalPdfFile = null;
+let modalTruckersList = [], modalSuppliersList = [];
+let bookingsCache = {};
+
+async function loadModalContacts() {
+  try {
+    const [t, s] = await Promise.all([api('/api/truckers'), api('/api/suppliers')]);
+    modalTruckersList = Array.isArray(t) ? t.filter(x => x && x.name) : [];
+    modalSuppliersList = Array.isArray(s) ? s.filter(x => x && x.name) : [];
+  } catch { modalTruckersList = []; modalSuppliersList = []; }
+}
+
+function renderContainersInModal() {
+  const wrap = $('containersList');
+  const SIZES = ['20GP', '40GP', '40HC', '20RF', '40RF', '45HC'];
+  const STAGES = ['not_started', 'supplier_assigned', 'forwarded', 'empty_dropped', 'load_ready', 'picked_up', 'ingate_received', 'done'];
+  const pol = $('f_pol').value || '';
+  const isEditing = !!editingBookingNumber;
+  wrap.innerHTML = (isEditing ? `<div style="padding:8px 12px; background:var(--copper-soft); color:var(--copper-onSoft); border-radius:var(--radius-xs); font-size:11.5px; margin-bottom:4px;"><strong>Manual stage override:</strong> changing a stage here does not send WhatsApp messages — use only to correct an out-of-sync booking.</div>` : '')
+    + modalContainers.map((c, i) => `
+    <div class="card" data-idx="${i}" style="display:grid; grid-template-columns:50px 90px 1fr 1fr 1fr ${isEditing ? '150px' : ''} 36px; gap:8px; align-items:end; padding:10px 12px;">
+      <div class="field" style="margin-bottom:0;"><label style="font-size:9px;">Seq</label><div style="padding:9px 0; font-family:var(--font-mono); font-weight:700; color:var(--copper-400);">#${c.seq}</div></div>
+      <div class="field" style="margin-bottom:0;"><label style="font-size:9px;">Size</label><select class="mc_size">${SIZES.map(s => `<option ${c.size === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div class="field" style="margin-bottom:0;"><label style="font-size:9px;">Container #</label><input class="mc_num" value="${esc(c.container_number || '')}" placeholder="TCLU8841207"></div>
+      <div class="field" style="margin-bottom:0;"><label style="font-size:9px;">Supplier</label><select class="mc_supplier">${buildContactOptions(modalSuppliersList, c.supplier, pol)}</select></div>
+      <div class="field" style="margin-bottom:0;"><label style="font-size:9px;">Trucker</label><select class="mc_trucker">${buildContactOptions(modalTruckersList, c.trucker, pol)}</select></div>
+      ${isEditing ? `<div class="field" style="margin-bottom:0;"><label style="font-size:9px; color:var(--status-danger);">Stage (manual)</label><select class="mc_stage" style="border-color:var(--status-danger);">${STAGES.map(s => `<option value="${s}" ${(c.stage || 'not_started') === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select></div>` : ''}
+      <button class="btn btn-danger mc_remove" ${modalContainers.length <= 1 ? 'disabled' : ''} style="padding:9px 0;" title="Remove">×</button>
+    </div>`).join('');
+
+  wrap.querySelectorAll('[data-idx]').forEach(row => {
+    const i = Number(row.dataset.idx);
+    row.querySelector('.mc_size').addEventListener('change', e => modalContainers[i].size = e.target.value);
+    row.querySelector('.mc_num').addEventListener('input', e => modalContainers[i].container_number = e.target.value);
+    row.querySelector('.mc_supplier').addEventListener('change', e => modalContainers[i].supplier = e.target.value);
+    row.querySelector('.mc_trucker').addEventListener('change', e => modalContainers[i].trucker = e.target.value);
+    const stageEl = row.querySelector('.mc_stage');
+    if (stageEl) stageEl.addEventListener('change', e => modalContainers[i].stage = e.target.value);
+    row.querySelector('.mc_remove').addEventListener('click', () => {
+      if (modalContainers.length <= 1) return;
+      modalContainers.splice(i, 1);
+      modalContainers.forEach((c, idx) => c.seq = idx + 1);
+      renderContainersInModal();
+    });
+  });
+}
+let polDebounce = null;
+$('f_pol').addEventListener('input', () => { clearTimeout(polDebounce); polDebounce = setTimeout(renderContainersInModal, 250); });
+$('btnAddContainer').addEventListener('click', () => {
+  const nextSeq = modalContainers.length ? Math.max(...modalContainers.map(c => c.seq)) + 1 : 1;
+  modalContainers.push({ seq: nextSeq, size: modalContainers[0]?.size || '40HC', container_number: '', supplier: '', trucker: '', stage: 'not_started' });
+  renderContainersInModal();
+});
+
+function renderDropZone() {
+  const dz = $('pdfDropZone');
+  if (modalPdfFile) {
+    $('pdfDropLabel').textContent = `${modalPdfFile.name} — ready to scan`;
+  } else {
+    $('pdfDropLabel').textContent = "Drop the carrier's booking PDF here";
+  }
+}
+function handlePdfFile(f) {
+  if (!f || f.type !== 'application/pdf') return;
+  modalPdfFile = f;
+  const reader = new FileReader();
+  reader.onload = () => { modalPdfBase64 = reader.result.split(',')[1]; $('scanBtn').classList.remove('hidden'); $('scannedBanner').classList.add('hidden'); renderDropZone(); };
+  reader.readAsDataURL(f);
+}
+$('pdfDropZone').addEventListener('click', () => { if (!modalPdfFile) $('pdfInput').click(); });
+$('pdfInput').addEventListener('change', () => handlePdfFile($('pdfInput').files[0]));
+$('pdfDropZone').addEventListener('dragover', e => e.preventDefault());
+$('pdfDropZone').addEventListener('drop', e => { e.preventDefault(); if (!modalPdfFile) handlePdfFile(e.dataTransfer.files[0]); });
+
+$('scanBtn').addEventListener('click', async () => {
+  if (!modalPdfBase64) return;
+  const btn = $('scanBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Scanning…';
+  try {
+    const d = await api('/api/documents/scan', { method: 'POST', body: JSON.stringify({ pdf_base64: modalPdfBase64 }) });
+    const f = d.fields || {};
+    if (f.booking_number) $('f_bkg').value = f.booking_number;
+    if (f.carrier) $('f_carrier').value = f.carrier;
+    if (f.port_of_loading) $('f_pol').value = f.port_of_loading;
+    if (f.port_of_discharge) $('f_pod').value = f.port_of_discharge;
+    if (f.erd_date) $('f_erd').value = f.erd_date;
+    if (f.cutoff_date) $('f_cutoff').value = f.cutoff_date;
+    if (f.vessel_voyage) $('f_vessel').value = f.vessel_voyage;
+    if (f.buyer) $('f_buyer').value = f.buyer; else if (f.consignee) $('f_buyer').value = f.consignee;
+    if (f.container_size) {
+      const raw = String(f.container_size).trim();
+      const m = raw.match(/^\s*(\d+[A-Z]{2,3})\s*[xX*]\s*(\d+)\s*$/);
+      const size = m ? m[1] : raw;
+      const count = m ? (parseInt(m[2], 10) || 1) : 1;
+      modalContainers = [];
+      for (let i = 1; i <= count; i++) modalContainers.push({ seq: i, size, container_number: (i === 1 && f.container_number) ? f.container_number : '', supplier: '', trucker: '', stage: 'not_started' });
+      renderContainersInModal();
+    } else if (f.container_number) {
+      modalContainers[0].container_number = f.container_number;
+      renderContainersInModal();
+    }
+    $('scannedBanner').classList.remove('hidden');
+    $('scanBtn').classList.add('hidden');
+  } catch (e) {
+    $('modalError').textContent = 'Scan failed: ' + e.message;
+    btn.disabled = false; btn.innerHTML = 'Scan &amp; auto-fill fields';
+  }
+});
+
+function resetBookingModal() {
+  modalPdfBase64 = null; modalPdfFile = null; editingBookingNumber = null;
+  ['f_bkg', 'f_carrier', 'f_vessel', 'f_pol', 'f_pod', 'f_erd', 'f_cutoff', 'f_buyer'].forEach(id => $(id).value = '');
+  $('f_bkg').disabled = false;
+  modalContainers = [{ seq: 1, size: '40HC', container_number: '', supplier: '', trucker: '', stage: 'not_started' }];
+  $('modalError').textContent = '';
+  $('scannedBanner').classList.add('hidden');
+  $('scanBtn').classList.add('hidden');
+  $('bookingModalTitle').textContent = 'New booking';
+  $('btnSaveBooking').textContent = 'Save booking';
+  renderDropZone();
+  renderContainersInModal();
+}
+async function openBookingModalForAdd() {
+  await loadModalContacts();
+  resetBookingModal();
+  $('bookingModal').classList.remove('hidden');
+}
+async function openBookingModalForEdit(bkg) {
+  await loadModalContacts();
+  resetBookingModal();
+  const b = bookingsCache[bkg];
+  if (!b) { alert('Booking not found.'); return; }
+  editingBookingNumber = bkg;
+  $('f_bkg').value = b.booking_number || ''; $('f_bkg').disabled = true;
+  $('f_carrier').value = b.carrier || '';
+  $('f_pol').value = b.port_of_loading || '';
+  $('f_pod').value = b.port_of_discharge || '';
+  $('f_erd').value = b.erd_date || '';
+  $('f_cutoff').value = b.cutoff_date || '';
+  $('f_vessel').value = b.vessel_voyage || '';
+  $('f_buyer').value = b.buyer || b.consignee || '';
+  modalContainers = Array.isArray(b.containers) && b.containers.length
+    ? b.containers.map(c => ({ seq: c.seq, size: c.size || '', container_number: c.container_number || '', supplier: c.supplier || '', trucker: c.trucker || '', stage: c.stage || 'not_started' }))
+    : [{ seq: 1, size: b.container_size || '40HC', container_number: b.container_number || '', supplier: '', trucker: '', stage: 'not_started' }];
+  $('bookingModalTitle').textContent = `Edit booking — ${bkg}`;
+  $('btnSaveBooking').textContent = 'Save changes';
+  renderContainersInModal();
+  $('bookingModal').classList.remove('hidden');
+}
+function closeBookingModal() { $('bookingModal').classList.add('hidden'); }
+$('btnCloseBookingModal').addEventListener('click', closeBookingModal);
+$('btnCancelBooking').addEventListener('click', closeBookingModal);
+
+$('btnSaveBooking').addEventListener('click', async () => {
+  const isEditing = !!editingBookingNumber;
+  let bkg = $('f_bkg').value.trim().toUpperCase();
+  if (!bkg && editingBookingNumber) bkg = editingBookingNumber;
+  if (!bkg) { $('modalError').textContent = 'Booking number is required.'; return; }
+  $('modalError').textContent = '';
+  const btn = $('btnSaveBooking');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
+  try {
+    const payload = {
+      booking_number: bkg,
+      carrier: $('f_carrier').value.trim() || null,
+      port_of_loading: $('f_pol').value.trim() || null,
+      port_of_discharge: $('f_pod').value.trim() || null,
+      erd_date: $('f_erd').value.trim() || null,
+      cutoff_date: $('f_cutoff').value.trim() || null,
+      vessel_voyage: $('f_vessel').value.trim() || null,
+      buyer: $('f_buyer').value.trim() || null,
+      containers: modalContainers.map(c => ({
+        seq: c.seq, size: c.size || null, container_number: (c.container_number || '').trim() || null,
+        supplier: c.supplier || null, trucker: c.trucker || null, stage: c.stage || 'not_started',
+      })),
+    };
+    isEditing
+      ? await api(`/api/bookings/${encodeURIComponent(editingBookingNumber)}`, { method: 'PUT', body: JSON.stringify(payload) })
+      : await api('/api/bookings', { method: 'POST', body: JSON.stringify(payload) });
+    if (modalPdfBase64) {
+      try { await api('/api/bookings/upload-pdf', { method: 'POST', body: JSON.stringify({ booking_number: bkg, pdf_base64: modalPdfBase64, original_filename: modalPdfFile?.name }) }); }
+      catch (e) { console.warn('[UPLOAD]', e.message); }
+    }
+    closeBookingModal();
+    if (CURRENT_TAB === 'bookings') loadTab('bookings'); else if (CURRENT_TAB === 'board') loadTab('board');
+  } catch (e) {
+    $('modalError').textContent = e.message;
+    btn.disabled = false; btn.textContent = isEditing ? 'Save changes' : 'Save booking';
+  }
+});
+
 function renderBookings(bookingsObj) {
+  bookingsCache = bookingsObj;
   const list = Object.values(bookingsObj);
   $('viewRoot').innerHTML = `
     <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
@@ -303,24 +648,49 @@ function renderBookings(bookingsObj) {
         <button id="btnAddBooking" class="btn btn-primary">+ Add booking</button>
       </div>
       <div class="card" style="overflow:hidden;">
-        <div style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
+        <div style="display:grid; grid-template-columns:24px 150px 1fr 100px 100px 130px 130px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+          <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
         </div>
-        ${list.length ? list.map(b => `
-          <div class="row-hover" style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
-            <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
-            <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${Array.isArray(b.containers) ? b.containers.length : 1}</div>
-            <div style="display:flex; gap:6px; justify-content:flex-end;">
-              <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
+        ${list.length ? list.map(b => {
+          const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{ seq: 1, size: b.container_size, container_number: b.container_number, stage: 'not_started' }];
+          const subRows = containers.map(c => `
+            <div style="display:grid; grid-template-columns:24px 60px 1fr 140px 120px 90px; gap:14px; padding:9px 18px 9px 40px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); font-size:12px; align-items:center;">
+              <div></div>
+              <div style="font-family:var(--font-mono); color:var(--copper-400); font-weight:700;">#${c.seq}</div>
+              <div style="font-family:var(--font-mono);">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div>
+              <div style="font-family:var(--font-mono); color:${c.supplier || c.trucker ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(c.supplier && c.trucker ? c.supplier + ' → ' + c.trucker : (c.supplier || c.trucker || '—'))}</div>
+              <div><span class="badge" style="background:var(--surface-card); border:1px solid var(--border-subtle); color:var(--text-body);">${esc((c.stage || 'not_started').replace(/_/g, ' '))}</span></div>
+              <div></div>
+            </div>`).join('');
+          return `
+          <div data-bkg-group="${esc(b.booking_number)}">
+            <div class="row-hover" data-bk-expand="${esc(b.booking_number)}" style="display:grid; grid-template-columns:24px 150px 1fr 100px 100px 130px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center; cursor:pointer;">
+              <div style="color:var(--text-faint); font-family:var(--font-mono);" class="bk-chevron">▸</div>
+              <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
+              <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${containers.length}</div>
+              <div style="display:flex; gap:6px; justify-content:flex-end;" onclick="event.stopPropagation();">
+                <button class="btn btn-secondary btn-edit-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Edit</button>
+                <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
+              </div>
             </div>
-          </div>
-        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
+            <div class="bk-containers hidden">${subRows}</div>
+          </div>`;
+        }).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
       </div>
     </section>`;
-  $('btnAddBooking').addEventListener('click', openBookingModal);
+  $('btnAddBooking').addEventListener('click', openBookingModalForAdd);
+  document.querySelectorAll('[data-bk-expand]').forEach(row => row.addEventListener('click', () => {
+    const group = row.closest('[data-bkg-group]');
+    const detail = group.querySelector('.bk-containers');
+    const chev = row.querySelector('.bk-chevron');
+    const open = !detail.classList.contains('hidden');
+    detail.classList.toggle('hidden', open);
+    chev.textContent = open ? '▸' : '▾';
+  }));
+  document.querySelectorAll('.btn-edit-booking').forEach(btn => btn.addEventListener('click', () => openBookingModalForEdit(btn.dataset.bkg)));
   document.querySelectorAll('.btn-del-booking').forEach(btn => btn.addEventListener('click', async () => {
     if (!confirm(`Archive booking ${btn.dataset.bkg}?`)) return;
     await api(`/api/bookings/${encodeURIComponent(btn.dataset.bkg)}`, { method: 'DELETE' });
@@ -328,91 +698,152 @@ function renderBookings(bookingsObj) {
   }));
 }
 
-function openBookingModal() {
-  $('modalError').textContent = '';
-  ['f_bkg','f_carrier','f_vessel','f_pol','f_pod','f_erd','f_cutoff'].forEach(id => $(id).value = '');
-  $('bookingModal').style.display = 'flex';
-}
-function closeBookingModal() { $('bookingModal').style.display = 'none'; }
+// ── TRUCKERS / SUPPLIERS (shared contact modal) ──────────────────────────
+let contactKind = null;
+let contactListCache = [];
 
-// ── TRUCKERS / SUPPLIERS (shared shape) ──────────────────────────────────
-// group_id is REAL routing data — workflow/truckers.js and workflow/suppliers.js
-// match a chat by group_id first, and getTruckerChatId()/getSupplierChatId()
-// send to the group instead of the personal number whenever group_id is set
-// (confirmed against the live repo). group_name has no backend meaning — it's
-// stored alongside purely so this dashboard can show a readable label instead
-// of a raw WhatsApp group ID; contactRoutes' POST handler stores whatever
-// fields are sent, so this doesn't need any api.js change.
+function openContactModal(kind, existing) {
+  contactKind = kind;
+  $('contactModalTitle').textContent = existing ? `Edit ${kind.slice(0, -1)}` : `New ${kind.slice(0, -1)}`;
+  $('ct_name').value = existing?.name || ''; $('ct_name').disabled = !!existing;
+  $('ct_locality').value = existing?.locality || '';
+  $('ct_whatsapp').value = existing?.whatsapp || '';
+  $('ct_email').value = existing?.email || '';
+  $('ct_group_id').value = existing?.group_id || '';
+  $('ct_group_name').value = existing?.group_name || '';
+  $('ct_group_search').value = '';
+  $('ct_group_search_results').innerHTML = '';
+  $('ct_mode').value = existing?.preferred_mode || 'whatsapp';
+  $('ct_verify_result').classList.add('hidden');
+  $('ct_common_groups').classList.add('hidden');
+  $('ct_error').textContent = '';
+  $('contactModal').classList.remove('hidden');
+}
+function closeContactModal() { $('contactModal').classList.add('hidden'); $('ct_name').disabled = false; contactKind = null; }
+$('btnCloseContactModal').addEventListener('click', closeContactModal);
+$('btnCancelContact').addEventListener('click', closeContactModal);
+
+// Verify a specific number is on WhatsApp, then show groups Jarvis shares
+// with that exact contact — precise (guaranteed real overlap), narrower than
+// the name-search picker below. Both are kept: this restores the original
+// dashboard's flow; the name-search is what was asked for more recently.
+$('ct_verify').addEventListener('click', async () => {
+  const raw = $('ct_whatsapp').value.trim().replace(/\D/g, '');
+  const result = $('ct_verify_result');
+  if (raw.length < 8) { result.classList.remove('hidden'); result.style.background = 'var(--copper-soft)'; result.style.color = 'var(--copper-onSoft)'; result.textContent = 'Enter a full WhatsApp number first.'; return; }
+  const btn = $('ct_verify');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  result.classList.remove('hidden'); result.style.background = 'var(--surface-sunken)'; result.style.color = 'var(--text-muted)'; result.textContent = 'Contacting WhatsApp…';
+  try {
+    const vd = await api('/api/whatsapp/verify-number', { method: 'POST', body: JSON.stringify({ number: raw }) });
+    if (!vd.registered) {
+      result.style.background = '#FBE1E6'; result.style.color = 'var(--status-danger)'; result.textContent = '✗ Not on WhatsApp';
+      $('ct_common_groups').classList.add('hidden');
+      return;
+    }
+    result.style.background = 'var(--accent-soft)'; result.style.color = 'var(--accent-onSoft)'; result.textContent = '✓ On WhatsApp' + (vd.formatted ? ` (${vd.formatted})` : '');
+    const cd = await api('/api/whatsapp/common-groups', { method: 'POST', body: JSON.stringify({ contactId: vd.contactId }) });
+    const groups = cd.groups || [];
+    $('ct_common_groups').classList.remove('hidden');
+    if (!groups.length) {
+      $('ct_common_groups_list').innerHTML = '';
+      $('ct_common_groups_empty').classList.remove('hidden');
+    } else {
+      $('ct_common_groups_empty').classList.add('hidden');
+      $('ct_common_groups_list').innerHTML = groups.map(g => `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--border-subtle);">
+          <div><div style="font-size:12.5px; font-weight:600;">${esc(g.name)}</div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id)}${g.participants ? ' · ' + g.participants + ' members' : ''}</div></div>
+          <button type="button" class="btn btn-secondary cg-use" data-id="${esc(g.id)}" data-name="${esc(g.name)}" style="padding:5px 10px; font-size:9.5px;">Use</button>
+        </div>`).join('');
+      $('ct_common_groups_list').querySelectorAll('.cg-use').forEach(b => b.addEventListener('click', () => { $('ct_group_id').value = b.dataset.id; $('ct_group_name').value = b.dataset.name; }));
+    }
+  } catch (e) {
+    result.style.background = '#FBE1E6'; result.style.color = 'var(--status-danger)'; result.textContent = 'Verify failed: ' + e.message;
+  } finally { btn.disabled = false; btn.textContent = 'Verify'; }
+});
+
+// Generic search-by-name group picker — shared with Settings' team-group and
+// team-member rows. rowEl must contain .grp-search-input / .grp-search-results
+// / .grp-id-target, and optionally .grp-name-target.
+async function doGroupSearch(rowEl) {
+  const name = rowEl.querySelector('.grp-search-input').value.trim();
+  const box = rowEl.querySelector('.grp-search-results');
+  const idField = rowEl.querySelector('.grp-id-target');
+  const nameField = rowEl.querySelector('.grp-name-target');
+  box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">Searching…</div>';
+  try {
+    const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
+    if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">No matches — make sure Jarvis has already been added to that group.</div>'; return; }
+    box.innerHTML = groups.map(g => `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+        <div style="font-size:12px;"><strong>${esc(g.name || g.subject || '(unnamed)')}</strong> <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</span></div>
+        <button class="btn btn-secondary grp-use" data-id="${esc(g.id || g.chatId || '')}" data-name="${esc(g.name || g.subject || '')}" style="padding:5px 10px; font-size:9.5px;">Use</button>
+      </div>`).join('');
+    box.querySelectorAll('.grp-use').forEach(btn => btn.addEventListener('click', () => {
+      idField.value = btn.dataset.id;
+      if (nameField) nameField.value = btn.dataset.name;
+      box.innerHTML = '';
+    }));
+  } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--status-danger);">${esc(e.message)}</div>`; }
+}
+$('ct_group_search_btn').addEventListener('click', () => doGroupSearch($('contactModal')));
+
+$('btnSaveContact').addEventListener('click', async () => {
+  const name = $('ct_name').value.trim();
+  if (!name) { $('ct_error').textContent = 'Name is required.'; return; }
+  const whatsapp = $('ct_whatsapp').value.trim().replace(/\D/g, '');
+  const email = $('ct_email').value.trim();
+  const mode = $('ct_mode').value;
+  const groupId = $('ct_group_id').value.trim();
+  if (mode === 'whatsapp' && !whatsapp && !groupId) { $('ct_error').textContent = 'For WhatsApp mode, provide a number or a group ID.'; return; }
+  if (mode === 'email' && !email) { $('ct_error').textContent = 'For Email mode, provide an email address.'; return; }
+  $('ct_error').textContent = '';
+  const btn = $('btnSaveContact');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving…';
+  try {
+    await api(`/api/${contactKind}`, { method: 'POST', body: JSON.stringify({
+      name, locality: $('ct_locality').value.trim() || null, whatsapp: whatsapp || null,
+      email: email || null, group_id: groupId || null, group_name: $('ct_group_name').value.trim() || null,
+      preferred_mode: mode,
+    }) });
+    const kind = contactKind;
+    closeContactModal();
+    loadTab(kind);
+  } catch (e) { $('ct_error').textContent = e.message; }
+  finally { btn.disabled = false; btn.textContent = 'Save'; }
+});
+
 function renderContacts(kind, title, addLabel, list) {
+  contactListCache = list;
   $('viewRoot').innerHTML = `
-    <section style="max-width:1080px; margin:0 auto; padding:38px 40px 80px;">
+    <section style="max-width:1120px; margin:0 auto; padding:38px 40px 80px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
         <div><div class="eyebrow">// ${esc(kind[0].toUpperCase() + kind.slice(1))}</div><h2 style="font-size:24px; text-transform:uppercase;">${esc(title)}</h2></div>
         <button id="btnAddContact" class="btn btn-primary">${esc(addLabel)}</button>
       </div>
-      <div id="addContactForm" class="card hidden" style="padding:22px 24px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:16px;">New ${esc(kind.slice(0, -1))}</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-          <div class="field"><label>Name *</label><input id="nc_name"></div>
-          <div class="field"><label>Locality</label><input id="nc_locality" placeholder="Los Angeles"></div>
-          <div class="field"><label>WhatsApp number</label><input id="nc_whatsapp" placeholder="918056944193"></div>
-          <div class="field"><label>Group name</label><input id="nc_group_name" placeholder="e.g. ABC Trucking Dispatch" readonly style="background:var(--surface-sunken);"></div>
+      <div class="card" style="overflow:hidden;">
+        <div style="display:grid; grid-template-columns:150px 120px 1fr 90px 140px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+          <div>Name</div><div>Locality</div><div>Email / Reaches via</div><div>Preferred</div><div style="text-align:right;">Actions</div>
         </div>
-        <div class="field"><label>Group ID</label><input id="nc_group_id" placeholder="120363123456789012@g.us" readonly style="background:var(--surface-sunken);"></div>
-        <div style="font-size:11.5px; color:var(--text-muted); margin:2px 0 10px;">If a group is set, Jarvis messages the group instead of the number above. Group name is a label for this dashboard only — routing uses the ID.</div>
-        <div class="grp-row" style="display:flex; gap:10px; align-items:end;">
-          <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input class="grp_search_input" placeholder="e.g. ABC Trucking"></div>
-          <button class="btn btn-secondary grp_search_btn">Search</button>
-        </div>
-        <div class="grp_results" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
-        <div id="addContactError" style="color:var(--status-danger); font-size:12.5px; margin-top:12px;"></div>
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-          <button id="btnCancelContact" class="btn btn-secondary">Cancel</button>
-          <button id="btnSaveContact" class="btn btn-primary">Save</button>
-        </div>
-      </div>
-      <div class="card" style="overflow:hidden; margin-bottom:16px;">
-        <div style="display:grid; grid-template-columns:170px 130px 1fr 120px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div>Name</div><div>Locality</div><div>Reaches via</div><div style="text-align:right;">Actions</div>
-        </div>
-        ${list.length ? list.map(p => `
-          <div class="row-hover" style="display:grid; grid-template-columns:170px 130px 1fr 120px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
+        ${list.length ? list.map(p => {
+          const dest = p.group_id ? `${p.group_name || 'Group'} (${p.group_id})` : (p.whatsapp || '(no WhatsApp)');
+          const modeLabel = p.preferred_mode === 'email' ? 'Email' : 'WhatsApp';
+          return `
+          <div class="row-hover" style="display:grid; grid-template-columns:150px 120px 1fr 90px 140px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
             <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(p.name)}</div>
-            <div>${p.locality ? `<span style="font-family:var(--font-mono); font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; background:var(--accent-soft); color:var(--leaf-700); padding:4px 9px; border-radius:var(--radius-xs);">${esc(p.locality)}</span>` : '—'}</div>
-            <div>
-              ${p.group_id ? `<div style="font-size:12.5px; color:var(--text-strong);">${esc(p.group_name || '(group)')} <span class="badge" style="background:var(--copper-50); color:var(--copper-600); margin-left:4px;">Group</span></div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(p.group_id)}</div>`
-                        : `<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(p.whatsapp || '—')}</div>`}
-            </div>
+            <div>${p.locality ? `<span class="badge" style="background:var(--accent-soft); color:var(--accent-onSoft);">${esc(p.locality)}</span>` : '<span style="color:var(--text-faint);">—</span>'}</div>
+            <div style="font-size:12px;">${esc(p.email || '—')}<br><span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(dest)}</span></div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${modeLabel}</div>
             <div style="display:flex; gap:6px; justify-content:flex-end;">
+              <button class="btn btn-secondary btn-edit-contact" data-name="${esc(p.name)}" style="padding:6px 12px; font-size:10px;">Edit</button>
               <button class="btn btn-danger btn-del-contact" data-name="${esc(p.name)}" style="padding:6px 12px; font-size:10px;">Del</button>
             </div>
-          </div>
-        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">None registered yet.</div>'}
+          </div>`;
+        }).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">None registered yet.</div>'}
       </div>
     </section>`;
-
-  $('btnAddContact').addEventListener('click', () => {
-    $('addContactForm').classList.remove('hidden');
-    ['nc_name','nc_locality','nc_whatsapp','nc_group_name','nc_group_id'].forEach(id => $(id).value = '');
-    $('addContactError').textContent = '';
-    $('addContactForm').querySelector('.grp_results').innerHTML = '';
-  });
-  $('btnCancelContact').addEventListener('click', () => $('addContactForm').classList.add('hidden'));
-  $('addContactForm').querySelector('.grp_search_btn').addEventListener('click', () => doGroupSearch($('addContactForm')));
-  $('btnSaveContact').addEventListener('click', async () => {
-    $('addContactError').textContent = '';
-    const name = $('nc_name').value.trim();
-    if (!name) { $('addContactError').textContent = 'Name is required.'; return; }
-    try {
-      await api(`/api/${kind}`, { method: 'POST', body: JSON.stringify({
-        name, locality: $('nc_locality').value.trim(),
-        whatsapp: $('nc_whatsapp').value.replace(/\D/g, ''),
-        group_id: $('nc_group_id').value.trim() || null,
-        group_name: $('nc_group_name').value.trim() || null,
-      }) });
-      loadTab(kind);
-    } catch (e) { $('addContactError').textContent = e.message; }
-  });
+  $('btnAddContact').addEventListener('click', () => openContactModal(kind, null));
+  document.querySelectorAll('.btn-edit-contact').forEach(btn => btn.addEventListener('click', () => openContactModal(kind, contactListCache.find(c => c.name === btn.dataset.name))));
   document.querySelectorAll('.btn-del-contact').forEach(btn => btn.addEventListener('click', async () => {
     if (!confirm(`Remove ${btn.dataset.name}?`)) return;
     await api(`/api/${kind}/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
@@ -420,67 +851,110 @@ function renderContacts(kind, title, addLabel, list) {
   }));
 }
 
-// Shared group-search helper — scoped to whatever container (rowEl) holds a
-// .grp_search_input / .grp_results / .nc_group_id (or .tm_group_id) /
-// .nc_group_name (or .tm_group_name). Used by trucker/supplier add form and
-// by each internal-team row in Settings. Calls /api/whatsapp/find-groups,
-// which is requireAdmin server-side — non-admins will see that as an error
-// here (they can still type an ID/name manually since those stay plain inputs).
-async function doGroupSearch(rowEl) {
-  const searchInput = rowEl.querySelector('.grp_search_input');
-  const box = rowEl.querySelector('.grp_results');
-  const idField = rowEl.querySelector('.nc_group_id, .tm_group_id');
-  const nameField = rowEl.querySelector('.nc_group_name, .tm_group_name');
-  const name = searchInput.value.trim();
-  box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">Searching…</div>';
-  try {
-    const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
-    if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">No matches — make sure Jarvis has already been added to that group on WhatsApp.</div>'; return; }
-    box.innerHTML = groups.map(g => `
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
-        <div style="font-size:12px;"><strong>${esc(g.name || g.subject || '(unnamed)')}</strong> <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</span></div>
-        <button class="btn btn-secondary grp_use" data-id="${esc(g.id || g.chatId || '')}" data-name="${esc(g.name || g.subject || '')}" style="padding:5px 10px; font-size:9.5px;">Use</button>
-      </div>`).join('');
-    box.querySelectorAll('.grp_use').forEach(btn => btn.addEventListener('click', () => {
-      idField.value = btn.dataset.id;
-      nameField.value = btn.dataset.name;
-      box.innerHTML = '';
-    }));
-  } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--status-danger);">${esc(e.message)}</div>`; }
-}
-
 // ── WHATSAPP ──────────────────────────────────────────────────────────────
+// Full-bleed 3D orbit scene, restored from the mockup. Decorative geometry
+// (ring radii, beam angles, node positions) is fixed/hand-tuned to match what
+// the mockup showed — the mockup's own values were template variables I never
+// saw resolved. The DATA inside it is real: node cards pull actual trucker/
+// supplier names, and the stats strip pulls real counts from the API, not
+// placeholder numbers.
 async function renderWhatsapp() {
   const root = $('viewRoot');
-  let status;
-  try { status = await api('/api/whatsapp/status'); }
-  catch (e) { status = { status: 'unknown' }; }
+  let status = { status: 'unknown' }, truckers = [], suppliers = [], dash = null;
+  try { status = await api('/api/whatsapp/status'); } catch {}
+  try {
+    [truckers, suppliers, dash] = await Promise.all([
+      api('/api/truckers').catch(() => []),
+      api('/api/suppliers').catch(() => []),
+      api('/api/dashboard').catch(() => null),
+    ]);
+  } catch {}
   const isReady = status.status === 'ready';
   const isQr = status.status === 'qr';
-  const isDown = status.status === 'disconnected' || status.status === 'auth_failure';
+
+  const NODE_POS = [
+    { left: '16%', top: '26%', dur: '5.5s', delay: '0s' },
+    { left: '80%', top: '22%', dur: '6.2s', delay: '.4s' },
+    { left: '18%', top: '76%', dur: '5.8s', delay: '.8s' },
+    { left: '80%', top: '72%', dur: '6.6s', delay: '.2s' },
+  ];
+  const nodeSource = [
+    ...(Array.isArray(truckers) ? truckers : []).map(t => ({ name: t.name, line: (t.locality || 'Trucker') + (t.group_id ? ' · group' : '') })),
+    ...(Array.isArray(suppliers) ? suppliers : []).map(s => ({ name: s.name, line: (s.locality || 'Supplier') + (s.group_id ? ' · group' : '') })),
+  ].slice(0, 4);
+  const nodes = nodeSource.map((n, i) => ({ ...n, ...NODE_POS[i] }));
+
+  const stats = [
+    { v: truckers.length || 0, k: 'Truckers linked' },
+    { v: suppliers.length || 0, k: 'Suppliers linked' },
+    { v: dash ? dash.bookings.length : '—', k: 'Active bookings' },
+    { v: dash ? dash.alerts.length : '—', k: 'Needs attention' },
+  ];
+
   root.innerHTML = `
-    <section style="max-width:760px; margin:0 auto; padding:38px 40px 80px;">
-      <div class="eyebrow">// WhatsApp link</div>
-      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Connection</h2>
-      <div style="background:var(--steel-950); border-radius:var(--radius-md); padding:44px 36px; text-align:center; position:relative; overflow:hidden;">
-        <div style="position:absolute; left:0; right:0; top:0; height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-        ${isReady ? `
-          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(87,190,73,.12); border:1px solid var(--leaf-700); align-items:center; justify-content:center; color:var(--leaf-400); font-size:28px; margin-bottom:18px;">✓</div>
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:#fff;">Connected</div>
-          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">Jarvis is online and receiving WhatsApp messages.</div>
-        ` : isQr ? `
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-warning); margin-bottom:10px;">Scan to connect</div>
-          <div style="font-size:13px; color:var(--steel-400);">Check the server terminal/logs for the QR code, or restart the process — this dashboard doesn't render the QR image itself yet.</div>
-        ` : `
-          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(197,64,47,.14); border:1px solid var(--status-danger); align-items:center; justify-content:center; color:var(--status-danger); font-size:28px; margin-bottom:18px;">⚠</div>
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-danger);">${esc(status.status || 'Disconnected')}</div>
-          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">${esc(status.error || 'Not connected.')}</div>
-        `}
-        <div style="margin-top:20px;">
-          ${ROLE === 'admin' ? '<button id="btnWaReset" class="btn btn-dark">Sign out &amp; re-scan</button>' : ''}
+    <div class="view-in" style="position:relative; height:100%; min-height:600px; overflow:hidden; background:radial-gradient(900px 600px at 50% 42%, rgba(61,168,54,.10), transparent 65%), #0C0E10;">
+      <div style="position:absolute; inset:0; background-image:repeating-linear-gradient(-45deg, rgba(194,94,34,.05) 0, rgba(194,94,34,.05) 2px, transparent 2px, transparent 18px);"></div>
+      <div style="position:absolute; left:50%; top:44%; width:0; height:0; perspective:1200px;">
+        <div style="position:absolute; left:-370px; top:-370px; width:740px; height:740px; border-radius:50%; border:1px dashed rgba(87,190,73,.22); animation:emOrbit 34s linear infinite;">
+          <span style="position:absolute; left:50%; top:-4px; width:8px; height:8px; margin-left:-4px; border-radius:50%; background:#57BE49; box-shadow:0 0 14px #57BE49;"></span>
+          <span style="position:absolute; left:-4px; top:50%; width:6px; height:6px; margin-top:-3px; border-radius:50%; background:#D77E3D; box-shadow:0 0 12px #D77E3D;"></span>
         </div>
+        <div style="position:absolute; left:-255px; top:-255px; width:510px; height:510px; border-radius:50%; border:1px solid rgba(87,190,73,.28); animation:emOrbitRev 22s linear infinite;">
+          <span style="position:absolute; right:-5px; top:50%; width:9px; height:9px; margin-top:-4px; border-radius:50%; background:#57BE49; box-shadow:0 0 16px #57BE49;"></span>
+          <span style="position:absolute; left:50%; bottom:-4px; width:6px; height:6px; margin-left:-3px; border-radius:50%; background:#7FD172; box-shadow:0 0 10px #7FD172;"></span>
+        </div>
+        <div style="position:absolute; left:-150px; top:-150px; width:300px; height:300px; border-radius:50%; border:1px dashed rgba(194,94,34,.3); animation:emOrbit 14s linear infinite;">
+          <span style="position:absolute; left:50%; top:-4px; width:7px; height:7px; margin-left:-3px; border-radius:50%; background:#D77E3D; box-shadow:0 0 12px #D77E3D;"></span>
+        </div>
+        <div style="position:absolute; left:0; top:0; width:427px; height:2px; transform:rotate(200.6deg); transform-origin:0 50%; background-image:repeating-linear-gradient(90deg, rgba(87,190,73,.55) 0, rgba(87,190,73,.55) 8px, transparent 8px, transparent 20px); background-size:120px 2px; animation:emBeam 1.6s linear infinite;"></div>
+        <div style="position:absolute; left:0; top:0; width:434px; height:2px; transform:rotate(-26deg); transform-origin:0 50%; background-image:repeating-linear-gradient(90deg, rgba(87,190,73,.55) 0, rgba(87,190,73,.55) 8px, transparent 8px, transparent 20px); background-size:120px 2px; animation:emBeam 1.9s linear infinite;"></div>
+        <div style="position:absolute; left:0; top:0; width:402px; height:2px; transform:rotate(153.4deg); transform-origin:0 50%; background-image:repeating-linear-gradient(90deg, rgba(87,190,73,.55) 0, rgba(87,190,73,.55) 8px, transparent 8px, transparent 20px); background-size:120px 2px; animation:emBeam 2.2s linear infinite;"></div>
+        <div style="position:absolute; left:0; top:0; width:449px; height:2px; transform:rotate(20.9deg); transform-origin:0 50%; background-image:repeating-linear-gradient(90deg, rgba(87,190,73,.55) 0, rgba(87,190,73,.55) 8px, transparent 8px, transparent 20px); background-size:120px 2px; animation:emBeam 1.4s linear infinite;"></div>
+        <div style="position:absolute; left:-58px; top:-58px; width:116px; height:116px;">
+          <span style="position:absolute; inset:0; border-radius:50%; border:1px solid rgba(87,190,73,.5); animation:emPing 2.4s cubic-bezier(.2,.7,.2,1) infinite;"></span>
+          <span style="position:absolute; inset:0; border-radius:50%; border:1px solid rgba(87,190,73,.35); animation:emPing 2.4s cubic-bezier(.2,.7,.2,1) infinite; animation-delay:1.2s;"></span>
+          <div style="position:absolute; inset:8px;">
+            <span style="position:absolute; inset:-18px; border-radius:50%; background:radial-gradient(circle, rgba(215,126,61,.45), transparent 68%); animation:emGlow 2.2s ease-in-out infinite;"></span>
+            <span style="position:absolute; inset:0; border-radius:50%; background:repeating-conic-gradient(rgba(215,126,61,.9) 0deg 14deg, transparent 14deg 36deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px)); mask:radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px)); animation:emSpin 9s linear infinite;"></span>
+            <span style="position:absolute; inset:8px; border-radius:50%; background:conic-gradient(from 0deg, transparent 0 64%, rgba(255,214,170,.95)); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); animation:emSpin 2.4s linear infinite;"></span>
+            <span style="position:absolute; inset:16px; border-radius:50%; background:repeating-conic-gradient(rgba(87,190,73,.7) 0deg 3deg, transparent 3deg 15deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); mask:radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); animation:emSpinRev 6s linear infinite;"></span>
+            <span style="position:absolute; inset:26px; border-radius:50%; background:repeating-conic-gradient(rgba(255,184,119,.95) 0deg 20deg, transparent 20deg 36deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px)); mask:radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 8px)); animation:emSpinRev 14s linear infinite;"></span>
+            <span style="position:absolute; inset:32px; border-radius:50%; border:1px solid rgba(255,214,170,.7); animation:emPing 2.2s cubic-bezier(.2,.7,.2,1) infinite;"></span>
+            <span style="position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px; border-radius:50%; background:radial-gradient(circle at 40% 38%, #FFFFFF, #FFE7CB 40%, #FFB877 70%, #D77E3D 100%); box-shadow:0 0 50px rgba(255,214,170,1), 0 0 110px rgba(215,126,61,.6); animation:emGlow 1.2s ease-in-out infinite;"></span>
+          </div>
+        </div>
+        ${nodes.map(n => `
+          <div style="position:absolute; left:${n.left}; top:${n.top}; transform:translate(-50%,-50%); display:flex; align-items:center; gap:10px; padding:10px 16px; background:rgba(20,24,27,.88); border:1px solid #2B3239; border-radius:4px; backdrop-filter:blur(6px); box-shadow:0 10px 30px rgba(0,0,0,.5); animation:emFloat ${n.dur} ease-in-out infinite; animation-delay:${n.delay};">
+            <span style="width:7px; height:7px; border-radius:50%; background:#57BE49; box-shadow:0 0 10px #57BE49; animation:jarvis-pulse 2s ease-in-out infinite;"></span>
+            <div>
+              <div style="font-family:var(--font-display); font-size:12.5px; font-weight:800; text-transform:uppercase; color:#fff; letter-spacing:.03em;">${esc(n.name)}</div>
+              <div style="font-family:var(--font-mono); font-size:9.5px; color:#7E8891;">${esc(n.line)}</div>
+            </div>
+          </div>`).join('')}
       </div>
-    </section>`;
+      <div style="position:absolute; left:clamp(24px,5vw,64px); bottom:120px; max-width:560px; padding-right:20px;">
+        <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--copper-400); margin-bottom:12px;">// WhatsApp link</div>
+        ${isReady ? `
+          <h1 style="margin:0; font-family:var(--font-display); font-size:clamp(46px,6vw,80px); font-weight:900; text-transform:uppercase; letter-spacing:-.03em; line-height:.94; color:#fff; text-shadow:0 0 80px rgba(87,190,73,.45);">Connected<span style="color:#57BE49;">.</span></h1>
+          <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">Jarvis is on the wire. Every trucker, supplier, and team group routes through this link.</div>
+        ` : isQr ? `
+          <h1 style="margin:0; font-family:var(--font-display); font-size:clamp(36px,5vw,58px); font-weight:900; text-transform:uppercase; letter-spacing:-.03em; line-height:.98; color:#fff; text-shadow:0 0 80px rgba(217,154,43,.4);">Scan to connect<span style="color:var(--status-warning);">.</span></h1>
+          <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">Check the server terminal/logs for the QR code.</div>
+        ` : `
+          <h1 style="margin:0; font-family:var(--font-display); font-size:clamp(46px,6vw,80px); font-weight:900; text-transform:uppercase; letter-spacing:-.03em; line-height:.94; color:#fff; text-shadow:0 0 80px rgba(197,64,47,.5);">Link down<span style="color:var(--status-danger);">.</span></h1>
+          <div style="font-size:14px; color:#A7B0B7; margin-top:14px; max-width:420px;">${esc(status.error || 'The wire went quiet. Jarvis is retrying.')}</div>
+        `}
+      </div>
+      <div style="position:absolute; left:clamp(24px,5vw,64px); right:clamp(24px,5vw,64px); bottom:20px; display:flex; flex-wrap:wrap; align-items:center; gap:clamp(14px,3vw,40px); padding-top:16px; border-top:1px solid #1E2429;">
+        ${stats.map(s => `
+          <div>
+            <div style="font-family:var(--font-mono); font-size:20px; font-weight:600; color:#fff;">${esc(s.v)}</div>
+            <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:#57616A; margin-top:3px;">${esc(s.k)}</div>
+          </div>`).join('')}
+        <div style="flex:1;"></div>
+        ${ROLE === 'admin' ? '<button id="btnWaReset" class="btn btn-dark" style="border-color:#2B3239;">Sign out &amp; re-scan</button>' : ''}
+      </div>
+    </div>`;
   if ($('btnWaReset')) $('btnWaReset').addEventListener('click', async () => {
     if (!confirm('This logs Jarvis out of WhatsApp and requires a fresh QR scan. Continue?')) return;
     await api('/api/whatsapp/reset', { method: 'POST' });
@@ -488,21 +962,17 @@ async function renderWhatsapp() {
   });
   updateWaBadge(status);
 }
-
 function updateWaBadge(status) {
   const dot = $('waStatusDot'), text = $('waStatusText'), banner = $('linkDownBanner'), bannerText = $('linkDownText');
   if (status.status === 'ready') {
     dot.style.background = 'var(--leaf-400)'; dot.style.boxShadow = '0 0 8px var(--leaf-400)'; dot.style.animation = 'jarvis-pulse 2.4s ease-in-out infinite';
-    text.textContent = 'Live · synced from WhatsApp';
-    banner.classList.add('hidden');
+    text.textContent = 'Live · synced from WhatsApp'; banner.classList.add('hidden');
   } else if (status.status === 'qr') {
     dot.style.background = 'var(--status-warning)'; dot.style.boxShadow = '0 0 8px var(--status-warning)';
-    text.textContent = 'QR scan needed';
-    bannerText.textContent = 'WhatsApp needs a QR scan to connect.'; banner.classList.remove('hidden');
+    text.textContent = 'QR scan needed'; bannerText.textContent = 'WhatsApp needs a QR scan to connect.'; banner.classList.remove('hidden');
   } else {
     dot.style.background = 'var(--status-danger)'; dot.style.boxShadow = '0 0 8px var(--status-danger)';
-    text.textContent = 'Link down — retrying';
-    bannerText.textContent = 'WhatsApp link is down.'; banner.classList.remove('hidden');
+    text.textContent = 'Link down — retrying'; bannerText.textContent = 'WhatsApp link is down.'; banner.classList.remove('hidden');
   }
 }
 
@@ -511,7 +981,7 @@ function renderSettings(s) {
   let team = Array.isArray(s.internal_team) ? s.internal_team.map(x => typeof x === 'string' ? { name: '', whatsapp: x, role: '' } : x) : [];
   function teamRowsHtml() {
     return team.map((m, i) => `
-      <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:14px; margin-bottom:12px;" data-idx="${i}">
+      <div class="team-row" style="border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:14px; margin-bottom:12px;" data-idx="${i}">
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end;">
           <div class="field" style="margin-bottom:0;"><label>Name</label><input class="tm_name" value="${esc(m.name || '')}"></div>
           <div class="field" style="margin-bottom:0;"><label>WhatsApp</label><input class="tm_whatsapp" value="${esc(m.whatsapp || '')}"></div>
@@ -519,14 +989,14 @@ function renderSettings(s) {
           <button class="btn btn-danger btn-remove-team" data-idx="${i}">Remove</button>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
-          <div class="field" style="margin-bottom:0;"><label>Group name</label><input class="tm_group_name" value="${esc(m.group_name || '')}" readonly style="background:var(--surface-sunken);"></div>
-          <div class="field" style="margin-bottom:0;"><label>Group ID</label><input class="tm_group_id" value="${esc(m.group_id || '')}" readonly style="background:var(--surface-sunken);"></div>
+          <div class="field" style="margin-bottom:0;"><label>Group name</label><input class="tm_group_name grp-name-target" value="${esc(m.group_name || '')}" readonly style="background:var(--surface-sunken);"></div>
+          <div class="field" style="margin-bottom:0;"><label>Group ID</label><input class="tm_group_id grp-id-target" value="${esc(m.group_id || '')}" readonly style="background:var(--surface-sunken);"></div>
         </div>
         <div style="display:flex; gap:10px; align-items:end; margin-top:10px;">
-          <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input class="grp_search_input" placeholder="e.g. Ops Team"></div>
-          <button class="btn btn-secondary grp_search_btn" style="padding:9px 14px;">Search</button>
+          <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input class="grp-search-input" placeholder="e.g. Ops Team"></div>
+          <button class="btn btn-secondary grp-search-btn" style="padding:9px 14px;">Search</button>
         </div>
-        <div class="grp_results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
+        <div class="grp-search-results" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;"></div>
       </div>`).join('');
   }
   $('viewRoot').innerHTML = `
@@ -549,45 +1019,33 @@ function renderSettings(s) {
             <button id="btnAddTeam" class="btn btn-secondary" style="padding:7px 14px;">+ Add member</button>
           </div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:8px;">People who can send commands and receive alerts — same access level as the manager, including price list.</div>
-          <div style="font-size:11.5px; color:var(--copper-600); background:var(--copper-50); border-radius:var(--radius-xs); padding:8px 12px; margin-bottom:16px;">Group name/ID below are saved for your reference only. Command access is still granted by matching this person's WhatsApp number (or by the shared "Team WhatsApp group" field further down) — pointing an individual member at a group here does not by itself grant that group access.</div>
+          <div style="font-size:11.5px; color:var(--copper-onSoft); background:var(--copper-soft); border-radius:var(--radius-xs); padding:8px 12px; margin-bottom:16px;">Group name/ID below are saved for your reference only. Command access is granted by matching this person's WhatsApp number, or by the shared "Team WhatsApp group" field further down.</div>
           <div id="teamRows">${teamRowsHtml()}</div>
         </div>
         <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Team WhatsApp group</div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages route here instead of the manager's DM. Jarvis must already be a member of the group before it can find it — add it on your phone first, then search by name below.</div>
-          <div class="field"><label>Team group ID</label><input id="s_group" value="${esc(s.team_group_id || '')}" placeholder="120363123456789012@g.us"></div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages route here instead of the manager's DM. Jarvis must already be a member of the group — add it on your phone first, then search by name below.</div>
+          <div class="field"><label>Team group ID</label><input id="s_group" class="grp-id-target" value="${esc(s.team_group_id || '')}" placeholder="120363123456789012@g.us"></div>
           <div style="display:flex; gap:10px; align-items:end; margin-top:12px;">
-            <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input id="groupSearch" placeholder="e.g. Edge Metals Ops"></div>
-            <button id="btnFindGroup" class="btn btn-secondary">Search</button>
+            <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input class="grp-search-input" id="groupSearch" placeholder="e.g. Edge Metals Ops"></div>
+            <button class="btn btn-secondary grp-search-btn" id="btnFindGroup">Search</button>
           </div>
-          <div id="groupResults" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
-        </div>
-        <div class="card" style="padding:22px 24px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-            <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Price list contacts</div>
-            <button id="btnAddPriceContact" class="btn btn-secondary" style="padding:7px 14px;">+ Add contact</button>
-          </div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Save a name once, then just say "send price list to &lt;name&gt;" on WhatsApp instead of typing a number. "Standing" contacts also get the auto-notify when a price changes.</div>
-          <div id="priceContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+          <div class="grp-search-results" id="groupResults" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
         </div>
       </div>
     </section>`;
 
   function refreshTeamRows() { $('teamRows').innerHTML = teamRowsHtml(); wireTeamRows(); }
   function wireTeamRows() {
-    document.querySelectorAll('.btn-remove-team').forEach(btn => btn.addEventListener('click', () => {
-      team.splice(Number(btn.dataset.idx), 1); refreshTeamRows();
-    }));
-    document.querySelectorAll('#teamRows [data-idx]').forEach(row => {
-      row.querySelector('.grp_search_btn').addEventListener('click', () => doGroupSearch(row));
-    });
+    document.querySelectorAll('.btn-remove-team').forEach(btn => btn.addEventListener('click', () => { team.splice(Number(btn.dataset.idx), 1); refreshTeamRows(); }));
+    document.querySelectorAll('#teamRows .team-row').forEach(row => row.querySelector('.grp-search-btn').addEventListener('click', () => doGroupSearch(row)));
   }
   wireTeamRows();
   $('btnAddTeam').addEventListener('click', () => { team.push({ name: '', whatsapp: '', role: '', group_id: '', group_name: '' }); refreshTeamRows(); });
 
   $('btnSaveSettings').addEventListener('click', async () => {
     $('settingsError').style.display = 'none'; $('settingsSaved').style.display = 'none';
-    document.querySelectorAll('#teamRows [data-idx]').forEach((row, i) => {
+    document.querySelectorAll('#teamRows .team-row').forEach((row, i) => {
       team[i] = {
         name: row.querySelector('.tm_name').value.trim(),
         whatsapp: row.querySelector('.tm_whatsapp').value.replace(/\D/g, ''),
@@ -605,29 +1063,25 @@ function renderSettings(s) {
     } catch (e) { $('settingsError').textContent = e.message; $('settingsError').style.display = 'block'; }
   });
 
-  // Group finder — calls /api/whatsapp/find-groups (requireAdmin, matches api.js).
-  // Only surfaces groups Jarvis is already in; that's a WhatsApp privacy limit,
-  // not a bug — the helper text above explains it.
-  $('btnFindGroup').addEventListener('click', async () => {
-    const name = $('groupSearch').value.trim();
-    const box = $('groupResults');
-    box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">Searching…</div>';
-    try {
-      const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
-      if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">No matching groups — make sure Jarvis has been added to it on WhatsApp first.</div>'; return; }
-      box.innerHTML = groups.map(g => `
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
-          <div><div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(g.name || g.subject || '(unnamed)')}</div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</div></div>
-          <button class="btn btn-secondary btn-use-group" data-id="${esc(g.id || g.chatId || '')}" style="padding:6px 12px; font-size:10px;">Use this</button>
-        </div>`).join('');
-      document.querySelectorAll('.btn-use-group').forEach(btn => btn.addEventListener('click', () => { $('s_group').value = btn.dataset.id; }));
-    } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);">${esc(e.message)}</div>`; }
-  });
+  $('btnFindGroup').addEventListener('click', () => doGroupSearch($('groupSearch').closest('.card')));
+}
 
-  // Price-list contacts — GET/POST/DELETE /api/pricelist/contacts, send via the
-  // new /api/pricelist/send-city route (mirrors the WhatsApp ask-city-first flow
-  // so a website send behaves identically to a WhatsApp send).
-  const PRICE_CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
+// ── CONTACTS (price-list send-to contacts — separate from the Settings tab
+// so they're easy to find; moved here from Settings on request) ─────────────
+const PRICE_CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
+function renderPriceContacts() {
+  $('viewRoot').innerHTML = `
+    <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
+        <div><div class="eyebrow">// Contacts</div><h2 style="font-size:24px; text-transform:uppercase;">Price list contacts</h2></div>
+        <button id="btnAddPriceContact" class="btn btn-primary">+ Add contact</button>
+      </div>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "send price list to &lt;name&gt;" on WhatsApp instead of typing a number. "Standing" contacts also get the auto-notify when a price changes.</div>
+      <div class="card" style="padding:22px 24px;">
+        <div id="priceContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+      </div>
+    </section>`;
+
   async function loadPriceContacts() {
     const rows = $('priceContactRows');
     try {
@@ -635,26 +1089,20 @@ function renderSettings(s) {
       rows.innerHTML = contacts.length ? contacts.map(c => `
         <div style="display:grid; grid-template-columns:1fr auto auto auto auto; gap:10px; align-items:center; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(c.name)}">
           <div>
-            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)} ${c.standing ? '<span class="badge" style="background:var(--accent-soft); color:var(--leaf-700); margin-left:6px;">Standing</span>' : ''}</div>
+            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)} ${c.standing ? '<span class="badge" style="background:var(--accent-soft); color:var(--accent-onSoft); margin-left:6px;">Standing</span>' : ''}</div>
             <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.whatsapp)}</div>
           </div>
-          <select class="pc_city" style="padding:7px 10px; border:1px solid var(--border-default); border-radius:var(--radius-xs); font-size:12px;">
-            ${PRICE_CITIES.map(city => `<option value="${esc(city)}">${esc(city)}</option>`).join('')}
-          </select>
+          <select class="pc_city" style="padding:7px 10px; border:1px solid var(--border-default); border-radius:var(--radius-xs); font-size:12px;">${PRICE_CITIES.map(city => `<option value="${esc(city)}">${esc(city)}</option>`).join('')}</select>
           <button class="btn btn-primary btn-send-price" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Send</button>
           <span class="pc_status" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted);"></span>
           <button class="btn btn-danger btn-del-price-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
         </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
-
       document.querySelectorAll('.btn-send-price').forEach(btn => btn.addEventListener('click', async () => {
-        const row = btn.closest('[data-name]');
-        const city = row.querySelector('.pc_city').value;
-        const statusEl = row.querySelector('.pc_status');
+        const row = btn.closest('[data-name]'); const city = row.querySelector('.pc_city').value; const statusEl = row.querySelector('.pc_status');
         statusEl.textContent = 'Sending…';
         try {
           const result = await api('/api/pricelist/send-city', { method: 'POST', body: JSON.stringify({ to: btn.dataset.name, city }) });
-          statusEl.textContent = result.ok ? `Sent to ${result.target}` : 'Failed';
-          statusEl.style.color = result.ok ? 'var(--leaf-600)' : 'var(--status-danger)';
+          statusEl.textContent = result.ok ? `Sent to ${result.target}` : 'Failed'; statusEl.style.color = result.ok ? 'var(--leaf-600)' : 'var(--status-danger)';
         } catch (e) { statusEl.textContent = e.message; statusEl.style.color = 'var(--status-danger)'; }
       }));
       document.querySelectorAll('.btn-del-price-contact').forEach(btn => btn.addEventListener('click', async () => {
@@ -662,18 +1110,14 @@ function renderSettings(s) {
         await api(`/api/pricelist/contacts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
         loadPriceContacts();
       }));
-    } catch (e) {
-      rows.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
-    }
+    } catch (e) { rows.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`; }
   }
   $('btnAddPriceContact').addEventListener('click', async () => {
     const name = prompt('Contact name:'); if (!name) return;
     const whatsapp = prompt('WhatsApp number (digits only, e.g. 918056944193):'); if (!whatsapp) return;
     const standing = confirm('Should this contact also get the auto price-change notification (one of the 3 standing recipients)?');
-    try {
-      await api('/api/pricelist/contacts', { method: 'POST', body: JSON.stringify({ name, whatsapp, standing }) });
-      loadPriceContacts();
-    } catch (e) { alert(e.message); }
+    try { await api('/api/pricelist/contacts', { method: 'POST', body: JSON.stringify({ name, whatsapp, standing }) }); loadPriceContacts(); }
+    catch (e) { alert(e.message); }
   });
   loadPriceContacts();
 }
@@ -685,7 +1129,7 @@ function renderBot() {
     <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
       <div class="eyebrow">// Bot console</div>
       <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Jarvis terminal</h2>
-      <div style="background:var(--steel-950); border-radius:var(--radius-sm); overflow:hidden;">
+      <div style="background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); overflow:hidden;">
         <div style="display:flex; align-items:center; gap:10px; padding:10px 18px; background:var(--steel-900); border-bottom:1px solid var(--steel-800);">
           <span style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--steel-300);">Commands fire for real — same effect as messaging Jarvis on WhatsApp</span>
         </div>
@@ -718,20 +1162,46 @@ async function sendBotCommand() {
 }
 
 // ── TASKS ─────────────────────────────────────────────────────────────────
+// Nudge types + auto-cancel condition mapping reconstructed from the actual
+// backend schema (helpers/tasks.js evaluateCondition + comment block) since
+// the original UI's exact default-message strings weren't recoverable — the
+// condition *types* below are grounded in that file, not guessed.
+const TASK_TYPES = [
+  { value: 'nudge_scale_ticket', label: 'Nudge for scale ticket', cond: { kind: 'flag', flag: 'scale_ticket' }, msg: b => `Hi — following up on the scale ticket${b ? ' for ' + b : ''}. Can you send it over when you get a chance?` },
+  { value: 'nudge_load_ready',   label: 'Nudge for load ready',   cond: { kind: 'step', step: 'load_ready' },      msg: b => `Hi — checking in on load-ready status${b ? ' for ' + b : ''}.` },
+  { value: 'nudge_empty_drop',   label: 'Nudge for empty drop',   cond: { kind: 'step', step: 'empty_dropped' },   msg: b => `Hi — just confirming the empty has been dropped${b ? ' for ' + b : ''}.` },
+  { value: 'nudge_ingate',       label: 'Nudge for ingate',       cond: { kind: 'step', step: 'ingate_received' }, msg: b => `Hi — following up on ingate confirmation${b ? ' for ' + b : ''}.` },
+  { value: 'nudge_pickup',       label: 'Nudge for pickup',       cond: { kind: 'step', step: 'picked_up' },       msg: b => `Hi — checking on pickup timing${b ? ' for ' + b : ''}.` },
+  { value: 'generic_message',    label: 'Custom message',         cond: null,                                     msg: () => '' },
+];
+function buildTaskCondition(typeValue, bkgNo, containerSeq) {
+  const t = TASK_TYPES.find(x => x.value === typeValue);
+  if (!t || !t.cond || !bkgNo) return null;
+  if (t.cond.kind === 'flag') return { type: 'workflow_flag_true', flag: t.cond.flag, bkg_no: bkgNo };
+  if (containerSeq != null) return { type: 'container_stage_at_or_past', step: t.cond.step, bkg_no: bkgNo, container_seq: containerSeq };
+  return { type: 'workflow_step_at_or_past', step: t.cond.step, bkg_no: bkgNo };
+}
+function refreshTaskDefaultMessage() {
+  const t = TASK_TYPES.find(x => x.value === $('t_type').value);
+  if (t) $('t_message').value = t.msg($('t_bkg').value.trim().toUpperCase());
+}
 function renderTasks(data) {
   const pending = data.pending || [], history = data.history || [];
   $('viewRoot').innerHTML = `
-    <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
+    <section style="max-width:900px; margin:0 auto; padding:38px 40px 80px;">
       <div class="eyebrow">// Tasks</div>
       <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Follow-ups</h2>
       <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Persistent nudges. Fire at the scheduled time — auto-cancel if the answer arrives first.</div>
       <div class="card" style="padding:20px 22px; margin-bottom:18px;">
         <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:14px;">Create task</div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-          <div class="field"><label>Target name (trucker/supplier)</label><input id="tk_target"></div>
-          <div class="field"><label>Booking (enables auto-cancel)</label><input id="tk_bkg" placeholder="DALA23991600"></div>
-          <div class="field"><label>Fire in (minutes)</label><input id="tk_delay" value="60"></div>
-          <div class="field"><label>Message</label><input id="tk_msg" placeholder="Following up — can you send an update?"></div>
+          <div class="field"><label>Type</label><select id="t_type">${TASK_TYPES.map(t => `<option value="${t.value}">${esc(t.label)}</option>`).join('')}</select></div>
+          <div class="field"><label>Target</label><select id="t_target_kind"><option value="trucker">Trucker</option><option value="supplier">Supplier</option><option value="manager">Manager (me)</option></select></div>
+          <div class="field"><label>Name (leave blank for manager)</label><input id="t_target_name" placeholder="e.g. Dave R."></div>
+          <div class="field"><label>Booking (optional, enables auto-cancel)</label><input id="t_bkg" placeholder="DALA23991600" style="font-family:var(--font-mono);"></div>
+          <div class="field"><label>Container # (optional)</label><input id="t_container_seq" type="number" min="1" placeholder="e.g. 2"></div>
+          <div class="field"><label>Fire in (minutes)</label><input id="t_delay" value="60" type="number" min="1"></div>
+          <div class="field" style="grid-column:1/-1;"><label>Message</label><input id="t_message" placeholder="Auto-filled from type — edit freely"></div>
         </div>
         <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
           <button id="btnCreateTask" class="btn btn-primary">Create task</button>
@@ -744,8 +1214,8 @@ function renderTasks(data) {
           ${pending.length ? pending.map(t => `
             <div style="display:flex; justify-content:space-between; align-items:center; gap:14px; padding:12px 14px; background:var(--surface-sunken); border-left:3px solid var(--status-warning); border-radius:var(--radius-xs);">
               <div style="flex:1; min-width:0;">
-                <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(t.type || 'task')} → ${esc(t.target_name || t.target_chat || '')}</div>
-                <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(t.bkg_no || '')} · fires ${esc(t.fire_at || '')}</div>
+                <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc((TASK_TYPES.find(x => x.value === t.type) || {}).label || t.type || 'task')} → ${esc(t.target_name || t.target_kind || t.target_chat || '')}</div>
+                <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(t.bkg_no || '')}${t.container_seq ? ' #' + t.container_seq : ''} · fires ${esc(t.fire_at || '')}</div>
                 <div style="font-size:12px; color:var(--text-body); margin-top:5px; font-style:italic;">"${esc(t.message || '')}"</div>
               </div>
               <button class="btn btn-danger btn-cancel-task" data-id="${esc(t.id)}" style="white-space:nowrap;">Cancel</button>
@@ -762,13 +1232,28 @@ function renderTasks(data) {
           </div>`).join('') || '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No history yet.</div>'}
       </div>
     </section>`;
+  $('t_type').addEventListener('change', refreshTaskDefaultMessage);
+  $('t_bkg').addEventListener('blur', refreshTaskDefaultMessage);
+  refreshTaskDefaultMessage();
   $('btnCreateTask').addEventListener('click', async () => {
     $('taskErr').textContent = '';
+    const type = $('t_type').value;
+    const target_kind = $('t_target_kind').value;
+    const target_name = $('t_target_name').value.trim();
+    const bkg_no = $('t_bkg').value.trim().toUpperCase() || null;
+    const container_seq = $('t_container_seq').value ? Number($('t_container_seq').value) : null;
+    const message = $('t_message').value.trim();
+    if (!message) { $('taskErr').textContent = 'Message is required.'; return; }
+    if (target_kind !== 'manager' && !target_name) { $('taskErr').textContent = 'Name is required for a trucker/supplier target.'; return; }
     try {
       await api('/api/tasks', { method: 'POST', body: JSON.stringify({
-        type: 'generic_message', target_kind: 'trucker', target_name: $('tk_target').value.trim() || null,
-        bkg_no: $('tk_bkg').value.trim() || null, delay_minutes: Number($('tk_delay').value) || 60,
-        message: $('tk_msg').value.trim(), created_by: 'dashboard',
+        type, target_kind,
+        target_name: target_name || null,
+        target_chat: (target_kind === 'manager' && !target_name) ? 'manager' : null,
+        bkg_no, container_seq,
+        delay_minutes: Number($('t_delay').value) || 60,
+        message, condition: buildTaskCondition(type, bkg_no, container_seq),
+        created_by: 'dashboard',
       }) });
       loadTab('tasks');
     } catch (e) { $('taskErr').textContent = e.message; }
@@ -779,48 +1264,45 @@ function renderTasks(data) {
   }));
 }
 
-// ── Modal wiring (Add booking) ───────────────────────────────────────────
-$('btnCloseModal').addEventListener('click', closeBookingModal);
-$('btnCancelModal').addEventListener('click', closeBookingModal);
-$('pdfInput').addEventListener('change', async () => {
-  const file = $('pdfInput').files[0]; if (!file) return;
-  $('pdfDropLabel').textContent = 'Scanning…';
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const b64 = reader.result.split(',')[1];
-    try {
-      const { fields } = await api('/api/documents/scan', { method: 'POST', body: JSON.stringify({ pdf_base64: b64 }) });
-      if (fields) {
-        if (fields.booking_number) $('f_bkg').value = fields.booking_number;
-        if (fields.carrier) $('f_carrier').value = fields.carrier;
-        if (fields.vessel) $('f_vessel').value = fields.vessel;
-        if (fields.port_of_loading) $('f_pol').value = fields.port_of_loading;
-        if (fields.port_of_discharge) $('f_pod').value = fields.port_of_discharge;
-        if (fields.erd_date) $('f_erd').value = fields.erd_date;
-        if (fields.cutoff_date) $('f_cutoff').value = fields.cutoff_date;
-      }
-      $('pdfDropLabel').textContent = 'Extracted — review below and save.';
-    } catch (e) {
-      $('modalError').textContent = e.message;
-      $('pdfDropLabel').textContent = "Drop the carrier's booking PDF here";
-    }
-  };
-  reader.readAsDataURL(file);
-});
-$('btnSaveBooking').addEventListener('click', async () => {
-  $('modalError').textContent = '';
-  const bkg = $('f_bkg').value.trim();
-  if (!bkg) { $('modalError').textContent = 'Booking number is required.'; return; }
-  try {
-    await api('/api/bookings', { method: 'POST', body: JSON.stringify({
-      booking_number: bkg, carrier: $('f_carrier').value.trim(), vessel: $('f_vessel').value.trim(),
-      port_of_loading: $('f_pol').value.trim(), port_of_discharge: $('f_pod').value.trim(),
-      erd_date: $('f_erd').value.trim(), cutoff_date: $('f_cutoff').value.trim(),
-    }) });
-    closeBookingModal();
-    if (CURRENT_TAB === 'bookings') loadTab('bookings');
-  } catch (e) { $('modalError').textContent = e.message; }
-});
+// ── FACTS (admin only) — Jarvis's learned memory, fed into every AI prompt ─
+function renderFacts(data) {
+  const facts = data.facts || [];
+  $('viewRoot').innerHTML = `
+    <section style="max-width:800px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// Facts</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Learned memory</h2>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Explicit "remember X" commands and AI-detected corrections land here, and every one feeds every future AI answer.</div>
+      <div class="card" style="padding:18px 20px; margin-bottom:16px;">
+        <div style="display:flex; gap:8px;">
+          <input id="f_new_text" style="flex:1; padding:11px 12px; border:1px solid var(--border-default); border-radius:var(--radius-sm);" placeholder="e.g. DALA booking numbers can include a dash">
+          <button id="btnAddFact" class="btn btn-primary">Add</button>
+        </div>
+        <div id="factAddErr" style="color:var(--status-danger); font-size:12px; margin-top:8px;"></div>
+      </div>
+      <div class="card" style="padding:18px 20px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">All facts (most recent first)</div>
+        <div id="factList" style="display:flex; flex-direction:column; gap:8px;">
+          ${facts.length ? facts.map((f, i) => `
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+              <span style="font-size:13px;">${esc(f)}</span>
+              <button class="btn btn-danger btn-del-fact" data-idx="${i}" style="padding:5px 10px; font-size:10px;">Del</button>
+            </div>`).reverse().join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No facts yet.</div>'}
+        </div>
+      </div>
+    </section>`;
+  $('btnAddFact').addEventListener('click', async () => {
+    const text = $('f_new_text').value.trim();
+    if (!text) { $('factAddErr').textContent = 'Enter some text first.'; return; }
+    $('factAddErr').textContent = '';
+    try { await api('/api/facts', { method: 'POST', body: JSON.stringify({ text }) }); loadTab('facts'); }
+    catch (e) { $('factAddErr').textContent = e.message; }
+  });
+  document.querySelectorAll('.btn-del-fact').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete this fact?')) return;
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'DELETE' });
+    loadTab('facts');
+  }));
+}
 
 // ── Sign out ──────────────────────────────────────────────────────────────
 $('btnSignout').addEventListener('click', async () => {
@@ -831,16 +1313,10 @@ $('btnSignout').addEventListener('click', async () => {
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
-  try {
-    const me = await api('/api/me');
-    ROLE = me.role || 'user';
-  } catch {}
+  try { const me = await api('/api/me'); ROLE = me.role || 'user'; } catch {}
   $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : 'Standard access';
   renderNav();
   loadTab(CURRENT_TAB);
-  // /api/whatsapp/status is requireAdmin server-side (api.js) — only poll it for
-  // admins. A non-admin login would get a 403 here, which would otherwise show
-  // as a false "link down" in the sidebar even when WhatsApp is fine.
   if (ROLE === 'admin') {
     const poll = async () => { try { updateWaBadge(await api('/api/whatsapp/status')); } catch {} };
     poll();
