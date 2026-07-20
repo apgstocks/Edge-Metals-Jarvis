@@ -1342,6 +1342,12 @@ $('btnSignout').addEventListener('click', async () => {
   location.href = '/login';
 });
 
+// The top "⚠ WhatsApp needs a QR scan / Open WhatsApp tab" banner has always
+// been a plain <button id="linkDownBanner"> with no click handler wired to it
+// anywhere in this file (confirmed by grep — this predates the QR-image fix
+// and the pass-2 redesign). Wire it to actually switch tabs.
+$('linkDownBanner').addEventListener('click', () => switchTab('whatsapp'));
+
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
