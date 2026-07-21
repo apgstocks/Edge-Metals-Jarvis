@@ -200,14 +200,60 @@ function policyDecide(ctx) {
         if ((m = t.match(/^status\s+(\S+)$/)))
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
-        // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
-        if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {
-            const rawMins = m[2] ? parseInt(m[2], 10) : null;
-            const unit    = m[3] || '';
-            const minutes = rawMins != null ? (unit.startsWith('h') ? rawMins * 60 : rawMins) : null;
+        // "follow up with X" / "please follow up with X in N minutes/hours" —
+        // optionally "re/regarding/about/on BKG123". Rewritten (2026-07-20):
+        // the old single regex required the trailing re/regarding/about/on
+        // clause to be exactly one alphanumeric token right at end-of-string.
+        // A natural phrase like "on the scale ticket" doesn't fit that shape,
+        // so the non-greedy name capture backtracked and swallowed the whole
+        // thing — "follow up with trucker on the scale ticket." parsed as a
+        // literal contact named "trucker on the scale ticket.". Now parsed in
+        // steps: strip a trailing time clause, then split at the FIRST
+        // re/regarding/about/on boundary regardless of what follows, and only
+        // treat that trailing text as a booking number if it actually resolves
+        // as one — a plain topic phrase is dropped, not misused as a name or a
+        // fabricated bkg_no.
+        if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+)$/))) {
+            let rest = m[1].trim();
+            let minutes = null;
+
+            // Time and topic clauses can appear in EITHER order ("re DALA123 in
+            // 20 minutes" or "in 20 minutes re DALA123") — the original regex
+            // only supported one fixed order, so this splices each clause out
+            // by finding it anywhere in the string, not just anchored at the
+            // very end, and works regardless of which comes first.
+            const timeMatch = rest.match(/\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours)\b/i);
+            if (timeMatch) {
+                const rawMins = parseInt(timeMatch[1], 10);
+                minutes = timeMatch[2].toLowerCase().startsWith('h') ? rawMins * 60 : rawMins;
+                rest = (rest.slice(0, timeMatch.index) + rest.slice(timeMatch.index + timeMatch[0].length)).trim();
+            }
+
+            let bkgFromText = null;
+            const topicMatch = rest.match(/\s+(?:re|regarding|about|on)\s+(.+)$/i);
+            if (topicMatch) {
+                const candidate = resolveBookingNumber(topicMatch[1].replace(/[.?!]+$/, ''));
+                rest = rest.slice(0, topicMatch.index).trim(); // name ends at the boundary word, real booking or not
+                if (candidate) bkgFromText = candidate;
+            }
+
+            let targetName = rest.replace(/[.?!]+$/, '').trim();
+            const bkg_no = bkgFromText || ctx.activeBooking || null;
+
+            // Generic role reference ("the trucker", "supplier") instead of a
+            // registered contact name — resolve to whoever's actually assigned
+            // to the booking, same inference relay_request already does,
+            // rather than failing with "no contact named 'trucker'".
+            const wf = bkg_no ? (ctx.allWorkflow?.[bkg_no] || (bkg_no === ctx.activeBooking ? ctx.workflow : null)) : null;
+            const bookingForRole = bkg_no ? (ctx.allBookings?.[bkg_no] || (bkg_no === ctx.activeBooking ? ctx.booking : null)) : null;
+            const roleWord = targetName.toLowerCase().replace(/^the\s+/, '');
+            if (['trucker', 'driver'].includes(roleWord) && wf?.trucker_name) targetName = wf.trucker_name;
+            else if (roleWord === 'supplier' && (bookingForRole?.supplier || wf?.supplier)) targetName = bookingForRole?.supplier || wf.supplier;
+
+            if (!targetName) return { intent: null, resolvedBy: null, needsAI: true }; // malformed — let AI take a pass rather than guess
             return {
                 intent: 'schedule_followup', resolvedBy: 'policy',
-                data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
+                data: { target_name: targetName, minutes, bkg_no },
             };
         }
 
