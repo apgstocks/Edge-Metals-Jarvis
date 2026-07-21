@@ -146,6 +146,18 @@ function policyDecide(ctx) {
             if (cityMatch) return { intent: 'send_pricelist_city', resolvedBy: 'policy', data: { city: cityMatch, target_name: p.target_name || null } };
             return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply 1 for Los Angeles, 2 for Houston, or 3 for San Antonio.' } };
         }
+        // "How long before I follow up?" reply is free text (a bare number,
+        // "15 min", "2 hours", or something unparseable) — not yes/no, no
+        // options list — so without this branch it fell through to command
+        // grammar / a brand-new AI classification, which silently re-asked
+        // the identical question with zero acknowledgement the reply wasn't
+        // understood (looked like a loop). actions.resolvePending's
+        // 'await_followup_minutes' case already has the correct
+        // parse-or-reprompt-with-explanation logic — it just was never being
+        // reached. Found 2026-07-21 from a live transcript.
+        if (p.type === 'await_followup_minutes') {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: ctx.text } };
+        }
         // fall through — the manager may be asking something else mid-pending
     }
 
@@ -782,6 +794,22 @@ async function route(decision, ctx, sendMessage) {
     }
 }
 
+// The "(Still pending...)" reminder tail below used to hardcode "reply
+// yes/no" for every pending type. That's wrong for anything that isn't a
+// literal yes/no confirm — e.g. await_followup_minutes wants a number/time,
+// await_bkg_no wants a booking number, await_pricelist_city wants a pick.
+// Telling the manager "reply yes/no" when the pending actually wants a time
+// value is actively misleading (found 2026-07-21 from a live transcript
+// where it contributed to a confused back-and-forth). Give a hint that
+// matches what the pending state actually expects.
+function pendingHint(p) {
+    if (p.type === 'await_followup_minutes') return 'reply with a number of minutes (e.g. 15) or a time like "2 hours"';
+    if (p.type === 'await_bkg_no') return 'reply with the booking number';
+    if (p.type === 'await_pricelist_city') return 'reply 1, 2, or 3, or the city name';
+    if (p.options && p.options.length) return `reply with one of: ${p.options.join(', ')}`;
+    return 'reply yes/no';
+}
+
 // ── Main entry ────────────────────────────────────────────────────────────────
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
@@ -821,12 +849,16 @@ async function process(rawEvent, sendMessage) {
         if (inbound.isManagerOrTeam) await sendMessage(inbound.chatId, `Something broke while handling that: ${err.message}`);
     }
 
-    // Reminder tail — pending still open after an unrelated exchange
+    // Reminder tail — pending still open after an unrelated exchange.
+    // 'awaiting_followup_minutes' is excluded too: resolvePending's own
+    // "didn't catch a time frame" reply already restates that it's still
+    // waiting and how to answer/cancel — stacking the generic reminder
+    // right under it is a redundant double message (found 2026-07-21).
     if (inbound.isManagerOrTeam && pending &&
-        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled'].includes(result?.action_taken)) {
+        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled', 'awaiting_followup_minutes'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
-            await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')} for ${fresh.bkg_no} — reply yes/no.)`);
+            await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')} for ${fresh.bkg_no} — ${pendingHint(fresh)}.)`);
         }
     }
 
