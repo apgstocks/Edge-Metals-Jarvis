@@ -613,6 +613,30 @@ if (hasScaleTicket) await tasksHelper.cancelMatching({ type: 'nudge_scale_ticket
 return { action_taken: 'picked_up' };
 }
 
+// ── Relay — manager/team wants the trucker or supplier asked something RIGHT
+// NOW (e.g. "ask trucker for the scale ticket"). Distinct from scheduleFollowup
+// (fires later) and distinct from the *_confirmed/*_received actions above
+// (those are the trucker/supplier reporting their OWN status — this is the
+// manager asking THEM something). Added 2026-07-20 after "ask trucker for
+// scale ticket" had no matching action and the AI fallback mis-fired
+// scale_ticket_received instead — see SELF_REPORT_ACTIONS guard in brain.js.
+async function relayRequest(chatId, bkgNo, targetKind, message, requestedBy) {
+const clean = String(message || '').trim();
+if (!bkgNo) { await _send(chatId, 'Which booking is this about?'); return { action_taken: 'replied' }; }
+if (!clean) { await _send(chatId, 'What should I say to them?'); return { action_taken: 'replied' }; }
+const kind = targetKind === 'supplier' ? 'supplier' : 'trucker';
+const b = loadBookings()[bkgNo];
+if (!b) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
+const chat = kind === 'supplier'
+    ? suppliers.getSupplierGroupIdForBooking(bkgNo)
+    : truckers.getTruckerGroupIdForBooking(bkgNo);
+if (!chat) { await _send(chatId, `No ${kind} chat linked to ${bkgNo} yet — assign one first.`); return { action_taken: 'not_found' }; }
+await _send(chat, `${bkgNo}: ${clean}`);
+await _send(chatId, `Sent to the ${kind} on ${bkgNo}: "${clean}"`);
+updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'relay_request' });
+return { action_taken: 'relayed' };
+}
+
 // Scale ticket arriving late (side track). Not a stage transition — just a flag.
 async function scaleTicketReceived(bkgNo, containerSeq) {
 // No container stage change — scale_ticket is a workflow-level flag today.
@@ -676,6 +700,11 @@ return { action_taken: 'recalled' };
 async function archiveNow(chatId, bkgNo) {
 const ok = await archiveBooking(bkgNo, 'manual');
 await _send(chatId, ok ? `${bkgNo} archived.` : `No active booking ${bkgNo}.`);
+// FIX (2026-07-20): every other single-booking action (status/forward/assign/
+// recall) refreshes session.activeBooking so a bare follow-up question with
+// no booking number still resolves correctly — this one didn't. Same gap
+// closed for checkSupplierReadiness/scheduleFollowup/relayRequest below.
+if (ok) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'archive' });
 return { action_taken: ok ? 'archived' : 'not_found' };
 }
 
@@ -688,6 +717,25 @@ if (answer === 'no') {
 }
 
 switch (pending.type) {
+    // Medium-confidence AI-resolved mutating action, held for a yes/no before
+    // executing — see the gate/'confirm' path in brain.js's route(). Dispatch
+    // table kept local (not a call back into brain.js's route()) to avoid a
+    // circular require between brain.js and actions.js.
+    case 'confirm_ai_action': {
+        await clearPending(chatId);
+        const d = pending.data || {};
+        switch (pending.intent) {
+            case 'forward_booking':   return forwardBooking(chatId, d.bkg_no, d.trucker_name, d.container_seq);
+            case 'assign_supplier':   return assignSupplier(chatId, d.bkg_no, d.supplier_name, d.container_seq);
+            case 'recall_booking':    return recallBooking(chatId, d.bkg_no);
+            case 'archive_booking':   return archiveNow(chatId, d.bkg_no);
+            case 'relay_request':     return relayRequest(chatId, d.bkg_no, d.target_kind, d.message, d.requested_by);
+            case 'schedule_followup': return scheduleFollowup(chatId, d.target_name, d.minutes, d.bkg_no, d.requested_by);
+            default:
+                await _send(chatId, "I've lost track of what that confirmation was for — please restate the command.");
+                return { action_taken: 'noop' };
+        }
+    }
     case 'select_trucker':
         await clearPending(chatId);
         return forwardBooking(chatId, pending.bkg_no, selection, pending.container_seq); // → confirm step
@@ -917,6 +965,7 @@ await tasks.enqueue({
 
 const when = mins >= 60 ? `${Math.round(mins / 60 * 10) / 10}h` : `${mins}m`;
 await _send(chatId, `Scheduled — I'll follow up with ${resolvedName} in ${when}${label}.`);
+if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'follow_up' });
 return { action_taken: 'replied' };
 }
 
@@ -970,6 +1019,7 @@ const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 await _send(supplierChat, `${label}: checking in — is the container ready for pickup? Reply yes or no.`);
 await setPending(supplierChat, { type: 'await_ready_check', stage: 'yesno', bkg_no: bkgNo, container_seq: containerSeq ?? null, requested_by: managerChatId });
 await _send(managerChatId, `Pinged the supplier on ${label} — I'll let you know what they say.`);
+updateSession(managerChatId, { activeBooking: bkgNo, currentTopic: 'check_supplier' });
 return { action_taken: 'replied' };
 }
 
@@ -1038,6 +1088,7 @@ if (notifyTeam) {
 
 module.exports = {
 init,
+isWebSource,
 setPending, clearPending, getPending, resolvePending,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
@@ -1045,6 +1096,7 @@ forwardBooking, executeForward,
 assignSupplier, executeAssign,
 smartAssign,
 emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived,
+relayRequest,
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
