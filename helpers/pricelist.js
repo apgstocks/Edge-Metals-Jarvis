@@ -32,13 +32,25 @@ function loadContacts() {
     return loadJson(cfg.PRICELIST_CONTACTS_FILE, []);
 }
 
-async function addContact(name, whatsapp, standing = false) {
-    if (!name || !whatsapp) throw new Error('name and whatsapp required');
-    const digits = String(whatsapp).replace(/\D/g, '');
-    if (digits.length < 8) throw new Error('whatsapp number looks invalid');
+// group_id/group_name let a contact be a WhatsApp GROUP instead of (or in
+// addition to) a personal number — same "group_id wins over @c.us number"
+// priority already used for truckers/suppliers (workflow/truckers.js,
+// workflow/suppliers.js). group_name is decorative only, exactly like the
+// trucker/supplier one — never used for routing, just shown in the UI so you
+// remember which group you picked. At least one of whatsapp/group_id must be
+// given — a contact with neither has nowhere to send to.
+async function addContact(name, whatsapp, standing = false, group_id = null, group_name = null) {
+    if (!name) throw new Error('name required');
+    let digits = null;
+    if (whatsapp) {
+        digits = String(whatsapp).replace(/\D/g, '');
+        if (digits.length < 8) throw new Error('whatsapp number looks invalid');
+    }
+    const gid = group_id ? String(group_id).trim() : null;
+    if (!digits && !gid) throw new Error('either a whatsapp number or a group is required');
     await mutateJson(cfg.PRICELIST_CONTACTS_FILE, [], (list) => {
         const i = list.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
-        const entry = { name, whatsapp: digits, standing: !!standing };
+        const entry = { name, whatsapp: digits, standing: !!standing, group_id: gid, group_name: gid ? (group_name || null) : null };
         if (i >= 0) list[i] = { ...list[i], ...entry };
         else list.push(entry);
         return list;
@@ -62,12 +74,16 @@ function resolveTarget(nameOrNumber) {
         return { chatId: digits + '@c.us', label: raw };
     }
 
+    // group_id already IS a full WhatsApp chat id (e.g. "1203...@g.us") — used
+    // as-is, unlike whatsapp which is bare digits needing "@c.us" appended.
+    const chatIdFor = c => c.group_id || (c.whatsapp ? c.whatsapp + '@c.us' : null);
+
     const contacts = loadContacts();
     const exact = contacts.find(c => c.name.toLowerCase() === raw.toLowerCase());
-    if (exact) return { chatId: exact.whatsapp + '@c.us', label: exact.name };
+    if (exact) { const chatId = chatIdFor(exact); if (chatId) return { chatId, label: exact.name }; }
 
     const partial = contacts.find(c => c.name.toLowerCase().includes(raw.toLowerCase()));
-    if (partial) return { chatId: partial.whatsapp + '@c.us', label: partial.name };
+    if (partial) { const chatId = chatIdFor(partial); if (chatId) return { chatId, label: partial.name }; }
 
     return null;
 }
@@ -191,13 +207,23 @@ function formatSingleCity(data, city) {
 // renderPriceListImage); falls back to the old text format if the browser
 // isn't ready or rendering fails for any reason, so this never hard-fails
 // just because the image path had a bad moment.
+//
+// `text` is now ALWAYS computed (not just when media is absent), even though
+// on success it just becomes a redundant caption under the image — because
+// WhatsApp's own media-send step can fail for reasons that have nothing to
+// do with rendering (confirmed on-device: "No LID for user", a WhatsApp Web
+// recipient-resolution quirk that only affects media, not text, and doesn't
+// mean anything's actually wrong with the connection). sendMessage() in
+// index.js retries as plain text if the media send itself throws — that
+// retry is worthless without a real fallback text to retry with, so this
+// can't be null just because rendering happened to succeed.
 async function sendPriceListCityTo(targetNameOrNumber, city, fallbackChatId) {
     const data = await readPriceSheet();
     const rows = data[city] || [];
     const updatedLine = `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`;
+    const text = rows.length ? formatSingleCity(data, city) : null;
 
     let media = null;
-    let text = null;
     if (rows.length) {
         try {
             const base64 = await renderPriceListImage(rows, `Edge Metals — ${city} Price List`, updatedLine);
@@ -205,9 +231,6 @@ async function sendPriceListCityTo(targetNameOrNumber, city, fallbackChatId) {
         } catch (err) {
             console.warn('[PRICELIST] Image render failed, falling back to text:', err.message);
         }
-    }
-    if (!media) {
-        text = formatSingleCity(data, city);
     }
 
     if (!targetNameOrNumber) {
@@ -263,7 +286,12 @@ async function checkForChangesAndNotify() {
     const text = formatPriceList(newData) + '\n\n_Changed: ' + changes.join('; ') + '_';
     const results = [];
     for (const c of contacts) {
-        const ok = await _send(c.whatsapp + '@c.us', text);
+        // A standing contact can now be a group instead of a person (group_id
+        // wins, same priority as resolveTarget) — c.whatsapp + '@c.us' alone
+        // would send to the literal string "null@c.us" for a group-only entry.
+        const chatId = c.group_id || (c.whatsapp ? c.whatsapp + '@c.us' : null);
+        if (!chatId) { results.push({ name: c.name, ok: false, reason: 'no whatsapp or group_id on this contact' }); continue; }
+        const ok = await _send(chatId, text);
         results.push({ name: c.name, ok });
     }
 
