@@ -3,761 +3,282 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jarvis — Edge Metals Ops</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;800;900&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-/* ── Edge Metals — Color tokens (from design mockup) ─────────────────────── */
-:root {
-  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
-  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
-  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
-
-  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
-  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
-
-  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
-  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
-
-  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
-
-  --bg-base: var(--steel-50); --bg-panel: var(--white);
-  --surface-card: var(--white); --surface-sunken: var(--steel-100);
-  --text-strong: var(--steel-950); --text-body: var(--steel-700); --text-muted: var(--steel-500);
-  --text-faint: var(--steel-400);
-  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: var(--leaf-50);
-  --warm: var(--copper-500);
-  --border-subtle: var(--steel-200); --border-default: var(--steel-300);
-  --status-success: var(--green-500); --status-warning: var(--amber-500);
-  --status-danger: var(--red-500); --status-info: var(--blue-500);
-  --ring: var(--leaf-500);
-
-  --font-display: 'Poppins', system-ui, sans-serif;
-  --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
-
-  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px;
-  --shadow-xs: 0 1px 2px rgba(12,14,16,.06);
-  --shadow-sm: 0 1px 3px rgba(12,14,16,.10), 0 1px 2px rgba(12,14,16,.06);
-  --shadow-md: 0 6px 16px rgba(12,14,16,.10), 0 2px 6px rgba(12,14,16,.06);
-  --shadow-lg: 0 18px 40px rgba(12,14,16,.16), 0 6px 14px rgba(12,14,16,.08);
-  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
-}
-* , *::before, *::after { box-sizing: border-box; }
-body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; overflow:hidden; }
-h1,h2,h3,h4 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:800; line-height:1.18; letter-spacing:-.02em; }
-a { color:var(--leaf-600); text-decoration:none; }
-a:hover { color:var(--leaf-700); text-decoration:underline; text-underline-offset:3px; }
-button { font:inherit; }
-input, select { font-family:var(--font-sans); font-size:14px; }
-::selection { background:var(--leaf-200); color:var(--steel-950); }
-:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
-::-webkit-scrollbar { width:10px; height:10px; }
-::-webkit-scrollbar-thumb { background:var(--steel-300); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
-::-webkit-scrollbar-track { background:transparent; }
-@keyframes jarvis-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
-.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); margin-bottom:8px; }
-.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
-.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-.btn-primary:hover { background:var(--accent-hover); }
-.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
-.btn-secondary:hover { border-color:var(--steel-600); }
-.btn-danger { background:var(--surface-card); color:var(--status-danger); border-color:var(--border-default); }
-.btn-danger:hover { border-color:var(--status-danger); }
-.btn-dark { background:var(--steel-800); color:#fff; border-color:var(--steel-700); }
-.btn-dark:hover { background:var(--steel-700); }
-.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
-.field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
-.field input, .field select { width:100%; padding:11px 12px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
-.field input:focus, .field select:focus { border-color:var(--accent); }
-.badge { display:inline-block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); }
-.hidden { display:none !important; }
-.spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
-.nav-btn:hover { background:var(--steel-800); color:#fff; }
-.nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
-.row-hover:hover { background:var(--steel-50); }
-</style>
+<title>Jarvis — Booking Scoreboard</title>
+<link rel="stylesheet" href="/dashboard.css">
+<script src="/qrcode.min.js"></script>
 </head>
 <body>
 
-<div style="display:flex; height:100vh; overflow:hidden;">
-
-  <!-- ══ SIDEBAR ══ -->
-  <aside style="width:252px; flex-shrink:0; background:var(--steel-950); display:flex; flex-direction:column;">
-    <div style="height:5px; flex-shrink:0; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-    <div style="padding:26px 22px 20px; border-bottom:1px solid var(--steel-800);">
-      <div style="display:flex; align-items:center; gap:13px;">
-        <div style="width:42px; height:42px; border-radius:8px; background:var(--steel-900); border:1px solid var(--copper-500); display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:900; color:var(--copper-400); font-size:18px;">J</div>
-        <div>
-          <div style="font-family:var(--font-mono); font-size:9.5px; font-weight:500; letter-spacing:.2em; text-transform:uppercase; color:var(--steel-400);">// Edge Metals · Ops</div>
-          <div style="font-family:var(--font-display); font-size:21px; font-weight:800; letter-spacing:.08em; color:#fff; text-transform:uppercase;">Jarvis</div>
-        </div>
-      </div>
-      <div id="waStatusLine" style="display:flex; align-items:center; gap:8px; margin-top:16px;">
-        <span id="waStatusDot" style="width:7px; height:7px; border-radius:50%; background:var(--steel-600); flex-shrink:0;"></span>
-        <span id="waStatusText" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--steel-300);">Checking…</span>
+<div class="app-shell">
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand">
+      <div class="brand-mark">J</div>
+      <div>
+        <div class="brand-eyebrow">Edge Metals Inc</div>
+        <div class="brand-title">Jarvis</div>
       </div>
     </div>
+    <div class="live"><span class="live-dot" id="liveDot"></span><span class="live-label" id="liveLabel">Connecting…</span></div>
+  </div>
 
-    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:14px 12px; display:flex; flex-direction:column; gap:2px;"></nav>
+  <nav class="tabnav" id="tabnav">
+    <button class="tab active" data-tab="board" type="button">Board</button>
+    <button class="tab" data-tab="bookings" type="button">Bookings</button>
+    <button class="tab" data-tab="truckers" type="button">Truckers</button>
+    <button class="tab" data-tab="suppliers" type="button">Suppliers</button>
+    <button class="tab" data-tab="whatsapp" type="button" id="tabWhatsapp">WhatsApp</button>
+    <button class="tab" data-tab="settings" type="button" id="tabSettings">Settings</button>
+    <button class="tab" data-tab="bot" type="button">Bot</button>
+    <button class="tab" data-tab="tasks" type="button">Tasks</button>
+    <button class="tab" data-tab="facts" type="button" id="tabFacts" style="display:none;">Facts</button>
+  </nav>
 
-    <div style="padding:16px 22px 20px; border-top:1px solid var(--steel-800);">
-      <div id="todayLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--steel-300);"></div>
-      <div id="roleLabel" style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--steel-500); margin-top:4px;"></div>
-      <button id="btnSignout" class="btn btn-dark" style="width:100%; margin-top:14px; background:transparent; border-color:var(--steel-700); color:var(--steel-300);">Sign out</button>
-    </div>
-  </aside>
+  <div class="sidebar-footer">
+    <div class="topbar-date mono" id="todayLabel"></div>
+    <div class="topbar-count" id="trackedCount"></div>
+    <div class="tab-signout"><button type="button" id="btnSignout">Sign out</button></div>
+  </div>
+</aside>
 
-  <!-- ══ MAIN ══ -->
-  <main style="flex:1; min-width:0; display:flex; flex-direction:column;">
-    <button id="linkDownBanner" class="hidden" style="flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:10px; padding:9px 20px; background:var(--copper-500); color:#fff; border:none; cursor:pointer; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase;">
-      <span>⚠</span><span id="linkDownText"></span><span style="text-decoration:underline; text-underline-offset:3px;">Open WhatsApp tab</span>
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<main class="main-content">
+  <div class="mobile-topbar">
+    <div class="mobile-brand">Jarvis</div>
+    <button type="button" id="hamburgerBtn" class="hamburger" aria-label="Menu" aria-expanded="false">
+      <span></span><span></span><span></span>
     </button>
+  </div>
 
-    <div id="viewRoot" style="flex:1; overflow-y:auto;"></div>
-  </main>
+  <div id="waBanner" style="display:none; padding:9px 32px; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-weight:600; text-align:center; cursor:pointer;" title="Click to open the WhatsApp tab">
+    <span id="waBannerDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; vertical-align:middle;"></span>
+    <span id="waBannerText"></span>
+  </div>
+
+  <div class="tabpanel active" id="panel-board">
+<div class="container">
+  <div class="kpis" id="kpis"></div>
+  <div id="alertsSection">
+    <div class="rail-head"><span class="rail-title">Needs Attention</span><span class="rail-line"></span><span class="rail-count" id="alertCount">0</span></div>
+
+    <div class="alerts" id="alerts"></div>
+  </div>
+  <div class="filters" id="filters"></div>
+  <div class="rows" id="rows"></div>
+</div>
 </div>
 
-<!-- ══ ADD BOOKING MODAL ══ -->
-<div id="bookingModal" class="hidden" style="position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:56px 24px; overflow-y:auto;">
-  <div style="background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:700px; box-shadow:var(--shadow-lg); overflow:hidden;">
-    <div style="height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-    <div style="display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle);">
-      <div>
-        <div class="eyebrow" style="margin-bottom:3px;">// New booking</div>
-        <div style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">Log a booking</div>
-      </div>
-      <button id="btnCloseModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
+<div class="tabpanel" id="panel-bookings">
+<div class="container">
+  <div class="bk-head"><h2>Bookings</h2><div style="display:flex; gap:8px;"><button class="btn-secondary" id="btnRequestBooking" type="button">✉ Request new booking</button><button class="btn-primary" id="btnAddBooking" type="button">+ Add booking</button></div></div>
+  <div id="bkList"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-truckers">
+<div class="container">
+  <div class="bk-head"><h2>Truckers</h2><button class="btn-primary" id="btnAddTrucker" type="button">+ Add trucker</button></div>
+  <div id="truckerList"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-suppliers">
+<div class="container">
+  <div class="bk-head"><h2>Suppliers</h2><button class="btn-primary" id="btnAddSupplier" type="button">+ Add supplier</button></div>
+  <div id="supplierList"></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-whatsapp">
+<div class="container">
+  <div class="bk-head"><h2>WhatsApp connection</h2><button class="btn-secondary" id="btnWaReset" type="button">Sign out &amp; re-scan</button></div>
+  <div id="waState" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:32px 28px; text-align:center;">
+    <div id="waStateIcon" style="font-size:32px; margin-bottom:14px;">…</div>
+    <div id="waStateTitle" style="font-family:var(--mono); font-size:14px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin-bottom:6px; color:var(--text-strong);">Loading</div>
+    <div id="waStateSub" style="font-size:12.5px; color:var(--text-muted);">Checking WhatsApp status…</div>
+    <div id="waQrHolder" style="margin-top:22px; display:none;">
+      <div id="waQr" style="display:inline-block; padding:16px; background:#fff; border:1px solid var(--border); border-radius:var(--radius-sm);"></div>
+      <div style="margin-top:14px; font-size:12px; color:var(--text-muted);">On the phone that will be Jarvis: WhatsApp &rarr; Settings &rarr; Linked Devices &rarr; Link a Device &rarr; scan.</div>
     </div>
-    <div style="padding:24px 26px;">
-      <label style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:20px 22px; background:var(--surface-sunken); cursor:pointer;">
-        <input type="file" id="pdfInput" accept="application/pdf" class="hidden">
-        <span style="color:var(--accent); font-size:20px;">⇪</span>
-        <div>
-          <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="pdfDropLabel">Drop the carrier's booking PDF here</div>
-          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis extracts booking no, ports, ERD, cutoff, and containers automatically</div>
-        </div>
-      </label>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px 16px; margin-top:20px;">
-        <div class="field" style="grid-column:1/-1;"><label>Booking number *</label><input id="f_bkg" placeholder="e.g. DALA23991600"></div>
-        <div class="field"><label>Carrier</label><input id="f_carrier" placeholder="MSC, Maersk…"></div>
-        <div class="field"><label>Vessel / voyage</label><input id="f_vessel" placeholder="MSC AURORA 226E"></div>
-        <div class="field"><label>Port of loading</label><input id="f_pol" placeholder="Los Angeles"></div>
-        <div class="field"><label>Port of discharge</label><input id="f_pod" placeholder="Busan"></div>
-        <div class="field"><label>ERD date</label><input id="f_erd" placeholder="YYYY-MM-DD"></div>
-        <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="YYYY-MM-DD"></div>
-      </div>
-      <div id="modalError" style="color:var(--status-danger); font-size:12.5px; margin-top:12px;"></div>
+    <div id="waMetaLine" style="margin-top:18px; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); letter-spacing:.06em;"></div>
+  </div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-settings">
+<div class="container">
+  <div class="bk-head"><h2>Settings</h2><button class="btn-primary" id="btnSaveSettings" type="button">Save changes</button></div>
+  <div id="settingsError" class="form-err" style="display:none; margin-bottom:20px;"></div>
+  <div id="settingsSaved" style="display:none; margin-bottom:20px; padding:10px 14px; background:#E3F5EA; border:1px solid #8ED1AA; border-radius:var(--radius-sm); font-size:12.5px; color:#2F7A50; font-weight:600;">Saved.</div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
+    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Manager</h3>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
+    <div class="form-grid"><div class="full"><label for="s_manager_number">Manager WhatsApp number</label><input id="s_manager_number" type="text" placeholder="e.g. 918056944193 (country code + number, no + or spaces)"></div></div>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px; margin-bottom:18px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:5px;">
+      <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</h3>
+      <button class="btn-secondary" id="btnAddTeamMember" type="button" style="padding:6px 14px; font-size:10px;">+ Add member</button>
     </div>
-    <div style="display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken);">
-      <button id="btnCancelModal" class="btn btn-secondary">Cancel</button>
-      <button id="btnSaveBooking" class="btn btn-primary">Save booking</button>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">People who can send commands and receive alerts. Role is a free-text label — not enforced by routing yet.</div>
+    <div id="teamList"></div>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:22px 24px;">
+    <h3 style="font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:5px;">Team WhatsApp group</h3>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages go here. <strong style="color:var(--text-body);">Prerequisite:</strong> add the Jarvis phone to the group first — Validate can only find groups Jarvis is already a member of.</div>
+    <div class="form-grid">
+      <div class="full">
+        <label for="s_group_name">Group name (partial match)</label>
+        <div style="display:flex; gap:8px;"><input id="s_group_name" type="text" placeholder="e.g. Ops Team" style="flex:1;"><button class="btn-secondary" id="btnValidateGroup" type="button" style="white-space:nowrap;">Validate</button></div>
+      </div>
+      <div class="full"><div id="groupPicker" style="display:none; margin-top:10px; padding:14px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border);"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Matches — pick one:</div><div id="groupPickerList"></div></div></div>
+      <div class="full"><label for="s_group_id">Team group ID (auto-filled by Validate, or paste manually)</label><input id="s_group_id" type="text" placeholder="e.g. 120363123456789012@g.us" style="font-family:var(--mono);"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-bot">
+<div class="container">
+  <div class="bk-head"><h2>Bot</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Commands fire <strong style="color:var(--danger);">for real</strong> — same effect as messaging Jarvis on WhatsApp.</div></div>
+  <div id="botLog" style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); min-height:340px; max-height:60vh; overflow-y:auto; padding:18px 20px; margin-bottom:14px; display:flex; flex-direction:column; gap:10px;">
+    <div style="color:var(--text-faint); font-family:var(--mono); font-size:11.5px; text-align:center; padding:40px 0;">Type a command below. Try <code>menu</code>, <code>urgent</code>, or <code>status DALA23991600</code>.</div>
+  </div>
+  <div style="display:flex; gap:8px;"><input id="botInput" type="text" placeholder="Type command and press Enter (e.g. forward DALA23991600 to Dave)" style="flex:1; font-family:var(--mono);"><button class="btn-primary" id="botSend" type="button" style="white-space:nowrap;">Send</button></div>
+  <div style="margin-top:8px; font-size:11px; color:var(--text-faint); font-family:var(--mono);">⚠ No confirmation prompt — destructive commands (forward, assign, archive) fire immediately.</div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-tasks">
+<div class="container">
+  <div class="bk-head"><h2>Tasks</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Persistent follow-ups. Fires at scheduled time. Auto-cancels if the answer arrives first.</div></div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Create task</div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+      <div><label for="t_type">Type</label><select id="t_type"><option value="nudge_scale_ticket">Nudge for scale ticket</option><option value="nudge_load_ready">Nudge for load ready</option><option value="nudge_empty_drop">Nudge for empty drop</option><option value="nudge_ingate">Nudge for ingate</option><option value="nudge_pickup">Nudge for pickup</option><option value="generic_message">Custom message</option></select></div>
+      <div><label for="t_target_kind">Target</label><select id="t_target_kind"><option value="trucker">Trucker</option><option value="supplier">Supplier</option><option value="manager">Manager (me)</option></select></div>
+      <div><label for="t_target_name">Name (leave blank for manager)</label><input id="t_target_name" type="text" placeholder="e.g. Dave R."></div>
+      <div><label for="t_bkg">Booking (optional, enables auto-cancel)</label><input id="t_bkg" type="text" placeholder="DALA23991600" style="font-family:var(--mono);"></div>
+      <div><label for="t_container_seq">Container # (optional)</label><input id="t_container_seq" type="number" min="1" placeholder="e.g. 2 for BKG/2" style="font-family:var(--mono);"></div>
+      <div><label for="t_delay">Fire in (minutes)</label><input id="t_delay" type="number" min="1" value="60"></div>
+      <div><label for="t_message">Message</label><input id="t_message" type="text" placeholder="Auto-filled from type — edit freely"></div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px;"><button class="btn-primary" id="t_create" type="button">Create task</button><div id="t_create_err" style="color:var(--danger); font-size:12px; align-self:center;"></div></div>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Pending</div><div id="t_pending_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div></div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;"><div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">History</div><div id="t_history_list" style="display:flex; flex-direction:column; gap:6px; max-height:280px; overflow-y:auto;"></div></div>
+</div>
+</div>
+
+<div class="tabpanel" id="panel-facts">
+<div class="container">
+  <div class="bk-head"><h2>Facts</h2><div style="font-size:11px; color:var(--text-muted); font-family:var(--mono);">Jarvis's learned memory — fed into every AI answer. Admin-only.</div></div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px; margin-bottom:18px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Add a fact</div>
+    <div style="display:flex; gap:8px;"><input id="f_new_text" type="text" placeholder="e.g. DALA booking numbers can include a dash" style="flex:1;"><button class="btn-primary" id="f_add" type="button">Add</button></div>
+    <div id="f_add_err" style="color:var(--danger); font-size:12px; margin-top:6px;"></div>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 20px;">
+    <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">All facts (most recent first)</div>
+    <div id="f_list" style="display:flex; flex-direction:column; gap:8px;"><div style="color:var(--text-faint); font-size:12.5px; padding:12px 0;">Loading…</div></div>
+  </div>
+</div>
+</div>
+
+</main>
+</div>
+
+<!-- Request booking modal -->
+<div class="modal-back" id="requestBookingModal" style="display:none">
+  <div class="modal">
+    <div class="modal-head"><h3>Request new booking</h3><button class="modal-close" id="rbModalClose" type="button" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="full"><label for="rb_email">Freight company email *</label><input id="rb_email" type="email" placeholder="bookings@freightco.com" required></div>
+        <div><label for="rb_pol">Port of loading *</label><input id="rb_pol" type="text" placeholder="e.g. Los Angeles" required></div>
+        <div><label for="rb_pod">Destination *</label><input id="rb_pod" type="text" placeholder="e.g. Busan" required></div>
+        <div><label for="rb_cutoff">Cutoff needed *</label><input id="rb_cutoff" type="text" placeholder="e.g. next week, or 08/01/2026" required></div>
+        <div><label for="rb_size">Container size *</label><select id="rb_size"><option value="20ft">20 ft</option><option value="40ft" selected>40 ft</option><option value="40hc">40 ft HC</option></select></div>
+        <div class="full"><label for="rb_qty">How many containers *</label><input id="rb_qty" type="number" min="1" value="1" required></div>
+      </div>
+      <div id="rb_err" style="color:var(--danger); font-size:12px; margin-top:8px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" id="rbCancel" type="button">Cancel</button>
+      <button class="btn-primary" id="rbDraft" type="button">Draft email</button>
     </div>
   </div>
 </div>
 
-<script>
-// ══════════════════════════════════════════════════════════════════════════
-// Jarvis dashboard — plain HTML/vanilla JS, no build step, no framework.
-// Every tab fetches from the REAL api.js endpoints already running on this
-// server. Visual design matches the "Jarvis Ops" mockup; the LME/live-yard
-// ticker strip from that mockup is intentionally omitted per request.
-// ══════════════════════════════════════════════════════════════════════════
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let ROLE = 'user';
-let CURRENT_TAB = 'board';
-
-const NAV_ITEMS = [
-  { id: 'board',     label: 'Board' },
-  { id: 'bookings',  label: 'Bookings' },
-  { id: 'truckers',  label: 'Truckers' },
-  { id: 'suppliers', label: 'Suppliers' },
-  { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true }, // /api/whatsapp/* is requireAdmin server-side — a non-admin login would 403 on this tab
-  { id: 'settings',  label: 'Settings', adminOnly: true },
-  { id: 'bot',       label: 'Bot' },
-  { id: 'tasks',     label: 'Tasks' },
-];
-
-async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
-  return data;
-}
-
-function renderNav() {
-  const nav = $('sideNav');
-  nav.innerHTML = NAV_ITEMS.filter(n => !n.adminOnly || ROLE === 'admin').map(n => `
-    <button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>
-  `).join('');
-  nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-}
-
-function switchTab(tab) {
-  CURRENT_TAB = tab;
-  renderNav();
-  loadTab(tab);
-}
-
-async function loadTab(tab) {
-  const root = $('viewRoot');
-  root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
-  try {
-    if (tab === 'board') return renderBoard(await api('/api/dashboard'));
-    if (tab === 'bookings') return renderBookings(await api('/api/bookings'));
-    if (tab === 'truckers') return renderContacts('truckers', 'Drayage roster', '+ Add trucker', await api('/api/truckers'));
-    if (tab === 'suppliers') return renderContacts('suppliers', 'Yard network', '+ Add supplier', await api('/api/suppliers'));
-    if (tab === 'whatsapp') return renderWhatsapp();
-    if (tab === 'settings') return renderSettings(await api('/api/settings'));
-    if (tab === 'bot') return renderBot();
-    if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
-  } catch (err) {
-    root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`;
-  }
-}
-
-// ── BOARD ─────────────────────────────────────────────────────────────────
-const RISK_COLOR = { high: 'var(--status-danger)', medium: 'var(--status-warning)', low: 'var(--accent)', done: 'var(--steel-400)' };
-function renderBoard(data) {
-  const { counts, alerts, bookings } = data;
-  const kpiDefs = [
-    { key: 'high', label: 'High risk' }, { key: 'medium', label: 'Medium risk' },
-    { key: 'low', label: 'On track' }, { key: 'done', label: 'Complete' },
-  ];
-  $('viewRoot').innerHTML = `
-    <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:30px;">
+<!-- Contact modal -->
+<div class="modal-back" id="contactModal" style="display:none">
+  <div class="modal">
+    <div class="modal-head"><h3 id="contactModalTitle">New contact</h3><button class="modal-close" id="contactModalClose" type="button" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="full"><label for="c_name">Name *</label><input id="c_name" type="text" placeholder="e.g. Dave R." required></div>
+        <div class="full">
+          <label for="c_locality">Location (city or port)</label>
+          <input id="c_locality" type="text" placeholder="e.g. Los Angeles">
+          <div style="margin-top:4px; font-size:10.5px; color:var(--text-faint); font-family:var(--mono);">Used to filter this contact into bookings with matching POL. Leave blank to always show.</div>
+        </div>
         <div>
-          <div class="eyebrow">// Booking scoreboard</div>
-          <h1 style="font-size:clamp(26px,2.6vw,36px); text-transform:uppercase; line-height:1.05;">Every load,<br>accounted for.</h1>
+          <label for="c_whatsapp">WhatsApp number</label>
+          <div style="display:flex; gap:8px;"><input id="c_whatsapp" type="text" placeholder="e.g. 14155551234 (no + or spaces)" style="flex:1;"><button class="btn-secondary" id="c_verify_number" type="button" style="white-space:nowrap;">Verify</button></div>
+          <div id="c_verify_result" style="display:none; margin-top:8px; padding:8px 10px; border-radius:var(--radius-sm); font-size:12px; font-family:var(--mono);"></div>
         </div>
-        <div style="text-align:right;">
-          <div style="font-family:var(--font-mono); font-size:44px; font-weight:600; color:var(--text-strong); line-height:1;">${bookings.length}</div>
-          <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-top:6px;">Active bookings</div>
-        </div>
-      </div>
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:36px;">
-        ${kpiDefs.map(k => `
-          <div class="card" style="border-top:3px solid ${RISK_COLOR[k.key]}; padding:18px 20px 16px;">
-            <span style="font-family:var(--font-mono); font-size:34px; font-weight:600; color:var(--text-strong);">${counts[k.key] || 0}</span>
-            <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:${RISK_COLOR[k.key]}; margin-top:12px;">${k.label}</div>
+        <div><label for="c_email">Email</label><input id="c_email" type="email" placeholder="dave@example.com"></div>
+        <div class="full">
+          <label>WhatsApp group (optional)</label>
+          <div id="c_common_groups" style="display:none; padding:12px; background:var(--steel-100); border-radius:var(--radius-sm); border:1px solid var(--border); margin-bottom:10px;">
+            <div style="font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Shared groups with Jarvis:</div>
+            <div id="c_common_groups_list"></div>
+            <div id="c_common_groups_empty" style="display:none; padding:8px 0; font-size:12px; color:var(--text-muted); line-height:1.5;"><strong>Shared groups: 0.</strong> WhatsApp only lets Jarvis see groups that both Jarvis <em>and</em> this contact belong to. If you want to route via a group, add both to the same group on your phone first, then re-verify.</div>
           </div>
-        `).join('')}
-      </div>
-      ${alerts.length ? `
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-          <span style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--copper-500);">// Needs attention</span>
-          <span style="flex:1; height:1px; background-image:repeating-linear-gradient(-45deg, var(--copper-300) 0, var(--copper-300) 2px, transparent 2px, transparent 8px);"></span>
         </div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-bottom:40px;">
-          ${alerts.map(a => `
-            <div style="position:relative; background:var(--steel-950); border-radius:var(--radius-sm); padding:16px 18px 16px 26px;">
-              <div style="position:absolute; left:0; top:0; bottom:0; width:8px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 10px);"></div>
-              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-                <span style="font-family:var(--font-mono); font-size:13.5px; font-weight:600; color:#fff;">${esc(a.bookingNo)}</span>
-                <span class="badge" style="color:#fff; background:var(--status-danger);">${esc(a.deadlineLabel)}</span>
-              </div>
-              <div style="font-size:13px; color:var(--steel-300); margin-top:9px;">${esc(a.issue || '')}</div>
-            </div>
-          `).join('')}
-        </div>` : ''}
-      <div style="display:flex; flex-direction:column; gap:12px;">
-        ${bookings.length ? bookings.map(b => `
-          <div class="card" style="border-left:4px solid ${RISK_COLOR[b.risk]}; padding:20px 24px; display:grid; grid-template-columns:minmax(150px,200px) minmax(180px,1fr) minmax(160px,250px) minmax(110px,140px); align-items:center;">
-            <div style="padding-right:22px; border-right:1px solid var(--border-subtle);">
-              <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.16em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px;">${esc(b.container || '—')}</div>
-              <div style="font-family:var(--font-mono); font-size:14.5px; font-weight:600; color:var(--text-strong);">${esc(b.bookingNo)}</div>
-              <div style="font-size:12.5px; color:var(--text-body); margin-top:5px;">${esc(b.route)}</div>
-            </div>
-            <div style="padding:0 28px; border-right:1px solid var(--border-subtle);">
-              <div style="display:flex; align-items:baseline; gap:8px;">
-                <span style="font-family:var(--font-mono); font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-strong);">${esc(b.stageName)}</span>
-                ${b.subBranch ? `<span style="font-size:11.5px; color:var(--text-muted);">${esc(b.subBranch)}</span>` : ''}
-              </div>
-            </div>
-            <div style="padding:0 26px; border-right:1px solid var(--border-subtle);">
-              <div style="font-size:13px; line-height:1.45;">${esc(b.pending || '—')}</div>
-              <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-top:6px;">${esc(b.owner || '')}</div>
-            </div>
-            <div style="text-align:right; padding-left:22px;">
-              <div style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:${RISK_COLOR[b.risk]};">${esc(b.deadlineLabel)}</div>
-            </div>
-          </div>
-        `).join('') : '<div style="text-align:center; padding:60px 20px; color:var(--text-muted); font-family:var(--font-mono); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm);">No bookings in this view.</div>'}
-      </div>
-    </section>`;
-}
-
-// ── BOOKINGS ──────────────────────────────────────────────────────────────
-function renderBookings(bookingsObj) {
-  const list = Object.values(bookingsObj);
-  $('viewRoot').innerHTML = `
-    <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
-        <div><div class="eyebrow">// Bookings</div><h2 style="font-size:24px; text-transform:uppercase;">Booking ledger</h2></div>
-        <button id="btnAddBooking" class="btn btn-primary">+ Add booking</button>
-      </div>
-      <div class="card" style="overflow:hidden;">
-        <div style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
-        </div>
-        ${list.length ? list.map(b => `
-          <div class="row-hover" style="display:grid; grid-template-columns:170px 1fr 100px 100px 130px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
-            <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
-            <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${Array.isArray(b.containers) ? b.containers.length : 1}</div>
-            <div style="display:flex; gap:6px; justify-content:flex-end;">
-              <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
-            </div>
-          </div>
-        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
-      </div>
-    </section>`;
-  $('btnAddBooking').addEventListener('click', openBookingModal);
-  document.querySelectorAll('.btn-del-booking').forEach(btn => btn.addEventListener('click', async () => {
-    if (!confirm(`Archive booking ${btn.dataset.bkg}?`)) return;
-    await api(`/api/bookings/${encodeURIComponent(btn.dataset.bkg)}`, { method: 'DELETE' });
-    loadTab('bookings');
-  }));
-}
-
-function openBookingModal() {
-  $('modalError').textContent = '';
-  ['f_bkg','f_carrier','f_vessel','f_pol','f_pod','f_erd','f_cutoff'].forEach(id => $(id).value = '');
-  $('bookingModal').style.display = 'flex';
-}
-function closeBookingModal() { $('bookingModal').style.display = 'none'; }
-
-// ── TRUCKERS / SUPPLIERS (shared shape) ──────────────────────────────────
-function renderContacts(kind, title, addLabel, list) {
-  $('viewRoot').innerHTML = `
-    <section style="max-width:1080px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
-        <div><div class="eyebrow">// ${esc(kind[0].toUpperCase() + kind.slice(1))}</div><h2 style="font-size:24px; text-transform:uppercase;">${esc(title)}</h2></div>
-        <button id="btnAddContact" class="btn btn-primary">${esc(addLabel)}</button>
-      </div>
-      <div class="card" style="overflow:hidden; margin-bottom:16px;">
-        <div style="display:grid; grid-template-columns:190px 150px 1fr 120px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div>Name</div><div>Locality</div><div>WhatsApp / Group</div><div style="text-align:right;">Actions</div>
-        </div>
-        ${list.length ? list.map(p => `
-          <div class="row-hover" style="display:grid; grid-template-columns:190px 150px 1fr 120px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center;">
-            <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(p.name)}</div>
-            <div>${p.locality ? `<span style="font-family:var(--font-mono); font-size:10px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; background:var(--accent-soft); color:var(--leaf-700); padding:4px 9px; border-radius:var(--radius-xs);">${esc(p.locality)}</span>` : '—'}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(p.group_id || p.whatsapp || '—')}</div>
-            <div style="display:flex; gap:6px; justify-content:flex-end;">
-              <button class="btn btn-danger btn-del-contact" data-name="${esc(p.name)}" style="padding:6px 12px; font-size:10px;">Del</button>
-            </div>
-          </div>
-        `).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">None registered yet.</div>'}
-      </div>
-    </section>`;
-  $('btnAddContact').addEventListener('click', async () => {
-    const name = prompt('Name:'); if (!name) return;
-    const whatsapp = prompt('WhatsApp number (digits only):') || '';
-    const locality = prompt('Locality (e.g. Los Angeles):') || '';
-    await api(`/api/${kind}`, { method: 'POST', body: JSON.stringify({ name, whatsapp, locality }) });
-    loadTab(kind);
-  });
-  document.querySelectorAll('.btn-del-contact').forEach(btn => btn.addEventListener('click', async () => {
-    if (!confirm(`Remove ${btn.dataset.name}?`)) return;
-    await api(`/api/${kind}/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
-    loadTab(kind);
-  }));
-}
-
-// ── WHATSAPP ──────────────────────────────────────────────────────────────
-async function renderWhatsapp() {
-  const root = $('viewRoot');
-  let status;
-  try { status = await api('/api/whatsapp/status'); }
-  catch (e) { status = { status: 'unknown' }; }
-  const isReady = status.status === 'ready';
-  const isQr = status.status === 'qr';
-  const isDown = status.status === 'disconnected' || status.status === 'auth_failure';
-  root.innerHTML = `
-    <section style="max-width:760px; margin:0 auto; padding:38px 40px 80px;">
-      <div class="eyebrow">// WhatsApp link</div>
-      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Connection</h2>
-      <div style="background:var(--steel-950); border-radius:var(--radius-md); padding:44px 36px; text-align:center; position:relative; overflow:hidden;">
-        <div style="position:absolute; left:0; right:0; top:0; height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-        ${isReady ? `
-          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(87,190,73,.12); border:1px solid var(--leaf-700); align-items:center; justify-content:center; color:var(--leaf-400); font-size:28px; margin-bottom:18px;">✓</div>
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:#fff;">Connected</div>
-          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">Jarvis is online and receiving WhatsApp messages.</div>
-        ` : isQr ? `
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-warning); margin-bottom:10px;">Scan to connect</div>
-          <div style="font-size:13px; color:var(--steel-400);">Check the server terminal/logs for the QR code, or restart the process — this dashboard doesn't render the QR image itself yet.</div>
-        ` : `
-          <div style="display:inline-flex; width:64px; height:64px; border-radius:50%; background:rgba(197,64,47,.14); border:1px solid var(--status-danger); align-items:center; justify-content:center; color:var(--status-danger); font-size:28px; margin-bottom:18px;">⚠</div>
-          <div style="font-family:var(--font-mono); font-size:15px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--status-danger);">${esc(status.status || 'Disconnected')}</div>
-          <div style="font-size:13px; color:var(--steel-400); margin-top:8px;">${esc(status.error || 'Not connected.')}</div>
-        `}
-        <div style="margin-top:20px;">
-          ${ROLE === 'admin' ? '<button id="btnWaReset" class="btn btn-dark">Sign out &amp; re-scan</button>' : ''}
+        <div class="full"><label for="c_group">Group ID (auto-filled by selection above, or paste manually)</label><input id="c_group" type="text" placeholder="e.g. 120363123456@g.us" style="font-family:var(--mono);"></div>
+        <div><label for="c_mode">Preferred contact mode</label><select id="c_mode"><option value="whatsapp" selected>WhatsApp</option><option value="email">Email (routing not yet wired)</option></select></div>
+        <div class="full" style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+          <input type="checkbox" id="c_is_default" style="width:auto;">
+          <label for="c_is_default" style="margin:0;">Default for this area (used automatically when multiple contacts share a locality)</label>
         </div>
       </div>
-    </section>`;
-  if ($('btnWaReset')) $('btnWaReset').addEventListener('click', async () => {
-    if (!confirm('This logs Jarvis out of WhatsApp and requires a fresh QR scan. Continue?')) return;
-    await api('/api/whatsapp/reset', { method: 'POST' });
-    alert('Reset triggered — check server logs for the new QR code.');
-  });
-  updateWaBadge(status);
-}
+      <div class="form-err" id="contactErr" style="display:none"></div>
+      <div style="margin-top:14px; font-size:11.5px; color:var(--text-faint); font-family:var(--mono);">Note: WhatsApp routing uses group ID first, else the number. Email routing is stored but not yet used by the forward flow.</div>
+    </div>
+    <div class="modal-foot"><button class="btn-secondary" id="contactCancel" type="button">Cancel</button><button class="btn-primary" id="contactSave" type="button">Save</button></div>
+  </div>
+</div>
 
-function updateWaBadge(status) {
-  const dot = $('waStatusDot'), text = $('waStatusText'), banner = $('linkDownBanner'), bannerText = $('linkDownText');
-  if (status.status === 'ready') {
-    dot.style.background = 'var(--leaf-400)'; dot.style.boxShadow = '0 0 8px var(--leaf-400)'; dot.style.animation = 'jarvis-pulse 2.4s ease-in-out infinite';
-    text.textContent = 'Live · synced from WhatsApp';
-    banner.classList.add('hidden');
-  } else if (status.status === 'qr') {
-    dot.style.background = 'var(--status-warning)'; dot.style.boxShadow = '0 0 8px var(--status-warning)';
-    text.textContent = 'QR scan needed';
-    bannerText.textContent = 'WhatsApp needs a QR scan to connect.'; banner.classList.remove('hidden');
-  } else {
-    dot.style.background = 'var(--status-danger)'; dot.style.boxShadow = '0 0 8px var(--status-danger)';
-    text.textContent = 'Link down — retrying';
-    bannerText.textContent = 'WhatsApp link is down.'; banner.classList.remove('hidden');
-  }
-}
-
-// ── SETTINGS (admin only) ─────────────────────────────────────────────────
-function renderSettings(s) {
-  let team = Array.isArray(s.internal_team) ? s.internal_team.map(x => typeof x === 'string' ? { name: '', whatsapp: x, role: '' } : x) : [];
-  function teamRowsHtml() {
-    return team.map((m, i) => `
-      <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:12px;" data-idx="${i}">
-        <div class="field" style="margin-bottom:0;"><label>Name</label><input class="tm_name" value="${esc(m.name || '')}"></div>
-        <div class="field" style="margin-bottom:0;"><label>WhatsApp</label><input class="tm_whatsapp" value="${esc(m.whatsapp || '')}"></div>
-        <div class="field" style="margin-bottom:0;"><label>Role</label><input class="tm_role" value="${esc(m.role || '')}"></div>
-        <button class="btn btn-danger btn-remove-team" data-idx="${i}">Remove</button>
-      </div>`).join('');
-  }
-  $('viewRoot').innerHTML = `
-    <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
-        <div><div class="eyebrow">// Settings</div><h2 style="font-size:24px; text-transform:uppercase;">Routing &amp; roles</h2></div>
-        <button id="btnSaveSettings" class="btn btn-primary">Save changes</button>
-      </div>
-      <div id="settingsError" style="color:var(--status-danger); font-size:12.5px; margin-bottom:14px; display:none;"></div>
-      <div id="settingsSaved" style="color:var(--leaf-600); font-size:12.5px; margin-bottom:14px; display:none;">Saved.</div>
-      <div style="display:flex; flex-direction:column; gap:16px;">
-        <div class="card" style="padding:22px 24px;">
-          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Manager</div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
-          <div class="field"><label>Manager WhatsApp number</label><input id="s_manager" value="${esc(s.manager_number || '')}" placeholder="e.g. 918056944193"></div>
-        </div>
-        <div class="card" style="padding:22px 24px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-            <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</div>
-            <button id="btnAddTeam" class="btn btn-secondary" style="padding:7px 14px;">+ Add member</button>
-          </div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">People who can send commands and receive alerts — same access level as the manager, including price list.</div>
-          <div id="teamRows">${teamRowsHtml()}</div>
-        </div>
-        <div class="card" style="padding:22px 24px;">
-          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Team WhatsApp group</div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Alerts and team messages route here instead of the manager's DM. Jarvis must already be a member of the group before it can find it — add it on your phone first, then search by name below.</div>
-          <div class="field"><label>Team group ID</label><input id="s_group" value="${esc(s.team_group_id || '')}" placeholder="120363123456789012@g.us"></div>
-          <div style="display:flex; gap:10px; align-items:end; margin-top:12px;">
-            <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input id="groupSearch" placeholder="e.g. Edge Metals Ops"></div>
-            <button id="btnFindGroup" class="btn btn-secondary">Search</button>
-          </div>
-          <div id="groupResults" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
-        </div>
-        <div class="card" style="padding:22px 24px;">
-          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-            <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Price list contacts</div>
-            <button id="btnAddPriceContact" class="btn btn-secondary" style="padding:7px 14px;">+ Add contact</button>
-          </div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Save a name once, then just say "send price list to &lt;name&gt;" on WhatsApp instead of typing a number. "Standing" contacts also get the auto-notify when a price changes.</div>
-          <div id="priceContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+<!-- Booking Add/Edit modal -->
+<div class="modal-back" id="modalBack" style="display:none">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalTitle">New booking</h3><button class="modal-close" id="modalClose" type="button" aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      <div class="drop" id="dropZone"><div class="drop-label">Drop booking PDF here or click to upload</div><div class="drop-sub">Jarvis will extract the fields automatically</div><input type="file" id="fileInput" accept="application/pdf" style="display:none"></div>
+      <button class="scan-btn" id="scanBtn" type="button" style="display:none" disabled>Scan &amp; auto-fill fields</button>
+      <div class="scanned-banner" id="scannedBanner" style="display:none">Fields extracted — review and edit below</div>
+      <div class="form-grid">
+        <div class="full"><label for="f_bkg">Booking number *</label><input id="f_bkg" type="text" placeholder="e.g. BK-2602" required></div>
+        <div><label for="f_carrier">Carrier</label><input id="f_carrier" type="text" placeholder="MSC, Maersk…"></div>
+        <div><label for="f_pol">Port of loading</label><input id="f_pol" type="text" placeholder="Houston"></div>
+        <div><label for="f_pod">Port of discharge</label><input id="f_pod" type="text" placeholder="Busan"></div>
+        <div><label for="f_erd">ERD date</label><input id="f_erd" type="text" placeholder="MM/DD/YYYY"></div>
+        <div><label for="f_cutoff">Cutoff date</label><input id="f_cutoff" type="text" placeholder="MM/DD/YYYY"></div>
+        <div class="full"><label for="f_vessel">Vessel / voyage</label><input id="f_vessel" type="text" placeholder="MSC AURORA 226E"></div>
+        <div><label for="f_buyer">Buyer</label><input id="f_buyer" type="text"></div>
+        <div class="full" style="margin-top:6px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;"><label style="margin-bottom:0;">Containers</label><button type="button" class="btn-secondary" id="f_add_container" style="padding:5px 10px; font-size:10px;">+ Add container</button></div>
+          <div id="f_containers_list" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
       </div>
-    </section>`;
+      <div class="form-err" id="formErr" style="display:none"></div>
+    </div>
+    <div class="modal-foot"><button class="btn-secondary" id="btnCancel" type="button">Cancel</button><button class="btn-primary" id="btnSave" type="button">Save booking</button></div>
+  </div>
+</div>
 
-  function refreshTeamRows() { $('teamRows').innerHTML = teamRowsHtml(); wireTeamRemove(); }
-  function wireTeamRemove() {
-    document.querySelectorAll('.btn-remove-team').forEach(btn => btn.addEventListener('click', () => {
-      team.splice(Number(btn.dataset.idx), 1); refreshTeamRows();
-    }));
-  }
-  wireTeamRemove();
-  $('btnAddTeam').addEventListener('click', () => { team.push({ name: '', whatsapp: '', role: '' }); refreshTeamRows(); });
-
-  $('btnSaveSettings').addEventListener('click', async () => {
-    $('settingsError').style.display = 'none'; $('settingsSaved').style.display = 'none';
-    document.querySelectorAll('#teamRows [data-idx]').forEach((row, i) => {
-      team[i] = {
-        name: row.querySelector('.tm_name').value.trim(),
-        whatsapp: row.querySelector('.tm_whatsapp').value.replace(/\D/g, ''),
-        role: row.querySelector('.tm_role').value.trim(),
-      };
-    });
-    const managerNum = $('s_manager').value.trim().replace(/\D/g, '');
-    if (!managerNum) { $('settingsError').textContent = 'Manager number is required.'; $('settingsError').style.display = 'block'; return; }
-    const cleanedTeam = team.filter(m => (m.name && m.name.trim()) || (m.whatsapp && m.whatsapp.trim()));
-    try {
-      await api('/api/settings', { method: 'PUT', body: JSON.stringify({ manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group').value.trim() }) });
-      $('settingsSaved').style.display = 'block';
-    } catch (e) { $('settingsError').textContent = e.message; $('settingsError').style.display = 'block'; }
-  });
-
-  // Group finder — calls /api/whatsapp/find-groups (requireAdmin, matches api.js).
-  // Only surfaces groups Jarvis is already in; that's a WhatsApp privacy limit,
-  // not a bug — the helper text above explains it.
-  $('btnFindGroup').addEventListener('click', async () => {
-    const name = $('groupSearch').value.trim();
-    const box = $('groupResults');
-    box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">Searching…</div>';
-    try {
-      const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
-      if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">No matching groups — make sure Jarvis has been added to it on WhatsApp first.</div>'; return; }
-      box.innerHTML = groups.map(g => `
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
-          <div><div style="font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(g.name || g.subject || '(unnamed)')}</div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</div></div>
-          <button class="btn btn-secondary btn-use-group" data-id="${esc(g.id || g.chatId || '')}" style="padding:6px 12px; font-size:10px;">Use this</button>
-        </div>`).join('');
-      document.querySelectorAll('.btn-use-group').forEach(btn => btn.addEventListener('click', () => { $('s_group').value = btn.dataset.id; }));
-    } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);">${esc(e.message)}</div>`; }
-  });
-
-  // Price-list contacts — GET/POST/DELETE /api/pricelist/contacts, send via the
-  // new /api/pricelist/send-city route (mirrors the WhatsApp ask-city-first flow
-  // so a website send behaves identically to a WhatsApp send).
-  const PRICE_CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
-  async function loadPriceContacts() {
-    const rows = $('priceContactRows');
-    try {
-      const contacts = await api('/api/pricelist/contacts');
-      rows.innerHTML = contacts.length ? contacts.map(c => `
-        <div style="display:grid; grid-template-columns:1fr auto auto auto auto; gap:10px; align-items:center; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(c.name)}">
-          <div>
-            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)} ${c.standing ? '<span class="badge" style="background:var(--accent-soft); color:var(--leaf-700); margin-left:6px;">Standing</span>' : ''}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.whatsapp)}</div>
-          </div>
-          <select class="pc_city" style="padding:7px 10px; border:1px solid var(--border-default); border-radius:var(--radius-xs); font-size:12px;">
-            ${PRICE_CITIES.map(city => `<option value="${esc(city)}">${esc(city)}</option>`).join('')}
-          </select>
-          <button class="btn btn-primary btn-send-price" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Send</button>
-          <span class="pc_status" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted);"></span>
-          <button class="btn btn-danger btn-del-price-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
-        </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
-
-      document.querySelectorAll('.btn-send-price').forEach(btn => btn.addEventListener('click', async () => {
-        const row = btn.closest('[data-name]');
-        const city = row.querySelector('.pc_city').value;
-        const statusEl = row.querySelector('.pc_status');
-        statusEl.textContent = 'Sending…';
-        try {
-          const result = await api('/api/pricelist/send-city', { method: 'POST', body: JSON.stringify({ to: btn.dataset.name, city }) });
-          statusEl.textContent = result.ok ? `Sent to ${result.target}` : 'Failed';
-          statusEl.style.color = result.ok ? 'var(--leaf-600)' : 'var(--status-danger)';
-        } catch (e) { statusEl.textContent = e.message; statusEl.style.color = 'var(--status-danger)'; }
-      }));
-      document.querySelectorAll('.btn-del-price-contact').forEach(btn => btn.addEventListener('click', async () => {
-        if (!confirm(`Remove ${btn.dataset.name} from price list contacts?`)) return;
-        await api(`/api/pricelist/contacts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
-        loadPriceContacts();
-      }));
-    } catch (e) {
-      rows.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
-    }
-  }
-  $('btnAddPriceContact').addEventListener('click', async () => {
-    const name = prompt('Contact name:'); if (!name) return;
-    const whatsapp = prompt('WhatsApp number (digits only, e.g. 918056944193):'); if (!whatsapp) return;
-    const standing = confirm('Should this contact also get the auto price-change notification (one of the 3 standing recipients)?');
-    try {
-      await api('/api/pricelist/contacts', { method: 'POST', body: JSON.stringify({ name, whatsapp, standing }) });
-      loadPriceContacts();
-    } catch (e) { alert(e.message); }
-  });
-  loadPriceContacts();
-}
-
-// ── BOT CONSOLE ───────────────────────────────────────────────────────────
-let botLog = [];
-function renderBot() {
-  $('viewRoot').innerHTML = `
-    <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
-      <div class="eyebrow">// Bot console</div>
-      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:22px;">Jarvis terminal</h2>
-      <div style="background:var(--steel-950); border-radius:var(--radius-sm); overflow:hidden;">
-        <div style="display:flex; align-items:center; gap:10px; padding:10px 18px; background:var(--steel-900); border-bottom:1px solid var(--steel-800);">
-          <span style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--steel-300);">Commands fire for real — same effect as messaging Jarvis on WhatsApp</span>
-        </div>
-        <div id="botLogEl" style="height:380px; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:10px;"></div>
-        <div style="display:flex; gap:10px; padding:14px 18px; background:var(--steel-900); border-top:1px solid var(--steel-800);">
-          <input id="botInput" placeholder="forward DALA23991600 to Dave" style="flex:1; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-xs); padding:10px 14px; font-family:var(--font-mono); font-size:12.5px; color:var(--steel-100); outline:none;">
-          <button id="btnBotSend" class="btn btn-primary">Send</button>
-        </div>
-      </div>
-    </section>`;
-  renderBotLog();
-  $('btnBotSend').addEventListener('click', sendBotCommand);
-  $('botInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendBotCommand(); });
-}
-function renderBotLog() {
-  const el = $('botLogEl');
-  if (!botLog.length) { el.innerHTML = `<div style="margin:auto; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--steel-500); line-height:2;">Type a command below.<br>Try <span style="color:var(--leaf-400);">menu</span>, <span style="color:var(--leaf-400);">urgent</span>, or <span style="color:var(--leaf-400);">send price list</span>.</div>`; return; }
-  el.innerHTML = botLog.map(ln => `<div style="display:flex; gap:10px;"><span style="font-family:var(--font-mono); font-size:12.5px; color:${ln.color}; flex-shrink:0;">${ln.prompt}</span><span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(ln.text)}</span></div>`).join('');
-  el.scrollTop = el.scrollHeight;
-}
-async function sendBotCommand() {
-  const input = $('botInput'); const text = input.value.trim(); if (!text) return;
-  botLog.push({ prompt: '&gt;', color: 'var(--leaf-400)', text }); input.value = ''; renderBotLog();
-  try {
-    const res = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
-    (res.replies || []).forEach(r => botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: r.text || '(no text)' }));
-    if (!res.replies || !res.replies.length) botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: '(no reply)' });
-  } catch (e) { botLog.push({ prompt: 'error', color: 'var(--status-danger)', text: e.message }); }
-  renderBotLog();
-}
-
-// ── TASKS ─────────────────────────────────────────────────────────────────
-function renderTasks(data) {
-  const pending = data.pending || [], history = data.history || [];
-  $('viewRoot').innerHTML = `
-    <section style="max-width:880px; margin:0 auto; padding:38px 40px 80px;">
-      <div class="eyebrow">// Tasks</div>
-      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Follow-ups</h2>
-      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Persistent nudges. Fire at the scheduled time — auto-cancel if the answer arrives first.</div>
-      <div class="card" style="padding:20px 22px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:14px;">Create task</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-          <div class="field"><label>Target name (trucker/supplier)</label><input id="tk_target"></div>
-          <div class="field"><label>Booking (enables auto-cancel)</label><input id="tk_bkg" placeholder="DALA23991600"></div>
-          <div class="field"><label>Fire in (minutes)</label><input id="tk_delay" value="60"></div>
-          <div class="field"><label>Message</label><input id="tk_msg" placeholder="Following up — can you send an update?"></div>
-        </div>
-        <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
-          <button id="btnCreateTask" class="btn btn-primary">Create task</button>
-          <span id="taskErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span>
-        </div>
-      </div>
-      <div class="card" style="padding:20px 22px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:14px;">Pending — ${pending.length}</div>
-        <div style="display:flex; flex-direction:column; gap:10px;">
-          ${pending.length ? pending.map(t => `
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:14px; padding:12px 14px; background:var(--surface-sunken); border-left:3px solid var(--status-warning); border-radius:var(--radius-xs);">
-              <div style="flex:1; min-width:0;">
-                <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(t.type || 'task')} → ${esc(t.target_name || t.target_chat || '')}</div>
-                <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(t.bkg_no || '')} · fires ${esc(t.fire_at || '')}</div>
-                <div style="font-size:12px; color:var(--text-body); margin-top:5px; font-style:italic;">"${esc(t.message || '')}"</div>
-              </div>
-              <button class="btn btn-danger btn-cancel-task" data-id="${esc(t.id)}" style="white-space:nowrap;">Cancel</button>
-            </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:14px 0; text-align:center;">No pending tasks.</div>'}
-        </div>
-      </div>
-      <div class="card" style="padding:20px 22px;">
-        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">History</div>
-        ${history.slice(-20).reverse().map(h => `
-          <div style="display:grid; grid-template-columns:110px 1fr 150px; gap:12px; padding:9px 4px; border-bottom:1px solid var(--border-subtle); align-items:center;">
-            <span class="badge" style="background:var(--steel-100); color:var(--steel-700);">${esc(h.status || '')}</span>
-            <span style="font-size:12px; color:var(--text-body);">${esc(h.message || '')} <span style="color:var(--text-faint);">${esc(h.result_note || '')}</span></span>
-            <span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); text-align:right;">${esc(h.fire_at || '')}</span>
-          </div>`).join('') || '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No history yet.</div>'}
-      </div>
-    </section>`;
-  $('btnCreateTask').addEventListener('click', async () => {
-    $('taskErr').textContent = '';
-    try {
-      await api('/api/tasks', { method: 'POST', body: JSON.stringify({
-        type: 'generic_message', target_kind: 'trucker', target_name: $('tk_target').value.trim() || null,
-        bkg_no: $('tk_bkg').value.trim() || null, delay_minutes: Number($('tk_delay').value) || 60,
-        message: $('tk_msg').value.trim(), created_by: 'dashboard',
-      }) });
-      loadTab('tasks');
-    } catch (e) { $('taskErr').textContent = e.message; }
-  });
-  document.querySelectorAll('.btn-cancel-task').forEach(btn => btn.addEventListener('click', async () => {
-    await api(`/api/tasks/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
-    loadTab('tasks');
-  }));
-}
-
-// ── Modal wiring (Add booking) ───────────────────────────────────────────
-$('btnCloseModal').addEventListener('click', closeBookingModal);
-$('btnCancelModal').addEventListener('click', closeBookingModal);
-$('pdfInput').addEventListener('change', async () => {
-  const file = $('pdfInput').files[0]; if (!file) return;
-  $('pdfDropLabel').textContent = 'Scanning…';
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const b64 = reader.result.split(',')[1];
-    try {
-      const { fields } = await api('/api/documents/scan', { method: 'POST', body: JSON.stringify({ pdf_base64: b64 }) });
-      if (fields) {
-        if (fields.booking_number) $('f_bkg').value = fields.booking_number;
-        if (fields.carrier) $('f_carrier').value = fields.carrier;
-        if (fields.vessel) $('f_vessel').value = fields.vessel;
-        if (fields.port_of_loading) $('f_pol').value = fields.port_of_loading;
-        if (fields.port_of_discharge) $('f_pod').value = fields.port_of_discharge;
-        if (fields.erd_date) $('f_erd').value = fields.erd_date;
-        if (fields.cutoff_date) $('f_cutoff').value = fields.cutoff_date;
-      }
-      $('pdfDropLabel').textContent = 'Extracted — review below and save.';
-    } catch (e) {
-      $('modalError').textContent = e.message;
-      $('pdfDropLabel').textContent = "Drop the carrier's booking PDF here";
-    }
-  };
-  reader.readAsDataURL(file);
-});
-$('btnSaveBooking').addEventListener('click', async () => {
-  $('modalError').textContent = '';
-  const bkg = $('f_bkg').value.trim();
-  if (!bkg) { $('modalError').textContent = 'Booking number is required.'; return; }
-  try {
-    await api('/api/bookings', { method: 'POST', body: JSON.stringify({
-      booking_number: bkg, carrier: $('f_carrier').value.trim(), vessel: $('f_vessel').value.trim(),
-      port_of_loading: $('f_pol').value.trim(), port_of_discharge: $('f_pod').value.trim(),
-      erd_date: $('f_erd').value.trim(), cutoff_date: $('f_cutoff').value.trim(),
-    }) });
-    closeBookingModal();
-    if (CURRENT_TAB === 'bookings') loadTab('bookings');
-  } catch (e) { $('modalError').textContent = e.message; }
-});
-
-// ── Sign out ──────────────────────────────────────────────────────────────
-$('btnSignout').addEventListener('click', async () => {
-  await fetch('/logout', { method: 'POST' });
-  location.href = '/login';
-});
-
-// ── Boot ──────────────────────────────────────────────────────────────────
-async function boot() {
-  $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
-  try {
-    const me = await api('/api/me');
-    ROLE = me.role || 'user';
-  } catch {}
-  $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : 'Standard access';
-  renderNav();
-  loadTab(CURRENT_TAB);
-  // /api/whatsapp/status is requireAdmin server-side (api.js) — only poll it for
-  // admins. A non-admin login would get a 403 here, which would otherwise show
-  // as a false "link down" in the sidebar even when WhatsApp is fine.
-  if (ROLE === 'admin') {
-    const poll = async () => { try { updateWaBadge(await api('/api/whatsapp/status')); } catch {} };
-    poll();
-    setInterval(poll, 15000);
-  } else {
-    $('waStatusText').textContent = 'Signed in';
-    $('waStatusDot').style.background = 'var(--steel-500)';
-  }
-}
-boot();
-</script>
+<script src="/dashboard.js"></script>
 </body>
 </html>

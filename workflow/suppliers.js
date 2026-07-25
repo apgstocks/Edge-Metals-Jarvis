@@ -1,5 +1,7 @@
 // ── workflow/suppliers.js — Supplier identity + chat routing ─────────────────
 // Same identity rules as truckers: group_id first, @c.us only, @lid ignored.
+// v2: loadSuppliers/loadBookings are now DB-backed (Supabase) and async —
+// every function here is now async as a result. All callers updated to match.
 
 const { loadSuppliers, loadWorkflow, loadBookings } = require('../helpers/json');
 const cfg = require('../config');
@@ -7,7 +9,6 @@ const cfg = require('../config');
 const digits = (v) => String(v || '').replace(/\D/g, '');
 
 // Locality match — mirror of dashboard/index.html localityMatchesPort.
-// If either side is empty, no match (strict: unknown locality is not "any port").
 function localityMatchesPort(loc, port) {
     const l = String(loc || '').toLowerCase().trim().replace(/\s+/g, ' ');
     const p = String(port || '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -15,8 +16,8 @@ function localityMatchesPort(loc, port) {
     return l.includes(p) || p.includes(l);
 }
 
-function matchSupplierByChat(chatId, senderNumber) {
-    const suppliers = loadSuppliers();
+async function matchSupplierByChat(chatId, senderNumber) {
+    const suppliers = await loadSuppliers();
 
     const byGroup = suppliers.find(s => s.group_id && s.group_id === chatId);
     if (byGroup) return byGroup;
@@ -34,9 +35,10 @@ function matchSupplierByChat(chatId, senderNumber) {
     return null;
 }
 
-function getSupplierChatId(supplierName) {
+async function getSupplierChatId(supplierName) {
     if (!supplierName) return cfg.GROUP_SUPPLIER;
-    const s = loadSuppliers().find(x => (x.name || '').toLowerCase() === supplierName.toLowerCase());
+    const all = await loadSuppliers();
+    const s = all.find(x => (x.name || '').toLowerCase() === supplierName.toLowerCase());
     if (!s) return cfg.GROUP_SUPPLIER;
     if (s.group_id) return s.group_id;
     if (s.whatsapp) return digits(s.whatsapp) + '@c.us';
@@ -44,38 +46,23 @@ function getSupplierChatId(supplierName) {
     return cfg.GROUP_SUPPLIER;
 }
 
-function getSupplier(supplierName) {
-    return loadSuppliers().find(x => (x.name || '').toLowerCase() === String(supplierName || '').toLowerCase()) || null;
+async function getSupplier(supplierName) {
+    const all = await loadSuppliers();
+    return all.find(x => (x.name || '').toLowerCase() === String(supplierName || '').toLowerCase()) || null;
 }
 
-// ── ALL matches by name (2026-07-16, for smartAssign) ─────────────────────────
-// getSupplier() above returns only the first hit — fine when names are unique,
-// silently wrong when two suppliers share a name in different cities. Exact
-// match first; only fall back to substring match if exact finds nothing, so
-// "Rudy" doesn't accidentally also pull in an unrelated "Rudyard Freight Co."
-function getSuppliersByName(name) {
-    const lower = String(name || '').trim().toLowerCase();
-    if (!lower) return [];
-    const all = loadSuppliers();
-    const exact = all.filter(x => (x.name || '').toLowerCase() === lower);
-    if (exact.length) return exact;
-    return all.filter(x => (x.name || '').toLowerCase().includes(lower));
-}
-
-function getSupplierGroupIdForBooking(bkgNo) {
+async function getSupplierGroupIdForBooking(bkgNo) {
     const wf = loadWorkflow()[bkgNo] || {};
     if (wf.supplier_group_id) return wf.supplier_group_id;
     const name = wf.supplier || loadBookings()[bkgNo]?.supplier || '';
     return getSupplierChatId(name);
 }
 
-function buildSupplierSelectionMessage(bkgNo) {
-    const all = loadSuppliers();
+async function buildSupplierSelectionMessage(bkgNo) {
+    const all = await loadSuppliers();
     if (!all.length) return { text: 'No suppliers registered. Add one from the dashboard first.', list: [] };
 
     const port = loadBookings()[bkgNo]?.port_of_loading || '';
-    // Strict: if POL is set, only offer suppliers at that port.
-    // If POL is empty (unlikely but defensive), offer all.
     const suppliers = port ? all.filter(s => localityMatchesPort(s.locality, port)) : all;
 
     if (!suppliers.length) {
@@ -92,7 +79,19 @@ function buildSupplierSelectionMessage(bkgNo) {
     };
 }
 
+// Resolve a supplier for a given port WITHOUT asking, if possible:
+//   - exactly one registered supplier at that locality → use it
+//   - multiple, one explicitly flagged is_default → use that one
+//   - multiple, none flagged → return null (genuinely needs asking)
+async function resolveDefaultSupplier(port) {
+    const all = await loadSuppliers();
+    const matches = all.filter(s => localityMatchesPort(s.locality, port));
+    if (matches.length === 0) return null;
+    if (matches.length === 1) return matches[0];
+    return matches.find(s => s.is_default) || null;
+}
+
 module.exports = {
-    matchSupplierByChat, getSupplierChatId, getSupplier, getSuppliersByName,
-    getSupplierGroupIdForBooking, buildSupplierSelectionMessage, localityMatchesPort,
+    matchSupplierByChat, getSupplierChatId, getSupplier,
+    getSupplierGroupIdForBooking, buildSupplierSelectionMessage, resolveDefaultSupplier,
 };

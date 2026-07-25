@@ -11,6 +11,7 @@ const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings, stepLabel } = require('../helpers/booking');
 const { getLATime, daysUntil } = require('../helpers/time');
 const memory = require('../helpers/memory');
+const trust = require('../helpers/trust');
 const { updateSession }        = require('../helpers/context');
 const truckers  = require('./truckers');
 const suppliers = require('./suppliers');
@@ -102,8 +103,8 @@ return { action_taken: 'list_week' };
 }
 
 async function showContacts(chatId) {
-const t = loadTruckers().map(x => `- ${x.name}${x.group_id ? '' : ' (DM)'}`);
-const s = loadSuppliers().map(x => `- ${x.name}${x.group_id ? '' : ' (DM)'}`);
+const t = (await loadTruckers()).map(x => `- ${x.name}${x.group_id ? '' : ' (DM)'}`);
+const s = (await loadSuppliers()).map(x => `- ${x.name}${x.group_id ? '' : ' (DM)'}`);
 await _send(chatId, ['Truckers:', ...(t.length ? t : ['(none)']), '', 'Suppliers:', ...(s.length ? s : ['(none)'])].join('\n'));
 return { action_taken: 'contacts_shown' };
 }
@@ -111,15 +112,8 @@ return { action_taken: 'contacts_shown' };
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
-const { booking, status } = getBooking(bkgNo);
+const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
-// FIX (2026-07-16): getBooking() intentionally also returns archived records
-// (needed for read-only status checks like showBookingStatus), but every
-// mutation path must reject them explicitly — otherwise a closed booking
-// gets forwarded, a real WhatsApp message goes to the trucker about a dead
-// load, and updateWorkflow() auto-creates a phantom workflow.json entry for
-// a booking that archiveBooking() already deleted from it.
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't forward. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 
 const containers = require('../helpers/containers');
 const cList = Array.isArray(booking.containers) ? booking.containers : [];
@@ -159,20 +153,31 @@ if (targetContainer) {
 }
 
 if (!truckerName) {
-    const sel = truckers.buildTruckerSelectionMessage(bkgNo);
+    const sel = await truckers.buildTruckerSelectionMessage(bkgNo);
     if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_truckers' }; }
     await setPending(chatId, { type: 'select_trucker', bkg_no: bkgNo, container_seq: targetContainer?.seq || null, options: sel.list.map(t => t.name) });
     await _send(chatId, sel.text);
     return { action_taken: 'awaiting_trucker_selection' };
 }
 
-const t = truckers.getTrucker(truckerName);
+const t = await truckers.getTrucker(truckerName);
 if (!t) { await _send(chatId, `Trucker "${truckerName}" not found. Type "forward ${bkgNo}" to pick from the list.`); return { action_taken: 'trucker_not_found' }; }
 
 // Web Bot tab — skip yes/no confirm.
 if (isWebSource()) {
     await clearPending(chatId);
     return executeForward(chatId, bkgNo, t.name, targetContainer?.seq || null);
+}
+
+// Graduated trust — this exact trucker has a proven streak of correct
+// approvals AND bot_mode has been deliberately set to allow it. Execute
+// immediately instead of blocking on yes/no; to undo, the manager uses the
+// existing, already-tested "recall" command — no new reversal logic needed.
+if (trust.isTrusted('forward', t.name)) {
+    const label = targetContainer ? `${bkgNo}/${targetContainer.seq}` : bkgNo;
+    const result = await executeForward(chatId, bkgNo, t.name, targetContainer?.seq || null);
+    await _send(chatId, `(Auto — ${t.name} has a proven track record. Reply "recall ${bkgNo}" if this was wrong.)`);
+    return result;
 }
 
 await setPending(chatId, { type: 'confirm_forward', bkg_no: bkgNo, trucker_name: t.name, container_seq: targetContainer?.seq || null });
@@ -184,23 +189,15 @@ return { action_taken: 'awaiting_confirmation' };
 // Executes after manager confirms.
 // containerSeq (optional): write the trucker onto that specific container.
 async function executeForward(chatId, bkgNo, truckerName, containerSeq) {
-const { booking, status } = getBooking(bkgNo);
+const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
-// FIX (2026-07-16): see forwardBooking() above — same guard needed here since
-// this is also reached directly from resolvePending('confirm_forward') and
-// the smart-assign path, both of which bypass forwardBooking()'s own check.
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't forward. Not notifying the trucker.`); return { action_taken: 'archived_blocked' }; }
 
-const truckerChat = truckers.getTruckerChatId(truckerName);
-const t           = truckers.getTrucker(truckerName);
+const truckerChat = await truckers.getTruckerChatId(truckerName);
+const t           = await truckers.getTrucker(truckerName);
 const label       = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-const forwardMsg = [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n');
-// FIX (2026-07-16): this send's result used to be discarded — if WhatsApp
-// wasn't ready (still booting, reconnecting), the trucker silently never got
-// notified while the manager saw a clean "forwarded to X" confirmation with
-// no indication anything went wrong. Now captured and surfaced + auto-retried.
-const truckerNotified = await _send(truckerChat, forwardMsg);
+await _send(truckerChat,
+    [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
 
 // PDF side track — never blocks the forward
 try {
@@ -236,34 +233,15 @@ await updateWorkflow(bkgNo, {
     forwarded_at    : new Date().toISOString(),
 });
 
-if (truckerNotified) {
-    await _send(chatId, `${label} forwarded to ${truckerName}.`);
-} else {
-    await _send(chatId, `${label} forwarded to ${truckerName} in the system, but the WhatsApp notification to ${truckerName} did NOT go through (WhatsApp not connected). Queued for automatic retry — will notify them once reconnected.`);
-    try {
-        const tasks = require('../helpers/tasks');
-        await tasks.enqueue({
-            type: 'generic_message', target_kind: 'trucker', target_name: truckerName,
-            bkg_no: bkgNo, container_seq: containerSeq, message: forwardMsg,
-            fire_at: new Date(Date.now() + 60 * 1000).toISOString(),
-            created_by: 'system_retry_forward',
-        });
-    } catch (e) { console.error('[ACTIONS] Failed to enqueue forward retry:', e.message); }
-}
-_pushAlert({ type: 'forwarded', bkgNo, message: `${label} forwarded to ${truckerName}${truckerNotified ? '' : ' (notification pending retry)'}`, severity: 'info' });
-// FIX (2026-07-16): activeBooking used to only get set by showBookingStatus(),
-// so "this"/"it" pronoun resolution (e.g. "assign this to Rudy") almost never
-// had anything to resolve against right after a real action. Every
-// booking-scoped action should refresh it.
-updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'forward' });
+await _send(chatId, `${label} forwarded to ${truckerName}.`);
+_pushAlert({ type: 'forwarded', bkgNo, message: `${label} forwarded to ${truckerName}`, severity: 'info' });
 return { action_taken: 'forwarded' };
 }
 
 // ── Assign supplier ───────────────────────────────────────────────────────────
 async function assignSupplier(chatId, bkgNo, supplierName, containerSeq) {
-const { booking, status } = getBooking(bkgNo);
+const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign a supplier. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
 
 const containersMod = require('../helpers/containers');
 const cList = Array.isArray(booking.containers) ? booking.containers : [];
@@ -287,20 +265,30 @@ if (containerSeq != null) {
 }
 
 if (!supplierName) {
-    const sel = suppliers.buildSupplierSelectionMessage(bkgNo);
+    const sel = await suppliers.buildSupplierSelectionMessage(bkgNo);
     if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_suppliers' }; }
     await setPending(chatId, { type: 'select_supplier', bkg_no: bkgNo, container_seq: targetContainer?.seq || null, options: sel.list.map(s => s.name) });
     await _send(chatId, sel.text);
     return { action_taken: 'awaiting_supplier_selection' };
 }
 
-const s = suppliers.getSupplier(supplierName);
+const s = await suppliers.getSupplier(supplierName);
 if (!s) { await _send(chatId, `Supplier "${supplierName}" not found.`); return { action_taken: 'supplier_not_found' }; }
 
 // Web Bot tab — skip yes/no confirm, fire immediately.
 if (isWebSource()) {
     await clearPending(chatId);
     return executeAssign(chatId, bkgNo, s.name, targetContainer?.seq || null);
+}
+
+// Graduated trust — see forwardBooking for the full reasoning. Undo here is
+// a manual re-assign to the correct supplier (no clean single "unassign"
+// exists yet) — flagged in the auto message so the manager knows the path.
+if (trust.isTrusted('assign', s.name)) {
+    const label = targetContainer ? `${bkgNo}/${targetContainer.seq}` : bkgNo;
+    const result = await executeAssign(chatId, bkgNo, s.name, targetContainer?.seq || null);
+    await _send(chatId, `(Auto — ${s.name} has a proven track record. If this was wrong, reassign with "assign ${bkgNo} to <correct supplier>".)`);
+    return result;
 }
 
 await setPending(chatId, { type: 'confirm_assign', bkg_no: bkgNo, supplier_name: s.name, container_seq: targetContainer?.seq || null });
@@ -310,26 +298,15 @@ return { action_taken: 'awaiting_confirmation' };
 }
 
 async function executeAssign(chatId, bkgNo, supplierName, containerSeq) {
-const { booking, status } = getBooking(bkgNo);
-if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
-// FIX (2026-07-16): same archived guard as executeForward — reached directly
-// from resolvePending('confirm_assign') and the smart-assign path, both of
-// which bypass assignSupplier()'s own check. (Also fixed the previous silent
-// return-with-no-message on a vanished booking while touching this block —
-// executeForward already messaged the manager in that case, this didn't.)
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign a supplier. Not notifying anyone.`); return { action_taken: 'archived_blocked' }; }
+const { booking } = getBooking(bkgNo);
+if (!booking) return { action_taken: 'not_found' };
 
-const supplierChat = suppliers.getSupplierChatId(supplierName);
-const s            = suppliers.getSupplier(supplierName);
+const supplierChat = await suppliers.getSupplierChatId(supplierName);
+const s            = await suppliers.getSupplier(supplierName);
 const label        = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-const assignMsg = [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n');
-// FIX (2026-07-16): same issue as executeForward above — the send result was
-// discarded, so "WA not ready" silently dropped the supplier notification
-// while the manager still saw a clean "assigned" confirmation. See the live
-// example: 2026-07-16 boot log — assign fired 4.3s into startup, before the
-// WhatsApp client was ready, and Rudy was never actually notified.
-const supplierNotified = await _send(supplierChat, assignMsg);
+await _send(supplierChat,
+    [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
 
 // Per-container: write supplier + stage onto the target container.
 if (containerSeq != null) {
@@ -357,145 +334,9 @@ await updateWorkflow(bkgNo, {
     assigned_at      : new Date().toISOString(),
 });
 
-if (supplierNotified) {
-    await _send(chatId, `${label} assigned to ${supplierName}.`);
-} else {
-    await _send(chatId, `${label} assigned to ${supplierName} in the system, but the WhatsApp notification to ${supplierName} did NOT go through (WhatsApp not connected). Queued for automatic retry — will notify them once reconnected.`);
-    try {
-        const tasks = require('../helpers/tasks');
-        await tasks.enqueue({
-            type: 'generic_message', target_kind: 'supplier', target_name: supplierName,
-            bkg_no: bkgNo, container_seq: containerSeq, message: assignMsg,
-            fire_at: new Date(Date.now() + 60 * 1000).toISOString(),
-            created_by: 'system_retry_assign',
-        });
-    } catch (e) { console.error('[ACTIONS] Failed to enqueue assign retry:', e.message); }
-}
-_pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierName}${supplierNotified ? '' : ' (notification pending retry)'}`, severity: 'info' });
-updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'assign' });
+await _send(chatId, `${label} assigned to ${supplierName}.`);
+_pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierName}`, severity: 'info' });
 return { action_taken: 'assigned' };
-}
-
-// ── Smart assign — "assign this/it to NAME" (2026-07-16) ──────────────────
-// Spec from Apsara: resolve NAME against BOTH the trucker and supplier
-// rosters, narrow multi-city name collisions by the booking's own port of
-// loading, and — if NAME hits both rosters — use which role still has an
-// open (unassigned) container on THIS booking to break the tie. Only ask the
-// manager outright when that still doesn't resolve it. If the resolved
-// role's containers are ALL already assigned (nothing pending), don't
-// silently overwrite — confirm first, and show the current stage so a
-// mid-flight reassignment (trucker already picked up, etc.) isn't invisible.
-// Decisions locked in 2026-07-16: plain yes/no confirm regardless of stage
-// (just surface the stage in the prompt, don't block); do NOT notify the
-// outgoing trucker/supplier that they were replaced.
-async function smartAssign(chatId, bkgNo, name) {
-const { booking, status } = getBooking(bkgNo);
-if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
-if (!name) { await _send(chatId, 'Assign to whom? e.g. "assign this to Rudy".'); return { action_taken: 'no_name' }; }
-
-const pol = booking.port_of_loading || '';
-const narrowByLocality = (list) => {
-    if (list.length <= 1) return list;
-    const local = list.filter(x => suppliers.localityMatchesPort(x.locality, pol));
-    return local.length ? local : list; // locality narrowed to nobody — better to ask than to silently drop every candidate
-};
-
-const supplierCandidates = narrowByLocality(suppliers.getSuppliersByName(name));
-const truckerCandidates  = narrowByLocality(truckers.getTruckersByName(name));
-
-if (!supplierCandidates.length && !truckerCandidates.length) {
-    await _send(chatId, `No trucker or supplier named "${name}" found. Check the Truckers/Suppliers tab.`);
-    return { action_taken: 'name_not_found' };
-}
-
-const containersMod = require('../helpers/containers');
-const supplierPending = !!containersMod.nextUnassignedContainer(booking, 'supplier');
-const truckerPending  = !!containersMod.nextUnassignedContainer(booking, 'trucker');
-
-let role;
-if (supplierCandidates.length && truckerCandidates.length) {
-    // Name hits both rosters. Use this booking's own pending state to break
-    // the tie — if only one role still has an open slot, that's almost
-    // certainly what was meant. Only ask when it's genuinely ambiguous
-    // (both pending, or both already fully assigned).
-    if (supplierPending && !truckerPending)      role = 'supplier';
-    else if (truckerPending && !supplierPending) role = 'trucker';
-    else {
-        await setPending(chatId, { type: 'await_role_choice', bkg_no: bkgNo, name, options: ['trucker', 'supplier'] });
-        await _send(chatId, `"${name}" is both a trucker and a supplier. Assign as trucker or supplier for ${bkgNo}? Reply "trucker" or "supplier".`);
-        return { action_taken: 'awaiting_role_choice' };
-    }
-} else {
-    role = supplierCandidates.length ? 'supplier' : 'trucker';
-}
-
-return resolveSmartAssignRole(chatId, bkgNo, role, role === 'supplier' ? supplierCandidates : truckerCandidates);
-}
-
-// Shared tail for smartAssign() and the await_role_choice / await_candidate_choice
-// pending resolutions below — once we have exactly one role and a candidate
-// list, this decides fresh-assign vs reassign-confirm vs name-collision ask.
-async function resolveSmartAssignRole(chatId, bkgNo, role, candidates) {
-const { booking, status } = getBooking(bkgNo);
-if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
-// FIX (2026-07-16): this is also reached after a round-trip through
-// await_role_choice / await_candidate_choice — the booking could have been
-// archived (manually, or by the 11pm auto-archive job) in the gap between
-// the manager being asked "trucker or supplier?" and them replying. Re-check
-// here, don't just trust smartAssign()'s earlier check.
-if (status === 'archived') { await _send(chatId, `${bkgNo} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
-if (!candidates.length) { await _send(chatId, `No ${role} found for that name.`); return { action_taken: 'name_not_found' }; }
-
-if (candidates.length > 1) {
-    // Same name, multiple contacts, locality didn't narrow it to one.
-    await setPending(chatId, { type: 'await_candidate_choice', bkg_no: bkgNo, role, options: candidates.map(c => c.name) });
-    await _send(chatId, [`Multiple ${role}s match:`, '', ...candidates.map((c, i) => `${i + 1}. ${c.name}${c.locality ? ' · ' + c.locality : ''}`), '', 'Reply with a number or name.'].join('\n'));
-    return { action_taken: 'awaiting_' + role + '_selection' };
-}
-
-const resolvedName = candidates[0].name;
-const containersMod = require('../helpers/containers');
-const pendingContainer = containersMod.nextUnassignedContainer(booking, role);
-
-if (pendingContainer) {
-    // Open slot for this role — just fill it. No confirmation needed
-    // (matches existing forward/assign behavior for a fresh assignment).
-    return role === 'supplier'
-        ? executeAssign(chatId, bkgNo, resolvedName, null)
-        : executeForward(chatId, bkgNo, resolvedName, null);
-}
-
-// Every container already has this role filled — this is a REASSIGNMENT,
-// not a fresh assignment. Confirm before overwriting.
-const assignedContainers = (booking.containers || []).filter(c => c[role]);
-if (!assignedContainers.length) {
-    // Defensive: nextUnassignedContainer said full but nothing is actually
-    // assigned (shouldn't happen) — fall back to a fresh assign on #1.
-    return role === 'supplier'
-        ? executeAssign(chatId, bkgNo, resolvedName, booking.containers?.[0]?.seq ?? null)
-        : executeForward(chatId, bkgNo, resolvedName, booking.containers?.[0]?.seq ?? null);
-}
-
-if (assignedContainers.length === 1) {
-    const c = assignedContainers[0];
-    const current = c[role];
-    const label = booking.containers.length > 1 ? `${bkgNo}/${c.seq}` : bkgNo;
-    if (String(current).toLowerCase() === resolvedName.toLowerCase()) {
-        await _send(chatId, `${label} is already assigned to ${resolvedName} as ${role}. Nothing to do.`);
-        return { action_taken: 'already_assigned_same' };
-    }
-    const stageNote = (c.stage && c.stage !== 'not_started') ? ` — currently at "${stepLabel(c.stage)}"` : '';
-    await setPending(chatId, { type: 'await_reassign_confirm', bkg_no: bkgNo, role, new_name: resolvedName, container_seq: c.seq });
-    await _send(chatId, `${label} is already assigned to ${current} as ${role}${stageNote}. Reassign to ${resolvedName}? (yes/no)`);
-    return { action_taken: 'awaiting_reassign_confirm' };
-}
-
-// Multiple containers already have this role filled — ask which one.
-await setPending(chatId, { type: 'await_reassign_confirm', bkg_no: bkgNo, role, new_name: resolvedName, options: assignedContainers.map(c => String(c.seq)) });
-const list = assignedContainers.map(c => `#${c.seq} → ${c[role]}${c.stage && c.stage !== 'not_started' ? ` (${stepLabel(c.stage)})` : ''}`).join(', ');
-await _send(chatId, `${bkgNo} has multiple containers already assigned as ${role}: ${list}. Reply with a container number to reassign to ${resolvedName}, or "no" to cancel.`);
-return { action_taken: 'awaiting_reassign_confirm' };
 }
 
 // ── Phase 4a: disambiguation prompts to trucker/supplier ──────────────────
@@ -576,7 +417,7 @@ async function emptyDropConfirmed(bkgNo, byName, containerSeq) {
 await advanceContainer(bkgNo, containerSeq, 'empty_dropped');
 const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'empty_dropped';
 await updateWorkflow(bkgNo, { step: topStep, empty_dropped_at: new Date().toISOString() });
-const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
+const supplierChat = await suppliers.getSupplierGroupIdForBooking(bkgNo);
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 if (supplierChat) await _send(supplierChat, `${label}: empty container dropped. Please start loading and reply "load ready" when done.`);
 await _sendToTeam(`${label}: empty dropped (${byName || 'trucker'}).`);
@@ -589,7 +430,7 @@ async function loadReadyReceived(bkgNo, byName, containerSeq) {
 await advanceContainer(bkgNo, containerSeq, 'load_ready');
 const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'load_ready';
 await updateWorkflow(bkgNo, { step: topStep, load_ready_at: new Date().toISOString() });
-const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
+const truckerChat = await truckers.getTruckerGroupIdForBooking(bkgNo);
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 if (truckerChat) await _send(truckerChat, `${label}: load is READY for pickup. Please confirm your pickup window and send the scale ticket after pickup.`);
 await _sendToTeam(`${label}: load ready (${byName || 'supplier'}). Trucker notified.`);
@@ -637,39 +478,18 @@ return { action_taken: 'ingated' };
 }
 
 // ── Recall / archive ──────────────────────────────────────────────────────────
-// FIX (2026-07-16): recallBooking/executeRecall had ZERO existence check —
-// worse than the archived-booking gap above, because there wasn't even a
-// check for "does this booking exist at all". Any typo'd or fabricated
-// booking number would still go through confirm → executeRecall, and
-// getTruckerGroupIdForBooking('') for a booking with no workflow entry falls
-// through to cfg.GROUP_TRUCKER (the default fallback group) — so a bogus
-// recall sent a real "BKGXXX has been RECALLED" message to the whole default
-// trucker group, plus created a phantom workflow.json entry via
-// updateWorkflow's auto-create. Recall only makes sense on an active
-// booking — an archived one is already closed, so treat that the same as
-// "not found" (no separate archived-specific message needed here).
 async function recallBooking(chatId, bkgNo) {
-const { booking, status } = getBooking(bkgNo);
-if (!booking || status === 'archived') { await _send(chatId, `No active booking found for ${bkgNo}. Check the booking number — it may not exist, or may already be archived.`); return { action_taken: 'not_found' }; }
 await setPending(chatId, { type: 'confirm_recall', bkg_no: bkgNo });
 await _send(chatId, `Recall ${bkgNo} from the trucker and reset to Not Started? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
 }
 
 async function executeRecall(chatId, bkgNo) {
-// Re-check at execute time too (same reasoning as resolveSmartAssignRole) —
-// the booking could have been archived in the gap between the yes/no ask
-// and the manager's reply (e.g. the 11pm auto-archive job, or a manual
-// archive from the dashboard in another tab).
-const { booking, status } = getBooking(bkgNo);
-if (!booking || status === 'archived') { await _send(chatId, `${bkgNo} is no longer an active booking — nothing to recall. Not notifying anyone.`); return { action_taken: 'not_found' }; }
-
-const truckerChat = truckers.getTruckerGroupIdForBooking(bkgNo);
+const truckerChat = await truckers.getTruckerGroupIdForBooking(bkgNo);
 if (truckerChat) await _send(truckerChat, `${bkgNo} has been RECALLED. Please stop work on this booking.`);
 await updateWorkflow(bkgNo, { step: 'not_started', trucker_name: null, trucker_group_id: null, recalled_at: new Date().toISOString() });
 await _send(chatId, `${bkgNo} recalled.`);
 _pushAlert({ type: 'recalled', bkgNo, message: `${bkgNo} recalled from trucker`, severity: 'warning' });
-updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'recall' });
 return { action_taken: 'recalled' };
 }
 
@@ -680,9 +500,264 @@ return { action_taken: ok ? 'archived' : 'not_found' };
 }
 
 // ── Pending resolution (called by brain when manager replies yes/no/selection) ─
+// ── Guided daily trucker-assignment wizard ──────────────────────────────────
+// Triggered by scheduler.js's dailyTruckerCheck(). Chains through pending
+// states: wizard_start → wizard_await_port → wizard_await_booking (if 2+
+// candidates) → wizard_await_supplier (if ambiguous) → wizard_await_trucker
+// (if ambiguous) → wizard_confirm → execute. Each "if ambiguous" step is
+// skipped automatically when resolveDefaultSupplier/Trucker can resolve it
+// without asking (single registered option, or one flagged is_default).
+async function wizardAdvance(chatId, pending, answer, selection) {
+    const { loadBookings, loadWorkflow } = require('../helpers/json');
+    const { migrate, nextUnassignedContainer } = require('../helpers/containers');
+
+    switch (pending.type) {
+        case 'wizard_start': {
+            if (answer !== 'yes') { await clearPending(chatId); return { action_taken: 'wizard_declined' }; }
+            const bookings = loadBookings();
+            const workflow = loadWorkflow();
+            const ports = new Set();
+            for (const b of Object.values(bookings)) {
+                const wf = workflow[b.booking_number] || {};
+                if (['ingate_received', 'done', 'archived'].includes(wf.step)) continue;
+                // Container-aware: a booking stays a candidate as long as ANY of its
+                // containers still lacks a trucker — NOT just checking the legacy
+                // booking-level trucker_name field, which gets set once the FIRST
+                // container is forwarded even if 2 more still need one. This is
+                // what actually supports a 3x40HC booking going to 3 different
+                // truckers instead of vanishing from the list after the first.
+                if (!nextUnassignedContainer(migrate(b), 'trucker')) continue;
+                if (b.port_of_loading) ports.add(b.port_of_loading);
+            }
+            const portList = [...ports];
+            if (!portList.length) {
+                await clearPending(chatId);
+                await _send(chatId, 'No bookings currently need a trucker. All set.');
+                return { action_taken: 'wizard_no_candidates' };
+            }
+            await setPending(chatId, { type: 'wizard_await_port', options: portList });
+            await _send(chatId, ['Which port?', '', ...portList.map((p, i) => `${i + 1}. ${p}`), '', 'Reply with a number or name.'].join('\n'));
+            return { action_taken: 'wizard_await_port' };
+        }
+
+        case 'wizard_await_port': {
+            const port = selection || answer;
+            if (!port) { await _send(chatId, 'Which port?'); return { action_taken: 'wizard_await_port' }; }
+            const bookings = loadBookings();
+            const workflow = loadWorkflow();
+            const candidates = Object.values(bookings).filter(b => {
+                const wf = workflow[b.booking_number] || {};
+                if (['ingate_received', 'done', 'archived'].includes(wf.step)) return false;
+                if (!nextUnassignedContainer(migrate(b), 'trucker')) return false;
+                return (b.port_of_loading || '').toLowerCase() === String(port).toLowerCase();
+            });
+            if (!candidates.length) {
+                await clearPending(chatId);
+                await _send(chatId, `No bookings at ${port} currently need a trucker.`);
+                return { action_taken: 'wizard_no_candidates' };
+            }
+            if (candidates.length === 1) return proceedToContainer(chatId, candidates[0].booking_number, port);
+            const options = candidates.map(b => b.booking_number);
+            await setPending(chatId, { type: 'wizard_await_booking', port, options });
+            await _send(chatId, ['Which booking?', '', ...options.map((o, i) => `${i + 1}. ${o}`), '', 'Reply with a number or the booking number.'].join('\n'));
+            return { action_taken: 'wizard_await_booking' };
+        }
+
+        case 'wizard_await_booking': {
+            const bkgNo = selection || answer;
+            if (!bkgNo) { await _send(chatId, 'Which booking?'); return { action_taken: 'wizard_await_booking' }; }
+            return proceedToContainer(chatId, bkgNo, pending.port);
+        }
+
+        case 'wizard_await_supplier': {
+            const supplierName = selection || answer;
+            if (!supplierName) { await _send(chatId, 'Which supplier?'); return { action_taken: 'wizard_await_supplier' }; }
+            return proceedToTrucker(chatId, pending.bkg_no, pending.port, supplierName, pending.container_seq);
+        }
+
+        case 'wizard_await_trucker': {
+            const truckerName = selection || answer;
+            if (!truckerName) { await _send(chatId, 'Which trucker?'); return { action_taken: 'wizard_await_trucker' }; }
+            return proceedToConfirm(chatId, pending.bkg_no, pending.supplier_name, truckerName, pending.container_seq);
+        }
+
+        case 'wizard_confirm': {
+            await clearPending(chatId);
+            return executeWizardAssignment(chatId, pending.bkg_no, pending.supplier_name, pending.trucker_name, pending.container_seq, pending.port);
+        }
+    }
+}
+
+// Entry point once a specific booking is chosen — finds WHICH container
+// actually needs a trucker (lowest seq first) and starts resolving for that
+// one specifically. A single-container booking behaves exactly as before;
+// a 3-container booking processes one container per pass through the wizard.
+async function proceedToContainer(chatId, bkgNo, port) {
+    const { loadBookings } = require('../helpers/json');
+    const { migrate, nextUnassignedContainer } = require('../helpers/containers');
+    const booking = migrate(loadBookings()[bkgNo]);
+    if (!booking) { await clearPending(chatId); await _send(chatId, `Booking ${bkgNo} not found.`); return { action_taken: 'not_found' }; }
+
+    const target = nextUnassignedContainer(booking, 'trucker');
+    if (!target) {
+        await clearPending(chatId);
+        await _send(chatId, `${bkgNo}: every container already has a trucker.`);
+        return { action_taken: 'wizard_no_candidates' };
+    }
+    // Only show the /seq suffix when the booking genuinely has more than one
+    // container — no point cluttering a single-container booking's messages.
+    const containerSeq = booking.containers.length > 1 ? target.seq : null;
+    return proceedToSupplier(chatId, bkgNo, port, containerSeq);
+}
+
+// Step: does THIS SPECIFIC CONTAINER already have a supplier? Checked at the
+// container level, not the booking level — different containers on the same
+// booking can have different suppliers.
+async function proceedToSupplier(chatId, bkgNo, port, containerSeq) {
+    const { loadBookings } = require('../helpers/json');
+    const { migrate, getContainer } = require('../helpers/containers');
+    const booking = migrate(loadBookings()[bkgNo]);
+    const existingSupplier = containerSeq != null
+        ? getContainer(booking, containerSeq)?.supplier
+        : (booking?.containers?.[0]?.supplier || booking?.supplier);
+    if (existingSupplier) return proceedToTrucker(chatId, bkgNo, port, existingSupplier, containerSeq);
+
+    const defaultSupplier = await suppliers.resolveDefaultSupplier(port);
+    if (defaultSupplier) return proceedToTrucker(chatId, bkgNo, port, defaultSupplier.name, containerSeq);
+
+    const sel = await suppliers.buildSupplierSelectionMessage(bkgNo);
+    if (!sel.list.length) {
+        await clearPending(chatId);
+        await _send(chatId, `No supplier registered at ${port} for ${bkgNo}. Add one from the dashboard first.`);
+        return { action_taken: 'wizard_no_supplier' };
+    }
+    await setPending(chatId, { type: 'wizard_await_supplier', bkg_no: bkgNo, port, container_seq: containerSeq, options: sel.list.map(s => s.name) });
+    await _send(chatId, sel.text);
+    return { action_taken: 'wizard_await_supplier' };
+}
+
+// Step: resolve the trucker the same way, for the same specific container.
+async function proceedToTrucker(chatId, bkgNo, port, supplierName, containerSeq) {
+    const defaultTrucker = await truckers.resolveDefaultTrucker(port);
+    if (defaultTrucker) return proceedToConfirm(chatId, bkgNo, supplierName, defaultTrucker.name, containerSeq);
+
+    const sel = await truckers.buildTruckerSelectionMessage(bkgNo);
+    if (!sel.list.length) {
+        await clearPending(chatId);
+        await _send(chatId, `No trucker registered at ${port} for ${bkgNo}. Add one from the dashboard first.`);
+        return { action_taken: 'wizard_no_trucker' };
+    }
+    await setPending(chatId, { type: 'wizard_await_trucker', bkg_no: bkgNo, port, supplier_name: supplierName, container_seq: containerSeq, options: sel.list.map(t => t.name) });
+    await _send(chatId, sel.text);
+    return { action_taken: 'wizard_await_trucker' };
+}
+
+// Step: present ONE combined confirmation for supplier + trucker together,
+// scoped to the specific container when the booking has more than one.
+async function proceedToConfirm(chatId, bkgNo, supplierName, truckerName, containerSeq) {
+    await setPending(chatId, { type: 'wizard_confirm', bkg_no: bkgNo, supplier_name: supplierName, trucker_name: truckerName, container_seq: containerSeq });
+    const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+    await _send(chatId, `${label} — Supplier: ${supplierName}, Trucker: ${truckerName}. Confirm? (yes/no)`);
+    return { action_taken: 'wizard_await_confirm' };
+}
+
+// Final step: execute for this one container. Checks dual-role FIRST — a
+// contact acting as both supplier and trucker gets ONE combined message,
+// never the normal separate assign-then-forward messaging. After executing,
+// checks whether the SAME booking still has another container needing a
+// trucker and, if so, loops straight back into the wizard for it — this is
+// what actually lets a 3x40HC booking go to 3 different parties in one
+// guided session instead of requiring 3 separate manual triggers.
+async function executeWizardAssignment(chatId, bkgNo, supplierName, truckerName, containerSeq, port) {
+    const dualRole = require('../helpers/dualRole');
+    const supplierRecord = await suppliers.getSupplier(supplierName);
+    const truckerRecord  = await truckers.getTrucker(truckerName);
+
+    let result;
+    if (dualRole.isSamePairing(supplierRecord, truckerRecord)) {
+        result = await executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerRecord, containerSeq);
+    } else {
+        // Different parties — the wizard's own combined confirmation already
+        // served as "are you sure", so call the EXECUTE functions directly
+        // rather than assignSupplier/forwardBooking, which would ask yes/no again.
+        await executeAssign(chatId, bkgNo, supplierName, containerSeq);
+        result = await executeForward(chatId, bkgNo, truckerName, containerSeq);
+    }
+
+    // Same booking, another container still needs a trucker? Keep going.
+    const { loadBookings } = require('../helpers/json');
+    const { migrate, nextUnassignedContainer } = require('../helpers/containers');
+    const fresh = migrate(loadBookings()[bkgNo]);
+    const next = fresh ? nextUnassignedContainer(fresh, 'trucker') : null;
+    if (next) {
+        await _send(chatId, `${bkgNo} has another container (seq ${next.seq}) still needing a trucker — continuing.`);
+        return proceedToSupplier(chatId, bkgNo, port, fresh.containers.length > 1 ? next.seq : null);
+    }
+    return result;
+}
+
+// Dual-role case: one party handles both ends of ONE container. One
+// message, not two redundant ones. Expectation is set explicitly: they
+// report back ONCE, with the scale ticket, once that container is picked up
+// and heading back to port — not through each intermediate stage separately
+// like a normal trucker/supplier pairing would.
+async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerRecord, containerSeq) {
+    const { booking } = getBooking(bkgNo);
+    if (!booking) { await _send(chatId, `Booking ${bkgNo} disappeared — check dashboard.`); return { action_taken: 'not_found' }; }
+
+    const digits = (v) => String(v || '').replace(/\D/g, '');
+    const chat = truckerRecord.group_id || (truckerRecord.whatsapp ? digits(truckerRecord.whatsapp) + '@c.us' : null)
+              || supplierRecord.group_id || (supplierRecord.whatsapp ? digits(supplierRecord.whatsapp) + '@c.us' : null);
+    if (!chat) { await _send(chatId, `${truckerRecord.name} has no WhatsApp/group on file — can't send.`); return { action_taken: 'no_destination' }; }
+
+    const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
+    await _send(chat,
+        [`New booking — ${label}`, '', formatBookingForForward(booking), '',
+         `You're handling both material and trucking on this one — no separate handoff needed.`,
+         `Just share the scale ticket once the container is picked up and heading back to port.`].join('\n'));
+
+    // Per-container write when this booking actually has multiple containers —
+    // mirrors the exact pattern executeAssign/executeForward already use, so
+    // a dual-role assignment on container 2 doesn't clobber container 1's data.
+    if (containerSeq != null) {
+        const { mutateJson } = require('../helpers/json');
+        const { migrate } = require('../helpers/containers');
+        await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
+            if (!all[bkgNo]) return all;
+            all[bkgNo] = migrate(all[bkgNo]);
+            const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+            if (c) { c.supplier = supplierRecord.name; c.trucker = truckerRecord.name; c.stage = 'forwarded'; }
+            return all;
+        });
+    }
+
+    const { bookingStage } = require('../helpers/containers');
+    const { loadBookings } = require('../helpers/json');
+    const fresh = loadBookings()[bkgNo];
+    const topStage = fresh ? bookingStage(fresh) : 'forwarded';
+
+    await updateWorkflow(bkgNo, {
+        step             : topStage,
+        supplier         : supplierRecord.name,             // legacy top-level fields — kept for existing readers
+        trucker_name     : truckerRecord.name,
+        trucker_group_id : truckerRecord.group_id || chat,
+        dual_role        : true, // flags this booking for adapted status expectations
+        assigned_at      : new Date().toISOString(),
+        forwarded_at     : new Date().toISOString(),
+    });
+
+    await _send(chatId, `${label}: ${supplierRecord.name} is handling both supplier and trucker roles — one combined message sent.`);
+    _pushAlert({ type: 'assigned', bkgNo, message: `${label} assigned to ${supplierRecord.name} (dual-role — supplier+trucker)`, severity: 'info' });
+    return { action_taken: 'dual_role_assigned' };
+}
+
 async function resolvePending(chatId, pending, answer, selection) {
 if (answer === 'no') {
     await clearPending(chatId);
+    // A rejection on a forward/assign confirmation resets that specific
+    // pattern's trust streak — only these two types are trust-eligible.
+    if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
+    if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
     await _send(chatId, 'Cancelled.');
     return { action_taken: 'cancelled_pending' };
 }
@@ -696,13 +771,24 @@ switch (pending.type) {
         return assignSupplier(chatId, pending.bkg_no, selection, pending.container_seq);
     case 'confirm_forward':
         await clearPending(chatId);
+        await trust.recordApproval('forward', pending.trucker_name);
         return executeForward(chatId, pending.bkg_no, pending.trucker_name, pending.container_seq);
     case 'confirm_assign':
         await clearPending(chatId);
+        await trust.recordApproval('assign', pending.supplier_name);
         return executeAssign(chatId, pending.bkg_no, pending.supplier_name, pending.container_seq);
     case 'confirm_recall':
         await clearPending(chatId);
         return executeRecall(chatId, pending.bkg_no);
+
+    // Daily guided trucker-assignment wizard — see wizardAdvance above.
+    case 'wizard_start':
+    case 'wizard_await_port':
+    case 'wizard_await_booking':
+    case 'wizard_await_supplier':
+    case 'wizard_await_trucker':
+    case 'wizard_confirm':
+        return wizardAdvance(chatId, pending, answer, selection);
 
     // Phase 4a: trucker/supplier selecting which booking their state message applied to.
     // Answer is a number (1/2/…) or the booking number itself.
@@ -767,59 +853,6 @@ switch (pending.type) {
         return fireResolvedStateIntent(pending.intent_to_resolve, pending.bkg_no, seq, null, pending.has_media);
     }
 
-    // ── Smart-assign follow-ups (2026-07-16) ────────────────────────────────
-    // Manager told us WHICH role ("trucker" or "supplier") when a name hit
-    // both rosters and the booking's pending state didn't break the tie.
-    case 'await_role_choice': {
-        await clearPending(chatId);
-        const role = String(selection || '').toLowerCase();
-        if (role !== 'trucker' && role !== 'supplier') {
-            await _send(chatId, 'Reply "trucker" or "supplier".');
-            return { action_taken: 'awaiting_role_choice' };
-        }
-        const { booking, status } = getBooking(pending.bkg_no);
-        if (!booking) { await _send(chatId, `No booking found for ${pending.bkg_no}.`); return { action_taken: 'not_found' }; }
-        if (status === 'archived') { await _send(chatId, `${pending.bkg_no} is archived — can't assign. If this was closed by mistake, restore it from the dashboard first.`); return { action_taken: 'archived_blocked' }; }
-        const pol = booking.port_of_loading || '';
-        const raw = role === 'supplier' ? suppliers.getSuppliersByName(pending.name) : truckers.getTruckersByName(pending.name);
-        const local = raw.length > 1 ? raw.filter(x => suppliers.localityMatchesPort(x.locality, pol)) : raw;
-        return resolveSmartAssignRole(chatId, pending.bkg_no, role, local.length ? local : raw);
-    }
-    // Manager picked which of several same-named contacts (name collision
-    // within one role, e.g. two "Rudy"s and locality didn't narrow it).
-    case 'await_candidate_choice':
-        await clearPending(chatId);
-        return resolveSmartAssignRole(chatId, pending.bkg_no, pending.role, [{ name: selection }]);
-    // Manager confirmed (or picked a container for) a reassignment onto a
-    // role that was already fully assigned on this booking.
-    case 'await_reassign_confirm': {
-        await clearPending(chatId);
-        let seq = pending.container_seq ?? null;
-        if (pending.options && selection) {
-            const asNum = parseInt(selection, 10);
-            if (!isNaN(asNum)) seq = asNum;
-        }
-        return pending.role === 'supplier'
-            ? executeAssign(chatId, pending.bkg_no, pending.new_name, seq)
-            : executeForward(chatId, pending.bkg_no, pending.new_name, seq);
-    }
-
-    // Manager answering "how long before I follow up?" (2026-07-16). Reply
-    // could be a preset (5/15/30/60), any other plain number, or a phrase
-    // like "2 hours". If it doesn't parse, re-prompt WITHOUT clearing the
-    // pending — same pattern as await_role_choice's invalid-reply branch —
-    // so a stray reply doesn't silently drop the follow-up request.
-    case 'await_followup_minutes': {
-        const raw = String(selection || answer || '').trim();
-        const mins = parseMinutesReply(raw);
-        if (!mins) {
-            await _send(chatId, `Didn't catch a time frame — reply with a number of minutes (e.g. 15) or something like "2 hours". Reply "no" to cancel.`);
-            return { action_taken: 'awaiting_followup_minutes' };
-        }
-        await clearPending(chatId);
-        return fireFollowup(chatId, pending.target_kind, pending.resolved_name, pending.bkg_no, mins, pending.requested_by);
-    }
-
     default:
         await clearPending(chatId);
         return { action_taken: 'unknown_pending_cleared' };
@@ -848,26 +881,13 @@ return loadBookings()?.[bkgNo]?.[field] || null;
 // matches — e.g. "follow up with the port" isn't a contact, tell the manager
 // rather than silently dropping the request). Reuses the existing persistent
 // task queue (helpers/tasks.js) — same infra as nudge_* tasks, survives restart.
-//
-// Parses a manager's reply to "how long?" into minutes. Accepts a bare
-// number (interpreted as minutes — matches the 5/15/30/60 presets we offer,
-// but any positive integer works too, e.g. "20"), or "N min(s)"/"N hr(s)"/
-// "N hour(s)". Returns null if it doesn't parse — caller re-prompts rather
-// than guessing.
-function parseMinutesReply(raw) {
-const s = String(raw || '').trim().toLowerCase();
-if (/^\d+$/.test(s)) { const n = parseInt(s, 10); return n > 0 ? n : null; }
-const m = s.match(/^(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours)$/);
-if (m) { const n = parseInt(m[1], 10); return n > 0 ? (m[2].startsWith('h') ? n * 60 : n) : null; }
-return null;
-}
-
 async function scheduleFollowup(chatId, targetName, minutes, bkgNo, requestedBy) {
+const tasks = require('../helpers/tasks');
 const name = String(targetName || '').trim();
 
 let target_kind = null, resolvedName = name;
-const t = truckers.getTrucker(name);
-const s = !t ? suppliers.getSupplier(name) : null;
+const t = await truckers.getTrucker(name);
+const s = !t ? await suppliers.getSupplier(name) : null;
 if (t)      { target_kind = 'trucker';  resolvedName = t.name; }
 else if (s) { target_kind = 'supplier'; resolvedName = s.name; }
 
@@ -876,29 +896,7 @@ if (!target_kind) {
     return { action_taken: 'replied' };
 }
 
-// FIX (2026-07-16): this used to silently default to 30 minutes whenever no
-// explicit time was given (e.g. "Remind AP to share the scale ticket" has
-// no "in N minutes"). Per Apsara: never auto-assume a timeframe on her
-// behalf — ask, same principle as smart_assign asking instead of guessing
-// trucker-vs-supplier. Only skip the ask when minutes came through already
-// resolved (e.g. "follow up with X in 20 minutes" — policy regex parsed it).
-if (!Number.isFinite(minutes) || minutes <= 0) {
-    await setPending(chatId, {
-        type: 'await_followup_minutes', target_kind, resolved_name: resolvedName,
-        bkg_no: bkgNo || null, requested_by: requestedBy || null,
-    });
-    await _send(chatId, `How long before I follow up with ${resolvedName}${bkgNo ? ' re ' + bkgNo : ''}? Reply 5, 15, 30, or 60 (minutes) — or tell me a specific time, e.g. "2 hours".`);
-    return { action_taken: 'awaiting_followup_minutes' };
-}
-
-return fireFollowup(chatId, target_kind, resolvedName, bkgNo, minutes, requestedBy);
-}
-
-// Shared tail for scheduleFollowup() (explicit minutes given up front) and
-// resolvePending's 'await_followup_minutes' case (minutes given on the ask).
-async function fireFollowup(chatId, target_kind, resolvedName, bkgNo, minutes, requestedBy) {
-const tasks = require('../helpers/tasks');
-const mins = minutes;
+const mins = Number.isFinite(minutes) && minutes > 0 ? minutes : 30; // default 30 min if unspecified
 const fireAt = new Date(Date.now() + mins * 60 * 1000).toISOString();
 const label = bkgNo ? ` re ${bkgNo}` : '';
 const message = bkgNo
@@ -963,7 +961,7 @@ return { action_taken: 'context_stored' };
 async function checkSupplierReadiness(managerChatId, bkgNo, containerSeq) {
 const b = loadBookings()[bkgNo];
 if (!b) { await _send(managerChatId, `Booking ${bkgNo} not found.`); return { action_taken: 'replied' }; }
-const supplierChat = suppliers.getSupplierGroupIdForBooking(bkgNo);
+const supplierChat = await suppliers.getSupplierGroupIdForBooking(bkgNo);
 if (!supplierChat) { await _send(managerChatId, `${bkgNo} has no supplier assigned yet — nothing to check.`); return { action_taken: 'replied' }; }
 
 const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
@@ -976,7 +974,7 @@ return { action_taken: 'replied' };
 async function resolveReadyCheckYes(supplierChatId, pending) {
 const { bkg_no, container_seq, requested_by } = pending;
 await clearPending(supplierChatId);
-const supplierName = suppliers.matchSupplierByChat(supplierChatId)?.name || 'Supplier';
+const supplierName = (await suppliers.matchSupplierByChat(supplierChatId))?.name || 'Supplier';
 await _send(supplierChatId, `Thanks — noted.`);
 // Feed straight into the real state machine (same as the organic "load ready"
 // keyword flow) so this check-in actually advances the booking, not just chat.
@@ -996,7 +994,7 @@ return { action_taken: 'replied' };
 async function resolveReadyCheckDate(supplierChatId, pending, dateText) {
 const { bkg_no, container_seq, requested_by } = pending;
 await clearPending(supplierChatId);
-const supplierName = suppliers.matchSupplierByChat(supplierChatId)?.name || 'Supplier';
+const supplierName = (await suppliers.matchSupplierByChat(supplierChatId))?.name || 'Supplier';
 const label = container_seq != null ? `${bkg_no}/${container_seq}` : bkg_no;
 await _send(supplierChatId, `Thanks, noted.`);
 // Surface on the dashboard's existing pending/owner display (decorateBooking
@@ -1006,6 +1004,25 @@ const notifyTo = requested_by || (cfg.getManagerNumber() ? cfg.getManagerNumber(
 if (notifyTo) await _send(notifyTo, `${label}: NOT ready yet — supplier expects it ready ${dateText}.`);
 await _pushAlert({ type: 'ready_check_delayed', bkgNo: bkg_no, message: `${label}: supplier says not ready — expected ${dateText}`, severity: 'info' });
 return { action_taken: 'replied' };
+}
+
+// ── Container number capture — no fixed format for these (confirmed by
+// Apsara), so the pending itself IS the validation: whatever they reply to
+// the "what's the container number?" question is stored verbatim. Notifies
+// the manager since this is the one thing actually needed mid-process from
+// a dual-role contact.
+async function recordContainerNumber(chatId, pending, containerNumber) {
+const { bkg_no } = pending;
+await clearPending(chatId);
+const clean = String(containerNumber || '').trim();
+if (!clean) { await _send(chatId, "Didn't catch that — what's the container number?"); await setPending(chatId, pending); return { action_taken: 'replied' }; }
+
+await updateWorkflow(bkg_no, { container_number: clean });
+await _send(chatId, `Got it, thanks.`);
+const notifyTo = cfg.getManagerNumber() ? cfg.getManagerNumber() + '@c.us' : null;
+if (notifyTo) await _send(notifyTo, `${bkg_no}: container number received — ${clean}.`);
+await _pushAlert({ type: 'container_number', bkgNo: bkg_no, message: `${bkg_no}: container number ${clean}`, severity: 'info' });
+return { action_taken: 'container_number_recorded' };
 }
 
 // ── Knowledge-gap log — manager asked something Jarvis genuinely couldn't
@@ -1043,41 +1060,10 @@ showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,
-smartAssign,
 emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived,
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap,
-checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
+checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber,
 };
-// ── Paste this block into workflow/actions.js — anywhere alongside the other
-// action handlers (e.g. right after checkSupplierReadiness/resolveReadyCheckDate).
-// Standalone: only depends on _send (already defined/injected at the top of
-// the file via init()) and helpers/pricelist.js. Doesn't touch or call
-// anything else in actions.js, so it's safe to append without needing the
-// rest of the file's content.
-
-// ── Price list — "send price list to X" from brain.js ───────────────────────
-async function sendPriceListTo(chatId, targetNameOrNumber) {
-    const pricelist = require('../helpers/pricelist');
-    const result = await pricelist.sendPriceListTo(targetNameOrNumber);
-    if (!result.ok && result.reason === 'not_found') {
-        await _send(chatId, `Couldn't find a saved contact or valid number for "${targetNameOrNumber}". Add them via /api/pricelist/contacts first, or give me a full WhatsApp number.`);
-        return { action_taken: 'not_found' };
-    }
-    await _send(chatId, result.ok ? `Price list sent to ${result.target}.` : `Send to ${result.target} failed — check WhatsApp connection.`);
-    return { action_taken: result.ok ? 'pricelist_sent' : 'send_failed' };
-}
-
-// ── Then find the module.exports block at the very bottom of the file.
-// I verified its exact tail via GitHub — it currently ends with:
-//
-//   checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
-//   };
-//
-// Change those two lines to:
-//
-//   checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate,
-//   sendPriceListTo,
-//   };

@@ -27,7 +27,7 @@ function isDuplicate(messageId) {
 }
 
 // ── Step 1: normalize + authorize ─────────────────────────────────────────────
-function normalize(raw) {
+async function normalize(raw) {
     const settings = loadSettings();
     const digits   = (v) => String(v || '').replace(/\D/g, '');
 
@@ -44,8 +44,8 @@ function normalize(raw) {
     const isTeam    = teamNums.includes(senderNum) ||
                       (!!settings.team_group_id && raw.chatId === settings.team_group_id);
 
-    const trucker  = !isManager && !isTeam ? matchTruckerByChat(raw.chatId, raw.senderNumber) : null;
-    const supplier = !isManager && !isTeam && !trucker ? matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
+    const trucker  = !isManager && !isTeam ? await matchTruckerByChat(raw.chatId, raw.senderNumber) : null;
+    const supplier = !isManager && !isTeam && !trucker ? await matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
 
     const role = isManager ? 'manager' : isTeam ? 'team' : trucker ? 'trucker' : supplier ? 'supplier' : 'unknown';
 
@@ -75,8 +75,62 @@ function resolveListSelection(text, options) {
     return options.find(o => o.toLowerCase() === t || o.toLowerCase().includes(t)) || null;
 }
 
+// ── Typo tolerance — deterministic, not LLM-dependent ────────────────────────
+// Relying on Gemini to "read through" typos proved unreliable in practice
+// (tested twice with explicit prompt instructions, still missed "bookking").
+// This fixes it in code instead: single-word edit-distance correction against
+// the small set of command keywords the grammar below actually looks for.
+// Only touches the LOCAL text used for policy matching — ctx.text/textLower
+// stay untouched, so the AI still sees the person's original wording verbatim
+// if it ever needs to fall back that far.
+const COMMAND_KEYWORDS = [
+    'booking', 'bookings', 'available', 'unassigned', 'assigned', 'supplier', 'suppliers',
+    'trucker', 'truckers', 'forward', 'assign', 'archive', 'recall', 'status', 'cutoff',
+    'menu', 'urgent', 'contacts', 'remember', 'context',
+];
+// Abbreviations aren't typos — "avl" isn't letter-close to "available", it's a
+// different word entirely that happens to mean the same thing. Edit-distance
+// can never catch these; they need a direct dictionary lookup instead, tried
+// FIRST (exact match on the whole token) before the fuzzy edit-distance pass.
+const ABBREVIATIONS = {
+    avl: 'available', avail: 'available',
+    bkg: 'booking', bkgs: 'bookings', bk: 'booking', bks: 'bookings',
+    sup: 'supplier', sups: 'suppliers', splr: 'supplier',
+    trk: 'trucker', trks: 'truckers', trkr: 'trucker',
+    unassgn: 'unassigned', unassn: 'unassigned',
+    asgn: 'assign', asn: 'assign',
+    fwd: 'forward',
+    mgr: 'manager',
+    cntx: 'context', ctx: 'context',
+};
+function levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+    return dp[m][n];
+}
+function fuzzyCorrectKeywords(text) {
+    return text.split(/(\s+)/).map(tok => {
+        if (!/^[a-z]+$/i.test(tok)) return tok; // skip whitespace, punctuation, booking numbers
+        const lower = tok.toLowerCase();
+        if (COMMAND_KEYWORDS.includes(lower)) return tok; // already correct
+        if (ABBREVIATIONS[lower]) return ABBREVIATIONS[lower]; // exact abbreviation match, no distance check needed
+        if (lower.length < 4) return tok; // too short for safe fuzzy matching (avoids "to"/"at" false positives)
+        let best = null, bestDist = Infinity;
+        for (const kw of COMMAND_KEYWORDS) {
+            const d = levenshtein(lower, kw);
+            if (d < bestDist) { bestDist = d; best = kw; }
+        }
+        const maxAllowed = lower.length >= 7 ? 2 : 1; // longer words tolerate more edits
+        return (best && bestDist <= maxAllowed) ? best : tok;
+    }).join('');
+}
+
 function policyDecide(ctx) {
-    const t = ctx.textLower;
+    const t = fuzzyCorrectKeywords(ctx.textLower);
 
     // ── A0. Ready-check pending — applies to whoever the question was sent to
     // (the supplier), not just manager/team. Runs before everything else so a
@@ -94,6 +148,15 @@ function policyDecide(ctx) {
         if (p.stage === 'date') {
             return { intent: 'ready_check_date', resolvedBy: 'policy', data: { date_text: ctx.text.trim() } };
         }
+    }
+
+    // ── A0b. Container-number pending — no fixed format exists for these
+    // (confirmed — not ISO-standard, don't pattern-match), so the ONLY
+    // reliable way to capture it is: whatever they reply to THIS specific
+    // question, verbatim, is the answer. Same priority as A0 so it can't be
+    // mis-routed to keyword grammar either.
+    if (ctx.pendingAction?.type === 'await_container_number') {
+        return { intent: 'container_number_received', resolvedBy: 'policy', data: { container_number: ctx.text.trim() } };
     }
 
     // ── A. Pending action always wins — never chat-history string matching ────
@@ -204,15 +267,6 @@ function policyDecide(ctx) {
         // "check supplier BKG123" — pings the supplier for pickup readiness
         if ((m = t.match(/^check\s+supplier\s+(\S+)$/)))
             return { intent: 'check_supplier', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
-
-        // "send price list to X" / "send prices to X" / "price list X" — X is
-        // either a saved pricelist contact name or a raw WhatsApp number.
-        // Resolution happens in actions.sendPriceListTo / helpers/pricelist.js,
-        // not here — policy only extracts the target string. Deliberately kept
-        // OUT of the Gemini/llm-intent path (see helpers/pricelist.js header).
-        if ((m = t.match(/^(?:send\s+)?price\s*list\s+(?:to\s+)?(.+)$/)) ||
-            (m = t.match(/^send\s+prices?\s+to\s+(.+)$/)))
-            return { intent: 'send_pricelist', resolvedBy: 'policy', data: { target_name: m[1].trim() } };
 
         // Bare booking number → status
         const bkg = resolveBookingNumber(ctx.text);
@@ -371,15 +425,24 @@ function policyDecide(ctx) {
     }
 
     // ── F. Bare location follow-up to a just-shown bookings listing ───────────
-    // "show available bookings" → "from oakland" / "Oakland" (no "show/list/how
-    // many" wrapper) should narrow the SAME query, not repeat it unfiltered.
-    // Guarded tightly: only fires for manager/team, only right after a bookings
-    // query, and only for short alphabetic text — avoids treating "thanks" or
-    // "ok" typed right after a listing as a location.
+    // "show available bookings" → "from oakland" / "for oakland" / "Oakland"
+    // (no "show/list/how many" wrapper) should narrow the SAME query, not
+    // repeat it unfiltered. Guarded tightly: only fires for manager/team, only
+    // right after a bookings query, and only for short alphabetic text with no
+    // question/reference words — a real follow-up QUESTION like "whats its
+    // erd" must never be swallowed as if it were a location name.
     if (ctx.isManagerOrTeam && ctx.session?.lastInstruction === 'bookings_query') {
-        const stripped = t.replace(/^(?:from|at|in)\s+/, '').trim();
-        const wordCount = stripped.split(/\s+/).filter(Boolean).length;
-        const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && /^[a-z\s.'-]+$/i.test(stripped)
+        const stripped = t.replace(/^(?:from|at|in|for)\s+/, '').trim();
+        const words = stripped.split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+        const QUESTION_WORDS = new Set([
+            'what', 'whats', "what's", 'why', 'when', 'where', 'who', 'whos', "who's", 'how',
+            'its', 'it', "it's", 'his', 'her', 'their', 'is', 'are', 'was', 'were',
+            'does', 'do', 'did', 'can', 'could', 'would', 'should', 'will',
+        ]);
+        const hasQuestionWord = words.some(w => QUESTION_WORDS.has(w));
+        const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && !hasQuestionWord
+            && /^[a-z\s.'-]+$/i.test(stripped)
             && !['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel'].includes(stripped);
         if (looksLikeLocation) {
             return {
@@ -393,14 +456,15 @@ function policyDecide(ctx) {
 }
 
 // ── Step 3: AI fallback ───────────────────────────────────────────────────────
-function buildPrompt(ctx) {
-    const a = formatForAI(ctx);
+async function buildPrompt(ctx) {
+    const a = await formatForAI(ctx);
     return `You are Jarvis — the freight operations AI for Edge Metals Inc.
 You are one step in a pipeline. The policy layer already handled deterministic cases.
 You are called because the message intent is ambiguous.
 
 STRICT RULES:
 - You reach this prompt ONLY when the deterministic command grammar found no exact match — that's expected for typos, informal phrasing, or wording it doesn't anticipate, NOT a sign the message is unintelligible. Read past spelling: "bookking" means "booking", "avilable" means "available", "shw me" means "show me". If the corrected reading maps clearly onto one of the AVAILABLE ACTIONS below, use that action confidently — do not fall back to NEED_DATA or a generic "couldn't understand" reply just because the exact letters didn't match a pattern. A real assistant reads intent through typos; only use NEED_DATA when the actual MEANING is genuinely ambiguous or missing information, never because of spelling.
+- SEMANTIC MEMORY entries are a similarity-based RECALL AID, not verified fact — they were embedded from past session summaries, which are themselves brief and can be stale, superseded, or only loosely related despite the similarity score. Use them to inform tone and continuity ("last time this came up, X was the concern") and to jog what to ask about, but NEVER state something from semantic memory as current fact — always verify against ALL ACTIVE BOOKINGS / FACTS / BUSINESS CONTEXT for anything that could have changed since. If semantic memory conflicts with current data, current data wins, always, and it's worth surfacing the conflict ("last time it was assigned to X, but it now shows unassigned — did that change?") rather than silently picking one.
 - For anything specific to Edge Metals' own data — booking status, dates, who's assigned, counts, contacts — use ONLY the context below. The ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE sections are your complete knowledge base for everything currently active — search across ALL of it, not just activeBooking, before saying you don't know. Never invent or guess a fact that isn't there.
 - Archived/completed bookings are NOT included in the context above (kept out to bound token cost). If a question is plausibly about an older/closed booking not in ALL ACTIVE BOOKINGS, say it may be archived and suggest checking the dashboard → History — do not guess, and do not claim it doesn't exist.
 - For general freight/logistics knowledge NOT specific to Edge Metals' data (e.g. "what does FCL mean", "what happens if we miss cutoff", "typical transit time LA to Busan", "what's a bill of lading") — answer from your own general knowledge via "reply", like a knowledgeable freight ops assistant would. Don't refuse or say NEED_DATA just because it's not in the context block; that restriction is only for YOUR business's specific data, not general domain expertise. If mixing the two, clearly ground the business-specific part in context and flag anything you're unsure of.
@@ -445,6 +509,9 @@ ${a.businessContext}
 
 ═══ RECENT SESSIONS WITH THIS CHAT (continuity across restarts/idle gaps) ═══
 ${a.recentSummaries}
+
+═══ SEMANTIC MEMORY (meaning-based match across ALL past conversations, any day, any chat — may be exactly relevant or may be a loose match; use judgment) ═══
+${a.semanticMemory}
 
 ═══ URGENT ═══
 ${a.urgentBookings}
@@ -497,7 +564,7 @@ const SAFE_ACTIONS = new Set([
 ]);
 
 async function aiDecide(ctx) {
-    const decision = await callGeminiJSON(buildPrompt(ctx));
+    const decision = await callGeminiJSON(await buildPrompt(ctx));
     if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable' };
     // Confidence gate protects actions that mutate data (forward, assign, archive, etc).
     // A conversational "reply" or a read-only lookup has no side effects — don't crush
@@ -544,7 +611,6 @@ async function route(decision, ctx, sendMessage) {
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
-        case 'send_pricelist':         return d.target_name ? actions.sendPriceListTo(chatId, d.target_name) : ask(chatId, 'Send the price list to whom? Give me a name or WhatsApp number.');
         case 'bookings_count_query': {
             updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
@@ -571,6 +637,7 @@ async function route(decision, ctx, sendMessage) {
         case 'ready_check_yes':        return actions.resolveReadyCheckYes(chatId, ctx.pendingAction);
         case 'ready_check_no':         return actions.resolveReadyCheckNo(chatId, ctx.pendingAction);
         case 'ready_check_date':       return actions.resolveReadyCheckDate(chatId, ctx.pendingAction, d.date_text);
+        case 'container_number_received': return actions.recordContainerNumber(chatId, ctx.pendingAction, d.container_number);
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
@@ -605,7 +672,7 @@ async function route(decision, ctx, sendMessage) {
 // ── Main entry ────────────────────────────────────────────────────────────────
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
-    const inbound = normalize(rawEvent);
+    const inbound = await normalize(rawEvent);
 
     if (!inbound.isAuthorized) {
         console.log(`[BRAIN] Unauthorized ${inbound.senderNumber} in ${inbound.chatId} — silent`);
@@ -619,7 +686,7 @@ async function process(rawEvent, sendMessage) {
     // the "check supplier" ready flow needs a pending question on the SUPPLIER's
     // own chat (awaiting yes/no, then possibly a date).
     const pending = actions.getPending(inbound.chatId);
-    const ctx     = buildContext(inbound, pending);
+    const ctx     = await buildContext(inbound, pending);
 
     let decision = policyDecide(ctx);
     if (decision.needsAI) {

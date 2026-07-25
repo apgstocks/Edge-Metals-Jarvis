@@ -31,11 +31,10 @@ const FILES = {
     SETTINGS_FILE    : path.join(DATA_DIR, 'settings.json'),
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
-    // ── Price list feature (added 2026-07-16) ──────────────────────────────
-    PRICELIST_CONTACTS_FILE: path.join(DATA_DIR, 'pricelist_contacts.json'),
-    PRICELIST_SNAPSHOT_FILE: path.join(DATA_DIR, 'pricelist_snapshot.json'),
+    TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
+    MEMORY_EMBEDDINGS_FILE: path.join(MEMORY_DIR, 'embeddings.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
@@ -44,6 +43,8 @@ const GEMINI_MODEL   = process.env.GEMINI_MODEL   || 'gemini-2.5-flash-lite';
 const API_PORT       = parseInt(process.env.API_PORT || '8080');
 const API_TOKEN      = process.env.API_TOKEN || '';        // simple bearer token for dashboard API
 const APP_PASSWORD   = process.env.APP_PASSWORD || '';     // password gate for the web app (browser sessions)
+const SUPABASE_URL   = process.env.SUPABASE_URL || '';     // semantic memory store — Project Settings > API
+const SUPABASE_KEY   = process.env.SUPABASE_KEY || '';     // service_role key (server-side only, never expose to browser)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';   // separate, stronger password — gates WhatsApp QR + Facts admin panel
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
@@ -51,15 +52,6 @@ const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_
 const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
-
-// Google Sheets (price list) — reuses GDRIVE_KEYFILE's service account, just a
-// different API/scope (see helpers/sheets.js). Sheet must be shared with that
-// SA's client_email as Viewer — same constraint as the Shared Drive above.
-const PRICE_SHEET_ID          = process.env.PRICE_SHEET_ID || '';
-// Shared secret for the Apps Script → /api/pricelist/webhook call. Required
-// because Apps Script's UrlFetchApp can't carry the dashboard's session
-// cookie or the API_TOKEN bearer header the same way.
-const PRICELIST_WEBHOOK_TOKEN = process.env.PRICELIST_WEBHOOK_TOKEN || '';
 
 // Default fallback groups (used only when a contact has no group and no number)
 const GROUP_TRUCKER  = process.env.GROUP_TRUCKER  || '';
@@ -107,18 +99,38 @@ const PENDING_EXPIRY_MS   = 2 * 60 * 60 * 1000; // pending actions auto-expire a
 
 // ── Dynamic settings ──────────────────────────────────────────────────────────
 function getSettings() {
-    try {
-        if (fs.existsSync(FILES.SETTINGS_FILE)) {
-            return JSON.parse(fs.readFileSync(FILES.SETTINGS_FILE, 'utf8'));
-        }
-    } catch {}
-    return {
+    const defaults = {
         manager_number : process.env.MANAGER_NUMBER || '',
         manager_name   : 'Manager',
         internal_team  : [],
         team_group_id  : process.env.TEAM_GROUP_ID || '',
         bot_mode       : 'handholding',
+        // Stall-detection thresholds (hours) — how long a booking can sit in a
+        // stage before Jarvis proactively checks in. Adjustable here without a
+        // code change. See scheduler.js's stallCheck job.
+        stall_thresholds_hours: {
+            awaiting_supplier    : 12,
+            awaiting_forward     : 6,
+            awaiting_empty_pickup: 24,
+            awaiting_load_ready  : 48,
+            awaiting_pickup      : 24,
+            awaiting_scale_ticket: 24,
+            awaiting_ingate      : 24,
+        },
+        // How long to wait after a check-in before escalating to the manager
+        // if the supplier/trucker hasn't replied.
+        stall_escalation_hours: 24,
     };
+    try {
+        if (fs.existsSync(FILES.SETTINGS_FILE)) {
+            const saved = JSON.parse(fs.readFileSync(FILES.SETTINGS_FILE, 'utf8'));
+            return {
+                ...defaults, ...saved,
+                stall_thresholds_hours: { ...defaults.stall_thresholds_hours, ...(saved.stall_thresholds_hours || {}) },
+            };
+        }
+    } catch {}
+    return defaults;
 }
 
 const getManagerNumber = () => (getSettings().manager_number || process.env.MANAGER_NUMBER || '').replace(/\D/g, '');
@@ -155,8 +167,8 @@ module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
+    SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
-    PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,
     GROUP_TRUCKER, GROUP_SUPPLIER,
     WORKFLOW_STAGES, STEP_LABELS, STAGE_INDEX, TERMINAL_STEPS,
     MAX_REMINDERS, URGENT_CUTOFF_DAYS, PENDING_EXPIRY_MS,
