@@ -20,7 +20,6 @@ const scheduler = require('./scheduler');
 const pricelist = require('./helpers/pricelist');
 const { createApi } = require('./api');
 const { loadJson, saveJson } = require('./helpers/json');
-const waSupervisor = require('./helpers/wa_supervisor'); // WA_SUPERVISOR_INTEGRATION_v1
 
 // ── Seed migration: root bookings.json → data/ on first boot only ─────────────
 (function seedData() {
@@ -97,6 +96,7 @@ async function sendToTeam(text) {
 alerts.init({ sendToManager });
 actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAlert });
 pricelist.init({ sendMessage, getBrowser: () => client.pupBrowser });
+require('./helpers/notify').init({ pushAlert: alerts.pushAlert });
 
 // Bridge for the /api/bot/command endpoint — brain.process() takes a sendMessage
 // argument, and api.js needs to pass the SAME sendMessage that has the capture
@@ -119,24 +119,14 @@ client.on('qr', (qr) => {
     waState.setStatus('qr', { qr });
 });
 
-client.on('ready', async () => {
+client.on('ready', () => {
     waReady = true;
     console.log('[WA] Client ready');
     waState.setStatus('ready');
     scheduler.start();
-    // WA_SUPERVISOR_HOOK_v1: if we're recovering from a crash-loop, notify.
-    try {
-        const { wasLooping } = await waSupervisor.recordReady();
-        if (wasLooping) {
-            await alerts.sendEmailAlert(
-                '[Jarvis] WhatsApp recovered',
-                `Jarvis WA client is back up after a crash-loop.\nRecovered at: ${new Date().toISOString()}\nHost: ${process.env.HOSTNAME || 'unknown'}`
-            );
-        }
-    } catch (e) { console.error('[WA] recordReady/alert error:', e.message); }
 });
 
-client.on('disconnected', async (reason) => {
+client.on('disconnected', (reason) => {
     if (shuttingDown) {
         // This disconnect is a side effect of OUR OWN client.destroy() call
         // during a deliberate shutdown (Ctrl+C, SIGTERM) — not a real external
@@ -151,26 +141,12 @@ client.on('disconnected', async (reason) => {
     waState.setStatus('disconnected', { error: String(reason) });
     console.error('[WA] Disconnected:', reason);
 
-    // WA_SUPERVISOR_HOOK_v1: crash-loop detection + email BEFORE exit.
-    // Persisted state survives the restart; if we hit the threshold inside
-    // the window, one email fires (cooldown-throttled) so the operator
-    // learns about the loop instead of watching pm2 respawn silently.
-    try {
-        const { looping, count } = await waSupervisor.recordDisconnect(reason);
-        if (looping && waSupervisor.shouldSendAlert()) {
-            await alerts.sendEmailAlert(
-                '[Jarvis] WhatsApp crash-loop detected',
-                [
-                    `Jarvis WA client has disconnected ${count} times in the last ${Math.round(waSupervisor.LOOP_WINDOW_MS / 60000)} minutes.`,
-                    `Latest reason: ${reason}`,
-                    `Host: ${process.env.HOSTNAME || 'unknown'}`,
-                    '',
-                    'Action: SSH in, run `pm2 logs jarvis`, possibly rescan QR at /dashboard.',
-                ].join('\n')
-            );
-            await waSupervisor.markAlertSent();
-        }
-    } catch (e) { console.error('[WA] supervisor hook error:', e.message); }
+    // A single disconnect is usually transient (network blip) and self-heals
+    // via the exit-for-respawn below. But 3+ disconnects within 10 minutes
+    // means something deeper is wrong — worth telling a human even though
+    // each individual one auto-recovers, since silent repeated restarts can
+    // mask a worsening problem until it becomes a real outage.
+    recordFailureAndMaybeAlert('disconnect', String(reason));
 
     // Re-initializing the SAME Client instance after a disconnect hangs forever —
     // puppeteer's browser session is already torn down (same root cause as the
@@ -183,21 +159,46 @@ client.on('disconnected', async (reason) => {
     process.exit(1);
 });
 
-client.on('auth_failure', async (msg) => {
+client.on('auth_failure', (msg) => {
     waReady = false;
     waState.setStatus('auth_failure', { error: String(msg) });
     console.error('[WA] Auth failure:', msg);
-    // WA_SUPERVISOR_HOOK_v1: session invalidated → operator must rescan QR.
-    try {
-        if (waSupervisor.shouldSendAlert()) {
-            await alerts.sendEmailAlert(
-                '[Jarvis] WhatsApp auth failure — QR rescan required',
-                `Jarvis WA auth failed: ${msg}\nHost: ${process.env.HOSTNAME || 'unknown'}\nAction: open /dashboard and rescan the QR.`
-            );
-            await waSupervisor.markAlertSent();
-        }
-    } catch (e) { console.error('[WA] auth_failure alert error:', e.message); }
+
+    // Unlike a disconnect, an auth_failure means WhatsApp explicitly rejected
+    // the session — no amount of restarting fixes this on its own, a human
+    // MUST rescan the QR. This is always worth an immediate alert (not
+    // threshold-based like disconnects), since it's never self-healing.
+    // Fire-and-forget: don't block the exit below on network alert calls.
+    require('./helpers/notify').criticalAlert(
+        'WhatsApp logged out',
+        `Jarvis's WhatsApp session was rejected and needs a fresh QR scan. Reason: ${msg}`
+    ).catch(e => console.error('[NOTIFY] auth_failure alert error:', e.message));
+
+    // Same exit-for-respawn as disconnected — without this, the OLD dead
+    // client just sits here forever with no way to get a fresh QR without a
+    // manual restart. pm2 respawns with a NEW client, which (since the old
+    // session is genuinely invalid) will correctly show a fresh QR to scan.
+    console.error('[WA] Exiting for respawn after auth failure — will need a QR rescan');
+    setTimeout(() => process.exit(1), 500); // brief delay so the alert call above has a chance to fire
 });
+
+// ── Repeated-failure tracking, shared by disconnect and (future) other
+// failure types. Simple in-memory sliding window — doesn't need to survive
+// restarts since it's specifically about frequency WITHIN a single runtime.
+const _failureLog = {};
+function recordFailureAndMaybeAlert(kind, detail) {
+    const WINDOW_MS = 10 * 60 * 1000, THRESHOLD = 3;
+    const now = Date.now();
+    const log = (_failureLog[kind] = (_failureLog[kind] || []).filter(t => now - t < WINDOW_MS));
+    log.push(now);
+    if (log.length >= THRESHOLD) {
+        require('./helpers/notify').criticalAlert(
+            `WhatsApp repeatedly ${kind === 'disconnect' ? 'disconnecting' : kind}`,
+            `${log.length} ${kind} events in the last ${Math.round(WINDOW_MS / 60000)} minutes. Latest: ${detail}. Each is auto-recovering individually, but this frequency suggests a deeper problem worth checking.`
+        ).catch(e => console.error('[NOTIFY] repeated-failure alert error:', e.message));
+        _failureLog[kind] = []; // reset so we don't alert on every single one past the threshold
+    }
+}
 
 // Called by POST /api/whatsapp/find-groups — case-insensitive substring match on group names.
 // Only returns groups Jarvis is a member of — you cannot validate a group
