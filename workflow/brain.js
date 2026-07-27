@@ -16,35 +16,6 @@ const { matchSupplierByChat }                      = require('./suppliers');
 const actions = require('./actions');
 const cfg     = require('../config');
 
-// ── Confirming-language guard (2026-07-20) ───────────────────────────────────
-// A trucker/supplier message merely CONTAINING a stage keyword ("scale
-// ticket", "picked up") is NOT automatically a report that it happened —
-// "did you get the scale ticket yet?" contains "scale ticket" but is a
-// question. Reject questions, negations, and requests before treating a bare
-// keyword hit as a real state change. This same gap, on the AI-fallback side,
-// let a MANAGER's "ask trucker for scale ticket" fire scale_ticket_received
-// at confidence 1 — see SELF_REPORT_ACTIONS below for that half of the fix.
-function isConfirmingStatement(text) {
-    const s = String(text || '').toLowerCase().trim();
-    if (!s) return false;
-    if (s.includes('?')) return false;
-    if (/^(do|does|did|can|could|should|would|will|is|are|was|were|when|why|how|what|who)\b/.test(s)) return false;
-    if (/\b(please|need|require|remind|ask|let\s+me\s+know|waiting\s+on|still\s+waiting|any\s+update|status\s+on)\b/.test(s)) return false;
-    if (/\b(not\s+yet|haven'?t|hasn'?t|don'?t\s+have|didn'?t|no\s+scale|without\s+the|missing\s+the)\b/.test(s)) return false;
-    return true;
-}
-
-// Trucker/supplier self-report actions — these represent the SENDER reporting
-// their OWN completed work. Must never fire for a mismatched sender role,
-// regardless of AI confidence — enforced unconditionally in route() below.
-const SELF_REPORT_ACTIONS = {
-    empty_drop_confirmed : 'trucker',
-    picked_up_confirmed  : 'trucker',
-    scale_ticket_received: 'trucker',
-    ingate_received      : 'trucker',
-    load_ready_received  : 'supplier',
-};
-
 // ── Dedupe — in-memory ring (single process, restart-safe enough) ─────────────
 const seen = new Set();
 function isDuplicate(messageId) {
@@ -56,7 +27,7 @@ function isDuplicate(messageId) {
 }
 
 // ── Step 1: normalize + authorize ─────────────────────────────────────────────
-function normalize(raw) {
+async function normalize(raw) {
     const settings = loadSettings();
     const digits   = (v) => String(v || '').replace(/\D/g, '');
 
@@ -73,8 +44,8 @@ function normalize(raw) {
     const isTeam    = teamNums.includes(senderNum) ||
                       (!!settings.team_group_id && raw.chatId === settings.team_group_id);
 
-    const trucker  = !isManager && !isTeam ? matchTruckerByChat(raw.chatId, raw.senderNumber) : null;
-    const supplier = !isManager && !isTeam && !trucker ? matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
+    const trucker  = !isManager && !isTeam ? await matchTruckerByChat(raw.chatId, raw.senderNumber) : null;
+    const supplier = !isManager && !isTeam && !trucker ? await matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
 
     const role = isManager ? 'manager' : isTeam ? 'team' : trucker ? 'trucker' : supplier ? 'supplier' : 'unknown';
 
@@ -104,8 +75,62 @@ function resolveListSelection(text, options) {
     return options.find(o => o.toLowerCase() === t || o.toLowerCase().includes(t)) || null;
 }
 
+// ── Typo tolerance — deterministic, not LLM-dependent ────────────────────────
+// Relying on Gemini to "read through" typos proved unreliable in practice
+// (tested twice with explicit prompt instructions, still missed "bookking").
+// This fixes it in code instead: single-word edit-distance correction against
+// the small set of command keywords the grammar below actually looks for.
+// Only touches the LOCAL text used for policy matching — ctx.text/textLower
+// stay untouched, so the AI still sees the person's original wording verbatim
+// if it ever needs to fall back that far.
+const COMMAND_KEYWORDS = [
+    'booking', 'bookings', 'available', 'unassigned', 'assigned', 'supplier', 'suppliers',
+    'trucker', 'truckers', 'forward', 'assign', 'archive', 'recall', 'status', 'cutoff',
+    'menu', 'urgent', 'contacts', 'remember', 'context',
+];
+// Abbreviations aren't typos — "avl" isn't letter-close to "available", it's a
+// different word entirely that happens to mean the same thing. Edit-distance
+// can never catch these; they need a direct dictionary lookup instead, tried
+// FIRST (exact match on the whole token) before the fuzzy edit-distance pass.
+const ABBREVIATIONS = {
+    avl: 'available', avail: 'available',
+    bkg: 'booking', bkgs: 'bookings', bk: 'booking', bks: 'bookings',
+    sup: 'supplier', sups: 'suppliers', splr: 'supplier',
+    trk: 'trucker', trks: 'truckers', trkr: 'trucker',
+    unassgn: 'unassigned', unassn: 'unassigned',
+    asgn: 'assign', asn: 'assign',
+    fwd: 'forward',
+    mgr: 'manager',
+    cntx: 'context', ctx: 'context',
+};
+function levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+    return dp[m][n];
+}
+function fuzzyCorrectKeywords(text) {
+    return text.split(/(\s+)/).map(tok => {
+        if (!/^[a-z]+$/i.test(tok)) return tok; // skip whitespace, punctuation, booking numbers
+        const lower = tok.toLowerCase();
+        if (COMMAND_KEYWORDS.includes(lower)) return tok; // already correct
+        if (ABBREVIATIONS[lower]) return ABBREVIATIONS[lower]; // exact abbreviation match, no distance check needed
+        if (lower.length < 4) return tok; // too short for safe fuzzy matching (avoids "to"/"at" false positives)
+        let best = null, bestDist = Infinity;
+        for (const kw of COMMAND_KEYWORDS) {
+            const d = levenshtein(lower, kw);
+            if (d < bestDist) { bestDist = d; best = kw; }
+        }
+        const maxAllowed = lower.length >= 7 ? 2 : 1; // longer words tolerate more edits
+        return (best && bestDist <= maxAllowed) ? best : tok;
+    }).join('');
+}
+
 function policyDecide(ctx) {
-    const t = ctx.textLower;
+    const t = fuzzyCorrectKeywords(ctx.textLower);
 
     // ── A0. Ready-check pending — applies to whoever the question was sent to
     // (the supplier), not just manager/team. Runs before everything else so a
@@ -123,6 +148,23 @@ function policyDecide(ctx) {
         if (p.stage === 'date') {
             return { intent: 'ready_check_date', resolvedBy: 'policy', data: { date_text: ctx.text.trim() } };
         }
+    }
+
+    // ── A0b. Container-number pending — no fixed format exists for these
+    // (confirmed — not ISO-standard, don't pattern-match), so the ONLY
+    // reliable way to capture it is: whatever they reply to THIS specific
+    // question, verbatim, is the answer. Same priority as A0 so it can't be
+    // mis-routed to keyword grammar either.
+    if (ctx.pendingAction?.type === 'await_container_number') {
+        return { intent: 'container_number_received', resolvedBy: 'policy', data: { container_number: ctx.text.trim() } };
+    }
+
+    // ── A0c. Relay-question reply — whatever the target says in response to
+    // "ask_contact" is captured verbatim and relayed back to whoever asked.
+    // Same reasoning as the container-number capture: no fixed format to
+    // match against, the pending itself is the validation.
+    if (ctx.pendingAction?.type === 'await_relay_reply') {
+        return { intent: 'relay_reply_received', resolvedBy: 'policy', data: { reply_text: ctx.text.trim() } };
     }
 
     // ── A. Pending action always wins — never chat-history string matching ────
@@ -145,18 +187,6 @@ function policyDecide(ctx) {
             const cityMatch = resolveListSelection(ctx.text, ['Los Angeles', 'Houston', 'San Antonio']);
             if (cityMatch) return { intent: 'send_pricelist_city', resolvedBy: 'policy', data: { city: cityMatch, target_name: p.target_name || null } };
             return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply 1 for Los Angeles, 2 for Houston, or 3 for San Antonio.' } };
-        }
-        // "How long before I follow up?" reply is free text (a bare number,
-        // "15 min", "2 hours", or something unparseable) — not yes/no, no
-        // options list — so without this branch it fell through to command
-        // grammar / a brand-new AI classification, which silently re-asked
-        // the identical question with zero acknowledgement the reply wasn't
-        // understood (looked like a loop). actions.resolvePending's
-        // 'await_followup_minutes' case already has the correct
-        // parse-or-reprompt-with-explanation logic — it just was never being
-        // reached. Found 2026-07-21 from a live transcript.
-        if (p.type === 'await_followup_minutes') {
-            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: ctx.text } };
         }
         // fall through — the manager may be asking something else mid-pending
     }
@@ -212,60 +242,14 @@ function policyDecide(ctx) {
         if ((m = t.match(/^status\s+(\S+)$/)))
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
 
-        // "follow up with X" / "please follow up with X in N minutes/hours" —
-        // optionally "re/regarding/about/on BKG123". Rewritten (2026-07-20):
-        // the old single regex required the trailing re/regarding/about/on
-        // clause to be exactly one alphanumeric token right at end-of-string.
-        // A natural phrase like "on the scale ticket" doesn't fit that shape,
-        // so the non-greedy name capture backtracked and swallowed the whole
-        // thing — "follow up with trucker on the scale ticket." parsed as a
-        // literal contact named "trucker on the scale ticket.". Now parsed in
-        // steps: strip a trailing time clause, then split at the FIRST
-        // re/regarding/about/on boundary regardless of what follows, and only
-        // treat that trailing text as a booking number if it actually resolves
-        // as one — a plain topic phrase is dropped, not misused as a name or a
-        // fabricated bkg_no.
-        if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+)$/))) {
-            let rest = m[1].trim();
-            let minutes = null;
-
-            // Time and topic clauses can appear in EITHER order ("re DALA123 in
-            // 20 minutes" or "in 20 minutes re DALA123") — the original regex
-            // only supported one fixed order, so this splices each clause out
-            // by finding it anywhere in the string, not just anchored at the
-            // very end, and works regardless of which comes first.
-            const timeMatch = rest.match(/\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours)\b/i);
-            if (timeMatch) {
-                const rawMins = parseInt(timeMatch[1], 10);
-                minutes = timeMatch[2].toLowerCase().startsWith('h') ? rawMins * 60 : rawMins;
-                rest = (rest.slice(0, timeMatch.index) + rest.slice(timeMatch.index + timeMatch[0].length)).trim();
-            }
-
-            let bkgFromText = null;
-            const topicMatch = rest.match(/\s+(?:re|regarding|about|on)\s+(.+)$/i);
-            if (topicMatch) {
-                const candidate = resolveBookingNumber(topicMatch[1].replace(/[.?!]+$/, ''));
-                rest = rest.slice(0, topicMatch.index).trim(); // name ends at the boundary word, real booking or not
-                if (candidate) bkgFromText = candidate;
-            }
-
-            let targetName = rest.replace(/[.?!]+$/, '').trim();
-            const bkg_no = bkgFromText || ctx.activeBooking || null;
-
-            // Generic role reference ("the trucker", "supplier") instead of a
-            // registered contact name — resolve to whoever's actually assigned
-            // to the booking, same inference relay_request already does,
-            // rather than failing with "no contact named 'trucker'".
-            const wf = bkg_no ? (ctx.allWorkflow?.[bkg_no] || (bkg_no === ctx.activeBooking ? ctx.workflow : null)) : null;
-            const bookingForRole = bkg_no ? (ctx.allBookings?.[bkg_no] || (bkg_no === ctx.activeBooking ? ctx.booking : null)) : null;
-            const roleWord = targetName.toLowerCase().replace(/^the\s+/, '');
-            if (['trucker', 'driver'].includes(roleWord) && wf?.trucker_name) targetName = wf.trucker_name;
-            else if (roleWord === 'supplier' && (bookingForRole?.supplier || wf?.supplier)) targetName = bookingForRole?.supplier || wf.supplier;
-
-            if (!targetName) return { intent: null, resolvedBy: null, needsAI: true }; // malformed — let AI take a pass rather than guess
+        // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
+        if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {
+            const rawMins = m[2] ? parseInt(m[2], 10) : null;
+            const unit    = m[3] || '';
+            const minutes = rawMins != null ? (unit.startsWith('h') ? rawMins * 60 : rawMins) : null;
             return {
                 intent: 'schedule_followup', resolvedBy: 'policy',
-                data: { target_name: targetName, minutes, bkg_no },
+                data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
             };
         }
 
@@ -290,6 +274,7 @@ function policyDecide(ctx) {
         // ctx.text (not lowercased t) preserves the original casing of the fact itself.
         if ((m = ctx.text.trim().match(/^(?:please\s+)?(?:remember|note)(?:\s+that)?:?\s+(.+)$/i)))
             return { intent: 'remember_fact', resolvedBy: 'policy', data: { fact: m[1].trim() } };
+
 
         // "business context: X" / "context note: X" — durable situational notes,
         // deliberately a different trigger phrase from remember/note (facts).
@@ -338,13 +323,10 @@ function policyDecide(ctx) {
                 // Pick the most-common current stage among their assignments; brain uses that to route.
                 return { kind: 'media', requiredStage: null };
             }
-            // Each also requires isConfirmingStatement(t) — a bare keyword hit is
-            // no longer enough; the message must actually read as a report, not a
-            // question/negation/request (2026-07-20 fix, see helper above).
-            if (/(empty|dropped)/.test(t) && isConfirmingStatement(t))        return { kind: 'empty_drop',   requiredStage: 'forwarded' };
-            if (/(picked\s*up|loaded)/.test(t) && isConfirmingStatement(t))   return { kind: 'picked_up',    requiredStage: 'load_ready' };
-            if (/(scale|ticket)/.test(t) && isConfirmingStatement(t))         return { kind: 'scale_ticket', requiredStage: 'picked_up' };
-            if (/(ingate|in-gate|gated)/.test(t) && isConfirmingStatement(t)) return { kind: 'ingate',       requiredStage: 'picked_up' };
+            if (/(empty|dropped)/.test(t))               return { kind: 'empty_drop',   requiredStage: 'forwarded' };
+            if (/(picked\s*up|loaded)/.test(t))          return { kind: 'picked_up',    requiredStage: 'load_ready' };
+            if (/(scale|ticket)/.test(t))                return { kind: 'scale_ticket', requiredStage: 'picked_up' };
+            if (/(ingate|in-gate|gated)/.test(t))        return { kind: 'ingate',       requiredStage: 'picked_up' };
             return null;
         };
 
@@ -428,8 +410,7 @@ function policyDecide(ctx) {
         const supplierName = ctx.matchedSupplier?.name;
 
         // Supplier fires "load ready" — must be on a container currently at supplier_assigned or empty_dropped.
-        // Same confirming-language guard as the trucker classifier above.
-        if (/(load\s*ready|loaded|ready)/.test(t) && isConfirmingStatement(t)) {
+        if (/(load\s*ready|loaded|ready)/.test(t)) {
             const active = supplierName
                 ? containers.findActiveAssignments(bookings, 'supplier', supplierName, ['supplier_assigned','empty_dropped'])
                 : [];
@@ -472,15 +453,24 @@ function policyDecide(ctx) {
     }
 
     // ── F. Bare location follow-up to a just-shown bookings listing ───────────
-    // "show available bookings" → "from oakland" / "Oakland" (no "show/list/how
-    // many" wrapper) should narrow the SAME query, not repeat it unfiltered.
-    // Guarded tightly: only fires for manager/team, only right after a bookings
-    // query, and only for short alphabetic text — avoids treating "thanks" or
-    // "ok" typed right after a listing as a location.
+    // "show available bookings" → "from oakland" / "for oakland" / "Oakland"
+    // (no "show/list/how many" wrapper) should narrow the SAME query, not
+    // repeat it unfiltered. Guarded tightly: only fires for manager/team, only
+    // right after a bookings query, and only for short alphabetic text with no
+    // question/reference words — a real follow-up QUESTION like "whats its
+    // erd" must never be swallowed as if it were a location name.
     if (ctx.isManagerOrTeam && ctx.session?.lastInstruction === 'bookings_query') {
-        const stripped = t.replace(/^(?:from|at|in)\s+/, '').trim();
-        const wordCount = stripped.split(/\s+/).filter(Boolean).length;
-        const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && /^[a-z\s.'-]+$/i.test(stripped)
+        const stripped = t.replace(/^(?:from|at|in|for)\s+/, '').trim();
+        const words = stripped.split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+        const QUESTION_WORDS = new Set([
+            'what', 'whats', "what's", 'why', 'when', 'where', 'who', 'whos', "who's", 'how',
+            'its', 'it', "it's", 'his', 'her', 'their', 'is', 'are', 'was', 'were',
+            'does', 'do', 'did', 'can', 'could', 'would', 'should', 'will',
+        ]);
+        const hasQuestionWord = words.some(w => QUESTION_WORDS.has(w));
+        const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && !hasQuestionWord
+            && /^[a-z\s.'-]+$/i.test(stripped)
             && !['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel'].includes(stripped);
         if (looksLikeLocation) {
             return {
@@ -494,14 +484,15 @@ function policyDecide(ctx) {
 }
 
 // ── Step 3: AI fallback ───────────────────────────────────────────────────────
-function buildPrompt(ctx) {
-    const a = formatForAI(ctx);
+async function buildPrompt(ctx) {
+    const a = await formatForAI(ctx);
     return `You are Jarvis — the freight operations AI for Edge Metals Inc.
 You are one step in a pipeline. The policy layer already handled deterministic cases.
 You are called because the message intent is ambiguous.
 
 STRICT RULES:
 - You reach this prompt ONLY when the deterministic command grammar found no exact match — that's expected for typos, informal phrasing, or wording it doesn't anticipate, NOT a sign the message is unintelligible. Read past spelling: "bookking" means "booking", "avilable" means "available", "shw me" means "show me". If the corrected reading maps clearly onto one of the AVAILABLE ACTIONS below, use that action confidently — do not fall back to NEED_DATA or a generic "couldn't understand" reply just because the exact letters didn't match a pattern. A real assistant reads intent through typos; only use NEED_DATA when the actual MEANING is genuinely ambiguous or missing information, never because of spelling.
+- SEMANTIC MEMORY entries are a similarity-based RECALL AID, not verified fact — they were embedded from past session summaries, which are themselves brief and can be stale, superseded, or only loosely related despite the similarity score. Use them to inform tone and continuity ("last time this came up, X was the concern") and to jog what to ask about, but NEVER state something from semantic memory as current fact — always verify against ALL ACTIVE BOOKINGS / FACTS / BUSINESS CONTEXT for anything that could have changed since. If semantic memory conflicts with current data, current data wins, always, and it's worth surfacing the conflict ("last time it was assigned to X, but it now shows unassigned — did that change?") rather than silently picking one.
 - For anything specific to Edge Metals' own data — booking status, dates, who's assigned, counts, contacts — use ONLY the context below. The ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE sections are your complete knowledge base for everything currently active — search across ALL of it, not just activeBooking, before saying you don't know. Never invent or guess a fact that isn't there.
 - Archived/completed bookings are NOT included in the context above (kept out to bound token cost). If a question is plausibly about an older/closed booking not in ALL ACTIVE BOOKINGS, say it may be archived and suggest checking the dashboard → History — do not guess, and do not claim it doesn't exist.
 - For general freight/logistics knowledge NOT specific to Edge Metals' data (e.g. "what does FCL mean", "what happens if we miss cutoff", "typical transit time LA to Busan", "what's a bill of lading") — answer from your own general knowledge via "reply", like a knowledgeable freight ops assistant would. Don't refuse or say NEED_DATA just because it's not in the context block; that restriction is only for YOUR business's specific data, not general domain expertise. If mixing the two, clearly ground the business-specific part in context and flag anything you're unsure of.
@@ -510,7 +501,7 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE. Your two ways to reach a trucker/supplier are "relay_request" (send something to them RIGHT NOW) and "schedule_followup" (a WhatsApp nudge sent LATER). You cannot set reminders for the manager, send emails, make phone calls, or do anything else deferred. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. The ONLY other future/deferred capability you have is "schedule_followup" (a WhatsApp nudge sent later to a trucker or supplier). You cannot set reminders for the manager, send emails, make phone calls, or do anything else deferred. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
 - When activeBooking is set AND the message clearly refers to an action verb ("forward", "assign", "recall", "archive", "status") WITHOUT naming a booking number, use activeBooking as bkg_no. Do NOT return NEED_DATA in this case.
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
@@ -519,9 +510,6 @@ STRICT RULES:
 - Two DIFFERENT questions that sound similar — never blur them: (1) "who is THE supplier/trucker FOR BOOKING X" or "for the Oakland booking" means the contact actually ASSIGNED to that specific booking — check the booking's own supplier/trucker field in ALL ACTIVE BOOKINGS, and if it's empty, say clearly it isn't assigned yet. (2) "who is A supplier/trucker IN/AT/FOR [a city]" or "show me Oakland suppliers" means the roster — check TRUCKERS ON FILE / SUPPLIERS ON FILE for contacts whose locality matches, which has NOTHING to do with any specific booking's assignment. When answering (2), never phrase it as "X is THE supplier for [booking/city]" — that reads as an assignment claim. Say "X is a registered supplier based in [city]" instead, and if relevant, separately note whether any booking there is still unassigned.
 - If the manager is CORRECTING something you (or an earlier assistant turn in LAST 5 MESSAGES) got wrong, or giving a standing instruction/preference for the future (e.g. "no, always CC me on archives", "actually DALA numbers can have a dash", "from now on default follow-ups to 15 minutes"), use action "remember_fact" with a short, self-contained fact string in the "fact" field — written so it makes sense on its own later, without today's conversation. Still also use "reply" wording is not needed for this action; a brief confirmation is generated automatically. Do not use "remember_fact" for one-off operational commands (those already have real actions) — only for corrections or durable preferences that should change future behavior.
 - If the manager is sharing ongoing situational background that ISN'T a correction — e.g. "we're onboarding a new supplier in Houston this month", "trucker capacity is tight through the holidays" — use action "add_business_context" with the note in the "note" field, not "remember_fact". Distinction: remember_fact changes how you should BEHAVE (a rule/correction); add_business_context is just something true right now worth knowing about (a situation).
-- CRITICAL — never confuse a REQUEST with a REPORT: empty_drop_confirmed, picked_up_confirmed, scale_ticket_received, ingate_received, and load_ready_received all mean "the trucker/supplier is reporting THEIR OWN completed work." They are NEVER valid when Role is "manager" or "team" — a manager mentioning "scale ticket" or asking about it is not the trucker confirming it. This is enforced in code regardless of what you return, but do not select these actions for a manager/team message under any circumstance or confidence level. If the manager wants the trucker/supplier asked, reminded, or told something RIGHT NOW, use "relay_request" instead. Before selecting one of these five actions even for a trucker/supplier sender, confirm the wording actually STATES something happened (not a question, negation, or future/pending statement) and that nothing in LAST 5 MESSAGES already establishes it happened — a false positive here silently corrupts real booking data and cancels the follow-up reminder meant to catch it, which is worse than asking again.
-- "relay_request": use when the manager/team wants a message sent to the trucker or supplier RIGHT NOW — e.g. "ask trucker for the scale ticket", "tell the supplier we need pickup by Friday", "remind Dave to send photos". Required: target_kind ("trucker" or "supplier") and message (the actual text to send — write it naturally and politely, as Jarvis would say it, not a copy of the manager's raw wording). bkg_no should be activeBooking if the ask is clearly about that booking. If there's no clear booking or no way to tell trucker from supplier, use NEED_DATA and ask which.
-- bkg_no: if activeBooking is set and the message doesn't explicitly name a DIFFERENT booking number, just omit bkg_no or repeat activeBooking — never substitute a different real booking number pulled from elsewhere in this context (e.g. the URGENT list) just because it seems relevant or timely. The active booking always wins unless the message itself names another one.
 
 ═══ RUNTIME CONTEXT ═══
 Time (LA): ${a.now_la}
@@ -550,6 +538,9 @@ ${a.businessContext}
 ═══ RECENT SESSIONS WITH THIS CHAT (continuity across restarts/idle gaps) ═══
 ${a.recentSummaries}
 
+═══ SEMANTIC MEMORY (meaning-based match across ALL past conversations, any day, any chat — may be exactly relevant or may be a loose match; use judgment) ═══
+${a.semanticMemory}
+
 ═══ URGENT ═══
 ${a.urgentBookings}
 
@@ -573,8 +564,8 @@ forward_booking, assign_supplier, recall_booking, archive_booking,
 show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
-scale_ticket_received, ingate_received, relay_request, schedule_followup, remember_fact, add_business_context,
-reply, silent, NEED_DATA, NEED_APPROVAL
+scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
+ask_contact, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -584,8 +575,6 @@ Return ONLY this JSON:
   "supplier_name": null,
   "trucker_name": null,
   "target_name": null,
-  "target_kind": null,
-  "message": null,
   "minutes": null,
   "fact": null,
   "note": null,
@@ -600,79 +589,29 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
+    'ask_contact',
 ]);
 
-// ── 3-tier confidence gate (2026-07-20) ──────────────────────────────────────
-// Replaces the old single 0.6 threshold, which only protected against LOW
-// confidence — useless against the actual incident that prompted this
-// (Gemini returned scale_ticket_received at confidence 1, maximally certain
-// and completely wrong). Reuses cfg.LLM_CONFIDENCE_HIGH/LOW, which already
-// existed for exactly this purpose in the dormant helpers/llm-intent.js path
-// but were never wired into the live one. High confidence still fires
-// immediately for mutating actions — this doesn't add friction to the normal
-// case, it adds a checkpoint for the ambiguous middle instead of silently
-// executing it.
-function gateConfidence(action, confidence) {
-    if (SAFE_ACTIONS.has(action)) return 'fire';
-    const c = confidence ?? 0;
-    if (c >= (cfg.LLM_CONFIDENCE_HIGH ?? 0.85)) return 'fire';
-    if (c >= (cfg.LLM_CONFIDENCE_LOW  ?? 0.5))  return 'confirm';
-    return 'fallthrough';
-}
-
 async function aiDecide(ctx) {
-    const decision = await callGeminiJSON(buildPrompt(ctx));
-    if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable', gate: 'fire' };
-
-    // Hard role gate — never trust the AI on this one, independent of confidence.
-    // See SELF_REPORT_ACTIONS: these five actions represent the trucker/supplier
-    // reporting their OWN status and are never valid from any other role.
-    const requiredRole = SELF_REPORT_ACTIONS[decision.action];
-    if (requiredRole && ctx.role !== requiredRole) {
-        console.warn(`[AI] Blocked "${decision.action}" — sender role is "${ctx.role}", requires "${requiredRole}". Message: "${ctx.text}"`);
-        return { ...decision, action: 'NEED_DATA', gate: 'fire',
-                 reasoning: `Blocked: ${decision.action} requires role "${requiredRole}", sender was "${ctx.role}". Original reasoning: ${decision.reasoning}` };
+    const decision = await callGeminiJSON(await buildPrompt(ctx));
+    if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable' };
+    // Confidence gate protects actions that mutate data (forward, assign, archive, etc).
+    // A conversational "reply" or a read-only lookup has no side effects — don't crush
+    // a genuinely useful answer into a canned "I couldn't pin that down" just because
+    // Gemini's confidence score for free-text Q&A tends to run lower than for clean commands.
+    if (!SAFE_ACTIONS.has(decision.action) && (decision.confidence ?? 0) < 0.6) {
+        console.warn(`[AI] Low confidence ${decision.confidence} on mutating action "${decision.action}" → NEED_DATA`);
+        return { ...decision, action: 'NEED_DATA' };
     }
-
-    const verdict = gateConfidence(decision.action, decision.confidence);
-    if (verdict === 'fallthrough') {
-        console.warn(`[AI] Low confidence ${decision.confidence} on "${decision.action}" → NEED_DATA`);
-        return { ...decision, action: 'NEED_DATA', gate: 'fire' };
-    }
-    console.log(`[AI] ${decision.action} (${decision.confidence}) [${verdict}] — ${decision.reasoning}`);
-    return { ...decision, gate: verdict };
-}
-
-// Human-readable description of an AI-resolved action, for the "Did you mean:
-// X? Reply yes/no." confirm prompt (medium-confidence gate below).
-function describeAiAction(intent, d) {
-    switch (intent) {
-        case 'forward_booking':   return `Forward ${d.bkg_no}${d.trucker_name ? ' to ' + d.trucker_name : ''}`;
-        case 'assign_supplier':   return `Assign ${d.bkg_no}${d.supplier_name ? ' to ' + d.supplier_name : ''}`;
-        case 'recall_booking':    return `Recall ${d.bkg_no}`;
-        case 'archive_booking':   return `Archive ${d.bkg_no}`;
-        case 'relay_request':     return `Ask the ${d.target_kind || 'contact'} on ${d.bkg_no}: "${d.message}"`;
-        case 'schedule_followup': return `Follow up with ${d.target_name}${d.bkg_no ? ' re ' + d.bkg_no : ''} in ${d.minutes || 30} min`;
-        default: return String(intent || '').replace(/_/g, ' ');
-    }
+    console.log(`[AI] ${decision.action} (${decision.confidence}) — ${decision.reasoning}`);
+    return decision;
 }
 
 // ── Step 4: router ────────────────────────────────────────────────────────────
 async function route(decision, ctx, sendMessage) {
     const d      = decision.data || {};
     const chatId = ctx.chatId;
-
-    // bkg_no resolution (2026-07-20 fix): for AI-resolved decisions, never trust
-    // the model's free-text bkg_no over what's actually known. If the raw
-    // message doesn't explicitly name a DIFFERENT booking, the already-tracked
-    // active booking always wins — closes the exact hole that let Gemini
-    // substitute an unrelated "urgent" booking at confidence 1. Policy-layer
-    // decisions are untouched — they already resolve bkg_no deterministically.
-    let bkg = d.bkg_no || ctx.activeBooking;
-    if (decision.resolvedBy === 'ai' && ctx.activeBooking) {
-        const explicitBkg = resolveBookingNumber(ctx.text);
-        bkg = explicitBkg || ctx.activeBooking;
-    }
+    const bkg    = d.bkg_no || ctx.activeBooking;
 
     const send = async (id, text) => { await sendMessage(id, text); return { action_taken: 'replied' }; };
     const ask  = (id, text) => send(id, text);
@@ -680,30 +619,6 @@ async function route(decision, ctx, sendMessage) {
         await actions.setPending(id, { type: 'await_bkg_no', nextIntent });
         return send(id, text);
     };
-
-    // Hard role gate, belt-and-suspenders (aiDecide() already blocks this
-    // before it gets here — this catches it too in case route() is ever
-    // reached with an AI decision through a path that skips aiDecide()).
-    const requiredRole = SELF_REPORT_ACTIONS[decision.intent];
-    if (requiredRole && ctx.role !== requiredRole) {
-        console.warn(`[BRAIN] Blocked ${decision.intent} at route() — role "${ctx.role}" needs "${requiredRole}".`);
-        return ctx.isManagerOrTeam
-            ? ask(chatId, `That reads like you want the ${requiredRole} asked about this, not reported as done — nothing was changed. Try "ask the ${requiredRole} for..." instead.`)
-            : { action_taken: 'blocked_wrong_role' };
-    }
-
-    // Medium-confidence AI-resolved mutating action — hold for a yes/no instead
-    // of firing blind. Revives the confirm-gate design that already existed for
-    // manager NL commands in helpers/llm-intent.js but was never wired into
-    // this live path. Skipped for web-sourced (bot console) testing, matching
-    // the existing isWebSource() skip-confirm convention already used by
-    // forwardBooking/assignSupplier.
-    if (decision.resolvedBy === 'ai' && decision.gate === 'confirm' && !actions.isWebSource()) {
-        const dataWithBkg = { ...d, bkg_no: bkg };
-        await actions.setPending(chatId, { type: 'confirm_ai_action', intent: decision.intent, data: dataWithBkg });
-        return send(chatId, `Did you mean: ${describeAiAction(decision.intent, dataWithBkg)}?\n\nReply yes to confirm, no to cancel.`);
-    }
-
     if (ctx.pendingAction?.type === 'await_bkg_no') {
         try { await actions.clearPending(chatId); } catch {}
     }
@@ -731,6 +646,7 @@ async function route(decision, ctx, sendMessage) {
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
+        case 'ask_contact':            return actions.relayQuestionToContact(chatId, d.target_name, d.note, d.bkg_no);
         case 'ask_pricelist_city': {
             await actions.setPending(chatId, { type: 'await_pricelist_city', target_name: d.target_name || null });
             return send(chatId, 'Which price list?\n1. Los Angeles\n2. Houston\n3. San Antonio');
@@ -756,13 +672,14 @@ async function route(decision, ctx, sendMessage) {
         case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
         case 'scale_ticket_received':  return actions.scaleTicketReceived(bkg, d.container_seq);
         case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName, d.container_seq);
-        case 'relay_request':          return (d.target_kind && d.message) ? actions.relayRequest(chatId, bkg, d.target_kind, d.message, ctx.senderName) : ask(chatId, 'Who should I send this to (trucker or supplier) and what should I say?');
         case 'ask_which_container':    return actions.askWhichContainer(chatId, d);
         case 'ask_which_booking':      return actions.askWhichBooking(chatId, d, ctx.matchedTrucker?.name || ctx.matchedSupplier?.name, ctx.isSupplier ? 'supplier' : 'trucker');
         case 'check_supplier':         return bkg ? actions.checkSupplierReadiness(chatId, bkg, d.container_seq) : askBkg(chatId, 'Which booking? I will ping its supplier for pickup status.', 'check_supplier');
         case 'ready_check_yes':        return actions.resolveReadyCheckYes(chatId, ctx.pendingAction);
         case 'ready_check_no':         return actions.resolveReadyCheckNo(chatId, ctx.pendingAction);
         case 'ready_check_date':       return actions.resolveReadyCheckDate(chatId, ctx.pendingAction, d.date_text);
+        case 'container_number_received': return actions.recordContainerNumber(chatId, ctx.pendingAction, d.container_number);
+        case 'relay_reply_received':      return actions.relayReplyReceived(chatId, ctx.pendingAction, d.reply_text);
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
@@ -794,14 +711,13 @@ async function route(decision, ctx, sendMessage) {
     }
 }
 
-// The "(Still pending...)" reminder tail below used to hardcode "reply
-// yes/no" for every pending type. That's wrong for anything that isn't a
-// literal yes/no confirm — e.g. await_followup_minutes wants a number/time,
-// await_bkg_no wants a booking number, await_pricelist_city wants a pick.
-// Telling the manager "reply yes/no" when the pending actually wants a time
-// value is actively misleading (found 2026-07-21 from a live transcript
-// where it contributed to a confused back-and-forth). Give a hint that
-// matches what the pending state actually expects.
+// ── Main entry ────────────────────────────────────────────────────────────────
+// The "(Still pending...)" reminder tail used to hardcode "reply yes/no" for
+// every pending type. That's wrong for anything that isn't a literal yes/no
+// confirm — e.g. await_followup_minutes wants a number/time, await_bkg_no
+// wants a booking number, await_pricelist_city wants a pick. Telling the
+// manager "reply yes/no" when the pending actually wants a time value is
+// actively misleading. Give a hint that matches what the pending actually expects.
 function pendingHint(p) {
     if (p.type === 'await_followup_minutes') return 'reply with a number of minutes (e.g. 15) or a time like "2 hours"';
     if (p.type === 'await_bkg_no') return 'reply with the booking number';
@@ -810,10 +726,9 @@ function pendingHint(p) {
     return 'reply yes/no';
 }
 
-// ── Main entry ────────────────────────────────────────────────────────────────
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
-    const inbound = normalize(rawEvent);
+    const inbound = await normalize(rawEvent);
 
     if (!inbound.isAuthorized) {
         console.log(`[BRAIN] Unauthorized ${inbound.senderNumber} in ${inbound.chatId} — silent`);
@@ -827,7 +742,7 @@ async function process(rawEvent, sendMessage) {
     // the "check supplier" ready flow needs a pending question on the SUPPLIER's
     // own chat (awaiting yes/no, then possibly a date).
     const pending = actions.getPending(inbound.chatId);
-    const ctx     = buildContext(inbound, pending);
+    const ctx     = await buildContext(inbound, pending);
 
     let decision = policyDecide(ctx);
     if (decision.needsAI) {
@@ -835,9 +750,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
-            confidence: ai.confidence,
-            gate      : ai.gate,
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, target_kind: ai.target_kind, message: ai.message, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
         };
     }
 
@@ -849,16 +762,13 @@ async function process(rawEvent, sendMessage) {
         if (inbound.isManagerOrTeam) await sendMessage(inbound.chatId, `Something broke while handling that: ${err.message}`);
     }
 
-    // Reminder tail — pending still open after an unrelated exchange.
-    // 'awaiting_followup_minutes' is excluded too: resolvePending's own
-    // "didn't catch a time frame" reply already restates that it's still
-    // waiting and how to answer/cancel — stacking the generic reminder
-    // right under it is a redundant double message (found 2026-07-21).
+    // Reminder tail — pending still open after an unrelated exchange
     if (inbound.isManagerOrTeam && pending &&
-        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled', 'awaiting_followup_minutes'].includes(result?.action_taken)) {
+        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
-            await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')} for ${fresh.bkg_no} — ${pendingHint(fresh)}.)`);
+            const bkgPart = fresh.bkg_no ? ` for ${fresh.bkg_no}` : '';
+            await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')}${bkgPart} — ${pendingHint(fresh)}.)`);
         }
     }
 
