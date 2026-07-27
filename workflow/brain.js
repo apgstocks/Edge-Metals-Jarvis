@@ -839,6 +839,23 @@ function pendingHint(p) {
     return 'reply yes/no';
 }
 
+// Wizard pendings get a FULL restated question instead of the terse generic
+// template — "reply yes/no" with no context on what it's asking led to a
+// real incident: the manager, days after the daily wizard trigger fired and
+// went unanswered, had no idea what "wizard start" meant and asked the AI to
+// explain, which then answered from general knowledge instead of the actual
+// pending — a hallucinated-sounding but wrong explanation. Restating the
+// original question directly in the reminder prevents that confusion from
+// happening in the first place, rather than relying on the AI to explain a
+// pending it has no real visibility into.
+function pendingFullReminder(p) {
+    if (p.type === 'wizard_start') return '(Still waiting on this from earlier: any bookings need to go out to a trucker today? Reply yes or no — or "cancel" to dismiss this.)';
+    if (p.type === 'wizard_await_port') return `(Still waiting: which port? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
+    if (p.type === 'wizard_await_booking') return `(Still waiting: which booking? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
+    if (p.type === 'wizard_confirm') return `(Still waiting: confirm ${p.bkg_no} — Supplier: ${p.supplier_name}, Trucker: ${p.trucker_name}? Reply yes or no.)`;
+    return null; // not a wizard pending — use the generic template
+}
+
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
     const inbound = await normalize(rawEvent);
@@ -880,8 +897,13 @@ async function process(rawEvent, sendMessage) {
         !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
-            const bkgPart = fresh.bkg_no ? ` for ${fresh.bkg_no}` : '';
-            await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')}${bkgPart} — ${pendingHint(fresh)}.)`);
+            const fullReminder = pendingFullReminder(fresh);
+            if (fullReminder) {
+                await sendMessage(inbound.chatId, fullReminder);
+            } else {
+                const bkgPart = fresh.bkg_no ? ` for ${fresh.bkg_no}` : '';
+                await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')}${bkgPart} — ${pendingHint(fresh)}.)`);
+            }
         }
     }
 
