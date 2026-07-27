@@ -622,24 +622,32 @@ async function aiDecide(ctx) {
         scale_ticket_received : 'Do you have the scale ticket yet?',
         ingate_received       : 'Has it been ingated at the port yet?',
     };
-    if (ctx.isManagerOrTeam && CONFIRM_ACTION_PARTY[decision.action]) {
+    const VERIFY_PHRASING = /\b(check|whether|verify|confirm|has|did|is)\b/i;
+    const detectedIntent = ctx.isManagerOrTeam ? actions.detectExpectedIntent(ctx.text) : null;
+    let effectiveAction = decision.action;
+    if (detectedIntent && VERIFY_PHRASING.test(ctx.text) && decision.action !== 'ask_contact') {
+        console.warn(`[AI] Text pattern-matched to "${detectedIntent}" despite AI choosing "${decision.action}" — overriding before the guard below runs`);
+        effectiveAction = detectedIntent;
+    }
+
+    if (ctx.isManagerOrTeam && CONFIRM_ACTION_PARTY[effectiveAction]) {
         const bkgNo = decision.bkg_no || ctx.activeBooking;
-        const party = CONFIRM_ACTION_PARTY[decision.action];
+        const party = CONFIRM_ACTION_PARTY[effectiveAction];
         const wf = bkgNo ? (require('../helpers/json').loadWorkflow()[bkgNo] || {}) : {};
         const contactName = party === 'trucker' ? wf.trucker_name : wf.supplier;
 
         if (bkgNo && contactName) {
-            console.warn(`[AI] Manager's "${decision.action}" attempt redirected to ask_contact — verifying with ${party} ${contactName} instead of trusting the manager's own claim`);
+            console.warn(`[AI] Manager's "${effectiveAction}" attempt redirected to ask_contact — verifying with ${party} ${contactName} instead of trusting the manager's own claim`);
             return {
                 action: 'ask_contact', confidence: 1, bkg_no: bkgNo, target_name: contactName,
-                note: CONFIRM_ACTION_QUESTION[decision.action],
+                note: CONFIRM_ACTION_QUESTION[effectiveAction],
                 reasoning: `Manager asked about status — auto-verifying with ${party} ${contactName} rather than confirming from the manager's own message.`,
             };
         }
         // No contact assigned yet to ask — genuinely can't verify, say so plainly.
         return {
             action: 'NEED_DATA', confidence: 0,
-            reasoning: `Manager message misclassified as a contact-confirm action (${decision.action}) — blocked, no ${party} assigned yet to verify with.`,
+            reasoning: `Manager message misclassified as a contact-confirm action (${effectiveAction}) — blocked, no ${party} assigned yet to verify with.`,
             reply: `No ${party} assigned to ${bkgNo || 'that booking'} yet, so I can't verify this with anyone. Assign one first, or tell me who to ask directly.`,
         };
     }
@@ -695,7 +703,36 @@ async function route(decision, ctx, sendMessage) {
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
-        case 'ask_contact':            return actions.relayQuestionToContact(chatId, d.target_name, d.note, d.bkg_no);
+        case 'ask_contact': {
+            let { target_name, note, bkg_no } = d;
+            // The AI has been observed correctly REASONING about who to ask
+            // and what to ask, while leaving the actual target_name/note
+            // fields empty in the same response — don't just fail with a
+            // generic "who/what" question when there's enough context to
+            // resolve it deterministically. Same auto-resolve logic as the
+            // confirm-action guard above: figure out which party owns the
+            // detected event, pull their name from the booking's own record.
+            if ((!target_name || !note) && (bkg_no || ctx.activeBooking)) {
+                const resolvedBkg = bkg_no || ctx.activeBooking;
+                const wf = require('../helpers/json').loadWorkflow()[resolvedBkg] || {};
+                const intent = actions.detectExpectedIntent(note || ctx.text);
+                const party = intent === 'load_ready_received' ? 'supplier' : (intent ? 'trucker' : null);
+                if (!target_name && party) target_name = party === 'trucker' ? wf.trucker_name : wf.supplier;
+                if (!note) {
+                    const QUESTION_BY_INTENT = {
+                        empty_drop_confirmed: 'Is the empty container dropped yet?',
+                        load_ready_received: 'Is the load ready for pickup?',
+                        picked_up_confirmed: 'Has pickup happened yet?',
+                        scale_ticket_received: 'Do you have the scale ticket yet?',
+                        ingate_received: 'Has it been ingated at the port yet?',
+                    };
+                    note = QUESTION_BY_INTENT[intent] || ctx.text;
+                }
+                bkg_no = resolvedBkg;
+                if (target_name) console.warn(`[BRAIN] ask_contact: AI left target_name/note empty despite reasoning about it — backfilled from booking ${resolvedBkg} (${party}: ${target_name})`);
+            }
+            return actions.relayQuestionToContact(chatId, target_name, note, bkg_no);
+        }
         case 'ask_pricelist_city': {
             await actions.setPending(chatId, { type: 'await_pricelist_city', target_name: d.target_name || null });
             return send(chatId, 'Which price list?\n1. Los Angeles\n2. Houston\n3. San Antonio');
