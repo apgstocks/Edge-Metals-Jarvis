@@ -20,6 +20,7 @@ const scheduler = require('./scheduler');
 const pricelist = require('./helpers/pricelist');
 const { createApi } = require('./api');
 const { loadJson, saveJson } = require('./helpers/json');
+const waSupervisor = require('./helpers/wa_supervisor'); // WA_SUPERVISOR_INTEGRATION_v1
 
 // ── Seed migration: root bookings.json → data/ on first boot only ─────────────
 (function seedData() {
@@ -118,14 +119,24 @@ client.on('qr', (qr) => {
     waState.setStatus('qr', { qr });
 });
 
-client.on('ready', () => {
+client.on('ready', async () => {
     waReady = true;
     console.log('[WA] Client ready');
     waState.setStatus('ready');
     scheduler.start();
+    // WA_SUPERVISOR_HOOK_v1: if we're recovering from a crash-loop, notify.
+    try {
+        const { wasLooping } = await waSupervisor.recordReady();
+        if (wasLooping) {
+            await alerts.sendEmailAlert(
+                '[Jarvis] WhatsApp recovered',
+                `Jarvis WA client is back up after a crash-loop.\nRecovered at: ${new Date().toISOString()}\nHost: ${process.env.HOSTNAME || 'unknown'}`
+            );
+        }
+    } catch (e) { console.error('[WA] recordReady/alert error:', e.message); }
 });
 
-client.on('disconnected', (reason) => {
+client.on('disconnected', async (reason) => {
     if (shuttingDown) {
         // This disconnect is a side effect of OUR OWN client.destroy() call
         // during a deliberate shutdown (Ctrl+C, SIGTERM) — not a real external
@@ -139,6 +150,28 @@ client.on('disconnected', (reason) => {
     waReady = false;
     waState.setStatus('disconnected', { error: String(reason) });
     console.error('[WA] Disconnected:', reason);
+
+    // WA_SUPERVISOR_HOOK_v1: crash-loop detection + email BEFORE exit.
+    // Persisted state survives the restart; if we hit the threshold inside
+    // the window, one email fires (cooldown-throttled) so the operator
+    // learns about the loop instead of watching pm2 respawn silently.
+    try {
+        const { looping, count } = await waSupervisor.recordDisconnect(reason);
+        if (looping && waSupervisor.shouldSendAlert()) {
+            await alerts.sendEmailAlert(
+                '[Jarvis] WhatsApp crash-loop detected',
+                [
+                    `Jarvis WA client has disconnected ${count} times in the last ${Math.round(waSupervisor.LOOP_WINDOW_MS / 60000)} minutes.`,
+                    `Latest reason: ${reason}`,
+                    `Host: ${process.env.HOSTNAME || 'unknown'}`,
+                    '',
+                    'Action: SSH in, run `pm2 logs jarvis`, possibly rescan QR at /dashboard.',
+                ].join('\n')
+            );
+            await waSupervisor.markAlertSent();
+        }
+    } catch (e) { console.error('[WA] supervisor hook error:', e.message); }
+
     // Re-initializing the SAME Client instance after a disconnect hangs forever —
     // puppeteer's browser session is already torn down (same root cause as the
     // old Sign-out/Reset bug). A disconnect is NOT a logout: the LocalAuth
@@ -150,10 +183,20 @@ client.on('disconnected', (reason) => {
     process.exit(1);
 });
 
-client.on('auth_failure', (msg) => {
+client.on('auth_failure', async (msg) => {
     waReady = false;
     waState.setStatus('auth_failure', { error: String(msg) });
     console.error('[WA] Auth failure:', msg);
+    // WA_SUPERVISOR_HOOK_v1: session invalidated → operator must rescan QR.
+    try {
+        if (waSupervisor.shouldSendAlert()) {
+            await alerts.sendEmailAlert(
+                '[Jarvis] WhatsApp auth failure — QR rescan required',
+                `Jarvis WA auth failed: ${msg}\nHost: ${process.env.HOSTNAME || 'unknown'}\nAction: open /dashboard and rescan the QR.`
+            );
+            await waSupervisor.markAlertSent();
+        }
+    } catch (e) { console.error('[WA] auth_failure alert error:', e.message); }
 });
 
 // Called by POST /api/whatsapp/find-groups — case-insensitive substring match on group names.

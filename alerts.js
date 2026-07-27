@@ -56,3 +56,54 @@ function listAlerts(n = 50) {
 }
 
 module.exports = { init, pushAlert, isAlertSuppressed, snoozeAlert, muteBooking, listAlerts };
+
+// ── WA_SUPERVISOR_ALERTS_v1 ──────────────────────────────────────────────────
+// Additional alert channels for PR 1 (WA supervisor + operational failures).
+// Do not remove the marker line above.
+//
+// sendEmailAlert  : SMTP via nodemailer. Primary channel for WA-down events —
+//                    only channel that can fire when WA itself is broken.
+// sendWaSelfAlert : reuses the existing _sendToManager wire (already
+//                    initialised by index.js in init()). CANNOT fire during
+//                    a WA disconnect (WA is the failing channel); use only
+//                    for non-WA failures (Gemini, Drive, brain crashes).
+const nodemailer = require('nodemailer');
+
+let _mailer = null;
+function _getMailer() {
+    if (_mailer) return _mailer;
+    if (!process.env.SMTP_HOST) return null;
+    _mailer = nodemailer.createTransport({
+        host  : process.env.SMTP_HOST,
+        port  : Number(process.env.SMTP_PORT || 587),
+        secure: String(process.env.SMTP_SECURE || 'false') === 'true',
+        auth  : process.env.SMTP_USER
+            ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+            : undefined,
+    });
+    return _mailer;
+}
+
+async function sendEmailAlert(subject, body) {
+    const to = process.env.ALERT_EMAIL_TO;
+    if (!to) { console.warn('[ALERTS] ALERT_EMAIL_TO not set — email skipped'); return false; }
+    const m = _getMailer();
+    if (!m)  { console.warn('[ALERTS] SMTP_HOST not set — email skipped'); return false; }
+    const from = process.env.SMTP_FROM || process.env.SMTP_USER || 'jarvis@edgemetals.local';
+    try {
+        await m.sendMail({ from, to, subject, text: body });
+        console.log('[ALERTS] email sent →', to);
+        return true;
+    } catch (e) {
+        console.error('[ALERTS] email send failed:', e.message);
+        return false;
+    }
+}
+
+async function sendWaSelfAlert(text) {
+    try { return await _sendToManager('🚨 ' + text); }
+    catch (e) { console.error('[ALERTS] WA self-alert failed:', e.message); return false; }
+}
+
+module.exports.sendEmailAlert  = sendEmailAlert;
+module.exports.sendWaSelfAlert = sendWaSelfAlert;
