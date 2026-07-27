@@ -20,6 +20,14 @@
 //      manual upload path already works.
 //   4. Multiple PDFs in one email: first one that yields a booking_number
 //      wins; the rest are ignored for this pass.
+//   5. Drive PDF: uploaded ONCE per booking (on creation, or if the booking
+//      somehow has no pdf_drive_id yet). A second email that resolves to the
+//      same booking number — whether a legitimate re-issue or a Gemini
+//      extraction slip — does NOT overwrite the existing PDF; it's logged
+//      and surfaced in the manager notification as "flagged" for a manual
+//      look instead. Caught live: two different-carrier PDFs both extracted
+//      as the same booking number in one poll, and the second silently
+//      clobbered the first PDF in Drive before this guard existed.
 
 const { getGmail, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
 const { extractPdfFields } = require('../helpers/gemini');
@@ -69,8 +77,13 @@ async function run() {
     if (!newMessages.length) return;
     console.log(`[${AGENT}] ${newMessages.length} new candidate email(s)`);
 
+    // `bookings` is kept as a LIVE in-memory mirror below (not just a one-time
+    // snapshot) — if the same booking number turns up twice in one poll (seen
+    // live: two different-carrier PDFs both extracted the same number), the
+    // second hit must see the first hit's result, not stale pre-run data.
     const bookings = loadBookings();
-    const created = [], updated = [], skipped = [];
+    const created = [], updated = [], skipped = [], flagged = [];
+    const seenThisRun = new Set();
 
     for (const m of newMessages) {
         try {
@@ -108,7 +121,9 @@ async function run() {
             }
 
             const bkg = String(fields.booking_number).toUpperCase().replace(/\s+/g, '');
-            const existing = bookings[bkg];
+            const existing = bookings[bkg]; // reflects in-run creates too, see mirror updates below
+            const duplicateThisRun = seenThisRun.has(bkg);
+            seenThisRun.add(bkg);
 
             if (existing) {
                 const fillable = {};
@@ -121,29 +136,40 @@ async function run() {
                         if (all[bkg]) Object.assign(all[bkg], fillable);
                         return all;
                     });
+                    Object.assign(existing, fillable); // keep in-memory mirror current
                     updated.push(bkg);
                 }
+                if (duplicateThisRun) {
+                    console.warn(`[${AGENT}] ${bkg} matched a SECOND email in this run ("${subject.slice(0, 60)}") — not touching its Drive PDF, flagging for review`);
+                    flagged.push(bkg);
+                }
             } else {
+                const record = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
                 await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
-                    all[bkg] = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
+                    all[bkg] = record;
                     return all;
                 });
+                bookings[bkg] = record; // keep in-memory mirror current so a later duplicate this run is treated as "existing"
                 await updateWorkflow(bkg, {});
                 created.push(bkg);
             }
 
-            // Best-effort Drive upload — booking record is already saved even if this fails.
-            try {
-                const file = await uploadPdfToDrive(bkg, pdfBase64, filename);
-                await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
-                    if (all[bkg]) {
-                        all[bkg].pdf_drive_id = file.id;
-                        all[bkg].pdf_uploaded_at = new Date().toISOString();
-                    }
-                    return all;
-                });
-            } catch (err) {
-                console.error(`[${AGENT}] Drive upload failed for ${bkg}:`, err.message);
+            // Upload the PDF to Drive ONLY the first time we see this booking number
+            // (this run or before) — never overwrite an existing confirmation PDF.
+            if (bookings[bkg].pdf_drive_id) {
+                console.log(`[${AGENT}] ${bkg} already has a PDF on file — skipping Drive upload from this email`);
+            } else {
+                try {
+                    const file = await uploadPdfToDrive(bkg, pdfBase64, filename);
+                    const stamp = { pdf_drive_id: file.id, pdf_uploaded_at: new Date().toISOString() };
+                    await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
+                        if (all[bkg]) Object.assign(all[bkg], stamp);
+                        return all;
+                    });
+                    Object.assign(bookings[bkg], stamp); // keep in-memory mirror current
+                } catch (err) {
+                    console.error(`[${AGENT}] Drive upload failed for ${bkg}:`, err.message);
+                }
             }
 
             processed.add(m.id);
@@ -155,10 +181,11 @@ async function run() {
 
     await saveProcessed(processed);
 
-    if (created.length || updated.length) {
+    if (created.length || updated.length || flagged.length) {
         const lines = ['Email watcher — auto-detected from Gmail:'];
         if (created.length) lines.push(`New: ${created.join(', ')} — verify details on the dashboard.`);
         if (updated.length) lines.push(`Filled in missing fields: ${updated.join(', ')}`);
+        if (flagged.length) lines.push(`Flagged — same booking number matched a second email, verify manually: ${[...new Set(flagged)].join(', ')}`);
         await _sendToManager(lines.join('\n'));
     }
     if (skipped.length) {
