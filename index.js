@@ -126,7 +126,7 @@ client.on('ready', () => {
     scheduler.start();
 });
 
-client.on('disconnected', (reason) => {
+client.on('disconnected', async (reason) => {
     if (shuttingDown) {
         // This disconnect is a side effect of OUR OWN client.destroy() call
         // during a deliberate shutdown (Ctrl+C, SIGTERM) — not a real external
@@ -148,12 +148,19 @@ client.on('disconnected', (reason) => {
     // alerts immediately rather than waiting for the 3-in-10-minutes pattern
     // that's meant for genuinely transient reasons (NAVIGATION, unknown, etc).
     if (String(reason).toUpperCase().includes('LOGOUT')) {
-        require('./helpers/notify').criticalAlert(
-            'WhatsApp session logged out',
-            `Reason: ${reason}. This requires a fresh QR scan — it will not recover on its own no matter how many times the process restarts.`
-        ).catch(e => console.error('[NOTIFY] logout alert error:', e.message));
+        // MUST be awaited — process.exit() right after used to race ahead of
+        // this network call, killing the process before the email/SMS send
+        // ever completed. A real incident: the alert function ran, started
+        // sending, and was killed mid-flight every single time, producing
+        // zero output and zero delivered email despite fully correct code.
+        try {
+            await require('./helpers/notify').criticalAlert(
+                'WhatsApp session logged out',
+                `Reason: ${reason}. This requires a fresh QR scan — it will not recover on its own no matter how many times the process restarts.`
+            );
+        } catch (e) { console.error('[NOTIFY] logout alert error:', e.message); }
     } else {
-        recordFailureAndMaybeAlert('disconnect', String(reason));
+        await recordFailureAndMaybeAlert('disconnect', String(reason));
     }
 
     // Re-initializing the SAME Client instance after a disconnect hangs forever —
@@ -167,7 +174,7 @@ client.on('disconnected', (reason) => {
     process.exit(1);
 });
 
-client.on('auth_failure', (msg) => {
+client.on('auth_failure', async (msg) => {
     waReady = false;
     waState.setStatus('auth_failure', { error: String(msg) });
     console.error('[WA] Auth failure:', msg);
@@ -176,34 +183,40 @@ client.on('auth_failure', (msg) => {
     // the session — no amount of restarting fixes this on its own, a human
     // MUST rescan the QR. This is always worth an immediate alert (not
     // threshold-based like disconnects), since it's never self-healing.
-    // Fire-and-forget: don't block the exit below on network alert calls.
-    require('./helpers/notify').criticalAlert(
-        'WhatsApp logged out',
-        `Jarvis's WhatsApp session was rejected and needs a fresh QR scan. Reason: ${msg}`
-    ).catch(e => console.error('[NOTIFY] auth_failure alert error:', e.message));
+    // MUST be awaited, not fire-and-forget with a guessed setTimeout delay —
+    // a real incident showed the guessed-delay approach silently losing the
+    // alert under load, since SMTP round-trips can exceed any fixed guess.
+    try {
+        await require('./helpers/notify').criticalAlert(
+            'WhatsApp logged out',
+            `Jarvis's WhatsApp session was rejected and needs a fresh QR scan. Reason: ${msg}`
+        );
+    } catch (e) { console.error('[NOTIFY] auth_failure alert error:', e.message); }
 
     // Same exit-for-respawn as disconnected — without this, the OLD dead
     // client just sits here forever with no way to get a fresh QR without a
     // manual restart. pm2 respawns with a NEW client, which (since the old
     // session is genuinely invalid) will correctly show a fresh QR to scan.
     console.error('[WA] Exiting for respawn after auth failure — will need a QR rescan');
-    setTimeout(() => process.exit(1), 500); // brief delay so the alert call above has a chance to fire
+    process.exit(1);
 });
 
 // ── Repeated-failure tracking, shared by disconnect and (future) other
 // failure types. Simple in-memory sliding window — doesn't need to survive
 // restarts since it's specifically about frequency WITHIN a single runtime.
 const _failureLog = {};
-function recordFailureAndMaybeAlert(kind, detail) {
+async function recordFailureAndMaybeAlert(kind, detail) {
     const WINDOW_MS = 10 * 60 * 1000, THRESHOLD = 3;
     const now = Date.now();
     const log = (_failureLog[kind] = (_failureLog[kind] || []).filter(t => now - t < WINDOW_MS));
     log.push(now);
     if (log.length >= THRESHOLD) {
-        require('./helpers/notify').criticalAlert(
-            `WhatsApp repeatedly ${kind === 'disconnect' ? 'disconnecting' : kind}`,
-            `${log.length} ${kind} events in the last ${Math.round(WINDOW_MS / 60000)} minutes. Latest: ${detail}. Each is auto-recovering individually, but this frequency suggests a deeper problem worth checking.`
-        ).catch(e => console.error('[NOTIFY] repeated-failure alert error:', e.message));
+        try {
+            await require('./helpers/notify').criticalAlert(
+                `WhatsApp repeatedly ${kind === 'disconnect' ? 'disconnecting' : kind}`,
+                `${log.length} ${kind} events in the last ${Math.round(WINDOW_MS / 60000)} minutes. Latest: ${detail}. Each is auto-recovering individually, but this frequency suggests a deeper problem worth checking.`
+            );
+        } catch (e) { console.error('[NOTIFY] repeated-failure alert error:', e.message); }
         _failureLog[kind] = []; // reset so we don't alert on every single one past the threshold
     }
 }

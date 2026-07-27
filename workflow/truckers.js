@@ -1,6 +1,8 @@
 // ── workflow/truckers.js — Trucker identity + chat routing ───────────────────
 // RULE (established, do not weaken): match by group_id if present; otherwise
 // match ONLY @c.us numbers. @lid linked-device IDs are never used for identity.
+// v2: loadTruckers/loadBookings are now DB-backed (Supabase) and async —
+// every function here is now async as a result. All callers updated to match.
 
 const { loadTruckers, loadWorkflow, loadBookings } = require('../helpers/json');
 const cfg = require('../config');
@@ -17,8 +19,8 @@ function localityMatchesPort(loc, port) {
 }
 
 // Identify which trucker a chat/sender belongs to. Returns trucker object or null.
-function matchTruckerByChat(chatId, senderNumber) {
-    const truckers = loadTruckers();
+async function matchTruckerByChat(chatId, senderNumber) {
+    const truckers = await loadTruckers();
 
     // 1. Group match — strongest signal
     const byGroup = truckers.find(t => t.group_id && t.group_id === chatId);
@@ -40,9 +42,10 @@ function matchTruckerByChat(chatId, senderNumber) {
 }
 
 // Where do we message this trucker? group → personal DM → default trucker group
-function getTruckerChatId(truckerName) {
+async function getTruckerChatId(truckerName) {
     if (!truckerName) return cfg.GROUP_TRUCKER;
-    const t = loadTruckers().find(x => (x.name || '').toLowerCase() === truckerName.toLowerCase());
+    const all = await loadTruckers();
+    const t = all.find(x => (x.name || '').toLowerCase() === truckerName.toLowerCase());
     if (!t) return cfg.GROUP_TRUCKER;
     if (t.group_id) return t.group_id;
     if (t.whatsapp) return digits(t.whatsapp) + '@c.us';
@@ -50,31 +53,33 @@ function getTruckerChatId(truckerName) {
     return cfg.GROUP_TRUCKER;
 }
 
-function getTrucker(truckerName) {
-    return loadTruckers().find(x => (x.name || '').toLowerCase() === String(truckerName || '').toLowerCase()) || null;
+async function getTrucker(truckerName) {
+    const all = await loadTruckers();
+    return all.find(x => (x.name || '').toLowerCase() === String(truckerName || '').toLowerCase()) || null;
 }
 
-// ── ALL matches by name (2026-07-16, for smartAssign) — mirror of the
-// identical addition in workflow/suppliers.js. See that file's comment. ─────
-function getTruckersByName(name) {
+// ── ALL matches by name (for smartAssign) — see suppliers.js's getSuppliersByName
+// for the full reasoning, identical here.
+async function getTruckersByName(name) {
     const lower = String(name || '').trim().toLowerCase();
     if (!lower) return [];
-    const all = loadTruckers();
+    const all = await loadTruckers();
     const exact = all.filter(x => (x.name || '').toLowerCase() === lower);
     if (exact.length) return exact;
     return all.filter(x => (x.name || '').toLowerCase().includes(lower));
 }
 
-function getTruckerGroupIdForBooking(bkgNo) {
+async function getTruckerGroupIdForBooking(bkgNo) {
     const wf = loadWorkflow()[bkgNo] || {};
     if (wf.trucker_group_id) return wf.trucker_group_id;
-    return getTruckerChatId(wf.trucker_name || loadBookings()[bkgNo]?.trucker || '');
+    const bookings = loadBookings();
+    return getTruckerChatId(wf.trucker_name || bookings[bkgNo]?.trucker || '');
 }
 
 // Numbered list for manager selection (policy resolves the reply by index/name).
 // Strict locality: only offer truckers whose locality matches the booking's POL.
-function buildTruckerSelectionMessage(bkgNo) {
-    const all = loadTruckers();
+async function buildTruckerSelectionMessage(bkgNo) {
+    const all = await loadTruckers();
     if (!all.length) return { text: 'No truckers registered. Add one from the dashboard first.', list: [] };
 
     const port = loadBookings()[bkgNo]?.port_of_loading || '';
@@ -94,7 +99,17 @@ function buildTruckerSelectionMessage(bkgNo) {
     };
 }
 
+// Same resolution logic as suppliers.js's resolveDefaultSupplier — see there
+// for the full reasoning.
+async function resolveDefaultTrucker(port) {
+    const all = await loadTruckers();
+    const matches = all.filter(t => localityMatchesPort(t.locality, port));
+    if (matches.length === 0) return null;
+    if (matches.length === 1) return matches[0];
+    return matches.find(t => t.is_default) || null;
+}
+
 module.exports = {
     matchTruckerByChat, getTruckerChatId, getTrucker, getTruckersByName,
-    getTruckerGroupIdForBooking, buildTruckerSelectionMessage, localityMatchesPort,
+    getTruckerGroupIdForBooking, buildTruckerSelectionMessage, resolveDefaultTrucker,
 };

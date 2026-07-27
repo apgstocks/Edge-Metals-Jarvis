@@ -58,15 +58,26 @@ async function sendSmsAlert(body) {
 
 // Fires both channels in parallel, never throws — a failed alert should
 // never crash whatever critical-failure handler is calling this.
+function withTimeout(promise, ms, fallback) {
+    return Promise.race([
+        promise,
+        new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
+    ]);
+}
+
 async function criticalAlert(subject, body) {
     console.error(`[NOTIFY] CRITICAL: ${subject} — ${body}`);
     try { _pushAlert({ type: 'critical', message: `${subject} — ${body}`, severity: 'high' }); } catch {}
+    // Hard 8s cap — a hung SMTP/Twilio connection must never block a caller
+    // that's awaiting this before doing something time-critical, like
+    // exiting for a WhatsApp respawn. Better to give up on the alert than
+    // leave the whole bot stuck because a mail server didn't respond.
     const [emailOk, smsOk] = await Promise.all([
-        sendEmailAlert(subject, body).catch(() => false),
-        sendSmsAlert(`${subject}: ${body}`).catch(() => false),
+        withTimeout(sendEmailAlert(subject, body).catch(() => false), 8000, false),
+        withTimeout(sendSmsAlert(`${subject}: ${body}`).catch(() => false), 8000, false),
     ]);
     if (!emailOk && !smsOk) {
-        console.error('[NOTIFY] Both email and SMS alerts failed or are unconfigured — this failure is currently INVISIBLE outside server logs and the dashboard.');
+        console.error('[NOTIFY] Both email and SMS alerts failed, timed out, or are unconfigured — this failure is currently INVISIBLE outside server logs and the dashboard.');
     }
     return { emailOk, smsOk };
 }

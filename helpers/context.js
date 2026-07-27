@@ -83,7 +83,7 @@ return Object.entries(workflow)
 }
 
 // ── Build full context ────────────────────────────────────────────────────────
-function buildContext(inbound, pendingAction) {
+async function buildContext(inbound, pendingAction) {
 const session = getSession(inbound.chatId) || {
     currentTopic: null, activeBooking: null,
     unansweredQuestion: null, lastInstruction: null, menuContext: null,
@@ -114,8 +114,8 @@ return {
     activeSlots,
     booking,
     workflow: wf,
-    truckers : loadTruckers(),
-    suppliers: loadSuppliers(),
+    truckers : await loadTruckers(),
+    suppliers: await loadSuppliers(),
     allBookings: bookings,
     allWorkflow: workflow,
     urgentBookings: getUrgentBookings(),
@@ -123,7 +123,7 @@ return {
 }
 
 // ── AI-facing view — session summary + last 5 messages + facts, never raw dump ─
-function formatForAI(ctx) {
+async function formatForAI(ctx) {
 const transcripts = loadTranscripts(ctx.chatId, 5)
     .map(t => `[${t.senderRole}] ${t.senderName}: ${t.text}${t.hasMedia ? ' [media]' : ''}`)
     .join('\n') || '(none)';
@@ -138,6 +138,26 @@ const businessContext = memory.loadBusinessContext().slice(-15).map(c => `- ${c.
 const recentSummaries = memory.getRecentSummaries(ctx.chatId, 3)
     .map(s => `- (${new Date(s.closed_at).toLocaleDateString()}) ${s.text}`)
     .join('\n') || '(none)';
+
+// Semantic memory — genuine RAG, not recency. Searches EVERY past session
+// summary ever archived (any chat, any day) for whatever is MEANINGFULLY
+// similar to the current message, not just the last few or the same chat.
+// This is what lets "what did we decide about the Houston delay" work
+// even if that conversation was days ago and isn't in the recent window.
+// Costs a real embedding API call per AI-routed message — accepted
+// trade-off, see helpers/embeddings.js for the reasoning.
+let semanticMemory = '(none)';
+try {
+    const embeddings = require('./embeddings');
+    const matches = await embeddings.searchSimilar(ctx.text, { topK: 3, minSimilarity: 0.55 });
+    if (matches.length) {
+        semanticMemory = matches
+            .map(m => `- (${new Date(m.created_at).toLocaleDateString()}, ${Math.round(m.similarity * 100)}% match) ${m.text}`)
+            .join('\n');
+    }
+} catch (e) {
+    console.error('[CONTEXT] semantic search failed (non-fatal):', e.message);
+}
 
 const urgent = ctx.urgentBookings
     .map(b => `${b.booking_number} cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d)`)
@@ -188,6 +208,7 @@ return {
     facts,
     businessContext,
     recentSummaries,
+    semanticMemory,
     urgentBookings: urgent,
     portStats,
     bookingsTable,

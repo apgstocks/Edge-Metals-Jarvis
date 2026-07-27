@@ -74,8 +74,48 @@ const loadBookings  = () => {
 };
 const loadWorkflow  = () => loadJson(cfg.WORKFLOW_FILE,  {});
 const loadHistory   = () => loadJson(cfg.HISTORY_FILE,   {});
-const loadTruckers  = () => loadJson(cfg.TRUCKERS_FILE,  []);
-const loadSuppliers = () => loadJson(cfg.SUPPLIERS_FILE, []);
+
+// ── Truckers / Suppliers — now backed by Postgres (Supabase), not flat JSON.
+// Both now ASYNC (real DB calls) — every caller across the app needs `await`.
+// Row shape maps 1:1 to what the dashboard's contact form already sends:
+// { name, locality, whatsapp, email, group_id, preferred_mode }.
+async function loadTruckers() {
+    const { getSupabase } = require('./supabase');
+    const { data, error } = await getSupabase().from('truckers').select('*').order('name');
+    if (error) { console.error('[DB] loadTruckers failed:', error.message); return []; }
+    return data || [];
+}
+async function loadSuppliers() {
+    const { getSupabase } = require('./supabase');
+    const { data, error } = await getSupabase().from('suppliers').select('*').order('name');
+    if (error) { console.error('[DB] loadSuppliers failed:', error.message); return []; }
+    return data || [];
+}
+// Upsert by name (case-insensitive) — mirrors the exact behavior the old
+// mutateJson-based contactRoutes had: update if a contact with this name
+// (any case) exists, otherwise insert new.
+async function upsertContact(table, payload) {
+    if (!payload?.name) throw new Error('name required');
+    const { getSupabase } = require('./supabase');
+    const sb = getSupabase();
+    const { data: existing } = await sb.from(table).select('id').ilike('name', payload.name).maybeSingle();
+    if (existing) {
+        const { error } = await sb.from(table).update(payload).eq('id', existing.id);
+        if (error) throw error;
+    } else {
+        const { error } = await sb.from(table).insert(payload);
+        if (error) throw error;
+    }
+}
+async function deleteContact(table, name) {
+    const { getSupabase } = require('./supabase');
+    const { error } = await getSupabase().from(table).delete().ilike('name', name);
+    if (error) throw error;
+}
+const upsertTrucker  = (payload) => upsertContact('truckers', payload);
+const deleteTrucker  = (name)    => deleteContact('truckers', name);
+const upsertSupplier = (payload) => upsertContact('suppliers', payload);
+const deleteSupplier = (name)    => deleteContact('suppliers', name);
 
 // ── Brain state (pending confirmations / actions) ─────────────────────────────
 function normalizeBrain(raw) {
@@ -140,7 +180,16 @@ const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);
 async function updateWorkflow(bkgNo, updates) {
     return mutateJson(cfg.WORKFLOW_FILE, {}, (wf) => {
         if (!wf[bkgNo]) wf[bkgNo] = { bkg_no: bkgNo, step: 'not_started', created_at: new Date().toISOString() };
-        Object.assign(wf[bkgNo], updates, { updated_at: new Date().toISOString() });
+        const now = new Date().toISOString();
+        // stage_entered_at tracks ONLY step transitions — distinct from updated_at,
+        // which touches on every field edit. This is what stall detection reads:
+        // "how long has this booking sat in its CURRENT stage", not "when was it
+        // last touched at all" (those are very different signals).
+        if (updates.step && updates.step !== wf[bkgNo].step) {
+            updates = { ...updates, stage_entered_at: now };
+        }
+        Object.assign(wf[bkgNo], updates, { updated_at: now });
+        if (!wf[bkgNo].stage_entered_at) wf[bkgNo].stage_entered_at = wf[bkgNo].created_at || now;
         return wf;
     });
 }
@@ -193,6 +242,7 @@ async function addFact(text) {
 module.exports = {
     loadJson, saveJson, mutateJson,
     loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
+    upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
     loadBrain, saveBrain, mutateBrain,
     loadAlertsState, saveAlertsState,
     loadSettings, saveSettings,
