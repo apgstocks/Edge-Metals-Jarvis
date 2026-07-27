@@ -40,24 +40,39 @@ async function normalize(raw) {
         .filter(Boolean);
     const senderNum  = digits(raw.senderNumber);
 
-    const isManager = !!managerNum && senderNum === managerNum;
-    const isTeam    = teamNums.includes(senderNum) ||
-                      (!!settings.team_group_id && raw.chatId === settings.team_group_id);
+    // Group identity resolves FIRST, unconditionally — a message sent
+    // inside a registered trucker/supplier group belongs to that
+    // trucker/supplier, regardless of who's personally typing it. The
+    // manager is often a member of these groups for visibility; a real
+    // incident: the manager typed "load ready" inside APS's supplier group,
+    // and the OLD order (isManager checked before group matching) silently
+    // attributed it to the manager instead of APS, skipping the whole
+    // trucker-notification flow entirely. Only when the chat ISN'T a
+    // registered group does personal-number-based manager/team detection apply.
+    const trucker  = await matchTruckerByChat(raw.chatId, raw.senderNumber);
+    const supplier = !trucker ? await matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
+    const isRegisteredGroupChat = (trucker && trucker.group_id === raw.chatId) || (supplier && supplier.group_id === raw.chatId);
 
-    const trucker  = !isManager && !isTeam ? await matchTruckerByChat(raw.chatId, raw.senderNumber) : null;
-    const supplier = !isManager && !isTeam && !trucker ? await matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
+    const isManager = !isRegisteredGroupChat && !!managerNum && senderNum === managerNum;
+    const isTeam    = !isRegisteredGroupChat && (teamNums.includes(senderNum) ||
+                      (!!settings.team_group_id && raw.chatId === settings.team_group_id));
 
-    const role = isManager ? 'manager' : isTeam ? 'team' : trucker ? 'trucker' : supplier ? 'supplier' : 'unknown';
+    // Group identity wins for group chats; for personal DMs, manager/team
+    // identity still wins over a coincidental personal-number match.
+    const finalTrucker  = isRegisteredGroupChat ? trucker  : (!isManager && !isTeam ? trucker  : null);
+    const finalSupplier = isRegisteredGroupChat ? supplier : (!isManager && !isTeam ? supplier : null);
+
+    const role = isManager ? 'manager' : isTeam ? 'team' : finalTrucker ? 'trucker' : finalSupplier ? 'supplier' : 'unknown';
 
     return {
         ...raw,
         textLower      : String(raw.text || '').toLowerCase().trim(),
         role,
-        matchedTrucker : trucker,
-        matchedSupplier: supplier,
+        matchedTrucker : finalTrucker,
+        matchedSupplier: finalSupplier,
         isManagerOrTeam: isManager || isTeam,
-        isTrucker      : !!trucker,
-        isSupplier     : !!supplier,
+        isTrucker      : !!finalTrucker,
+        isSupplier     : !!finalSupplier,
         isAuthorized   : role !== 'unknown',
     };
 }
