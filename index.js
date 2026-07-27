@@ -142,11 +142,19 @@ client.on('disconnected', (reason) => {
     console.error('[WA] Disconnected:', reason);
 
     // A single disconnect is usually transient (network blip) and self-heals
-    // via the exit-for-respawn below. But 3+ disconnects within 10 minutes
-    // means something deeper is wrong — worth telling a human even though
-    // each individual one auto-recovers, since silent repeated restarts can
-    // mask a worsening problem until it becomes a real outage.
-    recordFailureAndMaybeAlert('disconnect', String(reason));
+    // via the exit-for-respawn below. But a reason of LOGOUT means the
+    // session itself was actually terminated — same severity as auth_failure,
+    // never self-healing no matter how few times it's happened — so it
+    // alerts immediately rather than waiting for the 3-in-10-minutes pattern
+    // that's meant for genuinely transient reasons (NAVIGATION, unknown, etc).
+    if (String(reason).toUpperCase().includes('LOGOUT')) {
+        require('./helpers/notify').criticalAlert(
+            'WhatsApp session logged out',
+            `Reason: ${reason}. This requires a fresh QR scan — it will not recover on its own no matter how many times the process restarts.`
+        ).catch(e => console.error('[NOTIFY] logout alert error:', e.message));
+    } else {
+        recordFailureAndMaybeAlert('disconnect', String(reason));
+    }
 
     // Re-initializing the SAME Client instance after a disconnect hangs forever —
     // puppeteer's browser session is already torn down (same root cause as the
