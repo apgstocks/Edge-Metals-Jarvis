@@ -36,6 +36,7 @@ const FILES = {
     PRICELIST_SNAPSHOT_FILE: path.join(DATA_DIR, 'pricelist_snapshot.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
+    EMAIL_PROCESSED_FILE: path.join(DATA_DIR, 'email_processed_ids.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
@@ -51,7 +52,11 @@ const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_
 const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
-
+// Gmail (booking-email watcher) — OAuth, not service account
+const GMAIL_CREDENTIALS_FILE = process.env.GMAIL_CREDENTIALS_FILE || path.join(DATA_DIR, 'gmail-credentials.json');
+const GMAIL_TOKEN_FILE       = process.env.GMAIL_TOKEN_FILE       || path.join(DATA_DIR, 'gmail-token.json');
+const GMAIL_POLL_DAYS_BACK   = parseInt(process.env.GMAIL_POLL_DAYS_BACK || '3');
+const GMAIL_WATCH_ENABLED    = process.env.GMAIL_WATCH_ENABLED !== 'false'; // default ON; set 'false' to kill
 // Google Sheets (price list) — reuses GDRIVE_KEYFILE's service account, just a
 // different API/scope (see helpers/sheets.js). Sheet must be shared with that
 // SA's client_email as Viewer — same constraint as the Shared Drive above.
@@ -168,4 +173,5 @@ module.exports = {
     LLM_TIMEOUT_MS      : parseInt(process.env.LLM_TIMEOUT_MS      || '2000', 10),
     LLM_CONFIDENCE_HIGH : parseFloat(process.env.LLM_CONFIDENCE_HIGH || '0.85'),
     LLM_CONFIDENCE_LOW  : parseFloat(process.env.LLM_CONFIDENCE_LOW  || '0.5'),
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_POLL_DAYS_BACK, GMAIL_WATCH_ENABLED,
 };

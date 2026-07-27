@@ -11,12 +11,13 @@ const { getUrgentBookings }       = require('./helpers/booking');
 const { stepLabel }               = require('./helpers/booking');
 const { pushAlert }               = require('./alerts');
 const cfg = require('./config');
-
+const emailWatcher = require('./workflow/emailWatcher');
 let _sendToManager = async () => {}, _sendToTeam = async () => {}, _sendMessage = async () => {};
 function init({ sendToManager, sendToTeam, sendMessage }) {
     _sendToManager = sendToManager;
     _sendToTeam    = sendToTeam;
     if (sendMessage) _sendMessage = sendMessage;
+    emailWatcher.init({ sendToManager });
 }
 
 const TZ = { timezone: 'America/Los_Angeles' };
@@ -255,6 +256,7 @@ function start() {
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
+    cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
     console.log('[SCHED] Jobs registered (8AM digest, hourly urgent 9-17, 6AM pricelist, 11PM archive, minute task-runner — LA time)');
 }
 
