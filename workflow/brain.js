@@ -502,6 +502,8 @@ STRICT RULES:
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
 - The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. The ONLY other future/deferred capability you have is "schedule_followup" (a WhatsApp nudge sent later to a trucker or supplier). You cannot set reminders for the manager, send emails, make phone calls, or do anything else deferred. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+
+- CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
 - When activeBooking is set AND the message clearly refers to an action verb ("forward", "assign", "recall", "archive", "status") WITHOUT naming a booking number, use activeBooking as bkg_no. Do NOT return NEED_DATA in this case.
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
@@ -595,6 +597,53 @@ const SAFE_ACTIONS = new Set([
 async function aiDecide(ctx) {
     const decision = await callGeminiJSON(await buildPrompt(ctx));
     if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable' };
+
+    // Hard guard, not just a prompt instruction — these five represent a
+    // TRUCKER/SUPPLIER physically confirming something happened. They must
+    // never fire from the manager's own message, at any confidence, no
+    // matter how the AI classified it. A real incident: "check whether empty
+    // dropped" (a manager QUESTION) got fired as empty_drop_confirmed at
+    // confidence 1.0, silently marking a container dropped that was never
+    // actually verified with anyone. Rather than just blocking and making
+    // the manager retype an explicit "ask X" command, actively verify with
+    // whoever already owns that stage — the booking already knows who that
+    // is, no reason to ask the manager to re-supply information Jarvis has.
+    const CONFIRM_ACTION_PARTY = {
+        empty_drop_confirmed  : 'trucker',  // trucker is the one who drops the empty
+        load_ready_received   : 'supplier', // supplier is the one loading
+        picked_up_confirmed   : 'trucker',
+        scale_ticket_received : 'trucker',
+        ingate_received       : 'trucker',
+    };
+    const CONFIRM_ACTION_QUESTION = {
+        empty_drop_confirmed  : 'Is the empty container dropped yet?',
+        load_ready_received   : 'Is the load ready for pickup?',
+        picked_up_confirmed   : 'Has pickup happened yet?',
+        scale_ticket_received : 'Do you have the scale ticket yet?',
+        ingate_received       : 'Has it been ingated at the port yet?',
+    };
+    if (ctx.isManagerOrTeam && CONFIRM_ACTION_PARTY[decision.action]) {
+        const bkgNo = decision.bkg_no || ctx.activeBooking;
+        const party = CONFIRM_ACTION_PARTY[decision.action];
+        const wf = bkgNo ? (require('../helpers/json').loadWorkflow()[bkgNo] || {}) : {};
+        const contactName = party === 'trucker' ? wf.trucker_name : wf.supplier;
+
+        if (bkgNo && contactName) {
+            console.warn(`[AI] Manager's "${decision.action}" attempt redirected to ask_contact — verifying with ${party} ${contactName} instead of trusting the manager's own claim`);
+            return {
+                action: 'ask_contact', confidence: 1, bkg_no: bkgNo, target_name: contactName,
+                note: CONFIRM_ACTION_QUESTION[decision.action],
+                reasoning: `Manager asked about status — auto-verifying with ${party} ${contactName} rather than confirming from the manager's own message.`,
+            };
+        }
+        // No contact assigned yet to ask — genuinely can't verify, say so plainly.
+        return {
+            action: 'NEED_DATA', confidence: 0,
+            reasoning: `Manager message misclassified as a contact-confirm action (${decision.action}) — blocked, no ${party} assigned yet to verify with.`,
+            reply: `No ${party} assigned to ${bkgNo || 'that booking'} yet, so I can't verify this with anyone. Assign one first, or tell me who to ask directly.`,
+        };
+    }
+
     // Confidence gate protects actions that mutate data (forward, assign, archive, etc).
     // A conversational "reply" or a read-only lookup has no side effects — don't crush
     // a genuinely useful answer into a canned "I couldn't pin that down" just because
