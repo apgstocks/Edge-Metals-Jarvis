@@ -317,6 +317,18 @@ function policyDecide(ctx) {
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: bkg } };
     }
 
+    // ── B2. Trucker/supplier "menu" and bare-digit replies — silent, not a
+    // menu display. Menu grammar (Section B above) only applies to
+    // manager/team; a trucker sending "menu" or a bare digit like "1" used
+    // to fall through to the AI, which had no context for what a digit
+    // should mean and kept re-showing show_menu — an infinite loop with no
+    // progress. The manager's menu (forward/assign/etc.) isn't even
+    // meaningful for a trucker anyway, so silence is correct here, not a
+    // fallback menu — there's no real trucker menu to show yet.
+    if ((ctx.isTrucker || ctx.isSupplier) && (t === 'menu' || /^\d+$/.test(t))) {
+        return { intent: 'silent', resolvedBy: 'policy' };
+    }
+
     // ── C. Trucker signals — with per-container disambiguation ───────────────
     // Trucker types a state message ("empty dropped"). We need to figure out:
     //   which booking, and which container within that booking.
