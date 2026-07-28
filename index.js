@@ -259,18 +259,27 @@ waState.setCommonGroupsHandler(async (contactId) => {
     if (!waReady) throw new Error('WhatsApp not ready');
     if (!contactId) return [];
     const chatIds = await client.getCommonGroups(contactId);
-    // getCommonGroups returns an array of ChatId serialisations. Enrich each with name + size.
+    // getCommonGroups returns an array of ChatId serialisations. Enrich each with name + size —
+    // but a failed ENRICHMENT (getChatById, prone to the same Puppeteer flakiness as
+    // getChat/getContact elsewhere) must never erase a group that getCommonGroups
+    // ITSELF already confirmed exists. A real incident: all 6 real shared groups
+    // vanished from the result because getChatById failed for every one — the
+    // dashboard showed "no shared groups" despite 6 genuinely existing. Push a
+    // fallback entry using the raw ID so the group is still usable, just without
+    // a friendly display name.
     const groups = [];
     for (const cid of chatIds.slice(0, 30)) {
+        const rawId = cid._serialized || cid;
         try {
-            const chat = await client.getChatById(cid._serialized || cid);
+            const chat = await client.getChatById(rawId);
             groups.push({
-                id           : chat.id?._serialized || (cid._serialized || cid),
+                id           : chat.id?._serialized || rawId,
                 name         : chat.name || '(unnamed group)',
                 participants : chat.groupMetadata?.participants?.length || null,
             });
         } catch (e) {
-            console.warn('[WA] common-groups: could not fetch chat', cid, e.message);
+            console.warn('[WA] common-groups: could not fetch chat name, using raw ID', rawId, e.message);
+            groups.push({ id: rawId, name: `(name unavailable — ${rawId})`, participants: null });
         }
     }
     return groups;
