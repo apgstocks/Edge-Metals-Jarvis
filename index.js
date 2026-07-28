@@ -124,6 +124,24 @@ client.on('ready', () => {
     console.log('[WA] Client ready');
     waState.setStatus('ready');
     scheduler.start();
+
+    // Diagnostic — every client.* call that reaches into the page (getChat,
+    // getChatById, getChats, getContact) has been failing with a bare "r"
+    // error all session, while plain WhatsApp message send/receive keeps
+    // working. That split points at the Puppeteer<->Chrome DevTools protocol
+    // connection specifically, not WhatsApp itself. Chrome is launched with
+    // --remote-debugging-port=0 (auto-assign) — logging the actual endpoint
+    // Puppeteer believes it's connected to, and whether that connection
+    // reports itself as genuinely alive, to confirm or rule this out directly
+    // instead of continuing to guess at it.
+    try {
+        const browser = client.pupBrowser;
+        console.log('[WA][DIAG] Puppeteer wsEndpoint:', browser?.wsEndpoint?.());
+        console.log('[WA][DIAG] Puppeteer connected:', browser?.isConnected?.());
+        console.log('[WA][DIAG] Puppeteer process pid:', browser?.process?.()?.pid);
+    } catch (e) {
+        console.error('[WA][DIAG] endpoint check itself failed:', e.message);
+    }
 });
 
 client.on('disconnected', async (reason) => {
