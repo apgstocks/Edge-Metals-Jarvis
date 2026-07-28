@@ -277,6 +277,27 @@ waState.setCommonGroupsHandler(async (contactId) => {
     }
     const chatById = new Map(allChats.map(c => [c.id?._serialized, c]));
 
+    // Last-resort name lookup: whatsapp-web.js's own GitHub issues confirm a
+    // current, version-specific bug where getChatById/getChats() fail to
+    // properly construct a GroupChat object — name/participants come back
+    // undefined even though the group genuinely exists and is reachable.
+    // This bypasses that broken wrapper entirely and asks WhatsApp's own
+    // internal page-context data directly for just the group's title —
+    // a much narrower query than building a full Chat object, so it isn't
+    // hitting the same construction bug.
+    async function fetchGroupNameDirect(id) {
+        try {
+            return await client.pupPage.evaluate((chatId) => {
+                const chat = window.Store?.Chat?.get(chatId);
+                if (!chat) return null;
+                return chat.formattedTitle || chat.name || chat.groupMetadata?.subject || null;
+            }, id);
+        } catch (e) {
+            console.warn('[WA] common-groups: direct store lookup also failed for', id, e.message);
+            return null;
+        }
+    }
+
     const groups = [];
     for (const rawId of rawIds) {
         let chat = chatById.get(rawId);
@@ -285,12 +306,10 @@ waState.setCommonGroupsHandler(async (contactId) => {
             try { chat = await client.getChatById(rawId); }
             catch (e) { console.warn('[WA] common-groups: individual fallback also failed for', rawId, e.message); }
         }
-        if (chat) {
-            groups.push({
-                id           : chat.id?._serialized || rawId,
-                name         : chat.name || '(unnamed group)',
-                participants : chat.groupMetadata?.participants?.length || null,
-            });
+        let name = chat?.name;
+        if (!name) name = await fetchGroupNameDirect(rawId); // bypass the broken wrapper
+        if (name) {
+            groups.push({ id: rawId, name, participants: chat?.groupMetadata?.participants?.length || null });
         } else {
             groups.push({ id: rawId, name: `(name unavailable — ${rawId})`, participants: null });
         }
