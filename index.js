@@ -259,26 +259,39 @@ waState.setCommonGroupsHandler(async (contactId) => {
     if (!waReady) throw new Error('WhatsApp not ready');
     if (!contactId) return [];
     const chatIds = await client.getCommonGroups(contactId);
-    // getCommonGroups returns an array of ChatId serialisations. Enrich each with name + size —
-    // but a failed ENRICHMENT (getChatById, prone to the same Puppeteer flakiness as
-    // getChat/getContact elsewhere) must never erase a group that getCommonGroups
-    // ITSELF already confirmed exists. A real incident: all 6 real shared groups
-    // vanished from the result because getChatById failed for every one — the
-    // dashboard showed "no shared groups" despite 6 genuinely existing. Push a
-    // fallback entry using the raw ID so the group is still usable, just without
-    // a friendly display name.
+    const rawIds = chatIds.slice(0, 30).map(cid => cid._serialized || cid);
+
+    // getCommonGroups returns raw ChatIds with no name/size — needs enriching.
+    // Enriching PER-GROUP via getChatById (6 separate Puppeteer round-trips
+    // for 6 groups) turned out to be exactly as fragile as getChat/getContact
+    // elsewhere — a real incident had all 6 fail and vanish from the result
+    // entirely. Fetching ALL chats in ONE bulk call and looking names up from
+    // that is far more reliable — one round-trip instead of six, and if a
+    // single group is somehow still missing from that bulk list, only THAT
+    // one falls back to an individual retry rather than the whole set failing.
+    let allChats = [];
+    try {
+        allChats = await client.getChats();
+    } catch (e) {
+        console.warn('[WA] common-groups: bulk getChats() failed, falling back to per-group lookup:', e.message);
+    }
+    const chatById = new Map(allChats.map(c => [c.id?._serialized, c]));
+
     const groups = [];
-    for (const cid of chatIds.slice(0, 30)) {
-        const rawId = cid._serialized || cid;
-        try {
-            const chat = await client.getChatById(rawId);
+    for (const rawId of rawIds) {
+        let chat = chatById.get(rawId);
+        if (!chat) {
+            // Not in the bulk list (rare) — one individual retry before giving up.
+            try { chat = await client.getChatById(rawId); }
+            catch (e) { console.warn('[WA] common-groups: individual fallback also failed for', rawId, e.message); }
+        }
+        if (chat) {
             groups.push({
                 id           : chat.id?._serialized || rawId,
                 name         : chat.name || '(unnamed group)',
                 participants : chat.groupMetadata?.participants?.length || null,
             });
-        } catch (e) {
-            console.warn('[WA] common-groups: could not fetch chat name, using raw ID', rawId, e.message);
+        } else {
             groups.push({ id: rawId, name: `(name unavailable — ${rawId})`, participants: null });
         }
     }
