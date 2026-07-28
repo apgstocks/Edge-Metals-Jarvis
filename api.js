@@ -8,11 +8,11 @@ const express = require('express');
 const path    = require('path');
 const crypto  = require('crypto');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
+        upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
         mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking,
         loadFacts, addFact } = require('./helpers/json');
 const { daysUntil }   = require('./helpers/time');
 const { listAlerts, snoozeAlert, muteBooking } = require('./alerts');
-const pricelist = require('./helpers/pricelist');
 const cfg = require('./config');
 
 // ── Session auth (in-memory, single process) ────────────────────────────────
@@ -113,25 +113,6 @@ function createApi() {
 
     // ── Public routes (no auth) ───────────────────────────────────────────────
     app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
-
-    // Price-change webhook — hit by the Apps Script trigger bound to the price
-    // Sheet on every edit. MUST stay public: Apps Script's UrlFetchApp can't
-    // carry the dashboard's session cookie or the API_TOKEN bearer header, so
-    // auth here is a shared secret in the query string instead. Same public
-    // tier as /health and /login — nothing here mutates bookings/workflow,
-    // only reads the Sheet and (maybe) sends WhatsApp messages.
-    app.post('/api/pricelist/webhook', async (req, res) => {
-        if (!cfg.PRICELIST_WEBHOOK_TOKEN || req.query.token !== cfg.PRICELIST_WEBHOOK_TOKEN) {
-            return res.status(401).json({ error: 'invalid token' });
-        }
-        try {
-            const result = await pricelist.checkForChangesAndNotify();
-            res.json(result);
-        } catch (err) {
-            console.error('[API] pricelist webhook failed:', err.message);
-            res.status(500).json({ error: err.message });
-        }
-    });
 
     // Login page — inline HTML so it works before the dashboard static mount
     app.get('/login', (req, res) => {
@@ -449,26 +430,23 @@ function createApi() {
     });
 
     // ── Truckers / suppliers ──────────────────────────────────────────────────
-    const contactRoutes = (name, file, loader) => {
-        app.get(`/api/${name}`, (req, res) => res.json(loader()));
+    const contactRoutes = (name, loader, upsert, del) => {
+        app.get(`/api/${name}`, async (req, res) => {
+            try { res.json(await loader()); }
+            catch (e) { res.status(500).json({ error: e.message }); }
+        });
         app.post(`/api/${name}`, async (req, res) => {
             if (!req.body.name) return res.status(400).json({ error: 'name required' });
-            await mutateJson(file, [], (list) => {
-                const i = list.findIndex(x => (x.name || '').toLowerCase() === req.body.name.toLowerCase());
-                if (i >= 0) list[i] = { ...list[i], ...req.body };
-                else list.push(req.body);
-                return list;
-            });
-            res.json({ ok: true });
+            try { await upsert(req.body); res.json({ ok: true }); }
+            catch (e) { res.status(500).json({ error: e.message }); }
         });
         app.delete(`/api/${name}/:contactName`, async (req, res) => {
-            await mutateJson(file, [], (list) =>
-                list.filter(x => (x.name || '').toLowerCase() !== req.params.contactName.toLowerCase()));
-            res.json({ ok: true });
+            try { await del(req.params.contactName); res.json({ ok: true }); }
+            catch (e) { res.status(500).json({ error: e.message }); }
         });
     };
-    contactRoutes('truckers',  cfg.TRUCKERS_FILE,  loadTruckers);
-    contactRoutes('suppliers', cfg.SUPPLIERS_FILE, loadSuppliers);
+    contactRoutes('truckers',  loadTruckers,  upsertTrucker,  deleteTrucker);
+    contactRoutes('suppliers', loadSuppliers, upsertSupplier, deleteSupplier);
 
     // ── Alerts ────────────────────────────────────────────────────────────────
     app.get('/api/alerts', (req, res) => res.json(listAlerts()));
@@ -486,64 +464,6 @@ function createApi() {
     app.put('/api/settings', requireAdmin, async (req, res) => {
         await saveSettings({ ...loadSettings(), ...req.body });
         res.json({ ok: true });
-    });
-
-    // ── Price list — recipients + ad hoc send ─────────────────────────────────
-    // Recipients live in their own file (helpers/pricelist.js), deliberately
-    // separate from truckers.json/suppliers.json — these are buyers/customers,
-    // not operational contacts. "standing: true" marks the 3 people who get
-    // auto-notified by the webhook/fallback cron on a real price change;
-    // non-standing contacts can still be targeted by name via /send.
-    app.get('/api/pricelist/contacts', requireAdmin, (req, res) => res.json(pricelist.loadContacts()));
-
-    app.post('/api/pricelist/contacts', requireAdmin, async (req, res) => {
-        try {
-            await pricelist.addContact(req.body?.name, req.body?.whatsapp, !!req.body?.standing);
-            res.json({ ok: true });
-        } catch (err) {
-            res.status(400).json({ error: err.message });
-        }
-    });
-
-    app.delete('/api/pricelist/contacts/:name', requireAdmin, async (req, res) => {
-        await pricelist.removeContact(req.params.name);
-        res.json({ ok: true });
-    });
-
-    // Ad hoc send — "whoever I tell": a saved contact name OR a raw WhatsApp number.
-    // Sends ALL cities combined. Kept for backward compat / scripting use.
-    app.post('/api/pricelist/send', requireAdmin, async (req, res) => {
-        try {
-            const result = await pricelist.sendPriceListTo(req.body?.to);
-            if (!result.ok && result.reason === 'not_found') {
-                return res.status(404).json({ error: `no contact or valid number matching "${req.body?.to}"` });
-            }
-            res.json(result);
-        } catch (err) {
-            console.error('[API] pricelist/send failed:', err.message);
-            res.status(500).json({ error: err.message });
-        }
-    });
-
-    // Single-city send — mirrors the WhatsApp "send price list" flow (which
-    // always asks which city before sending). Dashboard passes the city the
-    // user picked from a dropdown, so no free-text city parsing needed here.
-    app.post('/api/pricelist/send-city', requireAdmin, async (req, res) => {
-        const CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
-        const city = req.body?.city;
-        if (!CITIES.includes(city)) {
-            return res.status(400).json({ error: `city must be one of: ${CITIES.join(', ')}` });
-        }
-        try {
-            const result = await pricelist.sendPriceListCityTo(req.body?.to, city, null);
-            if (!result.ok && result.reason === 'not_found') {
-                return res.status(404).json({ error: `no contact or valid number matching "${req.body?.to}"` });
-            }
-            res.json(result);
-        } catch (err) {
-            console.error('[API] pricelist/send-city failed:', err.message);
-            res.status(500).json({ error: err.message });
-        }
     });
 
     // ── WhatsApp status + re-scan ──────────────────────────────────────────────
@@ -608,6 +528,27 @@ function createApi() {
             res.json({ ok: true, groups });
         } catch (err) {
             console.error('[API] whatsapp/common-groups failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // Identify a group by SENDING into it, not by reading its metadata —
+    // reading (getChatById/getChats) is broken by a known whatsapp-web.js
+    // library bug (see the debugging thread this came from), but sending has
+    // worked reliably all along. This lets the person actually SEE which
+    // real group an opaque ID corresponds to, on their own phone, instead of
+    // being handed a useless raw ID with no way to match it to anything.
+    app.post('/api/whatsapp/test-group-message', requireAdmin, async (req, res) => {
+        const { groupId, label } = req.body || {};
+        if (!groupId) return res.status(400).json({ error: 'groupId required' });
+        try {
+            const sendMessage = global.__jarvisSendMessage;
+            if (!sendMessage) throw new Error('sendMessage bridge not initialised — check index.js exposes it on global');
+            const text = `🔍 Jarvis test message — this confirms this is the group for "${label || 'the contact you are adding'}". No action needed.`;
+            await sendMessage(groupId, text);
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] whatsapp/test-group-message failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });

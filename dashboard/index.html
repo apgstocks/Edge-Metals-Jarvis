@@ -753,12 +753,29 @@ $('ct_verify').addEventListener('click', async () => {
       $('ct_common_groups_empty').classList.remove('hidden');
     } else {
       $('ct_common_groups_empty').classList.add('hidden');
-      $('ct_common_groups_list').innerHTML = groups.map(g => `
+      $('ct_common_groups_list').innerHTML = groups.map(g => {
+        const unresolved = g.name && g.name.startsWith('(name unavailable');
+        const testBtn = unresolved ? `<button type="button" class="btn btn-secondary cg-test" data-id="${esc(g.id)}" style="padding:5px 10px; font-size:9.5px; margin-right:6px;">Send test</button>` : '';
+        return `
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid var(--border-subtle);">
           <div><div style="font-size:12.5px; font-weight:600;">${esc(g.name)}</div><div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id)}${g.participants ? ' · ' + g.participants + ' members' : ''}</div></div>
-          <button type="button" class="btn btn-secondary cg-use" data-id="${esc(g.id)}" data-name="${esc(g.name)}" style="padding:5px 10px; font-size:9.5px;">Use</button>
-        </div>`).join('');
+          <div>${testBtn}<button type="button" class="btn btn-secondary cg-use" data-id="${esc(g.id)}" data-name="${esc(g.name)}" style="padding:5px 10px; font-size:9.5px;">Use</button></div>
+        </div>`;
+      }).join('');
       $('ct_common_groups_list').querySelectorAll('.cg-use').forEach(b => b.addEventListener('click', () => { $('ct_group_id').value = b.dataset.id; $('ct_group_name').value = b.dataset.name; }));
+      $('ct_common_groups_list').querySelectorAll('.cg-test').forEach(b => {
+        b.addEventListener('click', async () => {
+          b.disabled = true; b.textContent = 'Sending…';
+          try {
+            const label = $('ct_name').value.trim() || 'this contact';
+            await api('/api/whatsapp/test-group-message', { method: 'POST', body: JSON.stringify({ groupId: b.dataset.id, label }) });
+            b.textContent = 'Sent ✓ check WhatsApp';
+          } catch (e) {
+            b.textContent = 'Failed';
+            console.error('test-group-message failed:', e.message);
+          }
+        });
+      });
     }
   } catch (e) {
     result.style.background = '#FBE1E6'; result.style.color = 'var(--status-danger)'; result.textContent = 'Verify failed: ' + e.message;
