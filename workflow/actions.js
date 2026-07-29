@@ -588,7 +588,13 @@ async function wizardAdvance(chatId, pending, answer, selection) {
         case 'wizard_await_trucker': {
             const truckerName = selection || answer;
             if (!truckerName) { await _send(chatId, 'Which trucker?'); return { action_taken: 'wizard_await_trucker' }; }
-            return proceedToConfirm(chatId, pending.bkg_no, pending.supplier_name, truckerName, pending.container_seq);
+            // port is threaded through so a continuation container (seq 2, 3...)
+            // can auto-resolve supplier/trucker the same way container 1 did —
+            // a real gap found via simulation: without it, resolveDefaultSupplier
+            // silently gets an undefined port and can never match, forcing an
+            // unnecessary re-ask on every subsequent container even when the
+            // answer is unambiguous.
+            return proceedToConfirm(chatId, pending.bkg_no, pending.supplier_name, truckerName, pending.container_seq, pending.port);
         }
 
         case 'wizard_confirm': {
@@ -649,7 +655,7 @@ async function proceedToSupplier(chatId, bkgNo, port, containerSeq) {
 // Step: resolve the trucker the same way, for the same specific container.
 async function proceedToTrucker(chatId, bkgNo, port, supplierName, containerSeq) {
     const defaultTrucker = await truckers.resolveDefaultTrucker(port);
-    if (defaultTrucker) return proceedToConfirm(chatId, bkgNo, supplierName, defaultTrucker.name, containerSeq);
+    if (defaultTrucker) return proceedToConfirm(chatId, bkgNo, supplierName, defaultTrucker.name, containerSeq, port);
 
     const sel = await truckers.buildTruckerSelectionMessage(bkgNo);
     if (!sel.list.length) {
@@ -664,8 +670,8 @@ async function proceedToTrucker(chatId, bkgNo, port, supplierName, containerSeq)
 
 // Step: present ONE combined confirmation for supplier + trucker together,
 // scoped to the specific container when the booking has more than one.
-async function proceedToConfirm(chatId, bkgNo, supplierName, truckerName, containerSeq) {
-    await setPending(chatId, { type: 'wizard_confirm', bkg_no: bkgNo, supplier_name: supplierName, trucker_name: truckerName, container_seq: containerSeq });
+async function proceedToConfirm(chatId, bkgNo, supplierName, truckerName, containerSeq, port) {
+    await setPending(chatId, { type: 'wizard_confirm', bkg_no: bkgNo, supplier_name: supplierName, trucker_name: truckerName, container_seq: containerSeq, port });
     const label = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
     await _send(chatId, `${label} — Supplier: ${supplierName}, Trucker: ${truckerName}. Confirm? (yes/no)`);
     return { action_taken: 'wizard_await_confirm' };
