@@ -272,8 +272,17 @@ function policyDecide(ctx) {
             return { intent: 'recall_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
         if ((m = t.match(/^archive\s+(\S+)$/)))
             return { intent: 'archive_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
-        if ((m = t.match(/^status\s+(\S+)$/)))
-            return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
+        // Any status-type phrasing containing a real booking number, anywhere
+        // in the text — not anchored to an exact "status X" shape. A real
+        // gap found by simulation testing: "status of 274150389" (natural
+        // phrasing with "of") fell all the way through to the AI because the
+        // old regex only matched the exact two-word form. resolveBookingNumber
+        // already reliably extracts a booking number from free text; this
+        // just adds the "status"-intent check alongside it.
+        if (/\bstatus\b/.test(t)) {
+            const statusBkg = resolveBookingNumber(ctx.text);
+            if (statusBkg) return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: statusBkg } };
+        }
 
         // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
         if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {

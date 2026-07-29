@@ -206,14 +206,22 @@ try {
     if (pdf) await _send(truckerChat, null, pdf);
 } catch (e) { console.log('[ACTIONS] PDF skip:', e.message); }
 
-// Per-container: write trucker + stage onto the target container.
-if (containerSeq != null) {
+// Per-container: write trucker + stage onto the target container. ALWAYS
+// runs, not gated on containerSeq being explicitly set — a real bug found
+// via simulation testing: single-container bookings pass containerSeq=null
+// (a DISPLAY decision, made in proceedToContainer, to keep "/seq" out of
+// messages when there's only one container) — but that same null was ALSO
+// disabling this write entirely, silently failing to persist the assignment
+// for what's likely the majority of real bookings. containerSeq ?? 1
+// defaults to the (only) container when no explicit seq was given.
+{
     const { mutateJson } = require('../helpers/json');
     const { migrate } = require('../helpers/containers');
+    const targetSeq = containerSeq ?? 1;
     await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
         if (!all[bkgNo]) return all;
         all[bkgNo] = migrate(all[bkgNo]);
-        const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+        const c = all[bkgNo].containers.find(x => x.seq === targetSeq);
         if (c) { c.trucker = truckerName; c.stage = 'forwarded'; }
         return all;
     });
@@ -308,14 +316,16 @@ const label        = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 await _send(supplierChat,
     [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
 
-// Per-container: write supplier + stage onto the target container.
-if (containerSeq != null) {
+// Per-container: write supplier + stage onto the target container. ALWAYS
+// runs — see executeForward's identical fix above for the full reasoning.
+{
     const { mutateJson } = require('../helpers/json');
     const { migrate } = require('../helpers/containers');
+    const targetSeq = containerSeq ?? 1;
     await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
         if (!all[bkgNo]) return all;
         all[bkgNo] = migrate(all[bkgNo]);
-        const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+        const c = all[bkgNo].containers.find(x => x.seq === targetSeq);
         if (c) { c.supplier = supplierName; if (c.stage === 'not_started') c.stage = 'supplier_assigned'; }
         return all;
     });
@@ -719,13 +729,15 @@ async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerR
     // Per-container write when this booking actually has multiple containers —
     // mirrors the exact pattern executeAssign/executeForward already use, so
     // a dual-role assignment on container 2 doesn't clobber container 1's data.
-    if (containerSeq != null) {
+    // ALWAYS runs — see executeForward's fix for the full reasoning.
+    {
         const { mutateJson } = require('../helpers/json');
         const { migrate } = require('../helpers/containers');
+        const targetSeq = containerSeq ?? 1;
         await mutateJson(cfg.BOOKINGS_FILE, {}, all => {
             if (!all[bkgNo]) return all;
             all[bkgNo] = migrate(all[bkgNo]);
-            const c = all[bkgNo].containers.find(x => x.seq === containerSeq);
+            const c = all[bkgNo].containers.find(x => x.seq === targetSeq);
             if (c) { c.supplier = supplierRecord.name; c.trucker = truckerRecord.name; c.stage = 'forwarded'; }
             return all;
         });
