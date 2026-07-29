@@ -43,9 +43,15 @@ async function dailyTruckerCheck() {
     const teamChat = settings.team_group_id || managerChat;
     if (!teamChat || teamChat === '@c.us') return; // nothing configured to send to
 
+    // Mark BEFORE sending, not after — if the process restarts between the
+    // send and the mark (a real risk on a day with many restarts), the guard
+    // never persists and the next cron tick or restart fires the whole
+    // sequence again: duplicate message, AND a fresh setPending overwriting
+    // whatever pending was already there. Marking first means a crash after
+    // this point just costs one skipped morning prompt, not a duplicate.
+    await markSent(key);
     await actions.setPending(teamChat, { type: 'wizard_start' });
     await _sendToTeam('Morning — any bookings need to go out to a trucker today? (yes/no)');
-    await markSent(key);
 }
 
 // ── 8AM — morning digest ──────────────────────────────────────────────────────
