@@ -222,6 +222,24 @@ function policyDecide(ctx) {
             if (intent) return { intent, resolvedBy: 'policy', data: {} };
         }
 
+        // Location-qualified bookings query — MUST be checked before the plain
+        // "available bookings" rule below, and routes to bookings_list_query
+        // (which actually supports location filtering via queryBookingsByLocation)
+        // rather than show_bookings_available (which has NO location awareness
+        // at all). A real incident: "available bookings from oakland" got
+        // routed to show_bookings_available by the AI, which just dumped every
+        // available booking from every port, ignoring "from oakland" entirely.
+        // Not anchored to the start of the string — deliberately searches for
+        // the pattern anywhere in the text, so a typo'd prefix ("shoe" instead
+        // of "show") doesn't prevent the match; only the meaningful part needs
+        // to be right.
+        const locQueryMatch = t.match(/\b(available|unassigned|assigned)?\s*bookings?\s+(?:from|at|in|for)\s+(.+?)\s*$/i);
+        if (locQueryMatch) {
+            const filter = locQueryMatch[1] === 'assigned' ? 'assigned' : (locQueryMatch[1] ? 'unassigned' : undefined);
+            const location = locQueryMatch[2].trim();
+            if (location) return { intent: 'bookings_list_query', resolvedBy: 'policy', data: { location, filter } };
+        }
+
         if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
         if (t === 'urgent' || /^(?:show\s+(?:me\s+)?|list\s+)?urgent\s+bookings?$/.test(t)) return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
         if (t === 'available' || /^(?:show\s+(?:me\s+)?|list\s+)?available\s+bookings?$/.test(t)) return { intent: 'show_bookings_available', resolvedBy: 'policy' };
