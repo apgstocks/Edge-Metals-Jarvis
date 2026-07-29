@@ -305,10 +305,17 @@ waState.setCommonGroupsHandler(async (contactId) => {
     // hitting the same construction bug.
     async function fetchGroupNameDirect(id) {
         try {
-            return await client.pupPage.evaluate((chatId) => {
-                const chat = window.Store?.Chat?.get(chatId);
+            // window.WWebJS.getChat is whatsapp-web.js's OWN internal helper —
+            // confirmed from the library's actual source (used internally by
+            // GroupChat.leave() and Chat.fetchMessages()), not a guess at
+            // Store internals. getAsModel:false returns the raw serialized
+            // data directly rather than constructing a full Chat/GroupChat
+            // wrapper object — that object construction is the part
+            // confirmed broken, so this deliberately avoids it.
+            return await client.pupPage.evaluate(async (chatId) => {
+                const chat = window.WWebJS?.getChat ? await window.WWebJS.getChat(chatId, { getAsModel: false }) : null;
                 if (!chat) return null;
-                return chat.formattedTitle || chat.name || chat.groupMetadata?.subject || null;
+                return chat.formattedTitle || chat.name || chat.groupMetadata?.subject || chat.subject || null;
             }, id);
         } catch (e) {
             console.warn('[WA] common-groups: direct store lookup also failed for', id, e.message);
