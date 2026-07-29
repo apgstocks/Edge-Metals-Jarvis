@@ -243,7 +243,9 @@ function policyDecide(ctx) {
         if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
         if (t === 'urgent' || /^(?:show\s+(?:me\s+)?|list\s+)?urgent\s+bookings?$/.test(t)) return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
         if (t === 'available' || /^(?:show\s+(?:me\s+)?|list\s+)?available\s+bookings?$/.test(t)) return { intent: 'show_bookings_available', resolvedBy: 'policy' };
-        if (['truckers', 'suppliers', 'contacts'].includes(t)) return { intent: 'show_contacts', resolvedBy: 'policy' };
+        if (t === 'truckers' || t === 'suppliers' || t === 'contacts' ||
+            /^(?:show\s+(?:me\s+)?|list\s+)?(?:truckers|suppliers|contacts)$/.test(t))
+            return { intent: 'show_contacts', resolvedBy: 'policy' };
 
         let m;
         // Grammar supports optional /N suffix for container seq: "forward BKG/1 to Dave"
@@ -523,9 +525,22 @@ function policyDecide(ctx) {
             'does', 'do', 'did', 'can', 'could', 'would', 'should', 'will',
         ]);
         const hasQuestionWord = words.some(w => QUESTION_WORDS.has(w));
+        // Known command words must never be swallowed as a location
+        // follow-up, no matter how stale ctx.session.lastInstruction is —
+        // a real bug found via simulation: "show contacts", sent well
+        // after an earlier bookings query, matched this heuristic (short,
+        // letters-only, no question word) and got treated as a location
+        // filter instead of the contacts command it actually was. Strips
+        // a "show "/"list " prefix before checking — an EXACT array match
+        // on the raw stripped text alone would miss "show contacts" even
+        // with "contacts" in the list, since they're different strings.
+        const withoutVerb = stripped.replace(/^(?:show(?:\s+me)?|list)\s+/, '');
+        const KNOWN_COMMANDS = new Set(['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel',
+             'contacts','truckers','suppliers','bookings','status','help','urgent',
+             'available','recall','archive','price list','pricelist']);
+        const isKnownCommand = KNOWN_COMMANDS.has(stripped) || KNOWN_COMMANDS.has(withoutVerb);
         const looksLikeLocation = stripped.length >= 2 && wordCount <= 3 && !hasQuestionWord
-            && /^[a-z\s.'-]+$/i.test(stripped)
-            && !['yes','no','ok','okay','thanks','thank you','hi','hello','menu','cancel'].includes(stripped);
+            && /^[a-z\s.'-]+$/i.test(stripped) && !isKnownCommand;
         if (looksLikeLocation) {
             return {
                 intent: 'bookings_list_query', resolvedBy: 'policy',
