@@ -1,3 +1,5 @@
 Edge-Metals-Jarvis 
 gcloud compute ssh --project vigilant-armor-490615-s1-cbd55 --zone us-west1-b jarvis-vm
 pm2 restart jarvis
+#run email
+node -e "require('./workflow/emailWatcher').run().then(()=>console.log('done')).catch(e=>console.error(e))"

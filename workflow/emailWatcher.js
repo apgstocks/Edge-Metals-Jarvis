@@ -35,7 +35,7 @@ const { appendAuditLog } = require('../helpers/auditlog');
 const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
 const cfg = require('../config');
-
+const { syncBookingToSheet } = require('../helpers/bookingTracker');
 const AGENT = 'EMAIL';
 
 let _sendToManager = async () => {};
@@ -154,6 +154,7 @@ async function run() {
                     });
                     Object.assign(existing, fillable); // keep in-memory mirror current
                     updated.push(bkg);
+                    await syncBookingToSheet(bkg);
                     await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_updated', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: fillable });
                 }
                 if (duplicateThisRun) {
@@ -170,6 +171,7 @@ async function run() {
                 bookings[bkg] = record; // keep in-memory mirror current so a later duplicate this run is treated as "existing"
                 await updateWorkflow(bkg, {});
                 created.push(bkg);
+                await syncBookingToSheet(bkg);
                 await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_created', resolvedBy: 'ai', confidence: null, actionTaken: 'created', subject, fields });
             }
 

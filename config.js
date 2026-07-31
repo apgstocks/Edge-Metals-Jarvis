@@ -60,6 +60,7 @@ const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Fo
 // different API/scope (see helpers/sheets.js). Sheet must be shared with that
 // SA's client_email as Viewer — same constraint as the Shared Drive above.
 const PRICE_SHEET_ID          = process.env.PRICE_SHEET_ID || '';
+const BOOKING_TRACKER_SHEET_ID = process.env.BOOKING_TRACKER_SHEET_ID || '';
 // Shared secret for the Apps Script → /api/pricelist/webhook call. Required
 // because Apps Script's UrlFetchApp can't carry the dashboard's session
 // cookie or the API_TOKEN bearer header the same way.
@@ -201,7 +202,7 @@ module.exports = {
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,EMAIL_PROCESSED_FILE, 
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
-    PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,
+    PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,

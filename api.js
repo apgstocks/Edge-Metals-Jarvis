@@ -219,6 +219,7 @@ function createApi() {
             return all;
         });
         await updateWorkflow(bkg, {}); // ensure workflow row exists
+        await require('./helpers/bookingTracker').syncBookingToSheet(bkg);
         res.json({ ok: true, booking_number: bkg });
     });
     app.put('/api/bookings/:bkgNo', async (req, res) => {
@@ -228,6 +229,7 @@ function createApi() {
             Object.assign(all[bkg], req.body, { booking_number: bkg });
             return all;
         });
+        await require('./helpers/bookingTracker').syncBookingToSheet(bkg);
         res.json({ ok: true });
     });
     app.post('/api/bookings/:bkgNo/archive', async (req, res) => {
