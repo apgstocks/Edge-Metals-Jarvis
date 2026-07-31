@@ -95,9 +95,10 @@ async function extractPdfFields(pdfBase64, retries = 2) {
 
     const prompt = `You are a freight operations expert. Extract booking fields from this freight document (carrier confirmation, booking confirmation, or shipping instructions). Return ONLY raw JSON — no markdown, no prose.
 
-Schema (every field can be null if not present):
-{
-  "booking_number": null,   // e.g. "BK-2602" or "HMMU6269419"
+    Schema (every field can be null if not present):
+    {
+      "is_booking_confirmation": false, // true ONLY if this document itself IS a carrier booking confirmation or shipping instruction establishing a specific shipment booking. false for invoices, rate quotes, container release notices, arrival notices, demurrage/detention notices, or any other freight document — even ones that mention a booking number in passing, or use words like "booking"/"cutoff" somewhere in the text. Judge by what the document actually IS, not by whether booking-shaped text appears in it.
+      "booking_number": null,   // e.g. "BK-2602" or "HMMU6269419" — leave null if is_booking_confirmation is false, even if some reference number is visible
   "carrier": null,          // e.g. "MSC", "Maersk", "COSCO"
   "port_of_loading": null,  // city only, e.g. "Houston"
   "port_of_discharge": null,// city only, e.g. "Busan"

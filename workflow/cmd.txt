@@ -3,3 +3,20 @@ gcloud compute ssh --project vigilant-armor-490615-s1-cbd55 --zone us-west1-b ja
 pm2 restart jarvis
 #run email
 node -e "require('./workflow/emailWatcher').run().then(()=>console.log('done')).catch(e=>console.error(e))"
+
+#trigger backfill excel
+cd ~/Edge-Metals-Jarvis
+cat > backfill_sheet.js << 'EOF'
+const { loadBookings } = require('./helpers/json');
+const { syncBookingToSheet } = require('./helpers/bookingTracker');
+(async () => {
+    const bookings = loadBookings();
+    const keys = Object.keys(bookings);
+    console.log('Syncing ' + keys.length + ' booking(s)...');
+    for (const bkg of keys) {
+        await syncBookingToSheet(bkg);
+    }
+    console.log('done');
+})().catch(e => console.error(e));
+EOF
+node backfill_sheet.js

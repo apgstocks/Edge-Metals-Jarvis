@@ -107,7 +107,7 @@ async function run() {
                     console.error(`[${AGENT}] Extraction failed on ${att.filename}:`, err.message);
                     return null;
                 });
-                if (extracted && extracted.booking_number) {
+                if (extracted && extracted.is_booking_confirmation && extracted.booking_number) {
                     fields = extracted;
                     pdfBase64 = att.base64;
                     filename = att.filename;
