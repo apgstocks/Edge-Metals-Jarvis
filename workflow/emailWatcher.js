@@ -30,7 +30,8 @@
 //      clobbered the first PDF in Drive before this guard existed.
 
 const { getGmail, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
-const { extractPdfFields, extractBookingFieldsFromText  } = require('../helpers/gemini');
+const { extractPdfFields, extractBookingFieldsFromText } = require('../helpers/gemini');
+const { appendAuditLog } = require('../helpers/auditlog');
 const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
 const cfg = require('../config');
@@ -94,6 +95,7 @@ async function run() {
 
             if (!pdfParts.length) {
                 processed.add(m.id);
+                await appendAuditLog({ source: 'email_watcher', intent: 'no_attachment', resolvedBy: 'ai', confidence: null, actionTaken: 'skipped', subject, messageId: m.id });
                 continue;
             }
 
@@ -117,6 +119,7 @@ async function run() {
                 console.log(`[${AGENT}] No extractable booking number in: ${subject.slice(0, 60)}`);
                 skipped.push(subject);
                 processed.add(m.id);
+                await appendAuditLog({ source: 'email_watcher', intent: 'no_booking_number', resolvedBy: 'ai', confidence: null, actionTaken: 'skipped', subject, messageId: m.id });
                 continue;
             }
             // Body text can carry ERD/cutoff even when the PDF doesn't, or when a
@@ -151,10 +154,12 @@ async function run() {
                     });
                     Object.assign(existing, fillable); // keep in-memory mirror current
                     updated.push(bkg);
+                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_updated', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: fillable });
                 }
                 if (duplicateThisRun) {
                     console.warn(`[${AGENT}] ${bkg} matched a SECOND email in this run ("${subject.slice(0, 60)}") — not touching its Drive PDF, flagging for review`);
                     flagged.push(bkg);
+                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'duplicate_flagged', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject });
                 }
             } else {
                 const record = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
@@ -165,6 +170,7 @@ async function run() {
                 bookings[bkg] = record; // keep in-memory mirror current so a later duplicate this run is treated as "existing"
                 await updateWorkflow(bkg, {});
                 created.push(bkg);
+                await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_created', resolvedBy: 'ai', confidence: null, actionTaken: 'created', subject, fields });
             }
 
             // Upload the PDF to Drive ONLY the first time we see this booking number

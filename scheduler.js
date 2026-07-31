@@ -301,7 +301,7 @@ async function autoArchive() {
         if (!b.cutoff_date) continue;
         const d  = daysUntil(b.cutoff_date);
         const wf = workflow[bkgNo] || {};
-        if (d !== -1) continue;                                  // exactly one day past — older ones handled in earlier runs
+        if (d > -1) continue;                                  // exactly one day past — older ones handled in earlier runs
         if (wf.keep_active) continue;
 
         // Multi-container: skip if any container still active. Legacy flat: use wf.step.
