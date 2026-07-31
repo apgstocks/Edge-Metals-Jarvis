@@ -17,7 +17,8 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 //              business-context notes (ongoing situations, not corrections).
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
-
+const LOGS_DIR = path.join(DATA_DIR, 'logs');
+if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
 const FILES = {
     BOOKINGS_FILE    : path.join(DATA_DIR, 'bookings.json'),
     WORKFLOW_FILE    : path.join(DATA_DIR, 'workflow.json'),
@@ -189,7 +190,7 @@ const BOOKINGS_MENU = [
 ].join('\n');
 
 module.exports = {
-    ROOT, DATA_DIR, MEMORY_DIR, ...FILES,
+    ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,

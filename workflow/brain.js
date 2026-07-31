@@ -5,6 +5,7 @@
 // selections, exact commands, booking numbers, role-scoped media. AI is the
 // fallback for ambiguity, never the first resort.
 const llmIntent = require('../helpers/llm-intent');
+const { appendAuditLog } = require('../helpers/auditlog');
 const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
@@ -922,6 +923,7 @@ async function process(rawEvent, sendMessage) {
         decision = {
             intent    : ai.action,
             resolvedBy: 'ai',
+            confidence: ai.confidence ?? null,
             data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
         };
     }
@@ -959,6 +961,20 @@ async function process(rawEvent, sendMessage) {
         resolvedBy: decision.resolvedBy,
         actionTaken: result?.action_taken,
         at        : new Date().toISOString(),
+    });
+    await appendAuditLog({
+        source     : 'core',
+        chatId     : inbound.chatId,
+        messageId  : inbound.messageId,
+        senderRole : inbound.role,
+        senderName : inbound.senderName,
+        text       : inbound.text,
+        hasMedia   : !!inbound.hasMedia,
+        intent     : decision.intent,
+        resolvedBy : decision.resolvedBy,
+        confidence : decision.confidence ?? (decision.resolvedBy === 'policy' ? 1 : null),
+        actionTaken: result?.action_taken,
+        durationMs : Date.now() - started,
     });
 
     console.log(`[BRAIN] ${decision.intent} → ${result?.action_taken} (${Date.now() - started}ms)`);
