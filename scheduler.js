@@ -431,6 +431,7 @@ function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => urgentWatch().catch(e => console.error('[SCHED] urgent:', e)),   TZ);
+    cron.schedule('*/15 * * * *', () => require('./workflow/email-intake').checkBookingEmails(_sendToManager).catch(e => console.error('[SCHED] email-intake:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => stallWatch().catch(e => console.error('[SCHED] stall:', e)),     TZ);
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);

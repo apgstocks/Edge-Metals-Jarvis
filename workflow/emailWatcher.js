@@ -30,7 +30,7 @@
 //      clobbered the first PDF in Drive before this guard existed.
 
 const { getGmail, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
-const { extractPdfFields } = require('../helpers/gemini');
+const { extractPdfFields, extractBookingFieldsFromText  } = require('../helpers/gemini');
 const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
 const cfg = require('../config');
@@ -90,7 +90,7 @@ async function run() {
             const msg = await getMessage(gmail, m.id);
             const hdrs = Object.fromEntries((msg.payload.headers || []).map((h) => [h.name, h.value]));
             const subject = hdrs.Subject || '(no subject)';
-            const { pdfParts } = getEmailContent(msg.payload);
+            const { body, pdfParts } = getEmailContent(msg.payload);
 
             if (!pdfParts.length) {
                 processed.add(m.id);
@@ -119,7 +119,20 @@ async function run() {
                 processed.add(m.id);
                 continue;
             }
-
+            // Body text can carry ERD/cutoff even when the PDF doesn't, or when a
+            // carrier sends a cutoff/ERD change as email text rather than a fresh
+            // PDF. Body wins for these two fields only; everything else (identity:
+            // booking_number, carrier, ports, vessel, containers) stays PDF-sourced —
+            // that's still the more reliable structured source for those.
+            if (body && body.trim()) {
+                try {
+                    const bodyFields = await extractBookingFieldsFromText(body);
+                    if (bodyFields?.erd_date)    fields.erd_date    = bodyFields.erd_date;
+                    if (bodyFields?.cutoff_date) fields.cutoff_date = bodyFields.cutoff_date;
+                } catch (err) {
+                    console.error(`[${AGENT}] Body extraction failed ("${subject.slice(0, 60)}"):`, err.message);
+                }
+            }
             const bkg = String(fields.booking_number).toUpperCase().replace(/\s+/g, '');
             const existing = bookings[bkg]; // reflects in-run creates too, see mirror updates below
             const duplicateThisRun = seenThisRun.has(bkg);

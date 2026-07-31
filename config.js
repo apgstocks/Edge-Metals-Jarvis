@@ -84,7 +84,9 @@ const GEMINI_API_KEY_BACKUP = process.env.GEMINI_API_KEY_BACKUP || '';
 // Default fallback groups (used only when a contact has no group and no number)
 const GROUP_TRUCKER  = process.env.GROUP_TRUCKER  || '';
 const GROUP_SUPPLIER = process.env.GROUP_SUPPLIER || '';
-
+const EMAIL_PROCESSED_FILE = path.join(DATA_DIR, 'email_processed.json');
+const GMAIL_WATCH_ENABLED  = process.env.GMAIL_WATCH_ENABLED !== 'false'; // default ON — matches LLM_MANAGER_ENABLED's pattern in this same file
+const GMAIL_POLL_DAYS_BACK = parseInt(process.env.GMAIL_POLL_DAYS_BACK || '3', 10);
 // ── Workflow constants ────────────────────────────────────────────────────────
 const WORKFLOW_STAGES = [
     'not_started',
@@ -197,7 +199,8 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
-    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,EMAIL_PROCESSED_FILE, 
+    GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,

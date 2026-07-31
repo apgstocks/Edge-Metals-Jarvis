@@ -50,6 +50,40 @@ async function callGeminiJSON(prompt, retries = 2) {
     }
     return null;
 }
+async function extractBookingFieldsFromText(emailBodyText, retries = 2) {
+    if (!emailBodyText || !emailBodyText.trim()) return null;
+    const prompt = `You are a freight operations expert. Extract booking fields from this email body (a carrier booking confirmation or update). Return ONLY raw JSON — no markdown, no prose.
+
+Schema (every field can be null if not present):
+{
+  "booking_number": null, "carrier": null, "port_of_loading": null, "port_of_discharge": null,
+  "cutoff_date": null, "erd_date": null, "etd": null, "vessel_voyage": null,
+  "container_size": null, "container_number": null, "shipper": null, "consignee": null, "buyer": null
+}
+
+Convert all dates to MM/DD/YYYY. Port fields must be city names only. Return the JSON object and nothing else.
+
+Email body:
+"""
+${emailBodyText.slice(0, 6000)}
+"""`;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model  = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent(prompt);
+            const fields = extractJson(result.response.text());
+            if (fields) return fields;
+            console.warn(`[GEMINI] Body extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            console.error(`[GEMINI] Body extraction failed (attempt ${attempt + 1}):`, err.message);
+            if (attempt < retries) await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+        }
+    }
+    return null;
+}
 
 // ── Multimodal: extract booking fields from a PDF ─────────────────────────────
 // Sends the PDF bytes directly to Gemini. Used by the Bookings tab.
@@ -128,4 +162,4 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
 // already includes full chat context (session, last 5 messages, facts,
 // business context). If a lighter-weight text-only Gemini call is needed
 // again later, re-add it deliberately — don't restore this dead pair as-is.
-module.exports = { callGeminiJSON, extractPdfFields };
+module.exports = { callGeminiJSON, extractPdfFields ,extractBookingFieldsFromText   };
