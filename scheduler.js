@@ -301,15 +301,18 @@ async function autoArchive() {
         if (!b.cutoff_date) continue;
         const d  = daysUntil(b.cutoff_date);
         const wf = workflow[bkgNo] || {};
-        if (d > -1) continue;                                  // exactly one day past — older ones handled in earlier runs
+        if (d > -1) continue;                                  // archive anything 1+ days past cutoff
         if (wf.keep_active) continue;
 
-        // Multi-container: skip if any container still active. Legacy flat: use wf.step.
-        if (Array.isArray(b.containers) && b.containers.length > 0) {
-            if (!allContainersTerminal(b)) continue;
-        } else {
-            if (cfg.TERMINAL_STEPS.includes(wf.step)) continue;
-        }
+        // Cutoff passed = strict archive regardless of container completion —
+        // if any further movement happens, it happens under a NEW booking
+        // (Apsara's correction, 2026-08-01): a container still shown as
+        // not_started/empty_dropped on an expired booking isn't "still in
+        // progress," it's just stale data. The record isn't lost — it moves
+        // to history.json with its actual final container states intact, so
+        // an incomplete booking is still visible there, just off the active
+        // dashboard. Previously this required allContainersTerminal() to be
+        // true first; that gate is removed.
 
         await mutateJson(cfg.HISTORY_FILE, {}, (h) => {
             h[bkgNo] = { ...b, archived_at: new Date().toISOString(), archive_reason: 'cutoff_passed_auto', final_step: wf.step || 'not_started' };
