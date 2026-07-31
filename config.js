@@ -51,6 +51,8 @@ const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_
 
 // Google Drive (booking PDFs) — service-account JSON path
 const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
+const GMAIL_CREDENTIALS_FILE = process.env.GMAIL_CREDENTIALS_FILE || path.join(DATA_DIR, 'gmail-credentials.json');
+const GMAIL_TOKEN_FILE       = process.env.GMAIL_TOKEN_FILE       || path.join(DATA_DIR, 'gmail-token.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 
@@ -195,6 +197,7 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
