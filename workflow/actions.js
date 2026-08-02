@@ -798,6 +798,9 @@ switch (pending.type) {
     case 'confirm_recall':
         await clearPending(chatId);
         return executeRecall(chatId, pending.bkg_no);
+    case 'await_email_confirm':
+        await clearPending(chatId);
+        return sendDraftedEmail(chatId, pending);
 
     // Daily guided trucker-assignment wizard — see wizardAdvance above.
     case 'wizard_start':
@@ -1186,6 +1189,102 @@ if (notifyTeam) {
 }
 }
 
+async function resolveFactBatch(chatId, pending, selection) {
+await clearPending(chatId);
+const candidates = pending.candidates || [];
+let toAdd = [];
+if (selection === 'all') toAdd = candidates;
+else if (Array.isArray(selection)) toAdd = selection.filter(n => n >= 1 && n <= candidates.length).map(n => candidates[n - 1]);
+
+if (!toAdd.length) {
+    await _send(chatId, 'No changes made.');
+    return { action_taken: 'fact_batch_declined' };
+}
+for (const fact of toAdd) {
+    await addFact(fact);
+}
+await _send(chatId, `Added ${toAdd.length} fact${toAdd.length === 1 ? '' : 's'}:\n${toAdd.map(f => `- ${f}`).join('\n')}`);
+return { action_taken: 'fact_batch_confirmed' };
+}
+
+// ── Manager-initiated outbound email ("email Zimex about DALA123's cutoff") ──
+// Two-step: draft here (staged as a pending confirmation, nothing sent yet),
+// actual send only happens from resolvePending's 'await_email_confirm' case
+// once the manager replies yes. This is the ONLY outbound-email path in the
+// app — Jarvis never sends mail on its own initiative, only when explicitly
+// instructed, and never without this confirm step in between. A wrong
+// auto-send is visible to a third party outside our own systems (unlike a
+// bad bookings.json write, which is just a dashboard field to correct), so
+// this is deliberately NOT in SAFE_ACTIONS-style auto-execute territory.
+async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
+    if (!targetName) {
+        await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
+        return { action_taken: 'email_missing_target' };
+    }
+    const { getGmail, findLatestFrom } = require('../helpers/gmail');
+    const { callGeminiJSON } = require('../helpers/gemini');
+
+    let gmail;
+    try {
+        gmail = getGmail();
+    } catch (err) {
+        await _send(chatId, `Can't draft that — Gmail isn't configured (${err.message}).`);
+        return { action_taken: 'email_gmail_unavailable' };
+    }
+
+    let to;
+    try {
+        to = await findLatestFrom(gmail, targetName);
+    } catch (err) {
+        console.error('[ACTIONS] findLatestFrom failed:', err.message);
+    }
+    if (!to) {
+        await _send(chatId, `Couldn't find a past email from "${targetName}" to reply to — no address to send to. Give me the exact email address instead.`);
+        return { action_taken: 'email_no_address' };
+    }
+
+    const bkg = bkgNo ? getBooking(bkgNo) : null;
+    const bookingLine = bkg
+        ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}, POL ${bkg.port_of_loading || '—'}, POD ${bkg.port_of_discharge || '—'}.`
+        : '';
+    const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to a carrier/vendor contact.
+Recipient: ${targetName}
+What the email needs to say: ${details || '(no further detail given — infer a reasonable, brief request from context)'}
+${bookingLine ? `Relevant booking data (use only what's relevant, do not dump all of it): ${bookingLine}` : ''}
+Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+
+    const draft = await callGeminiJSON(prompt);
+    if (!draft || !draft.subject || !draft.body) {
+        await _send(chatId, "Couldn't draft that email — try rephrasing what it should say.");
+        return { action_taken: 'email_draft_failed' };
+    }
+
+    await setPending(chatId, {
+        type: 'await_email_confirm',
+        to, subject: draft.subject, body: draft.body,
+        target_name: targetName, bkg_no: bkgNo || null,
+    });
+    await _send(chatId,
+        `Draft email to ${targetName} <${to}>:\n\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+    );
+    return { action_taken: 'email_draft_staged' };
+}
+
+// Only ever called from resolvePending after an explicit "yes" — see the
+// 'await_email_confirm' case below. Never called directly from brain.js.
+async function sendDraftedEmail(chatId, pending) {
+    const { sendEmail } = require('../helpers/gmail');
+    try {
+        await sendEmail({ to: pending.to, subject: pending.subject, body: pending.body });
+        await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.`);
+        return { action_taken: 'email_sent' };
+    } catch (err) {
+        console.error('[ACTIONS] sendEmail failed:', err.message);
+        await _send(chatId, `Send failed: ${err.message}. Not retried automatically — try again.`);
+        return { action_taken: 'email_send_failed' };
+    }
+}
+
 module.exports = {
 init,
 setPending, clearPending, getPending, resolvePending,
@@ -1197,6 +1296,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap,
+scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+    draftEmailForConfirm, sendDraftedEmail,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };

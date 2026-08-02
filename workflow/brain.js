@@ -183,6 +183,22 @@ function policyDecide(ctx) {
         return { intent: 'relay_reply_received', resolvedBy: 'policy', data: { reply_text: ctx.text.trim() } };
     }
 
+    // ── A0b. End-of-day fact-batch confirmation — same "runs before section A's
+    // generic yes/no" reasoning as await_ready_check above: "all" and "1,3"
+    // don't match the YES/NO arrays or a plain list selection, so this needs
+    // its own parse, not the generic pending handler. ──────────────────────────
+    if (ctx.pendingAction?.type === 'await_fact_batch') {
+        const tt = ctx.text.trim().toLowerCase();
+        if (/^(no|none|skip|cancel)$/.test(tt))
+            return { intent: 'resolve_fact_batch', resolvedBy: 'policy', data: { selection: [] } };
+        if (tt === 'all')
+            return { intent: 'resolve_fact_batch', resolvedBy: 'policy', data: { selection: 'all' } };
+        const nums = tt.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+        if (nums.length)
+            return { intent: 'resolve_fact_batch', resolvedBy: 'policy', data: { selection: nums } };
+        return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply with numbers (e.g. "1,3"), "all", or "no".' } };
+    }
+
     // ── A. Pending action always wins — never chat-history string matching ────
     if (ctx.isManagerOrTeam && ctx.pendingAction) {
         const p = ctx.pendingAction;
@@ -295,6 +311,19 @@ function policyDecide(ctx) {
             return {
                 intent: 'schedule_followup', resolvedBy: 'policy',
                 data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
+            };
+        }
+
+        // "email X about Y" / "email X re Y" / "please email X regarding Y" —
+        // manager explicitly instructing an outbound email. Uses ctx.text (not
+        // lowercased t) so the details clause keeps its original casing for the
+        // draft. Never sends directly — draftEmailForConfirm always stages a
+        // yes/no confirmation first; this regex only gets that flow started.
+        if ((m = ctx.text.trim().match(/^(?:please\s+)?email\s+(.+?)\s+(?:about|re|regarding)\s+(.+)$/i))) {
+            const detailsBkg = resolveBookingNumber(m[2]);
+            return {
+                intent: 'draft_email', resolvedBy: 'policy',
+                data: { target_name: m[1].trim(), email_details: m[2].trim(), bkg_no: detailsBkg || ctx.activeBooking || null },
             };
         }
 
@@ -571,7 +600,7 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. The ONLY other future/deferred capability you have is "schedule_followup" (a WhatsApp nudge sent later to a trucker or supplier). You cannot set reminders for the manager, send emails, make phone calls, or do anything else deferred. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup and draft_email. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 
 - CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
@@ -637,7 +666,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, reply, silent, NEED_DATA, NEED_APPROVAL
+ask_contact, draft_email, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -647,6 +676,7 @@ Return ONLY this JSON:
   "supplier_name": null,
   "trucker_name": null,
   "target_name": null,
+  "email_details": null,
   "minutes": null,
   "fact": null,
   "note": null,
@@ -661,7 +691,7 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact',
+    'ask_contact', 'draft_email',
 ]);
 
 async function aiDecide(ctx) {
@@ -758,6 +788,7 @@ async function route(decision, ctx, sendMessage) {
 
     switch (decision.intent) {
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection);
+        case 'resolve_fact_batch':     return actions.resolveFactBatch(chatId, ctx.pendingAction, d.selection);
         case 'show_menu':              return actions.showMenu(chatId);
         case 'bookings_menu':          return actions.showBookingsMenu(chatId);
         case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
@@ -771,6 +802,7 @@ async function route(decision, ctx, sendMessage) {
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
+        case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg);
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {
@@ -924,7 +956,7 @@ async function process(rawEvent, sendMessage) {
             intent    : ai.action,
             resolvedBy: 'ai',
             confidence: ai.confidence ?? null,
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
+            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, email_details: ai.email_details, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
         };
     }
 

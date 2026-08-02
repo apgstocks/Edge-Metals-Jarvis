@@ -440,6 +440,11 @@ function start() {
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
+    cron.schedule('45 23 * * *', () => {
+        const settings = cfg.getSettings ? cfg.getSettings() : {};
+        const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
+        require('./helpers/dailyLearning').run({ sendToManager: _sendToManager, setPending: actions.setPending, managerChatId }).catch(e => console.error('[SCHED] learning:', e));
+    }, TZ);
     console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 15-min email watcher, minute task-runner — LA time)');
 }
 

@@ -20,3 +20,6 @@ const { syncBookingToSheet } = require('./helpers/bookingTracker');
 })().catch(e => console.error(e));
 EOF
 node backfill_sheet.js
+
+#auto archive
+node -e "require('./scheduler').autoArchive().then(()=>console.log('done')).catch(e=>console.error(e))"
