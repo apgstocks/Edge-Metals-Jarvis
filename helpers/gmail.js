@@ -139,21 +139,49 @@ async function sendEmail({ to, subject, body, threadId, inReplyTo, references })
     return res.data; // { id, threadId, ... }
 }
 
-// Resolves a loosely-typed name/company ("Zimex") to the most recent sender
-// address we've actually received mail from — avoids guessing a domain.
-// Returns null if nothing matches, so the caller can ask the manager for the
-// address instead of sending to a wrong guess.
+// "Zimex Line <bookings@zimexline.com>" → pull out the bare address; falls
+// back to the raw string if there's no angle-bracket form.
+function extractAddress(headerValue) {
+    if (!headerValue) return null;
+    const match = headerValue.match(/<([^>]+)>/);
+    return match ? match[1] : headerValue.trim();
+}
+
+// To/Cc headers can hold multiple comma-separated recipients — find the one
+// whose display name or address actually contains needle, not just the
+// first one on the line. Comma-split respects quoted display names like
+// "Doe, John" <a@b.com> so those don't get split mid-name.
+function findMatchingAddress(headerValue, needle) {
+    if (!headerValue) return null;
+    const needleLower = needle.toLowerCase();
+    const parts = headerValue.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    for (const part of parts) {
+        if (part.toLowerCase().includes(needleLower)) return extractAddress(part.trim());
+    }
+    return null;
+}
+
+// Resolves a loosely-typed name/company to an address by searching From, Cc,
+// AND To across the mailbox — not just mail they sent. A contact who's only
+// ever been copied (Cc) or addressed (To) on someone else's thread still
+// resolves, not just contacts who've emailed us directly.
 async function findLatestFrom(gmail, nameOrDomain) {
-    const q = `from:${nameOrDomain}`;
+    const q = `(from:${nameOrDomain} OR cc:${nameOrDomain} OR to:${nameOrDomain})`;
     const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
     const messages = res.data.messages || [];
     if (!messages.length) return null;
     const msg = await getMessage(gmail, messages[0].id);
-    const fromHeader = (msg.payload.headers || []).find((h) => h.name === 'From');
-    if (!fromHeader) return null;
-    // "Zimex Line <bookings@zimexline.com>" → pull out the bare address.
-    const match = fromHeader.value.match(/<([^>]+)>/);
-    return match ? match[1] : fromHeader.value;
+    const headers = msg.payload.headers || [];
+    const get = (name) => headers.find((h) => h.name === name)?.value || '';
+
+    // Prefer From (the contact IS the sender) over Cc over To — matches the
+    // priority a human would use: someone who sent it directly is more "them"
+    // than someone merely copied or addressed alongside others.
+    for (const headerName of ['From', 'Cc', 'To']) {
+        const found = findMatchingAddress(get(headerName), nameOrDomain);
+        if (found) return found;
+    }
+    return null;
 }
 
 module.exports = {
