@@ -1184,37 +1184,71 @@ function renderPriceContacts() {
 
 // Saved name→email directory used by draft_email/reply_email on WhatsApp
 // ("email Zimex about DALA123" resolves against this before falling back to
-// a fresh Gmail search) — see helpers/emailContacts.js. Deliberately its own
-// simple 2-field list (name, email), same visual pattern as
-// renderPriceContacts() above rather than the heavier trucker/supplier
-// renderContacts() (which assumes locality/group_id/preferred_mode fields
-// that don't apply here).
+// a fresh Gmail search) — see helpers/emailContacts.js.
+//
+// DOMAIN GROUPS (added 2026-08-04) — records that share a `domain` field
+// (built via "learn X contacts" on WhatsApp, or scripts/learnDomain.js) are
+// now grouped into their own card instead of sitting in the flat list
+// looking like unrelated one-off contacts. Storage itself never changed —
+// still the same flat array api.js/loadContacts() has always returned —
+// this is purely a rendering change, same GET/POST/DELETE endpoints as
+// before. Plain single-name contacts (no domain field, e.g. "jeyshree")
+// still render in the simple flat list underneath, unchanged from before.
 function renderEmailContacts() {
+  const ROLE_STYLE = {
+    primary:   { bg: 'var(--accent-soft)', fg: 'var(--accent-onSoft)', label: 'Primary' },
+    secondary: { bg: 'var(--surface-sunken)', fg: 'var(--text-muted)', label: 'Secondary' },
+    shared:    { bg: 'var(--leaf-100, #e7f3ea)', fg: 'var(--leaf-600, #1a7a3c)', label: 'Shared / mailbox' },
+  };
+  const roleBadge = (role) => {
+    const s = ROLE_STYLE[role];
+    if (!s) return '';
+    return `<span class="badge" style="margin-left:6px; background:${s.bg}; color:${s.fg};">${esc(s.label)}</span>`;
+  };
+  const memberRow = (m) => `
+    <div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:9px 11px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(m.name)}">
+      <div>
+        <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(m.displayName || m.name)}${roleBadge(m.role)}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">"${esc(m.name)}" → ${esc(m.email)}</div>
+        ${Array.isArray(m.cc) && m.cc.length ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Cc: ${esc(m.cc.join(', '))}</div>` : ''}
+      </div>
+      <button class="btn btn-danger btn-del-email-contact" data-name="${esc(m.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
+    </div>`;
+
   $('viewRoot').innerHTML = `
     <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
         <div><div class="eyebrow">// Contacts</div><h2 style="font-size:24px; text-transform:uppercase;">Email contacts</h2></div>
         <button id="btnAddEmailContact" class="btn btn-primary">+ Add contact</button>
       </div>
-      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "email &lt;name&gt; about ..." or "reply to &lt;name&gt;..." on WhatsApp — Jarvis checks here before searching mail. Learned automatically too: the first time a name resolves via mail search, it's saved here for next time. Standing cc's are also detected automatically from a recurring pattern in your sent mail — Jarvis asks on WhatsApp before saving one, shown below once confirmed.</div>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "email &lt;name&gt; about ..." or "reply to &lt;name&gt;..." on WhatsApp — Jarvis checks here before searching mail. Learned automatically too. For a company with multiple people, say "learn &lt;company&gt; contacts" on WhatsApp instead of adding them one by one — Jarvis scans real mail, proposes each person's role, and groups them below once confirmed. Primary is who a bare company name resolves to by default; everyone in a group auto-cc's everyone else.</div>
+      <div id="emailDomainGroups"></div>
       <div class="card" style="padding:22px 24px;">
+        <div class="eyebrow" style="margin-bottom:12px;">// Other contacts</div>
         <div id="emailContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
       </div>
     </section>`;
 
   async function loadEmailContacts() {
+    const groupsEl = $('emailDomainGroups');
     const rows = $('emailContactRows');
     try {
       const contacts = await api('/api/email-contacts');
-      rows.innerHTML = contacts.length ? contacts.map(c => `
-        <div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(c.name)}">
-          <div>
-            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)}</div>
-            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.email)}</div>
-            ${Array.isArray(c.cc) && c.cc.length ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Standing cc: ${esc(c.cc.join(', '))}</div>` : ''}
-          </div>
-          <button class="btn btn-danger btn-del-email-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
-        </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
+      const grouped = {};
+      const flat = [];
+      contacts.forEach((c) => { if (c.domain) (grouped[c.domain] = grouped[c.domain] || []).push(c); else flat.push(c); });
+
+      const roleOrder = { primary: 0, secondary: 1, shared: 2 };
+      const domains = Object.keys(grouped).sort();
+      groupsEl.innerHTML = domains.map((domain) => {
+        const members = grouped[domain].slice().sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9));
+        return `<div class="card" style="padding:18px 20px; margin-bottom:16px;">
+          <div style="font-size:13px; font-weight:700; color:var(--text-strong); text-transform:uppercase; margin-bottom:12px;">${esc(domain)}</div>
+          <div style="display:flex; flex-direction:column; gap:8px;">${members.map(memberRow).join('')}</div>
+        </div>`;
+      }).join('');
+
+      rows.innerHTML = flat.length ? flat.map(memberRow).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No ungrouped contacts.</div>';
       document.querySelectorAll('.btn-del-email-contact').forEach(btn => btn.addEventListener('click', async () => {
         if (!confirm(`Remove ${btn.dataset.name} from email contacts?`)) return;
         await api(`/api/email-contacts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
