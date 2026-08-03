@@ -131,7 +131,8 @@ async function declineCcSuggestion(name) {
 // Resolve a loosely-typed name (or an already-typed raw address) to a saved
 // contact. Five distinct outcomes, so the caller can decide what "just ask,
 // are you mentioning this" should actually look like per case:
-//   { type: 'exact',          contact }  — typed a raw address, OR name matched a saved contact exactly. Use directly.
+//   { type: 'exact',          contact }  — typed a raw address, a name matched a saved contact exactly, OR an
+//                                           explicit "person from/at company" pinned it to one saved person. Use directly.
 //   { type: 'domain_default', contact }  — bare company/domain mention (e.g. "radmetals"), resolved to that
 //                                           domain's marked primary. Use directly — this is a real, deliberate
 //                                           default per Apsara, not a guess.
@@ -148,6 +149,35 @@ function resolveContact(nameOrEmail) {
 
     const contacts = loadContacts();
     const rawLower = raw.toLowerCase();
+
+    // 0. Qualified "person from/at company" — explicit disambiguation.
+    // Built 2026-08-04 per Apsara: "can I give like send mail to mike from
+    // eccomelt?" — lets her name someone specifically within a domain group
+    // rather than relying on a bare name being unambiguous on its own (two
+    // people with the same first name under different domains), or on the
+    // domain's default primary being who she actually means. Only resolves
+    // an ALREADY-SAVED person under an ALREADY-KNOWN domain — for a domain
+    // that's never been learned yet, this falls through to the normal tiers
+    // below (which will end up as a plain mail search on the full phrase,
+    // unlikely to resolve well until that domain's been set up via "learn X
+    // contacts" or the automatic multi-member check in draftEmailForConfirm).
+    const qualified = raw.match(/^(.+?)\s+(?:from|at)\s+(.+)$/i);
+    if (qualified) {
+        const [, personPart, domainPart] = qualified;
+        const qDomain = normalizeDomain(domainPart.trim());
+        const qPersonLower = personPart.trim().toLowerCase();
+        const siblings = contacts.filter((c) => c.domain && c.domain.toLowerCase() === qDomain);
+        if (siblings.length) {
+            const match = siblings.find((c) => c.name.toLowerCase() === qPersonLower);
+            if (match) return { type: 'exact', contact: match };
+            // Domain's known, but not this specific person — genuinely
+            // ambiguous (or just wrong), not a mail-search phrase that could
+            // ever resolve ("mike from eccomelt" isn't a real search term) —
+            // show her who's actually saved there instead of a dead end.
+            return { type: 'ambiguous', matches: siblings };
+        }
+        // Domain not known at all — fall through to the normal tiers.
+    }
 
     // 1. Exact name match — a specific person, e.g. "helen", always wins
     // over any domain-level default. Unchanged from before domain groups.
