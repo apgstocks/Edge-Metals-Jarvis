@@ -1331,18 +1331,25 @@ function isValidEmail(addr) {
 // instruction: "combine both, if there is duplicate remove one." Case-
 // insensitive de-dupe — the same address typed with different casing in the
 // two sources should still collapse to one.
-function mergeCc(globalCc, contactCc) {
-    const fromGlobal = globalCc ? String(globalCc).split(',').map((s) => s.trim()) : [];
-    const fromContact = Array.isArray(contactCc) ? contactCc : [];
-    const combined = [...fromGlobal, ...fromContact].filter(Boolean);
+// Variadic — each source can be a comma-string (e.g. from Settings) or an
+// array (e.g. a contact's saved cc, or an original thread's Cc list). Falsy
+// sources are just skipped, so callers don't need to guard every argument.
+// Extended 2026-08-03 from a 2-arg version to support reply_email merging a
+// THIRD source (the original thread's own Cc) on top of global + contact.
+function mergeCc(...sources) {
+    const combined = [];
+    for (const src of sources) {
+        if (!src) continue;
+        if (Array.isArray(src)) combined.push(...src);
+        else combined.push(...String(src).split(',').map((s) => s.trim()));
+    }
     const seen = new Set();
-    const deduped = combined.filter((addr) => {
+    return combined.filter(Boolean).filter((addr) => {
         const key = addr.toLowerCase();
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
-    });
-    return deduped.join(', ');
+    }).join(', ');
 }
 
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText) {
@@ -1768,7 +1775,9 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText)
     const fromAddr = (hdrs.From || '').match(/<([^>]+)>/)?.[1] || hdrs.From;
     const origSubject = hdrs.Subject || '';
     const { body: origBody } = getEmailContent(full.payload);
-    const { cc, bcc } = ccBccFromSettings();
+    const { cc: globalCc, bcc } = ccBccFromSettings();
+    const loadEmailContacts = () => require('../helpers/emailContacts').loadContacts();
+    const ccForAddress = (addr) => loadEmailContacts().find((c) => c.email.toLowerCase() === String(addr).toLowerCase())?.cc;
 
     const bkg = bkgNo ? getBooking(bkgNo) : null;
     const bookingLine = bkg
@@ -1850,10 +1859,19 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
             return { action_taken: 'reply_draft_failed' };
         }
 
+        // Same as draftEmailWithAddress: combine the global Cc with this
+        // address's own standing cc, if one's already been saved/confirmed
+        // for them (see helpers/emailContacts.js's setContactCc). Deliberately
+        // does NOT pull in the forward's own original Cc list the way the
+        // direct-sender path below does — those people were on a DIFFERENT
+        // conversation (whoever forwarded this to Apsara, and whoever THEY
+        // were talking to), not this fresh, non-threaded email to targetName.
+        const forwardCc = mergeCc(globalCc, ccForAddress(foundAddr));
+
         if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
         const staged = await setPending(chatId, {
             type: 'await_email_confirm',
-            to: foundAddr, cc, bcc, subject: draft.subject, body: draft.body,
+            to: foundAddr, cc: forwardCc, bcc, subject: draft.subject, body: draft.body,
             // No inReplyTo/references — a manual forward doesn't carry a
             // usable Message-ID for the ORIGINAL sender, so there's nothing
             // real to thread against. This sends as a fresh conversation.
@@ -1864,7 +1882,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
             return { action_taken: 'reply_via_forward_queued' };
         }
         await _send(chatId,
-            `Found this via a forwarded email, not a direct thread — composing a NEW email (not threaded) to ${targetName} <${foundAddr}>:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+            `Found this via a forwarded email, not a direct thread — composing a NEW email (not threaded) to ${targetName} <${foundAddr}>:\n${ccBccPreviewLine({ cc: forwardCc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
         );
         return { action_taken: 'reply_via_forward_staged' };
     }
@@ -1873,6 +1891,26 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
     const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
     const references = [hdrs.References, messageIdHeader].filter(Boolean).join(' ').trim();
+
+    // Preserve the original thread's own Cc list on the reply — real
+    // "reply-all" behavior, per Apsara: "reply_email.cc'd" (2026-08-03).
+    // Only done here, on the genuine same-thread reply path — the forward
+    // branch above deliberately does NOT do this (see its own comment for
+    // why). Excludes the target's own address (already the "to") and
+    // Jarvis's own sending account (never cc yourself). getMyEmailAddress
+    // failing isn't fatal — worst case, if it can't be determined, this
+    // just skips the self-exclusion rather than blocking the whole reply.
+    const { parseAddressList, getMyEmailAddress } = require('../helpers/gmail');
+    let myAddr = null;
+    try {
+        myAddr = await getMyEmailAddress(gmail);
+    } catch (err) {
+        console.warn('[ACTIONS] Could not determine own account address for cc-exclusion:', err.message);
+    }
+    const origCc = parseAddressList(hdrs.Cc)
+        .filter((addr) => addr.toLowerCase() !== fromAddr.toLowerCase())
+        .filter((addr) => !myAddr || addr.toLowerCase() !== myAddr.toLowerCase());
+    const replyCc = mergeCc(globalCc, ccForAddress(fromAddr), origCc);
 
     const prompt = `Draft a short, professional reply from Edge Metals Inc. to this email thread.
 Original email — From: ${hdrs.From}, Subject: ${origSubject}
@@ -1891,7 +1929,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
     if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
-        to: fromAddr, cc, bcc, subject: replySubject, body: draft.body,
+        to: fromAddr, cc: replyCc, bcc, subject: replySubject, body: draft.body,
         // No threadId — belongs to whichever mailbox this was read from,
         // invalid/meaningless when sending via a different account.
         // inReplyTo/References are plain headers and cross accounts fine —
@@ -1904,7 +1942,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         return { action_taken: 'reply_draft_queued' };
     }
     await _send(chatId,
-        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
+        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'reply_draft_staged' };
 }

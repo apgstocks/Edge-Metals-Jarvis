@@ -275,8 +275,32 @@ async function detectCcPattern(gmail, toAddress, minSamples = 2, maxResults = 8)
     return consistent.length ? consistent : null;
 }
 
+// Splits a raw To/Cc header value into individual bare addresses. Comma-
+// split respects quoted display names (same regex as findMatchingAddress
+// above) so "Doe, John" <a@b.com>, "Roe, Jane" <c@d.com> doesn't get split
+// mid-name. Used by draftReplyForConfirm to preserve an original thread's
+// Cc list on a real reply.
+function parseAddressList(headerValue) {
+    if (!headerValue) return [];
+    return headerValue.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+        .map((part) => extractAddress(part.trim()))
+        .filter(Boolean);
+}
+
+// The authenticated account's own address (apsara@edgemetals.com today) —
+// fetched once and cached for the process lifetime rather than hardcoded in
+// config, so it stays correct automatically if the account ever changes.
+// Used to make sure a reply never ends up cc'ing yourself.
+let _myEmailAddress = null;
+async function getMyEmailAddress(gmail) {
+    if (_myEmailAddress) return _myEmailAddress;
+    const res = await gmail.users.getProfile({ userId: 'me' });
+    _myEmailAddress = res.data.emailAddress;
+    return _myEmailAddress;
+}
+
 module.exports = {
     READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite,
     parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
-    sendEmail, findLatestFrom, detectCcPattern,
+    sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
 };
