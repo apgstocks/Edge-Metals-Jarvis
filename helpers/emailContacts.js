@@ -180,7 +180,57 @@ function resolveContact(nameOrEmail) {
     return null;
 }
 
+// "radmetals" -> "radmetals.com"; "radmetals.com" -> unchanged. Shared by
+// the WhatsApp domain-learn flow (workflow/actions.js) and the CLI diagnostic
+// (scripts/learnDomain.js) so both mean the same thing by "the domain".
+function normalizeDomain(term) {
+    const t = String(term || '').trim().toLowerCase();
+    return t.includes('.') ? t : `${t}.com`;
+}
+
+// Given a tally Map (address -> { from, to, cc }) — as returned by
+// helpers/gmail.js's tallyAddressesForTerm — propose primary/secondary/
+// shared roles for a domain-tree contact group. Pure function, no I/O, so
+// both the WhatsApp flow (workflow/actions.js's learnDomainForConfirm) and
+// the CLI tool (scripts/learnDomain.js) call this ONE implementation rather
+// than keeping their own copies that could quietly drift apart.
+//
+// Built 2026-08-03 after Apsara pointed out that hand-writing per-domain
+// seed scripts just relocates the "hardcoding" problem instead of fixing
+// it — this proposes from real From/Cc/To frequency instead of a guess:
+//   from === 0                                  -> shared (never originates mail)
+//   from > 0 but cc >= from*3 (and cc >= 10)     -> shared (sends occasionally, overwhelmingly cc'd — shared-box pattern)
+//   otherwise                                    -> primary (highest From count) / secondary (everyone else)
+// A name is inferred from the address's local-part UNLESS it's identical to
+// the domain term itself (e.g. radmetals@radmetals.com when learning
+// "radmetals") — that collision is left unnamed (name: null) rather than
+// guessing a label like "docs"; the caller must supply one explicitly. This
+// is deliberate: auto-picking that name would just be a different flavor of
+// the exact guessing this whole feature exists to avoid.
+function proposeDomainRoles(tally, term, domain) {
+    const bareTerm = String(term).replace(/\.com$/i, '').toLowerCase();
+    const domainAddrs = [...tally.entries()].filter(([addr]) => addr.endsWith(`@${domain}`));
+
+    const proposals = domainAddrs.map(([addr, counts]) => {
+        const localPart = addr.split('@')[0];
+        let role;
+        if (counts.from === 0) role = 'shared';
+        else if (counts.cc >= counts.from * 3 && counts.cc >= 10) role = 'shared';
+        else role = 'candidate'; // resolved to primary/secondary below
+        const name = localPart.toLowerCase() === bareTerm ? null : localPart;
+        return { addr, counts, role, name };
+    });
+
+    const candidates = proposals.filter((p) => p.role === 'candidate');
+    if (candidates.length) {
+        candidates.sort((a, b) => b.counts.from - a.counts.from);
+        candidates[0].role = 'primary';
+        for (const c of candidates.slice(1)) c.role = 'secondary';
+    }
+    return proposals;
+}
+
 module.exports = {
     loadContacts, addContact, removeContact, resolveContact, isValidEmail,
-    setContactCc, declineCcSuggestion,
+    setContactCc, declineCcSuggestion, normalizeDomain, proposeDomainRoles,
 };

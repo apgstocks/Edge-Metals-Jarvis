@@ -197,6 +197,16 @@ function policyDecide(ctx) {
         return { intent: 'manual_email_address_received', resolvedBy: 'policy', data: { address_text: ctx.text.trim() } };
     }
 
+    // ── A0e. Domain-learn name pending — "learn radmetals contacts" found a
+    // shared/docs-style address whose local-part is identical to the domain
+    // term itself (e.g. radmetals@radmetals.com), so it couldn't infer a
+    // name. Same verbatim-capture reasoning as A0b/A0c/A0d: whatever she
+    // replies IS the name (or names, comma-separated), not something to
+    // reclassify. See workflow/actions.js's resolveDomainLearnName.
+    if (ctx.pendingAction?.type === 'await_domain_learn_name') {
+        return { intent: 'domain_learn_name_received', resolvedBy: 'policy', data: { name_text: ctx.text.trim() } };
+    }
+
     // ── A0b. End-of-day fact-batch confirmation — same "runs before section A's
     // generic yes/no" reasoning as await_ready_check above: "all" and "1,3"
     // don't match the YES/NO arrays or a plain list selection, so this needs
@@ -334,6 +344,19 @@ function policyDecide(ctx) {
             /^(?:backfill|fill(?:\s+in)?|check)\s+(?:the\s+|any\s+|all\s+)?missing\s+(?:fields?|data|info(?:rmation)?)(?:\s+(?:in|from|for)\s+(?:the\s+)?bookings?)?(?:\s+from\s+(?:mail|email))?$/i.test(t) ||
             /^(?:backfill|fill(?:\s+in)?)\s+(?:whatever(?:'s|\s+is)?\s+missing|missing\s+(?:fields?|data))\s+(?:in\s+)?bookings?(?:\s+from\s+(?:mail|email))?$/i.test(t)) {
             return { intent: 'backfill_cutoffs', resolvedBy: 'policy', data: {} };
+        }
+
+        // "learn radmetals contacts" / "learn radmetals domain" / "scan
+        // radmetals contacts" — scans mail and proposes a domain-tree
+        // contact group (primary/secondary/shared roles from real From/Cc/To
+        // frequency), always with a confirm step before anything is saved.
+        // Deliberately deterministic-only (not wired into the AI classifier
+        // below) — this touches saved contacts/cc behavior for every future
+        // email to that domain, so it shouldn't be reachable via a fuzzy AI
+        // guess at intent; she has to actually say "learn".
+        {
+            const learnMatch = t.match(/^(?:learn|scan)\s+([a-z0-9][a-z0-9.\-]*)\s*(?:contacts?|domain)?$/i);
+            if (learnMatch) return { intent: 'learn_domain', resolvedBy: 'policy', data: { term: learnMatch[1] } };
         }
 
         // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
@@ -929,6 +952,8 @@ async function route(decision, ctx, sendMessage) {
         case 'container_number_received': return actions.recordContainerNumber(chatId, ctx.pendingAction, d.container_number);
         case 'relay_reply_received':      return actions.relayReplyReceived(chatId, ctx.pendingAction, d.reply_text);
         case 'manual_email_address_received': return actions.resolveManualEmailAddress(chatId, d.address_text);
+        case 'learn_domain':                  return actions.learnDomainForConfirm(chatId, d.term);
+        case 'domain_learn_name_received':    return actions.resolveDomainLearnName(chatId, d.name_text);
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
@@ -1008,6 +1033,12 @@ function pendingFullReminder(p) {
     }
     if (p.type === 'await_cc_pattern_confirm') {
         return `(Still waiting: save ${p.detected_cc.join(', ')} as ${p.target_name}'s standing cc? Reply yes or no — either way I'll draft the email to them next.)`;
+    }
+    if (p.type === 'await_domain_learn_name') {
+        return `(Still waiting on a name for ${(p.needs_name || []).join(', ')} before I can save the ${p.domain} contacts — or reply "cancel".)`;
+    }
+    if (p.type === 'await_domain_learn_confirm') {
+        return `(Still waiting: save the ${p.domain} contacts I proposed? Reply yes or no.)`;
     }
     return null; // no type-specific text — use the generic template
 }

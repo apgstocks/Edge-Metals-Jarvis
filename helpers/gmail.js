@@ -202,6 +202,21 @@ function findMatchingAddress(headerValue, needle) {
     return null;
 }
 
+// REAL BUG (found 2026-08-04, live): "mk metal trading" (a real, multi-word
+// company name) came back with NO address at all, while "mkmetaltrading"
+// (same company, spaces stripped) instantly found export@mkmetaltrading.com.
+// Root cause: from:/cc:/to: search operators need their argument to be ONE
+// token — an unquoted multi-word value gets split into separate search terms
+// by Gmail (from:mk + a free-text search for "metal" and "trading"
+// elsewhere), not treated as "the sender is mk metal trading." Quoting a
+// multi-word term keeps it together as a single phrase for every operator
+// AND the bare full-text fallback clause. Single-word terms (the overwhelming
+// common case — "radmetals", "zimex") are left unquoted, unchanged from
+// before, so this can't regress anything that already worked.
+function searchTermFor(term) {
+    return /\s/.test(term) ? `"${String(term).replace(/"/g, '')}"` : term;
+}
+
 // Resolves a loosely-typed name/company to an address by searching From, Cc,
 // AND To across the mailbox — not just mail they sent. A contact who's only
 // ever been copied (Cc) or addressed (To) on someone else's thread still
@@ -214,7 +229,8 @@ async function findLatestFrom(gmail, nameOrDomain) {
     // text search for "zimex" WOULD find it via the signature block or
     // anywhere else it appears as a standalone word). Real incident: this
     // exact gap caused a genuine Zimex email to be reported as not found.
-    const q = `(from:${nameOrDomain} OR cc:${nameOrDomain} OR to:${nameOrDomain} OR ${nameOrDomain})`;
+    const st = searchTermFor(nameOrDomain);
+    const q = `(from:${st} OR cc:${st} OR to:${st} OR ${st})`;
     // maxResults bumped 5 -> 15 (2026-08-03): confirmed via
     // scripts/debugFindAddress.js on the real radmetals data that the From
     // pool is what correctly separates a real correspondent from a Cc'd
@@ -340,7 +356,10 @@ async function detectCcPattern(gmail, toAddress, minSamples = 2, maxResults = 8)
 // today (findLatestFrom's old single-message-only logic silently disagreeing
 // with what a human would see by actually reading the mailbox).
 async function tallyAddressesForTerm(gmail, term, maxResults = 50) {
-    const q = `(from:${term} OR cc:${term} OR to:${term} OR ${term})`;
+    // Same multi-word quoting fix as findLatestFrom above — see
+    // searchTermFor's comment for the real incident this closes.
+    const st = searchTermFor(term);
+    const q = `(from:${st} OR cc:${st} OR to:${st} OR ${st})`;
     const res = await gmail.users.messages.list({ userId: 'me', q, maxResults });
     const rawMessages = res.data.messages || [];
 

@@ -885,6 +885,42 @@ switch (pending.type) {
         await clearPending(chatId);
         return sendDraftedEmail(chatId, pending);
 
+    // "yes" to the domain-tree proposal shown by stageDomainLearnConfirm.
+    // "no" is already handled generically above (cancel, nothing saved).
+    case 'await_domain_learn_confirm': {
+        await clearPending(chatId);
+        const emailContacts = require('../helpers/emailContacts');
+        const { term, domain, proposals, resume } = pending;
+        const bareTerm = String(term).replace(/\.com$/i, '').toLowerCase();
+        // Clear any pre-existing flat, non-domain entry with this exact bare
+        // name first — a leftover flat alias would otherwise permanently
+        // shadow the domain tier we're about to create (see addContact's own
+        // shadow-guard comment for the full incident this protects against).
+        const existingFlat = emailContacts.loadContacts().find((c) => c.name.toLowerCase() === bareTerm && !c.domain);
+        if (existingFlat) await emailContacts.removeContact(bareTerm);
+        const sharedEmails = proposals.filter((p) => p.role === 'shared').map((p) => p.addr);
+        for (const p of proposals) {
+            const cc = p.role === 'shared' ? undefined : sharedEmails.filter((e) => e !== p.addr);
+            await emailContacts.addContact(p.name, p.addr, { domain, role: p.role, ...(cc && cc.length ? { cc } : {}) });
+        }
+        if (!resume) {
+            await _send(chatId, `Saved ${proposals.length} contact(s) under ${domain}.${existingFlat ? ` (replaced the old flat "${bareTerm}" entry.)` : ''}`);
+            return { action_taken: 'domain_learn_saved' };
+        }
+        // Resume the original "mail X" request that triggered this — same
+        // "don't lose what was originally asked" reasoning as
+        // await_manual_email_address/await_cc_pattern_confirm. Re-resolving
+        // via resolveContact (rather than reusing whatever findLatestFrom
+        // picked before) means it now goes through the domain tree we just
+        // saved, so it actually reflects the roles she just confirmed.
+        const resolved = emailContacts.resolveContact(term);
+        if (!resolved || resolved.type === 'ambiguous') {
+            await _send(chatId, `Saved ${proposals.length} contact(s) under ${domain}, but none is marked primary — who should I actually send your original email to? Reply with their name.`);
+            return { action_taken: 'domain_learn_saved_no_default' };
+        }
+        return draftEmailWithAddress(chatId, term, resume.details, resume.bkg_no, resolved.contact.email, 'contact');
+    }
+
     // Daily guided trucker-assignment wizard — see wizardAdvance above.
     case 'wizard_start':
     case 'wizard_await_port':
@@ -1445,11 +1481,46 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
             to = null;
         }
         if (to) {
-            // Learned a new address via mail search — save it so the NEXT
-            // "email <name>" is an instant contacts hit instead of another
-            // search. Save failure must never block the actual draft.
-            emailContacts.addContact(targetName, to).catch((err) =>
-                console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
+            // REAL BUG (found 2026-08-04, live): a brand-new domain used to
+            // get flat-saved under whatever address findLatestFrom happened
+            // to pick — for mkmetaltrading that was export@mkmetaltrading.com
+            // by a single-vote margin (4 vs 3) over marckang@mkmetaltrading.
+            // com, a genuinely close contest, baked in with no review at
+            // all. That's the exact flat-guessing problem the radmetals
+            // domain-tree redesign exists to prevent — it just resurfaces
+            // for every NEW domain unless checked here too. Per Apsara:
+            // "it is Jarvis's responsibility, not mine" — this check runs
+            // automatically on every fresh resolution, not only when she
+            // remembers to say "learn X contacts" herself. One real sender
+            // -> the plain flat save below is still correct and
+            // proportionate. 2+ -> don't guess; stage the same propose-and-
+            // confirm flow scripts/learnDomain.js and "learn X contacts" use,
+            // then resume THIS exact request automatically once she's
+            // confirmed it (same "don't lose the original ask" pattern as
+            // await_manual_email_address/await_cc_pattern_confirm).
+            const domain = to.split('@')[1];
+            let handledAsDomainLearn = false;
+            try {
+                const { tallyAddressesForTerm } = require('../helpers/gmail');
+                const { tally } = await tallyAddressesForTerm(gmail, domain, 50);
+                const bareDomainTerm = domain.replace(/\.[a-z]+$/i, '');
+                const proposals = emailContacts.proposeDomainRoles(tally, bareDomainTerm, domain);
+                if (proposals.length > 1) {
+                    handledAsDomainLearn = true;
+                    return stageDomainProposal(chatId, targetName, domain, proposals,
+                        { details: details || '', bkg_no: bkgNo || null },
+                        `"${targetName}" resolved to ${domain}, which has ${proposals.length} real addresses, not just one — setting that up properly before sending anything.\n\n`);
+                }
+            } catch (err) {
+                console.warn(`[ACTIONS] Multi-member domain check failed for "${domain}" — falling back to a plain flat save:`, err.message);
+            }
+            if (!handledAsDomainLearn) {
+                // Learned a new address via mail search — save it so the
+                // NEXT "email <name>" is an instant contacts hit instead of
+                // another search. Save failure must never block the draft.
+                emailContacts.addContact(targetName, to).catch((err) =>
+                    console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
+            }
         }
     }
     if (!to) {
@@ -1636,6 +1707,124 @@ async function resolveManualEmailAddress(chatId, addressText) {
         console.warn(`[ACTIONS] Failed to save manually-given contact "${pending.target_name}":`, err.message));
 
     return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, addr, 'manual');
+}
+
+// ── Domain-tree contact learning ("learn radmetals contacts") ──────────────
+// Built 2026-08-03 after Apsara pushed back on a CLI-only version of this
+// ("why am I running scripts?") — every other detect-then-confirm action in
+// this app (cc patterns, cutoff backfill) happens through WhatsApp, so this
+// should too. Scans real mail via helpers/gmail.js's tallyAddressesForTerm,
+// proposes roles via helpers/emailContacts.js's proposeDomainRoles — the
+// SAME function scripts/learnDomain.js's CLI version uses, so the two can
+// never silently disagree — and never writes anything without a confirm,
+// same posture as detectCcPattern/await_cc_pattern_confirm.
+async function learnDomainForConfirm(chatId, term) {
+    const { getGmailRead, tallyAddressesForTerm } = require('../helpers/gmail');
+    const emailContacts = require('../helpers/emailContacts');
+
+    let gmail;
+    try {
+        gmail = getGmailRead();
+    } catch (err) {
+        await _send(chatId, `Can't scan mail — Gmail isn't configured (${err.message}).`);
+        return { action_taken: 'domain_learn_gmail_unavailable' };
+    }
+
+    const domain = emailContacts.normalizeDomain(term);
+    const { messages, tally } = await tallyAddressesForTerm(gmail, term, 50);
+    const proposals = emailContacts.proposeDomainRoles(tally, term, domain);
+
+    if (!proposals.length) {
+        await _send(chatId, `Couldn't find any addresses under @${domain} in the last ${messages.length} matching messages — nothing to learn.`);
+        return { action_taken: 'domain_learn_empty' };
+    }
+
+    return stageDomainProposal(chatId, term, domain, proposals, null, '');
+}
+
+// resume: null for an explicit "learn X contacts" command, or
+// { details, bkg_no } to automatically continue the original draft-email
+// request once the domain's set up — see draftEmailForConfirm's multi-member
+// check (built 2026-08-04, per Apsara: "it is Jarvis's responsibility, not
+// mine") for why this exists. intro: optional extra sentence prepended to
+// the first message shown, explaining WHY this fired (only used by that
+// auto-triggered path — the explicit command doesn't need it).
+async function stageDomainProposal(chatId, term, domain, proposals, resume, intro) {
+    const needsName = proposals.filter((p) => !p.name);
+    if (needsName.length) {
+        const summary = proposals.map((p) =>
+            `${p.name || '???'} <${p.addr}> — From=${p.counts.from} Cc=${p.counts.cc} To=${p.counts.to} -> ${p.role}`
+        ).join('\n');
+        const staged = await setPending(chatId, {
+            type: 'await_domain_learn_name',
+            term, domain, proposals, resume,
+            needs_name: needsName.map((p) => p.addr),
+        });
+        if (staged.queued) {
+            await _send(chatId, `${intro || ''}Scanned ${domain} — found ${proposals.length} address(es), but you have a pending "${staged.blockedBy}" to answer first. I'll ask for the missing name once that's resolved.`);
+            return { action_taken: 'domain_learn_name_queued' };
+        }
+        await _send(chatId,
+            `${intro || ''}Learning ${domain} contacts:\n${summary}\n\n` +
+            `${needsName.map((p) => p.addr).join(', ')} needs a name — its local-part is identical to "${term}" itself, so I won't guess a label for it. What should I call ${needsName.length > 1 ? 'these (comma-separated, same order)' : 'this address'}? Or reply "cancel".`
+        );
+        return { action_taken: 'domain_learn_needs_name' };
+    }
+
+    return stageDomainLearnConfirm(chatId, term, domain, proposals, resume, intro);
+}
+
+// Shared by stageDomainProposal (when no names are missing) and
+// resolveDomainLearnName (once the missing ones are filled in) — the final
+// yes/no gate before anything actually gets written. See the
+// 'await_domain_learn_confirm' case in resolvePending below for the save
+// (and how `resume`, if present, continues the original email afterward).
+async function stageDomainLearnConfirm(chatId, term, domain, proposals, resume, intro) {
+    const summary = proposals.map((p) => `${p.name} <${p.addr}> -> ${p.role}`).join('\n');
+    const staged = await setPending(chatId, { type: 'await_domain_learn_confirm', term, domain, proposals, resume });
+    if (staged.queued) {
+        await _send(chatId, `${intro || ''}Ready to save ${domain} contacts, but you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.`);
+        return { action_taken: 'domain_learn_confirm_queued' };
+    }
+    await _send(chatId,
+        `${intro || ''}Save these ${domain} contacts?\n${summary}\n\n` +
+        `(Primary = who "mail ${term}" resolves to by default. Shared = auto-cc'd on every email to the others.)\n\n` +
+        (resume ? 'yes/no — either way I\'ll continue your original email next' : 'yes/no')
+    );
+    return { action_taken: 'domain_learn_confirm_staged' };
+}
+
+// Only ever called from brain.js while 'await_domain_learn_name' is active —
+// same "capture verbatim, no reclassification" pattern as
+// resolveManualEmailAddress/recordContainerNumber above.
+async function resolveDomainLearnName(chatId, nameText) {
+    const pending = getPending(chatId);
+    if (!pending || pending.type !== 'await_domain_learn_name') {
+        console.warn('[ACTIONS] resolveDomainLearnName called with no matching pending — ignoring');
+        return { action_taken: 'domain_learn_name_no_pending' };
+    }
+    const text = String(nameText || '').trim();
+    if (/^cancel$/i.test(text)) {
+        await clearPending(chatId);
+        await _send(chatId, 'Cancelled — nothing saved.');
+        return { action_taken: 'domain_learn_name_cancelled' };
+    }
+
+    const names = text.split(',').map((s) => s.trim()).filter(Boolean);
+    const needs = pending.needs_name || [];
+    if (names.length < needs.length) {
+        await _send(chatId, `Need a name for ${needs.length} address(es) (${needs.join(', ')}) — reply with ${needs.length > 1 ? 'all of them, comma-separated, in that order' : 'one'}, or "cancel".`);
+        return { action_taken: 'domain_learn_name_incomplete' };
+    }
+
+    const proposals = pending.proposals.map((p) => ({ ...p }));
+    needs.forEach((addr, i) => {
+        const p = proposals.find((x) => x.addr === addr);
+        if (p) p.name = names[i];
+    });
+
+    await clearPending(chatId);
+    return stageDomainLearnConfirm(chatId, pending.term, pending.domain, proposals, pending.resume || null, '');
 }
 
 // Only ever called from resolvePending after an explicit "yes" — see the
@@ -2057,6 +2246,6 @@ recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
     draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
-    resolveManualEmailAddress,
+    resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };
