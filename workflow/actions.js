@@ -1277,17 +1277,44 @@ return { action_taken: 'fact_batch_confirmed' };
 // auto-send is visible to a third party outside our own systems (unlike a
 // bad bookings.json write, which is just a dashboard field to correct), so
 // this is deliberately NOT in SAFE_ACTIONS-style auto-execute territory.
+// Cc/Bcc are dashboard-editable (Settings → Outbound email), applied to
+// EVERY email Jarvis drafts, compose or reply — see helpers/json.js's
+// loadSettings default shape. Read fresh each time (not cached) so a
+// mid-day settings change takes effect on the very next draft. Shown in
+// the manager-facing preview so nothing gets copied to a third party the
+// manager didn't expect — same "no silent surprises" posture as the rest
+// of this app.
+function ccBccFromSettings() {
+    const settings = cfg.getSettings ? cfg.getSettings() : {};
+    return { cc: (settings.email_cc || '').trim() || null, bcc: (settings.email_bcc || '').trim() || null };
+}
+function ccBccPreviewLine({ cc, bcc }) {
+    const lines = [];
+    if (cc) lines.push(`Cc: ${cc}`);
+    if (bcc) lines.push(`Bcc: ${bcc}`);
+    return lines.length ? lines.join('\n') + '\n' : '';
+}
+
+// Loose but real check — catches Gemini hallucinating something that isn't
+// an email address at all (garbled forward text, a phone number, "n/a",
+// etc.) BEFORE it gets staged for the manager to approve. Without this, a
+// bad address only surfaces as a raw Gmail API error at actual send time,
+// after the manager already said yes.
+function isValidEmail(addr) {
+    return typeof addr === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim());
+}
+
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
         return { action_taken: 'email_missing_target' };
     }
-    const { getGmail, findLatestFrom } = require('../helpers/gmail');
+    const { getGmailRead, findLatestFrom } = require('../helpers/gmail');
     const { callGeminiJSON } = require('../helpers/gemini');
 
     let gmail;
     try {
-        gmail = getGmail();
+        gmail = getGmailRead();
     } catch (err) {
         await _send(chatId, `Can't draft that — Gmail isn't configured (${err.message}).`);
         return { action_taken: 'email_gmail_unavailable' };
@@ -1298,6 +1325,10 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
         to = await findLatestFrom(gmail, targetName);
     } catch (err) {
         console.error('[ACTIONS] findLatestFrom failed:', err.message);
+    }
+    if (to && !isValidEmail(to)) {
+        console.warn(`[ACTIONS] findLatestFrom resolved a non-address for "${targetName}": "${to}" — discarding`);
+        to = null;
     }
     if (!to) {
         await _send(chatId, `Couldn't find a past email from "${targetName}" to reply to — no address to send to. Give me the exact email address instead.`);
@@ -1320,9 +1351,10 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         return { action_taken: 'email_draft_failed' };
     }
 
+    const { cc, bcc } = ccBccFromSettings();
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
-        to, subject: draft.subject, body: draft.body,
+        to, cc, bcc, subject: draft.subject, body: draft.body,
         target_name: targetName, bkg_no: bkgNo || null,
     });
     if (staged.queued) {
@@ -1335,7 +1367,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         return { action_taken: 'email_draft_queued' };
     }
     await _send(chatId,
-        `Draft email to ${targetName} <${to}>:\n\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+        `Draft email to ${targetName} <${to}>:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'email_draft_staged' };
 }
@@ -1345,13 +1377,16 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     try {
-        // threadId/inReplyTo/references are only present when this pending
-        // came from draftReplyForConfirm (below) — undefined for a plain
-        // draftEmailForConfirm compose, and sendEmail/buildMimeMessage both
-        // already treat those as "new thread, no reply headers."
+        // inReplyTo/references are only present when this pending came from
+        // draftReplyForConfirm (below) — undefined for a plain
+        // draftEmailForConfirm compose, and buildMimeMessage already treats
+        // those as "new thread, no reply headers." sendEmail sends via
+        // apsara's account regardless — no threadId is ever passed, since a
+        // threadId captured from bose's mailbox (where the original lived)
+        // is meaningless on a different account's send.
         await sendEmail({
-            to: pending.to, subject: pending.subject, body: pending.body,
-            threadId: pending.threadId, inReplyTo: pending.inReplyTo, references: pending.references,
+            to: pending.to, cc: pending.cc, bcc: pending.bcc, subject: pending.subject, body: pending.body,
+            inReplyTo: pending.inReplyTo, references: pending.references,
         });
         await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.`);
         return { action_taken: 'email_sent' };
@@ -1369,12 +1404,12 @@ async function sendDraftedEmail(chatId, pending) {
 // instead of bookings.json. Reuses "note" (already used by ask_contact for
 // free-text) for the search topic instead of adding another schema field.
 async function searchMail(chatId, targetName, note, bkgNo) {
-    const { getGmail, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+    const { getGmailRead, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
     const { callGeminiJSON } = require('../helpers/gemini');
 
     let gmail;
     try {
-        gmail = getGmail();
+        gmail = getGmailRead();
     } catch (err) {
         await _send(chatId, `Can't search — Gmail isn't configured (${err.message}).`);
         return { action_taken: 'search_mail_gmail_unavailable' };
@@ -1441,34 +1476,59 @@ Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
 }
 
 // ── Reply within an existing thread ("reply to Zimex about DALA123: confirmed") ──
-// Distinct from draftEmailForConfirm: this finds a REAL prior email to reply
-// to and carries over its threadId/Message-ID/References, so the reply lands
-// in the same Gmail thread the manager and carrier are already using instead
-// of starting a fresh, disconnected one. Same confirm-before-send posture as
-// every other outbound path — stages via the SAME 'await_email_confirm'
-// pending type sendDraftedEmail already handles, just with thread fields
-// attached; no new pending type or send path needed.
+// Finds a REAL prior email to reply to and carries over its Message-ID/
+// References, so the RECIPIENT's mail client threads it correctly even
+// though the reply is sent from a different account than the one that
+// received the original — see helpers/gmail.js's sendEmail for why
+// threadId itself can't cross accounts and isn't used here.
+//
+// FORWARDED MAIL — a real, common case: if bose forwards a Zimex email to
+// the read/write account, the message's actual From header is bose, not
+// Zimex (that's just how Gmail forwarding works — Zimex's address only
+// exists as quoted TEXT inside the forward's body, e.g. "---------- 
+// Forwarded message ---------\nFrom: Zimex <...>"). Two consequences:
+//   1. A from:targetName search alone won't find it — broadened below to
+//      also match the name anywhere in the message (subject/body), which
+//      picks up the quoted header text inside a forward.
+//   2. Even once found, there's no real thread to reply into — a manual
+//      forward doesn't expose Zimex's original Message-ID as a usable
+//      header (Gmail only shows From/Date/Subject in the quoted block, not
+//      Message-ID), so In-Reply-To/References would have nothing valid to
+//      point at. In that case this composes a FRESH, non-threaded email to
+//      an address pulled out of the forward's body via Gemini instead of
+//      faking a thread reply it can't actually back up.
+// Same confirm-before-send posture either way — stages via the SAME
+// 'await_email_confirm' pending type sendDraftedEmail already handles.
 async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
     if (!targetName) {
         await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
         return { action_taken: 'reply_missing_target' };
     }
-    const { getGmail, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+    const { getGmailRead, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
     const { callGeminiJSON } = require('../helpers/gemini');
 
     let gmail;
     try {
-        gmail = getGmail();
+        gmail = getGmailRead();
     } catch (err) {
         await _send(chatId, `Can't reply — Gmail isn't configured (${err.message}).`);
         return { action_taken: 'reply_gmail_unavailable' };
     }
 
-    const terms = [`from:${targetName}`];
-    if (bkgNo) terms.push(bkgNo);
+    // Two passes, direct-first: a from:X search only ever matches a REAL
+    // direct email — if that finds something, use it, don't even look at
+    // the broader query. Only fall back to (from:X OR X) — which also
+    // matches X merely quoted inside a forward's body — when no direct
+    // email exists. Without this ordering, a genuine direct thread could
+    // lose to an unrelated forward just because Gmail's own relevance
+    // ranking on the combined OR query happened to rank the forward first.
+    const bkgTerm = bkgNo ? ` ${bkgNo}` : '';
     let messages;
     try {
-        messages = await listMessages(gmail, terms.join(' '), 3);
+        messages = await listMessages(gmail, `from:${targetName}${bkgTerm}`, 3);
+        if (!messages.length) {
+            messages = await listMessages(gmail, `(from:${targetName} OR ${targetName})${bkgTerm}`, 3);
+        }
     } catch (err) {
         await _send(chatId, `Couldn't search mail: ${err.message}`);
         return { action_taken: 'reply_search_failed' };
@@ -1485,20 +1545,74 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
     const full = await getMessage(gmail, messages[0].id);
     const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
     const fromAddr = (hdrs.From || '').match(/<([^>]+)>/)?.[1] || hdrs.From;
-    if (!fromAddr) {
-        await _send(chatId, "Found a matching email but couldn't parse the sender address — check Gmail directly.");
-        return { action_taken: 'reply_no_address' };
-    }
     const origSubject = hdrs.Subject || '';
-    const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
-    const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
-    const references = [hdrs.References, messageIdHeader].filter(Boolean).join(' ').trim();
     const { body: origBody } = getEmailContent(full.payload);
+    const { cc, bcc } = ccBccFromSettings();
 
     const bkg = bkgNo ? getBooking(bkgNo) : null;
     const bookingLine = bkg
         ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}.`
         : '';
+
+    // Is the message's ACTUAL sender the target, or does the target's name
+    // just appear somewhere in a forwarded/quoted body? Header match =
+    // direct email, real thread to reply into. No match = treat as a
+    // forward (or any other indirect mention) and compose fresh instead.
+    const isDirectSender = fromAddr && fromAddr.toLowerCase().includes(targetName.toLowerCase());
+
+    if (!isDirectSender) {
+        const extractPrompt = `This email may be a FORWARD containing an earlier message from "${targetName}". Find "${targetName}"'s email address as it appears in the forwarded/quoted content (often shown as "From: Name <address>" inside a "---------- Forwarded message ---------" block).
+Email body:
+${(origBody || '').slice(0, 3000)}
+Return ONLY this JSON: { "address": "the email address, or null if you can't find one for ${targetName} specifically" }`;
+        const extracted = await callGeminiJSON(extractPrompt);
+        let foundAddr = extracted && extracted.address && extracted.address !== 'null' ? extracted.address : null;
+        if (foundAddr && !isValidEmail(foundAddr)) {
+            console.warn(`[ACTIONS] Forward-extraction returned a non-address for "${targetName}": "${foundAddr}" — discarding`);
+            foundAddr = null;
+        }
+
+        if (!foundAddr) {
+            await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header). Give me the exact email address instead.`);
+            return { action_taken: 'reply_forward_no_address' };
+        }
+
+        const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to ${targetName}. This is NOT a direct reply-in-thread — it's a fresh email prompted by a forwarded/quoted message, so don't reference "your email below" or similar framing the recipient won't recognize.
+Forwarded content for context (may include other people's messages — use only what's relevant to ${targetName}):
+${(origBody || '').slice(0, 1500)}
+
+What this email needs to say: ${details || '(no further detail given — infer a reasonable, brief message from context)'}
+${bookingLine ? `Relevant booking data (use only what's relevant): ${bookingLine}` : ''}
+Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+        const draft = await callGeminiJSON(prompt);
+        if (!draft || !draft.subject || !draft.body) {
+            await _send(chatId, "Couldn't draft that email — try rephrasing what it should say.");
+            return { action_taken: 'reply_draft_failed' };
+        }
+
+        const staged = await setPending(chatId, {
+            type: 'await_email_confirm',
+            to: foundAddr, cc, bcc, subject: draft.subject, body: draft.body,
+            // No inReplyTo/references — a manual forward doesn't carry a
+            // usable Message-ID for the ORIGINAL sender, so there's nothing
+            // real to thread against. This sends as a fresh conversation.
+            target_name: targetName, bkg_no: bkgNo || null,
+        });
+        if (staged.queued) {
+            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
+            return { action_taken: 'reply_via_forward_queued' };
+        }
+        await _send(chatId,
+            `Found this via a forwarded email, not a direct thread — composing a NEW email (not threaded) to ${targetName} <${foundAddr}>:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+        );
+        return { action_taken: 'reply_via_forward_staged' };
+    }
+
+    // ── Direct email from the target — real thread-reply path ────────────
+    const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
+    const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
+    const references = [hdrs.References, messageIdHeader].filter(Boolean).join(' ').trim();
+
     const prompt = `Draft a short, professional reply from Edge Metals Inc. to this email thread.
 Original email — From: ${hdrs.From}, Subject: ${origSubject}
 Original body: ${(origBody || '').slice(0, 1500)}
@@ -1515,8 +1629,12 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
 
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
-        to: fromAddr, subject: replySubject, body: draft.body,
-        threadId: full.threadId, inReplyTo: messageIdHeader, references,
+        to: fromAddr, cc, bcc, subject: replySubject, body: draft.body,
+        // No threadId — belongs to whichever mailbox this was read from,
+        // invalid/meaningless when sending via a different account.
+        // inReplyTo/References are plain headers and cross accounts fine —
+        // that's what actually threads it for the recipient.
+        inReplyTo: messageIdHeader, references,
         target_name: targetName, bkg_no: bkgNo || null,
     });
     if (staged.queued) {
@@ -1524,7 +1642,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         return { action_taken: 'reply_draft_queued' };
     }
     await _send(chatId,
-        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n\n${draft.body}\n\nSend this? (yes/no)`
+        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'reply_draft_staged' };
 }
