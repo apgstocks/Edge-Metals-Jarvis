@@ -329,6 +329,50 @@ async function detectCcPattern(gmail, toAddress, minSamples = 2, maxResults = 8)
     return consistent.length ? consistent : null;
 }
 
+// Searches a term across From/Cc/To/bare-word (same query shape as
+// findLatestFrom) and returns, per matched message, its headers PLUS a
+// per-address tally of how often that address showed up in each role.
+// Built 2026-08-03 as the one shared source of truth for this — both
+// scripts/debugFindAddress.js (human-readable dump for manual review) and
+// scripts/learnDomain.js (auto-propose primary/secondary/shared roles for a
+// domain-tree contact group) need the EXACT same counting logic; having two
+// separate copies is exactly the kind of drift that caused real bugs earlier
+// today (findLatestFrom's old single-message-only logic silently disagreeing
+// with what a human would see by actually reading the mailbox).
+async function tallyAddressesForTerm(gmail, term, maxResults = 50) {
+    const q = `(from:${term} OR cc:${term} OR to:${term} OR ${term})`;
+    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults });
+    const rawMessages = res.data.messages || [];
+
+    const messages = [];
+    const tally = new Map(); // lowercased address -> { from, to, cc }
+
+    for (const m of rawMessages) {
+        let msg;
+        try {
+            msg = await getMessage(gmail, m.id);
+        } catch (err) {
+            console.warn(`[GMAIL] tallyAddressesForTerm: failed to read a matched message: ${err.message}`);
+            continue;
+        }
+        const headers = msg.payload.headers || [];
+        const get = (name) => headers.find((h) => h.name === name)?.value || '';
+        const date = get('Date'), subject = get('Subject'), from = get('From'), to = get('To'), cc = get('Cc');
+        messages.push({ date, subject, from, to, cc });
+
+        for (const [role, headerValue] of [['from', from], ['to', to], ['cc', cc]]) {
+            if (!headerValue) continue;
+            for (const part of headerValue.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)) {
+                if (!part.toLowerCase().includes(term.toLowerCase())) continue;
+                const addr = (extractAddress(part.trim()) || part.trim()).toLowerCase();
+                if (!tally.has(addr)) tally.set(addr, { from: 0, to: 0, cc: 0 });
+                tally.get(addr)[role]++;
+            }
+        }
+    }
+    return { query: q, messages, tally };
+}
+
 // Splits a raw To/Cc header value into individual bare addresses. Comma-
 // split respects quoted display names (same regex as findMatchingAddress
 // above) so "Doe, John" <a@b.com>, "Roe, Jane" <c@d.com> doesn't get split
@@ -357,4 +401,5 @@ module.exports = {
     READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite,
     parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
+    tallyAddressesForTerm,
 };
