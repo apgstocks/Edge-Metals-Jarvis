@@ -1310,7 +1310,6 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
         return { action_taken: 'email_missing_target' };
     }
     const { getGmailRead, findLatestFrom } = require('../helpers/gmail');
-    const { callGeminiJSON } = require('../helpers/gemini');
 
     let gmail;
     try {
@@ -1357,10 +1356,42 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
         }
     }
     if (!to) {
-        await _send(chatId, `Couldn't find a past email from "${targetName}" to reply to — no address to send to. Give me the exact email address instead.`);
+        // REAL BUG (found 2026-08-03 via a live transcript): this used to
+        // just send "give me the exact email address" and return, discarding
+        // targetName/details/bkgNo entirely. The manager's very next message
+        // (the address) then went through NORMAL intent classification
+        // instead of being recognized as "the answer to what I just asked" —
+        // it usually landed on a generic AI clarifying question ("what would
+        // you like to email X about?"), silently dropping the original
+        // request and forcing a full retype. Fixed the same way
+        // await_container_number/await_relay_reply already solve this
+        // exact class of problem elsewhere in this file: stage a pending
+        // that captures the ENTIRE original request, so the next message —
+        // whatever it is — is captured verbatim as the answer, not
+        // re-classified from scratch. See brain.js's policyDecide() A0-tier
+        // handling of 'await_manual_email_address'.
+        const staged = await setPending(chatId, {
+            type: 'await_manual_email_address',
+            mode: 'draft', target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+        });
+        if (staged.queued) {
+            await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to, and you already have a pending "${staged.blockedBy}" to answer first. I'll ask for ${targetName}'s address once that's resolved.`);
+            return { action_taken: 'email_no_address_queued' };
+        }
+        await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to. Give me the exact email address (or "cancel").`);
         return { action_taken: 'email_no_address' };
     }
 
+    return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource);
+}
+
+// Shared drafting tail — called once an address is known, whether resolved
+// via contacts, mail search, or (after the await_manual_email_address
+// pending above) typed directly by the manager. Factored out 2026-08-03 so
+// all three paths produce an identical draft/preview/confirm flow instead of
+// three slightly-diverging copies.
+async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource) {
+    const { callGeminiJSON } = require('../helpers/gemini');
     const bkg = bkgNo ? getBooking(bkgNo) : null;
     const bookingLine = bkg
         ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}, POL ${bkg.port_of_loading || '—'}, POD ${bkg.port_of_discharge || '—'}.`
@@ -1400,6 +1431,44 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         `Draft email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact — reply "no" if that\'s the wrong one)' : ''}:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'email_draft_staged' };
+}
+
+// Only ever called from brain.js's route() when an 'await_manual_email_address'
+// pending is active — see brain.js's policyDecide() A0-tier handling for why
+// this exists (fixes the real "asked for address, then lost the original
+// request" bug). Whatever the manager just typed is captured VERBATIM as the
+// candidate address, same pattern as recordContainerNumber/relayReplyReceived.
+async function resolveManualEmailAddress(chatId, addressText) {
+    const pending = getPending(chatId);
+    if (!pending || pending.type !== 'await_manual_email_address') {
+        // Shouldn't happen — brain.js only routes here while this exact
+        // pending is active — but never silently proceed on a stale/missing
+        // pending with no target to draft to.
+        console.warn('[ACTIONS] resolveManualEmailAddress called with no matching pending — ignoring');
+        return { action_taken: 'manual_email_address_no_pending' };
+    }
+
+    const addr = String(addressText || '').trim();
+    if (/^cancel$/i.test(addr)) {
+        await clearPending(chatId);
+        await _send(chatId, 'Cancelled — no email drafted.');
+        return { action_taken: 'manual_email_address_cancelled' };
+    }
+    if (!isValidEmail(addr)) {
+        // Deliberately does NOT clear the pending — same "keep asking until
+        // it's valid or cancelled" behavior a human assistant would use.
+        await _send(chatId, `"${addr}" doesn't look like a valid email address — try again, or reply "cancel".`);
+        return { action_taken: 'manual_email_address_invalid' };
+    }
+
+    await clearPending(chatId);
+    // The manager just typed this address specifically for this name — the
+    // highest-confidence signal of all three save points in this file, so
+    // it's always worth saving. Failure must never block the actual draft.
+    require('../helpers/emailContacts').addContact(pending.target_name, addr).catch((err) =>
+        console.warn(`[ACTIONS] Failed to save manually-given contact "${pending.target_name}":`, err.message));
+
+    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, addr, 'manual');
 }
 
 // Only ever called from resolvePending after an explicit "yes" — see the
@@ -1638,7 +1707,19 @@ Return ONLY this JSON: { "address": "the email address, or null if you can't fin
         }
 
         if (!foundAddr) {
-            await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header), and nothing saved for them either. Give me the exact email address instead.`);
+            // Same fix as draftEmailForConfirm's identical dead-end: don't
+            // just ask and discard targetName/details/bkgNo — stage a
+            // pending so the manager's next message (the address) resumes
+            // THIS request instead of being reclassified from scratch.
+            const staged = await setPending(chatId, {
+                type: 'await_manual_email_address',
+                mode: 'draft', target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+            });
+            if (staged.queued) {
+                await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address (likely a forward without a clean quoted header), and nothing saved for them either — plus you already have a pending "${staged.blockedBy}" to answer first. I'll ask for the address once that's resolved.`);
+                return { action_taken: 'reply_forward_no_address_queued' };
+            }
+            await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header), and nothing saved for them either. Give me the exact email address (or "cancel").`);
             return { action_taken: 'reply_forward_no_address' };
         }
         // Learned/confirmed this address (from the forward body, or reused
@@ -1761,5 +1842,6 @@ recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
     draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    resolveManualEmailAddress,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };

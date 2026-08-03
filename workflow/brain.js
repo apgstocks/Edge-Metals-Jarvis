@@ -183,6 +183,20 @@ function policyDecide(ctx) {
         return { intent: 'relay_reply_received', resolvedBy: 'policy', data: { reply_text: ctx.text.trim() } };
     }
 
+    // ── A0d. Manual email-address pending — same "capture verbatim, no
+    // reclassification" reasoning as A0b/A0c above. Built 2026-08-03 after a
+    // real live bug: draftEmailForConfirm/draftReplyForConfirm used to ask
+    // "give me the exact email address" and then just return, discarding
+    // the original request. The manager's next message (the address) went
+    // through NORMAL classification and usually landed on a generic AI
+    // clarifying question, silently dropping what she'd already typed. This
+    // pending captures the whole original request (target/details/booking)
+    // so ANY next message is treated as "the address I asked for", not
+    // reclassified from scratch.
+    if (ctx.pendingAction?.type === 'await_manual_email_address') {
+        return { intent: 'manual_email_address_received', resolvedBy: 'policy', data: { address_text: ctx.text.trim() } };
+    }
+
     // ── A0b. End-of-day fact-batch confirmation — same "runs before section A's
     // generic yes/no" reasoning as await_ready_check above: "all" and "1,3"
     // don't match the YES/NO arrays or a plain list selection, so this needs
@@ -914,6 +928,7 @@ async function route(decision, ctx, sendMessage) {
         case 'ready_check_date':       return actions.resolveReadyCheckDate(chatId, ctx.pendingAction, d.date_text);
         case 'container_number_received': return actions.recordContainerNumber(chatId, ctx.pendingAction, d.container_number);
         case 'relay_reply_received':      return actions.relayReplyReceived(chatId, ctx.pendingAction, d.reply_text);
+        case 'manual_email_address_received': return actions.resolveManualEmailAddress(chatId, d.address_text);
         // Whitelist info queries — trucker/supplier can ask ERD or cutoff of their active booking.
         case 'trucker_ask_erd':
         case 'supplier_ask_erd':       return actions.showErd ? actions.showErd(chatId, bkg) : ask(chatId, `ERD: ${(actions.getBookingField && actions.getBookingField(bkg, 'erd_date')) || 'not set'}`);
@@ -981,6 +996,9 @@ function pendingFullReminder(p) {
     if (p.type === 'await_email_confirm') {
         const ccBcc = [p.cc ? `Cc: ${p.cc}` : null, p.bcc ? `Bcc: ${p.bcc}` : null].filter(Boolean).join('\n');
         return `(Still waiting: send this email to ${p.target_name} <${p.to}>?\n${ccBcc ? ccBcc + '\n' : ''}Subject: ${p.subject}\n\n${p.body}\n\nReply yes or no.)`;
+    }
+    if (p.type === 'await_manual_email_address') {
+        return `(Still waiting: what's ${p.target_name}'s email address? I'll draft the email to them about "${p.details || '(what you asked)'}" once you give it — or reply "cancel".)`;
     }
     return null; // no type-specific text — use the generic template
 }
