@@ -1633,8 +1633,26 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
     if (toSource === 'contact' && !resolvedContact.contact.cc && !resolvedContact.contact.cc_declined) {
         let detectedCc = null;
         try {
-            const { detectCcPattern } = require('../helpers/gmail');
+            const { detectCcPattern, getMyEmailAddress } = require('../helpers/gmail');
             detectedCc = await detectCcPattern(gmail, to);
+            // REAL BUG (found 2026-08-04, live): Michael Horowitz ended up
+            // cc'd on an email TO Michael Horowitz — detectCcPattern read
+            // this straight out of Apsara's real sent-mail history (some
+            // past email apparently had his own address duplicated into
+            // Cc), which is technically accurate data but never a sane
+            // pattern to offer or save: nobody means to cc the person
+            // they're already emailing. Strip the recipient's own address
+            // (and, for the same reason, our own sending account) before
+            // this is ever shown or saved — same self-exclusion draftReply-
+            // ForConfirm already applies when preserving a thread's Cc list.
+            if (detectedCc && detectedCc.length) {
+                let myAddr = null;
+                try { myAddr = await getMyEmailAddress(gmail); } catch (_) { /* best-effort */ }
+                detectedCc = detectedCc.filter((addr) =>
+                    addr.toLowerCase() !== String(to).toLowerCase() &&
+                    (!myAddr || addr.toLowerCase() !== myAddr.toLowerCase())
+                );
+            }
         } catch (err) {
             console.warn(`[ACTIONS] Cc-pattern detection failed for "${targetName}":`, err.message);
         }
