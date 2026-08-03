@@ -1463,6 +1463,17 @@ function deReformatTargetName(targetName, rawText) {
     return cleaned;
 }
 
+// REAL BUG (found 2026-08-04, live): "request a delivery appointment for
+// tomorrow" drafted with a literal "[Date]" placeholder instead of an actual
+// date. Gemini has no way to resolve "tomorrow"/"next Monday"/etc. into a
+// real calendar date unless it's actually told what today is — nothing in
+// any drafting prompt ever gave it that. Shared by every draft-composing
+// prompt in this file so none of them can independently forget it.
+function todayDateContext() {
+    const formatted = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    return `Today's date is ${formatted}. If the message references a relative date ("tomorrow", "next Monday", "in 3 days", etc.), resolve it to an ACTUAL calendar date and use that in the email — never leave a placeholder like "[Date]" or "[Insert Date]" for the manager to fill in themselves.`;
+}
+
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
@@ -1735,6 +1746,7 @@ async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toS
     const greetingName = contactRecord?.displayName || targetName;
 
     const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to a carrier/vendor contact.
+${todayDateContext()}
 Recipient: ${greetingName}
 What the email needs to say: ${details || (recentContext
         ? 'No specific ask was given — write a brief, genuinely relevant follow-up grounded in the recent correspondence below (e.g. reference what it was actually about). Do NOT write generic filler like "just checking in" or "hope all is well" with no real content.'
@@ -2224,6 +2236,7 @@ Return ONLY this JSON: { "address": "the email address, or null if you can't fin
         const fwdGreetingName = fwdContactRecord?.displayName || targetName;
 
         const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to ${fwdGreetingName}. This is NOT a direct reply-in-thread — it's a fresh email prompted by a forwarded/quoted message, so don't reference "your email below" or similar framing the recipient won't recognize.
+${todayDateContext()}
 Forwarded content for context (may include other people's messages — use only what's relevant to ${targetName}):
 ${(origBody || '').slice(0, 1500)}
 
@@ -2290,6 +2303,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     const replyCc = mergeCc(globalCc, ccForAddress(fromAddr), origCc);
 
     const prompt = `Draft a short, professional reply from Edge Metals Inc. to this email thread.
+${todayDateContext()}
 Original email — From: ${hdrs.From}, Subject: ${origSubject}
 Original body: ${(origBody || '').slice(0, 1500)}
 
