@@ -234,8 +234,25 @@ function normalizeDomain(term) {
 // seed scripts just relocates the "hardcoding" problem instead of fixing
 // it — this proposes from real From/Cc/To frequency instead of a guess:
 //   from === 0                                  -> shared (never originates mail)
-//   from > 0 but cc >= from*3 (and cc >= 10)     -> shared (sends occasionally, overwhelmingly cc'd — shared-box pattern)
+//   from > 0 but cc >= from*3 (and cc >= 10)     -> shared, UNLESS the display name looks like a real
+//                                                   person (see looksLikePersonName below)
 //   otherwise                                    -> primary (highest From count) / secondary (everyone else)
+//
+// REAL BUG (found 2026-08-04, live): eccomelt.com's "Michael Horowitz" got
+// classified 'shared' purely from his From/Cc ratio — he sends occasionally
+// but gets copied on almost everything, the same numeric pattern as a
+// generic mailbox. But a shared/departmental box (docs, purchasing,
+// accounts) and a busy person who's cc'd on everything are NOT the same
+// thing, and the consequence is real: shared members never get a cc list of
+// their own (they're what gets auto-cc'd onto OTHERS' mail, not the other
+// way round) — so addressing Michael directly silently dropped everyone
+// else who should have been looped in. The display name is the signal the
+// pure ratio was missing: "Michael Horowitz" reads as a person; "Eccomelt
+// Purchasing" or a bare "Docs" doesn't. Only the ratio-based shared
+// classification is gated on this — the from===0 branch is untouched,
+// since Apsara explicitly confirmed elsewhere (helen@radmetals, who has
+// never sent anything at all) that a real person with zero sent mail should
+// still default to shared/auto-cc.
 // A name is inferred from the address's local-part UNLESS it's identical to
 // the domain term itself (e.g. radmetals@radmetals.com when learning
 // "radmetals") — that collision is left unnamed (name: null) rather than
@@ -252,18 +269,40 @@ function normalizeDomain(term) {
 // email body/greeting while `name` stays the short typed key — null when
 // no display name was ever seen in the scanned mail (e.g. the domain's
 // been mentioned but this address has never actually sent anything).
+// Heuristic, not a verdict — "Michael Horowitz" or "Tiffany Furleigh" reads
+// as a real person; a bare "Docs", "Support Team", or "Eccomelt Purchasing"
+// doesn't. Two-plus words with none of them a generic/departmental keyword
+// is treated as a person's name. False positives/negatives are possible
+// (an unusually-named shared inbox, a person who only gave one name) — this
+// only gates ONE specific heuristic branch in proposeDomainRoles and every
+// proposal is still shown to Apsara for review/override before anything
+// saves, same as always.
+const GENERIC_NAME_WORDS = new Set([
+    'team', 'dept', 'department', 'support', 'sales', 'purchasing', 'accounts', 'accounting',
+    'info', 'admin', 'administration', 'docs', 'documents', 'documentation', 'service', 'services',
+    'office', 'group', 'desk', 'helpdesk', 'notifications', 'billing', 'invoices', 'orders',
+    'shipping', 'logistics', 'operations', 'company', 'inc', 'llc', 'ltd', 'corp',
+]);
+function looksLikePersonName(name) {
+    if (!name) return false;
+    const words = name.trim().split(/\s+/).filter(Boolean);
+    if (words.length < 2) return false; // a single word ("Support", "Docs") reads as generic, not a person
+    return !words.some((w) => GENERIC_NAME_WORDS.has(w.toLowerCase().replace(/[^a-z]/g, '')));
+}
+
 function proposeDomainRoles(tally, term, domain) {
     const bareTerm = String(term).replace(/\.com$/i, '').toLowerCase();
     const domainAddrs = [...tally.entries()].filter(([addr]) => addr.endsWith(`@${domain}`));
 
     const proposals = domainAddrs.map(([addr, counts]) => {
         const localPart = addr.split('@')[0];
+        const displayName = counts.displayName || null;
         let role;
         if (counts.from === 0) role = 'shared';
-        else if (counts.cc >= counts.from * 3 && counts.cc >= 10) role = 'shared';
+        else if (counts.cc >= counts.from * 3 && counts.cc >= 10 && !looksLikePersonName(displayName)) role = 'shared';
         else role = 'candidate'; // resolved to primary/secondary below
         const name = localPart.toLowerCase() === bareTerm ? null : localPart;
-        return { addr, counts, role, name, displayName: counts.displayName || null };
+        return { addr, counts, role, name, displayName };
     });
 
     // REAL CASE (found 2026-08-04, live): mkmetaltrading.com has THREE real
