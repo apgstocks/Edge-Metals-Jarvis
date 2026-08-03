@@ -29,10 +29,15 @@
 // optionally carries `domain` and `role` now. `role: 'primary'` is who a
 // bare company-name mention ("mail radmetals") resolves to by default;
 // other roles (e.g. 'secondary', 'shared') must be addressed by their own
-// name ("mail helen"). A domain's shared/cc-only address (e.g. a docs
-// mailbox) is wired in by literally setting that address on every other
-// member's own `cc` field — draftEmailWithAddress/ccForAddress already look
-// up cc by the resolved email address, so this needed zero changes there.
+// name ("mail helen"). Every member of a domain group is wired to auto-cc
+// every OTHER member (cc scope widened 2026-08-04 per Apsara's explicit
+// choice — "everyone else at that company," not just shared/docs-style
+// addresses) by literally setting those addresses on each member's own
+// `cc` field — draftEmailWithAddress/ccForAddress already look up cc by the
+// resolved email address, so this needed zero changes there. `role` itself
+// still matters for a different reason: it decides who a bare domain
+// mention ("mail eccomelt") resolves to by default (primary) and who
+// should never be that default (shared).
 
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');

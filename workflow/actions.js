@@ -912,12 +912,18 @@ switch (pending.type) {
         // shadow-guard comment for the full incident this protects against).
         const existingFlat = emailContacts.loadContacts().find((c) => c.name.toLowerCase() === bareTerm && !c.domain);
         if (existingFlat) await emailContacts.removeContact(bareTerm);
-        const sharedEmails = proposals.filter((p) => p.role === 'shared').map((p) => p.addr);
+        // Cc scope changed 2026-08-04 per Apsara, explicit choice via
+        // AskUserQuestion ("everyone else at that company" over "only
+        // shared-role addresses"): every member of a domain group gets
+        // auto-cc'd with every OTHER member, regardless of role — not just
+        // whoever's marked 'shared'. 'shared' still matters for who a bare
+        // domain mention resolves to (never the default primary), just not
+        // for cc scope anymore.
         for (const p of proposals) {
-            const cc = p.role === 'shared' ? undefined : sharedEmails.filter((e) => e !== p.addr);
+            const others = proposals.filter((x) => x.addr !== p.addr).map((x) => x.addr);
             await emailContacts.addContact(p.name, p.addr, {
                 domain, role: p.role,
-                ...(cc && cc.length ? { cc } : {}),
+                ...(others.length ? { cc: others } : {}),
                 ...(p.displayName ? { displayName: p.displayName } : {}),
             });
         }
@@ -1891,7 +1897,7 @@ async function stageDomainLearnConfirm(chatId, term, domain, proposals, resume, 
     }
     await _send(chatId,
         `${intro || ''}Save these ${domain} contacts?\n${summary}\n\n` +
-        `(Primary = who "mail ${term}" resolves to by default. Shared = auto-cc'd on every email to the others.)\n\n` +
+        `(Primary = who "mail ${term}" resolves to by default. Everyone here gets auto-cc'd on emails to anyone else in the group.)\n\n` +
         (resume ? 'yes/no — either way I\'ll continue your original email next' : 'yes/no')
     );
     return { action_taken: 'domain_learn_confirm_staged' };

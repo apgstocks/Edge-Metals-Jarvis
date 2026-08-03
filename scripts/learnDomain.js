@@ -65,11 +65,13 @@ async function main() {
         console.log(`${p.addr}  From=${p.counts.from} To=${p.counts.to} Cc=${p.counts.cc}  -> role=${p.role}  name=${nameStr}${dnStr}`);
     }
 
-    const sharedEmails = proposals.filter((p) => p.role === 'shared').map((p) => p.addr);
+    // Cc scope changed 2026-08-04 per Apsara (explicit choice, same as the
+    // WhatsApp flow): every member of a domain group auto-cc's every OTHER
+    // member, regardless of role — not just 'shared' addresses. Role still
+    // decides who a bare domain mention resolves to by default.
     const applyable = proposals.filter((p) => p.name);
     const skipped = proposals.filter((p) => !p.name);
 
-    console.log(`\nShared/auto-cc addresses for this domain: ${sharedEmails.length ? sharedEmails.join(', ') : '(none)'}`);
     if (skipped.length) console.log(`\nSKIPPING (no name, needs override): ${skipped.map((p) => p.addr).join(', ')}`);
     if (!proposals.some((p) => p.role === 'primary')) {
         console.log('\nNOTE: no address qualified as primary — a bare domain mention will stay ambiguous until you set one manually via --role=email:primary.');
@@ -87,13 +89,13 @@ async function main() {
     }
 
     for (const p of applyable) {
-        const cc = p.role === 'shared' ? undefined : sharedEmails.filter((e) => e !== p.addr);
+        const others = proposals.filter((x) => x.addr !== p.addr).map((x) => x.addr);
         await emailContacts.addContact(p.name, p.addr, {
             domain, role: p.role,
-            ...(cc && cc.length ? { cc } : {}),
+            ...(others.length ? { cc: others } : {}),
             ...(p.displayName ? { displayName: p.displayName } : {}),
         });
-        console.log(`Saved: ${p.name} <${p.addr}> role=${p.role}${cc && cc.length ? ` cc=[${cc.join(', ')}]` : ''}${p.displayName ? ` displayName="${p.displayName}"` : ''}`);
+        console.log(`Saved: ${p.name} <${p.addr}> role=${p.role}${others.length ? ` cc=[${others.join(', ')}]` : ''}${p.displayName ? ` displayName="${p.displayName}"` : ''}`);
     }
     console.log('\nDone.');
 }
