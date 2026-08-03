@@ -293,6 +293,7 @@ const NAV_ITEMS = [
   { id: 'suppliers', label: 'Suppliers' },
   { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true },
   { id: 'contacts',  label: 'Contacts', adminOnly: true },
+  { id: 'email-contacts', label: 'Email Contacts', adminOnly: true },
   { id: 'settings',  label: 'Settings', adminOnly: true },
   { id: 'bot',       label: 'Bot' },
   { id: 'tasks',     label: 'Tasks' },
@@ -349,6 +350,7 @@ async function loadTab(tab) {
     if (tab === 'suppliers') return renderContacts('suppliers', 'Yard network', '+ Add supplier', await api('/api/suppliers'));
     if (tab === 'whatsapp') return renderWhatsapp();
     if (tab === 'contacts') return renderPriceContacts();
+    if (tab === 'email-contacts') return renderEmailContacts();
     if (tab === 'settings') return renderSettings(await api('/api/settings'));
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
@@ -1178,6 +1180,54 @@ function renderPriceContacts() {
     catch (e) { alert(e.message); }
   });
   loadPriceContacts();
+}
+
+// Saved name→email directory used by draft_email/reply_email on WhatsApp
+// ("email Zimex about DALA123" resolves against this before falling back to
+// a fresh Gmail search) — see helpers/emailContacts.js. Deliberately its own
+// simple 2-field list (name, email), same visual pattern as
+// renderPriceContacts() above rather than the heavier trucker/supplier
+// renderContacts() (which assumes locality/group_id/preferred_mode fields
+// that don't apply here).
+function renderEmailContacts() {
+  $('viewRoot').innerHTML = `
+    <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
+        <div><div class="eyebrow">// Contacts</div><h2 style="font-size:24px; text-transform:uppercase;">Email contacts</h2></div>
+        <button id="btnAddEmailContact" class="btn btn-primary">+ Add contact</button>
+      </div>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "email &lt;name&gt; about ..." or "reply to &lt;name&gt;..." on WhatsApp — Jarvis checks here before searching mail. Learned automatically too: the first time a name resolves via mail search, it's saved here for next time.</div>
+      <div class="card" style="padding:22px 24px;">
+        <div id="emailContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+      </div>
+    </section>`;
+
+  async function loadEmailContacts() {
+    const rows = $('emailContactRows');
+    try {
+      const contacts = await api('/api/email-contacts');
+      rows.innerHTML = contacts.length ? contacts.map(c => `
+        <div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-name="${esc(c.name)}">
+          <div>
+            <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)}</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.email)}</div>
+          </div>
+          <button class="btn btn-danger btn-del-email-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
+        </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
+      document.querySelectorAll('.btn-del-email-contact').forEach(btn => btn.addEventListener('click', async () => {
+        if (!confirm(`Remove ${btn.dataset.name} from email contacts?`)) return;
+        await api(`/api/email-contacts/${encodeURIComponent(btn.dataset.name)}`, { method: 'DELETE' });
+        loadEmailContacts();
+      }));
+    } catch (e) { rows.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`; }
+  }
+  $('btnAddEmailContact').addEventListener('click', async () => {
+    const name = prompt('Contact name:'); if (!name) return;
+    const email = prompt('Email address:'); if (!email) return;
+    try { await api('/api/email-contacts', { method: 'POST', body: JSON.stringify({ name, email }) }); loadEmailContacts(); }
+    catch (e) { alert(e.message); }
+  });
+  loadEmailContacts();
 }
 
 // ── BOT CONSOLE ───────────────────────────────────────────────────────────

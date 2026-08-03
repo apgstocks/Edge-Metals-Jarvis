@@ -57,9 +57,13 @@ async function extractBookingFieldsFromText(emailBodyText, retries = 2) {
 Schema (every field can be null if not present):
 {
   "booking_number": null, "carrier": null, "port_of_loading": null, "port_of_discharge": null,
-  "cutoff_date": null, "erd_date": null, "etd": null, "vessel_voyage": null,
+  "cutoff_date": null, "erd_date": null, "etd": null, "eta": null, "vessel_voyage": null,
   "container_size": null, "container_number": null, "shipper": null, "consignee": null, "buyer": null
 }
+
+etd = Estimated Time of Departure, eta = Estimated Time of Arrival — these are
+two DIFFERENT dates, do not confuse them or copy one into the other; leave
+either null if the email doesn't actually state it.
 
 Convert all dates to MM/DD/YYYY. Port fields must be city names only. Return the JSON object and nothing else.
 
@@ -104,7 +108,8 @@ async function extractPdfFields(pdfBase64, retries = 2) {
   "port_of_discharge": null,// city only, e.g. "Busan"
   "cutoff_date": null,      // MM/DD/YYYY format
   "erd_date": null,         // MM/DD/YYYY format — Earliest Return Date
-  "etd": null,              // MM/DD/YYYY
+  "etd": null,              // MM/DD/YYYY — Estimated Time of Departure
+  "eta": null,              // MM/DD/YYYY — Estimated Time of Arrival (different date than etd — don't conflate)
   "vessel_voyage": null,    // e.g. "MSC AURORA 226E"
   "container_size": null,   // format "40HC" (single) or "40HC X 3" (three containers of 40HC). Multiple containers common in metals bookings.
   "container_number": null, // e.g. "TCLU8841207". If multiple, use first only; others assigned later per-container.

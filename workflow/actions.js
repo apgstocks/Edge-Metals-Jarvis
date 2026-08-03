@@ -1320,15 +1320,41 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
         return { action_taken: 'email_gmail_unavailable' };
     }
 
+    // Contacts directory first — a saved name→address match (or the manager
+    // just typing a raw address) skips the mail search entirely. Ambiguous
+    // (multiple saved names partially match) is the literal "are you
+    // mentioning this?" case Apsara asked for: don't guess, ask which one.
+    const emailContacts = require('../helpers/emailContacts');
+    const resolvedContact = emailContacts.resolveContact(targetName);
     let to;
-    try {
-        to = await findLatestFrom(gmail, targetName);
-    } catch (err) {
-        console.error('[ACTIONS] findLatestFrom failed:', err.message);
+    let toSource = null;
+    if (resolvedContact && resolvedContact.type === 'ambiguous') {
+        const options = resolvedContact.matches.map((c) => `- ${c.name} <${c.email}>`).join('\n');
+        await _send(chatId, `A few saved contacts match "${targetName}" — which one did you mean?\n${options}\n\nRe-send with the exact name.`);
+        return { action_taken: 'email_contact_ambiguous' };
     }
-    if (to && !isValidEmail(to)) {
-        console.warn(`[ACTIONS] findLatestFrom resolved a non-address for "${targetName}": "${to}" — discarding`);
-        to = null;
+    if (resolvedContact) {
+        to = resolvedContact.contact.email;
+        toSource = 'contact';
+    }
+
+    if (!to) {
+        try {
+            to = await findLatestFrom(gmail, targetName);
+        } catch (err) {
+            console.error('[ACTIONS] findLatestFrom failed:', err.message);
+        }
+        if (to && !isValidEmail(to)) {
+            console.warn(`[ACTIONS] findLatestFrom resolved a non-address for "${targetName}": "${to}" — discarding`);
+            to = null;
+        }
+        if (to) {
+            // Learned a new address via mail search — save it so the NEXT
+            // "email <name>" is an instant contacts hit instead of another
+            // search. Save failure must never block the actual draft.
+            emailContacts.addContact(targetName, to).catch((err) =>
+                console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
+        }
     }
     if (!to) {
         await _send(chatId, `Couldn't find a past email from "${targetName}" to reply to — no address to send to. Give me the exact email address instead.`);
@@ -1366,12 +1392,12 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         // isn't actually the active pending yet — see setPending's own
         // comment for why silently overwriting the real one is worse.
         await _send(chatId,
-            `Drafted the email to ${targetName} <${to}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`
+            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`
         );
         return { action_taken: 'email_draft_queued' };
     }
     await _send(chatId,
-        `Draft email to ${targetName} <${to}>:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+        `Draft email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact — reply "no" if that\'s the wrong one)' : ''}:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'email_draft_staged' };
 }
@@ -1577,6 +1603,14 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
     // forward (or any other indirect mention) and compose fresh instead.
     const isDirectSender = fromAddr && fromAddr.toLowerCase().includes(targetName.toLowerCase());
 
+    if (isDirectSender) {
+        // Direct, header-confirmed address for targetName — save it so a
+        // future "email X" / "reply to X" resolves instantly via contacts
+        // instead of a fresh search. Failure must never block the reply.
+        require('../helpers/emailContacts').addContact(targetName, fromAddr).catch((err) =>
+            console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
+    }
+
     if (!isDirectSender) {
         const extractPrompt = `This email may be a FORWARD containing an earlier message from "${targetName}". Find "${targetName}"'s email address as it appears in the forwarded/quoted content (often shown as "From: Name <address>" inside a "---------- Forwarded message ---------" block).
 Email body:
@@ -1589,10 +1623,29 @@ Return ONLY this JSON: { "address": "the email address, or null if you can't fin
             foundAddr = null;
         }
 
+        const emailContacts = require('../helpers/emailContacts');
         if (!foundAddr) {
-            await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header). Give me the exact email address instead.`);
+            // Couldn't pull it from the forward body — check the saved
+            // contacts directory before giving up and asking the manager to
+            // type it out again.
+            const resolvedContact = emailContacts.resolveContact(targetName);
+            if (resolvedContact && resolvedContact.type === 'ambiguous') {
+                const options = resolvedContact.matches.map((c) => `- ${c.name} <${c.email}>`).join('\n');
+                await _send(chatId, `Couldn't pull ${targetName}'s address from the forward, and a few saved contacts match "${targetName}" — which one?\n${options}\n\nRe-send with the exact name.`);
+                return { action_taken: 'reply_forward_contact_ambiguous' };
+            }
+            if (resolvedContact) foundAddr = resolvedContact.contact.email;
+        }
+
+        if (!foundAddr) {
+            await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header), and nothing saved for them either. Give me the exact email address instead.`);
             return { action_taken: 'reply_forward_no_address' };
         }
+        // Learned/confirmed this address (from the forward body, or reused
+        // from contacts) — save it either way so the name resolves instantly
+        // next time. Failure here must never block the actual draft.
+        emailContacts.addContact(targetName, foundAddr).catch((err) =>
+            console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
 
         const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to ${targetName}. This is NOT a direct reply-in-thread — it's a fresh email prompted by a forwarded/quoted message, so don't reference "your email below" or similar framing the recipient won't recognize.
 Forwarded content for context (may include other people's messages — use only what's relevant to ${targetName}):
@@ -1666,6 +1719,35 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
     return { action_taken: 'reply_draft_staged' };
 }
 
+// On-demand trigger for helpers/cutoffBackfill.js — "backfill missing
+// cutoffs" on WhatsApp. Auto-fills (never overwrites, only blanks), so this
+// reports what changed AFTER the fact rather than asking for confirmation —
+// same posture as emailWatcher.js's own silent-fill-then-notify behavior.
+// The nightly cron in scheduler.js calls the same helper directly; this is
+// just the manager-triggered path into it.
+async function backfillCutoffs(chatId) {
+    const { run, FIELD_LABELS } = require('../helpers/cutoffBackfill');
+    await _send(chatId, 'Checking bookings for missing cutoff/ERD/ETD/ETA/vessel/route fields against existing mail — this can take a moment.');
+    let results;
+    try {
+        results = await run();
+    } catch (err) {
+        console.error('[ACTIONS] backfillCutoffs failed:', err.message);
+        await _send(chatId, `Backfill failed: ${err.message}`);
+        return { action_taken: 'cutoff_backfill_failed' };
+    }
+    if (!results.length) {
+        await _send(chatId, 'No missing fields found in existing mail — either nothing was blank, or nothing in mail could fill what was.');
+        return { action_taken: 'cutoff_backfill_none' };
+    }
+    const lines = results.map((r) => {
+        const parts = Object.entries(r.filled).map(([k, v]) => `${FIELD_LABELS[k] || k}: ${v}`);
+        return `${r.bkgNo} — ${parts.join(', ')}`;
+    });
+    await _send(chatId, `Backfilled from mail:\n${lines.join('\n')}`);
+    return { action_taken: 'cutoff_backfill_done', count: results.length };
+}
+
 module.exports = {
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,
@@ -1678,6 +1760,6 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm,
+    draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };

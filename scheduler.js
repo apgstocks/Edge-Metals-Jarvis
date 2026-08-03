@@ -337,6 +337,33 @@ async function autoArchive() {
     await pushAlert({ type: 'auto_archived', bkgNo: null, message: `Auto-archived: ${archived.join(', ')}`, severity: 'info' });
 }
 
+// ── 10:45PM — nightly field backfill ────────────────────────────────────────
+// Scans every active booking missing ANY of cutoff/ERD/ETD/ETA/vessel/route
+// (see BACKFILL_FIELDS in helpers/cutoffBackfill.js) and tries to fill it
+// from existing mail. Runs before autoArchive (11PM) on purpose: a booking
+// that's ACTUALLY past cutoff but just never had the field populated
+// shouldn't dodge archiving forever purely because cutoff_date was empty —
+// this gives it one more chance to get filled in first, same night, before
+// the archive check runs.
+async function nightlyCutoffBackfill() {
+    let results;
+    let FIELD_LABELS;
+    try {
+        const mod = require('./helpers/cutoffBackfill');
+        FIELD_LABELS = mod.FIELD_LABELS;
+        results = await mod.run();
+    } catch (err) {
+        console.error('[SCHED] cutoff-backfill:', err.message);
+        return;
+    }
+    if (!results.length) return;
+    const lines = results.map((r) => {
+        const parts = Object.entries(r.filled).map(([k, v]) => `${FIELD_LABELS[k] || k}: ${v}`);
+        return `${r.bkgNo} — ${parts.join(', ')}`;
+    });
+    await _sendToManager(`Nightly backfill — filled missing fields from existing mail:\n${lines.join('\n')}`);
+}
+
 // ── 6AM — price list fallback reconciliation ──────────────────────────────
 // Safety net for the real-time Apps Script webhook (helpers/pricelist.js +
 // POST /api/pricelist/webhook): if the webhook never fires — VM down, trigger
@@ -441,10 +468,10 @@ function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => urgentWatch().catch(e => console.error('[SCHED] urgent:', e)),   TZ);
-    cron.schedule('*/15 * * * *', () => require('./workflow/email-intake').checkBookingEmails(_sendToManager).catch(e => console.error('[SCHED] email-intake:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => stallWatch().catch(e => console.error('[SCHED] stall:', e)),     TZ);
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
+    cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
     cron.schedule('45 23 * * *', () => {

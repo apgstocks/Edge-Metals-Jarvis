@@ -450,6 +450,46 @@ function createApi() {
     contactRoutes('truckers',  loadTruckers,  upsertTrucker,  deleteTrucker);
     contactRoutes('suppliers', loadSuppliers, upsertSupplier, deleteSupplier);
 
+    // ── Email contacts (draft_email/reply_email's saved name→address directory) ─
+    // Built 2026-08-03 alongside helpers/emailContacts.js — see that file for
+    // the resolve/ambiguity logic used by workflow/actions.js. Reuses the
+    // exact same contactRoutes() factory as truckers/suppliers above; the
+    // factory just needs loader()/upsert(body)/del(name), and doesn't care
+    // whether the backing store is Supabase (truckers/suppliers) or a flat
+    // JSON file (this one, same pattern as pricelist contacts below).
+    const emailContacts = require('./helpers/emailContacts');
+    contactRoutes(
+        'email-contacts',
+        async () => emailContacts.loadContacts(),
+        (body) => emailContacts.addContact(body.name, body.email),
+        (name) => emailContacts.removeContact(name),
+    );
+
+    // ── Price list contacts ──────────────────────────────────────────────────
+    // helpers/pricelist.js's loadContacts/addContact/removeContact have
+    // existed since that file was written, and dashboard/index.html's
+    // "Price list contacts" tab has been calling /api/pricelist/contacts
+    // this whole time — but no route for it ever existed here. Confirmed via
+    // GitHub audit while building the email-contacts feature above (which
+    // shares the same contacts-directory pattern): every button on that
+    // dashboard tab (add/remove) has been 404ing in production. Fixed here
+    // by wiring it through the same proven contactRoutes() factory —
+    // addContact's positional (name, whatsapp, standing) signature just
+    // needs a thin wrapper to accept the factory's single req.body arg.
+    // NOTE: /api/pricelist/send-city (used by the same dashboard tab's "Send"
+    // button) and /api/pricelist/webhook (the Apps Script change-detection
+    // hook described in helpers/pricelist.js's own comments) are ALSO
+    // missing from this file — real gaps too, deliberately NOT fixed here
+    // since they need actual routing/secret-check logic decided, not a
+    // mechanical 3-line wire-up like this. Flagged, not silently left out.
+    const pricelist = require('./helpers/pricelist');
+    contactRoutes(
+        'pricelist/contacts',
+        async () => pricelist.loadContacts(),
+        (body) => pricelist.addContact(body.name, body.whatsapp, body.standing),
+        (name) => pricelist.removeContact(name),
+    );
+
     // ── Alerts ────────────────────────────────────────────────────────────────
     app.get('/api/alerts', (req, res) => res.json(listAlerts()));
     app.post('/api/alerts/snooze', async (req, res) => {

@@ -303,6 +303,25 @@ function policyDecide(ctx) {
             if (statusBkg) return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: statusBkg } };
         }
 
+        // "backfill missing cutoffs" / "fill missing fields" / "check missing
+        // data from mail" / "fill in whatever's missing" — auto-fills (never
+        // overwrites) any booking missing cutoff/ERD/ETD/ETA/vessel/route
+        // fields by searching existing mail for its booking number. Was
+        // cutoff-only originally; generalized 2026-08-03 per Apsara ("not
+        // only cutoff backfill, whatever is missing in booking, but
+        // especially cutoff/ERD/ETA/ETD") — see helpers/cutoffBackfill.js's
+        // BACKFILL_FIELDS for the exact field list and what's deliberately
+        // excluded. Old cutoff-only phrasing still matches (first regex) and
+        // now just triggers the same broader action — a "backfill cutoffs"
+        // request is a valid subset of "backfill missing fields", not a
+        // different feature. No parameters needed either way.
+        if (/^(?:backfill|fill(?:\s+in)?|check)\s+(?:the\s+|any\s+|all\s+)?missing\s+cutoffs?(?:\s+from\s+(?:mail|email))?$/i.test(t) ||
+            /^(?:backfill|fill(?:\s+in)?)\s+cutoffs?\s+from\s+(?:mail|email)$/i.test(t) ||
+            /^(?:backfill|fill(?:\s+in)?|check)\s+(?:the\s+|any\s+|all\s+)?missing\s+(?:fields?|data|info(?:rmation)?)(?:\s+(?:in|from|for)\s+(?:the\s+)?bookings?)?(?:\s+from\s+(?:mail|email))?$/i.test(t) ||
+            /^(?:backfill|fill(?:\s+in)?)\s+(?:whatever(?:'s|\s+is)?\s+missing|missing\s+(?:fields?|data))\s+(?:in\s+)?bookings?(?:\s+from\s+(?:mail|email))?$/i.test(t)) {
+            return { intent: 'backfill_cutoffs', resolvedBy: 'policy', data: {} };
+        }
+
         // "follow up with X" / "please follow up with X in N minutes/hours" — optionally "re BKG123"
         if ((m = t.match(/^(?:please\s+)?follow\s*up\s+with\s+(.+?)(?:\s+in\s+(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours))?(?:\s+(?:re|regarding|about|on)\s+([A-Za-z0-9-]+))?$/))) {
             const rawMins = m[2] ? parseInt(m[2], 10) : null;
@@ -624,7 +643,7 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup, draft_email, search_mail, and reply_email. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup, draft_email, search_mail, reply_email, and backfill_cutoffs. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 
 - CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
@@ -690,7 +709,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, reply, silent, NEED_DATA, NEED_APPROVAL
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -715,7 +734,7 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email', 'search_mail', 'reply_email',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
 ]);
 
 async function aiDecide(ctx) {
@@ -829,6 +848,7 @@ async function route(decision, ctx, sendMessage) {
         case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg);
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg);
+        case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {
@@ -958,7 +978,10 @@ function pendingFullReminder(p) {
         const list = (p.candidates || []).map((c, i) => `${i + 1}. ${c}`).join('\n');
         return `(Still waiting: end-of-day review —\n${list}\n\nReply with numbers to accept (e.g. "1,3"), "all", or "no" to skip all.)`;
     }
-    if (p.type === 'await_email_confirm') return `(Still waiting: send this email to ${p.target_name} <${p.to}>? Subject: ${p.subject}\n\n${p.body}\n\nReply yes or no.)`;
+    if (p.type === 'await_email_confirm') {
+        const ccBcc = [p.cc ? `Cc: ${p.cc}` : null, p.bcc ? `Bcc: ${p.bcc}` : null].filter(Boolean).join('\n');
+        return `(Still waiting: send this email to ${p.target_name} <${p.to}>?\n${ccBcc ? ccBcc + '\n' : ''}Subject: ${p.subject}\n\n${p.body}\n\nReply yes or no.)`;
+    }
     return null; // no type-specific text — use the generic template
 }
 

@@ -36,6 +36,22 @@ const FILES = {
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
     MEMORY_EMBEDDINGS_FILE: path.join(MEMORY_DIR, 'embeddings.json'),
+    // Saved name→email directory for draft_email/reply_email — see
+    // helpers/emailContacts.js. Added 2026-08-03.
+    EMAIL_CONTACTS_FILE: path.join(DATA_DIR, 'email_contacts.json'),
+    // helpers/pricelist.js's loadContacts()/addContact()/removeContact() have
+    // referenced cfg.PRICELIST_CONTACTS_FILE since that file was written, but
+    // this constant never actually existed here — confirmed via GitHub audit
+    // (grep -c "PRICELIST_CONTACTS_FILE" config.js on main → 0) while
+    // building the email-contacts feature alongside it. Real bug, not
+    // hypothetical: loadContacts() silently returned [] (loadJson catches
+    // the resulting fs.existsSync(undefined) throw), but addContact()/
+    // removeContact() would hard-crash on ensureFile(undefined, ...), which
+    // sits outside mutateJson's own try/catch. Combined with api.js having
+    // NO /api/pricelist/contacts routes at all (also fixed alongside this),
+    // the dashboard's "Price list contacts" tab has been fully non-functional
+    // in production — added here to close the gap.
+    PRICELIST_CONTACTS_FILE: path.join(DATA_DIR, 'price_contacts.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
