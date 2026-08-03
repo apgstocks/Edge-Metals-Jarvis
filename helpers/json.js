@@ -125,6 +125,14 @@ function normalizeBrain(raw) {
         pending_confirmations : typeof raw.pending_confirmations === 'object' && raw.pending_confirmations ? raw.pending_confirmations : {},
         proactive_sent        : typeof raw.proactive_sent        === 'object' && raw.proactive_sent        ? raw.proactive_sent        : {},
         pending_actions       : typeof raw.pending_actions       === 'object' && raw.pending_actions       ? raw.pending_actions       : {},
+        // One-per-chat pending_actions can't hold two unresolved asks at once
+        // (wizard prompt, daily-learning digest, manager-triggered email
+        // confirm can all target the same chat). pending_queue holds whatever
+        // got bumped instead of silently overwritten — see actions.js's
+        // setPending/clearPending. MUST be whitelisted here or it gets wiped
+        // on the next unrelated brain.json write, since mutateBrain rebuilds
+        // the object from this exact field list every time.
+        pending_queue         : typeof raw.pending_queue          === 'object' && raw.pending_queue          ? raw.pending_queue          : {},
     };
 }
 
@@ -172,6 +180,14 @@ function loadSettings() {
         team_group_id  : process.env.TEAM_GROUP_ID || '',
         gemini_model   : process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
         bot_mode       : 'handholding',
+        // Applied to every email Jarvis drafts (draft_email or reply_email),
+        // dashboard-editable under Settings — see api.js's existing generic
+        // PUT /api/settings merge, no new route needed. Comma-separated
+        // addresses, empty string means none. Common use: Bcc bose so she
+        // still sees replies sent from Apsara's account — see
+        // workflow/actions.js's draftEmailForConfirm/draftReplyForConfirm.
+        email_cc       : '',
+        email_bcc      : '',
     });
 }
 const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);
