@@ -218,18 +218,48 @@ async function findLatestFrom(gmail, nameOrDomain) {
     const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
     const messages = res.data.messages || [];
     if (!messages.length) return null;
-    const msg = await getMessage(gmail, messages[0].id);
-    const headers = msg.payload.headers || [];
-    const get = (name) => headers.find((h) => h.name === name)?.value || '';
 
-    // Prefer From (the contact IS the sender) over Cc over To — matches the
-    // priority a human would use: someone who sent it directly is more "them"
-    // than someone merely copied or addressed alongside others.
-    for (const headerName of ['From', 'Cc', 'To']) {
-        const found = findMatchingAddress(get(headerName), nameOrDomain);
-        if (found) return found;
+    // REAL BUG (found 2026-08-03, live): this used to look at ONLY the
+    // single most-recent matching message and return whatever address
+    // matched there — "radmetals" resolved to radmetals@radmetals.com
+    // (apparently a one-off match — a newsletter, an auto-notification, a
+    // cc) instead of brain@radmetals.com, the address Apsara has actually
+    // been corresponding with. Fixed by scanning ALL matched messages (up
+    // to 5) and picking whichever address shows up MOST OFTEN — the actual
+    // established correspondent — not just whatever the newest matching
+    // message happens to contain. Ties go to whichever was seen first,
+    // which is the most recent occurrence since Gmail returns results
+    // newest-first.
+    const counts = new Map();
+    for (const m of messages) {
+        let msg;
+        try {
+            msg = await getMessage(gmail, m.id);
+        } catch (err) {
+            console.warn('[GMAIL] findLatestFrom: failed to read a matched message:', err.message);
+            continue;
+        }
+        const headers = msg.payload.headers || [];
+        const get = (name) => headers.find((h) => h.name === name)?.value || '';
+        // Prefer From (the contact IS the sender) over Cc over To for THIS
+        // message — matches the priority a human would use — but still only
+        // counts once per message, so a message doesn't get double-weighted
+        // just because the same address appears in multiple headers on it.
+        for (const headerName of ['From', 'Cc', 'To']) {
+            const found = findMatchingAddress(get(headerName), nameOrDomain);
+            if (found) {
+                const key = found.toLowerCase();
+                counts.set(key, (counts.get(key) || 0) + 1);
+                break;
+            }
+        }
     }
-    return null;
+    if (!counts.size) return null;
+    let best = null, bestCount = 0;
+    for (const [addr, count] of counts) {
+        if (count > bestCount) { best = addr; bestCount = count; }
+    }
+    return best;
 }
 
 // ── Sent-mail Cc pattern detection ──────────────────────────────────────────
