@@ -215,22 +215,40 @@ async function findLatestFrom(gmail, nameOrDomain) {
     // anywhere else it appears as a standalone word). Real incident: this
     // exact gap caused a genuine Zimex email to be reported as not found.
     const q = `(from:${nameOrDomain} OR cc:${nameOrDomain} OR to:${nameOrDomain} OR ${nameOrDomain})`;
-    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
+    // maxResults bumped 5 -> 15 (2026-08-03): confirmed via
+    // scripts/debugFindAddress.js on the real radmetals data that the From
+    // pool is what correctly separates a real correspondent from a Cc'd
+    // shared mailbox — but a 5-message sample is small enough that an
+    // unlucky recent run (a flurry of Cc-only forwards, e.g.) could still
+    // miss the real sender entirely. 15 is still a light, occasional-call
+    // cost, not a hot loop, and meaningfully lowers that risk.
+    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 15 });
     const messages = res.data.messages || [];
     if (!messages.length) return null;
 
-    // REAL BUG (found 2026-08-03, live): this used to look at ONLY the
+    // REAL BUG #1 (found 2026-08-03, live): this used to look at ONLY the
     // single most-recent matching message and return whatever address
     // matched there — "radmetals" resolved to radmetals@radmetals.com
-    // (apparently a one-off match — a newsletter, an auto-notification, a
-    // cc) instead of brain@radmetals.com, the address Apsara has actually
-    // been corresponding with. Fixed by scanning ALL matched messages (up
-    // to 5) and picking whichever address shows up MOST OFTEN — the actual
-    // established correspondent — not just whatever the newest matching
-    // message happens to contain. Ties go to whichever was seen first,
-    // which is the most recent occurrence since Gmail returns results
-    // newest-first.
-    const counts = new Map();
+    // instead of brian@radmetals.com, the address Apsara has actually been
+    // corresponding with. First fix: scan ALL matched messages (up to 5)
+    // and pick whichever address shows up MOST OFTEN across From/Cc/To.
+    //
+    // REAL BUG #2 (found 2026-08-03, same live incident, fix #1 was
+    // insufficient): radmetals@radmetals.com turned out to be a shared
+    // "Docs RadMetals" mailbox that gets Cc'd on nearly every thread with
+    // that company. Raw frequency across From+Cc+To let that shared inbox
+    // out-vote brian@radmetals.com, who only appears as the actual sender
+    // (From) on a subset of messages. A Cc'd shared mailbox is NOT "the
+    // established correspondent" no matter how often it's copied.
+    //
+    // Fix: From-matches and Cc/To-matches are tallied in SEPARATE pools.
+    // The winner is decided from the From pool if it has anything at all;
+    // Cc/To is only consulted as a fallback when nobody ever appears as an
+    // actual sender in the sample. Within one message, only the
+    // highest-priority header that matches counts (From > Cc > To), so one
+    // message can never contribute to both pools.
+    const fromCounts = new Map();
+    const otherCounts = new Map();
     for (const m of messages) {
         let msg;
         try {
@@ -241,25 +259,31 @@ async function findLatestFrom(gmail, nameOrDomain) {
         }
         const headers = msg.payload.headers || [];
         const get = (name) => headers.find((h) => h.name === name)?.value || '';
-        // Prefer From (the contact IS the sender) over Cc over To for THIS
-        // message — matches the priority a human would use — but still only
-        // counts once per message, so a message doesn't get double-weighted
-        // just because the same address appears in multiple headers on it.
         for (const headerName of ['From', 'Cc', 'To']) {
             const found = findMatchingAddress(get(headerName), nameOrDomain);
             if (found) {
                 const key = found.toLowerCase();
-                counts.set(key, (counts.get(key) || 0) + 1);
+                const pool = headerName === 'From' ? fromCounts : otherCounts;
+                pool.set(key, (pool.get(key) || 0) + 1);
                 break;
             }
         }
     }
-    if (!counts.size) return null;
-    let best = null, bestCount = 0;
-    for (const [addr, count] of counts) {
-        if (count > bestCount) { best = addr; bestCount = count; }
-    }
-    return best;
+
+    const pickBest = (pool) => {
+        let best = null, bestCount = 0;
+        for (const [addr, count] of pool) {
+            if (count > bestCount) { best = addr; bestCount = count; }
+        }
+        return best;
+    };
+
+    const result = fromCounts.size ? pickBest(fromCounts) : pickBest(otherCounts);
+    console.log(
+        `[GMAIL] findLatestFrom("${nameOrDomain}") — from:[${[...fromCounts].map(([a, c]) => `${a}=${c}`).join(', ')}] ` +
+        `other:[${[...otherCounts].map(([a, c]) => `${a}=${c}`).join(', ')}] → ${result || '(none)'}`
+    );
+    return result;
 }
 
 // ── Sent-mail Cc pattern detection ──────────────────────────────────────────
