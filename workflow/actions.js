@@ -1326,6 +1326,25 @@ function isValidEmail(addr) {
     return typeof addr === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim());
 }
 
+// THIRD hallucination case, found 2026-08-03 via live pm2 logs: for "send
+// mail to radmetals" (zero content given), the AI classifier's own
+// reasoning invented email_details "stating I miss you" out of nothing —
+// same failure pattern as the target_name address hallucination, just a
+// different field. Regex-derived email_details (from policyDecide's "email
+// X about Y" pattern) is ALWAYS a literal substring of the manager's raw
+// message by construction, so this never flags those — it only catches
+// content that shares no real vocabulary with what was actually typed,
+// which is exactly what fabricated content looks like.
+function detailsLookGrounded(rawText, details) {
+    if (!details || !details.trim()) return true; // nothing to distrust
+    if (!rawText) return true; // can't verify either way — don't block on it
+    const stop = new Set(['about', 'email', 'mail', 'send', 'please', 'thanks', 'regards', 'reply']);
+    const meaningful = (details.toLowerCase().match(/[a-z]{4,}/g) || []).filter((w) => !stop.has(w));
+    if (!meaningful.length) return true; // too short/generic a details string to judge either way
+    const rawLower = rawText.toLowerCase();
+    return meaningful.some((w) => rawLower.includes(w));
+}
+
 // Combines the global Cc (Settings tab) with a contact's own standing Cc
 // (see helpers/emailContacts.js's setContactCc), per Apsara's explicit
 // instruction: "combine both, if there is duplicate remove one." Case-
@@ -1385,6 +1404,16 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
     if (isValidEmail(targetName) && rawText && !String(rawText).toLowerCase().includes(targetName.toLowerCase())) {
         console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
         targetName = targetName.split('@')[0];
+    }
+    // Same defense for email_details — real incident, 2026-08-03: "send
+    // mail to radmetals" (zero content given) got email_details "I miss
+    // you" invented by the AI classifier. Discarding it here just means it
+    // falls through to draftEmailWithAddress's "no details given" path,
+    // which (as of today) grounds the draft in real past correspondence
+    // instead of trusting fabricated content.
+    if (details && rawText && !detailsLookGrounded(rawText, details)) {
+        console.warn(`[ACTIONS] email_details "${details}" shares no real vocabulary with the manager's actual message ("${rawText}") — treating as likely-hallucinated, discarding.`);
+        details = null;
     }
 
     // Contacts directory first — a saved name→address match (or the manager
@@ -1495,9 +1524,41 @@ async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toS
     const bookingLine = bkg
         ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}, POL ${bkg.port_of_loading || '—'}, POD ${bkg.port_of_discharge || '—'}.`
         : '';
+
+    // REAL BUG (found 2026-08-03, live: "email radmetals checking in" with
+    // no further detail produced a content-free "we miss working with you,
+    // hope all is well" filler). Root cause: when details is empty, the old
+    // prompt told Gemini to "infer a reasonable request from context" but
+    // never actually GAVE it any context — draftEmailForConfirm never
+    // fetched mail history for a fresh compose (only reply_email did,
+    // since it's anchored to one specific message already). Fix: when
+    // details is missing/blank, pull the most recent real correspondence
+    // with this address and hand Gemini something actually informed to
+    // work from, instead of inventing small talk. Skipped entirely when
+    // details IS specific — old mail would just be noise there, not signal.
+    let recentContext = '';
+    if (!details || !details.trim()) {
+        try {
+            const { getGmailRead, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+            const gmail = getGmailRead();
+            const msgs = await listMessages(gmail, `(from:${to} OR to:${to})`, 2);
+            if (msgs.length) {
+                const full = await getMessage(gmail, msgs[0].id);
+                const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
+                const { body } = getEmailContent(full.payload);
+                recentContext = `Subject: "${hdrs.Subject || ''}" — excerpt: "${(body || '').slice(0, 400).replace(/\s+/g, ' ').trim()}"`;
+            }
+        } catch (err) {
+            console.warn(`[ACTIONS] Couldn't fetch recent-correspondence context for ${targetName}:`, err.message);
+        }
+    }
+
     const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to a carrier/vendor contact.
 Recipient: ${targetName}
-What the email needs to say: ${details || '(no further detail given — infer a reasonable, brief request from context)'}
+What the email needs to say: ${details || (recentContext
+        ? 'No specific ask was given — write a brief, genuinely relevant follow-up grounded in the recent correspondence below (e.g. reference what it was actually about). Do NOT write generic filler like "just checking in" or "hope all is well" with no real content.'
+        : 'No specific ask was given and no past correspondence was found either — ask a brief, concrete question (e.g. current pricing/availability) rather than pure small talk.')}
+${recentContext ? `Most recent past email with them, for context (use only what's actually relevant): ${recentContext}` : ''}
 ${bookingLine ? `Relevant booking data (use only what's relevant, do not dump all of it): ${bookingLine}` : ''}
 Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off as Edge Metals Inc." }`;
 
@@ -1741,6 +1802,13 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText)
     if (isValidEmail(targetName) && rawText && !String(rawText).toLowerCase().includes(targetName.toLowerCase())) {
         console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
         targetName = targetName.split('@')[0];
+    }
+    // Same defense for email_details as draftEmailForConfirm — see
+    // detailsLookGrounded's own comment (real incident: fabricated "I miss
+    // you" content for a message that specified nothing).
+    if (details && rawText && !detailsLookGrounded(rawText, details)) {
+        console.warn(`[ACTIONS] email_details "${details}" shares no real vocabulary with the manager's actual message ("${rawText}") — treating as likely-hallucinated, discarding.`);
+        details = null;
     }
 
     // Two passes, direct-first: a from:X search only ever matches a REAL
