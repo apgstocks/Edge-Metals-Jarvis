@@ -1421,6 +1421,38 @@ function mergeCc(...sources) {
     }).join(', ');
 }
 
+// REAL BUG (found 2026-08-04, live): "Send mail to mkmetaltrading" (one
+// clean word, exactly matching the mkmetaltrading.com domain) got
+// classified with target_name "mk metal trading" — the AI "helpfully"
+// reformatted a compressed company name into spaced-out words. That
+// silently broke resolution: the search then went looking for the literal
+// PHRASE "mk metal trading" (which appears nowhere in real mail), instead
+// of the single token that would have matched the domain instantly. Same
+// class of problem as the mike@example.com/"I miss you" incidents — the
+// model altering what was actually typed instead of preserving it — same
+// fix shape: don't trust a prompt instruction alone, check the raw message.
+// Shared by draftEmailForConfirm and draftReplyForConfirm so the two can't
+// drift into handling this differently.
+//
+// If a single word in rawText, with whitespace/punctuation stripped,
+// matches target_name the same way, that raw word IS what she actually
+// typed — use it verbatim instead of the AI's reformatted guess. Only fires
+// on an exact single-word match, so a genuinely multi-word name she really
+// did type with real spaces (nothing in rawText collapses to it) is left
+// untouched — that case is exactly what helpers/gmail.js's searchTermFor
+// quoting exists to handle correctly.
+function deReformatTargetName(targetName, rawText) {
+    if (!rawText) return targetName;
+    const stripped = targetName.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (!stripped) return targetName;
+    const rawWord = String(rawText).split(/\s+/).find((w) => w.replace(/[^a-z0-9]/gi, '').toLowerCase() === stripped);
+    if (!rawWord) return targetName;
+    const cleaned = rawWord.replace(/[^a-zA-Z0-9.\-]/g, '');
+    if (!cleaned || cleaned.toLowerCase() === targetName.toLowerCase()) return targetName;
+    console.warn(`[ACTIONS] target_name "${targetName}" was reformatted by the AI from what looks like one literal word ("${cleaned}") in the manager's actual message ("${rawText}") — using the literal word instead.`);
+    return cleaned;
+}
+
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
@@ -1455,6 +1487,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
         console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
         targetName = targetName.split('@')[0];
     }
+    targetName = deReformatTargetName(targetName, rawText);
     // Same defense for email_details — real incident, 2026-08-03: "send
     // mail to radmetals" (zero content given) got email_details "I miss
     // you" invented by the AI classifier. Discarding it here just means it
@@ -2027,6 +2060,10 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText)
         console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
         targetName = targetName.split('@')[0];
     }
+    // Same "AI reformatted a single word into spaced-out words" defense as
+    // draftEmailForConfirm — see deReformatTargetName's own comment (real
+    // incident: "mkmetaltrading" -> "mk metal trading").
+    targetName = deReformatTargetName(targetName, rawText);
     // Same defense for email_details as draftEmailForConfirm — see
     // detailsLookGrounded's own comment (real incident: fabricated "I miss
     // you" content for a message that specified nothing).
