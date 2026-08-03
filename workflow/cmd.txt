@@ -23,3 +23,7 @@ node backfill_sheet.js
 
 #auto archive
 node -e "require('./scheduler').autoArchive().then(()=>console.log('done')).catch(e=>console.error(e))"
+
+
+#email run
+ node -e "require('./workflow/emailWatcher').run().then(() => console.log('DONE')).catch(e => console.error('FAILED:', e.message))"
