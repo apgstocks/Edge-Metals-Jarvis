@@ -232,8 +232,51 @@ async function findLatestFrom(gmail, nameOrDomain) {
     return null;
 }
 
+// ── Sent-mail Cc pattern detection ──────────────────────────────────────────
+// Built 2026-08-03 per Apsara: "when I mail say T, there is always same type
+// of people I am cc'ing" — she wants that noticed and remembered, not
+// re-typed every time. Searches HER OWN sent mail (in:sent) to a given
+// address, and only calls it a real "pattern" — never a one-off — if a Cc
+// address shows up in EVERY sampled sent message that had a Cc at all.
+// Caller (workflow/actions.js) always confirms with her before saving
+// anything found here; this function only detects, never persists.
+//
+// Uses getGmailRead() — currently pointed at apsara@edgemetals.com per her
+// "read and write both from apsara for now" instruction, which is exactly
+// the account whose Sent folder actually holds her own outbound history.
+// If read is ever re-split back to bose@edgemetals.com, this stops finding
+// anything useful (bose's Sent folder isn't Apsara's correspondence) — worth
+// remembering if that split gets reinstated later.
+async function detectCcPattern(gmail, toAddress, minSamples = 2, maxResults = 8) {
+    if (!toAddress) return null;
+    const q = `in:sent to:${toAddress}`;
+    const res = await gmail.users.messages.list({ userId: 'me', q, maxResults });
+    const messages = res.data.messages || [];
+    if (messages.length < minSamples) return null; // not enough history to call anything a "pattern"
+
+    const ccLists = [];
+    for (const m of messages) {
+        const full = await getMessage(gmail, m.id);
+        const headers = full.payload.headers || [];
+        const ccHeader = headers.find((h) => h.name === 'Cc')?.value || '';
+        if (!ccHeader) continue; // messages with no Cc at all don't count either way
+        const addrs = ccHeader.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)
+            .map((p) => extractAddress(p.trim()))
+            .filter(Boolean)
+            .map((a) => a.toLowerCase());
+        if (addrs.length) ccLists.push(addrs);
+    }
+    if (ccLists.length < minSamples) return null; // not enough Cc'd samples to be confident
+
+    // "Always" = present in every single sample that had a Cc — one-off
+    // inclusions (a person cc'd on just one of several emails) don't count.
+    const [first, ...rest] = ccLists;
+    const consistent = first.filter((addr) => rest.every((l) => l.includes(addr)));
+    return consistent.length ? consistent : null;
+}
+
 module.exports = {
     READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite,
     parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
-    sendEmail, findLatestFrom,
+    sendEmail, findLatestFrom, detectCcPattern,
 };

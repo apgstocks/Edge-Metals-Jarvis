@@ -831,6 +831,28 @@ async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerR
 }
 
 async function resolvePending(chatId, pending, answer, selection) {
+// Handled BEFORE the generic 'no' branch below — unlike every other pending
+// type, "no" here does NOT mean "cancel and stop." It means "don't save the
+// cc pattern, but still draft the email I originally asked for" — the cc
+// suggestion is a side offer, not the actual request.
+if (pending.type === 'await_cc_pattern_confirm') {
+    await clearPending(chatId);
+    const emailContacts = require('../helpers/emailContacts');
+    if (answer === 'yes') {
+        try {
+            await emailContacts.setContactCc(pending.target_name, pending.detected_cc);
+        } catch (err) {
+            console.warn(`[ACTIONS] Failed to save cc pattern for "${pending.target_name}":`, err.message);
+        }
+    } else {
+        // Remembers the "no" so this isn't re-asked on every future email to
+        // the same contact — see declineCcSuggestion's own comment.
+        emailContacts.declineCcSuggestion(pending.target_name).catch((err) =>
+            console.warn(`[ACTIONS] Failed to record cc-suggestion decline for "${pending.target_name}":`, err.message));
+    }
+    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, pending.to, pending.to_source);
+}
+
 if (answer === 'no') {
     await clearPending(chatId);
     // A rejection on a forward/assign confirmation resets that specific
@@ -1304,7 +1326,26 @@ function isValidEmail(addr) {
     return typeof addr === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim());
 }
 
-async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
+// Combines the global Cc (Settings tab) with a contact's own standing Cc
+// (see helpers/emailContacts.js's setContactCc), per Apsara's explicit
+// instruction: "combine both, if there is duplicate remove one." Case-
+// insensitive de-dupe — the same address typed with different casing in the
+// two sources should still collapse to one.
+function mergeCc(globalCc, contactCc) {
+    const fromGlobal = globalCc ? String(globalCc).split(',').map((s) => s.trim()) : [];
+    const fromContact = Array.isArray(contactCc) ? contactCc : [];
+    const combined = [...fromGlobal, ...fromContact].filter(Boolean);
+    const seen = new Set();
+    const deduped = combined.filter((addr) => {
+        const key = addr.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+    return deduped.join(', ');
+}
+
+async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
         return { action_taken: 'email_missing_target' };
@@ -1317,6 +1358,26 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
     } catch (err) {
         await _send(chatId, `Can't draft that — Gmail isn't configured (${err.message}).`);
         return { action_taken: 'email_gmail_unavailable' };
+    }
+
+    // REAL BUG (found 2026-08-03, live): "mail Mike asking..." — no email in
+    // the manager's actual message — got classified by the AI with
+    // target_name = "mike@example.com". A bare first name became a fully
+    // fabricated, plausible-looking address (classic LLM placeholder
+    // pattern — example.com is literally RFC 2606's reserved example
+    // domain). resolveContact()'s isValidEmail(raw) shortcut then trusted it
+    // as an "exact" match and labeled it "(saved contact)" — false
+    // confidence on a completely invented destination, one "yes" away from
+    // actually sending real business mail nowhere useful. The prompt now
+    // explicitly forbids this (see brain.js), but a prompt instruction is
+    // not a guarantee against a model hallucinating — this is the actual
+    // backstop: if target_name looks like an email address but that exact
+    // string never appeared in what the manager actually typed, it did NOT
+    // come from the manager and must not be trusted as one.
+    targetName = String(targetName).trim();
+    if (isValidEmail(targetName) && rawText && !String(rawText).toLowerCase().includes(targetName.toLowerCase())) {
+        console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
+        targetName = targetName.split('@')[0];
     }
 
     // Contacts directory first — a saved name→address match (or the manager
@@ -1382,6 +1443,37 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo) {
         return { action_taken: 'email_no_address' };
     }
 
+    // Cc-pattern detection — per Apsara: "when I mail T, there is always
+    // same type of people I am cc'ing." Only runs for an ALREADY-SAVED
+    // contact (toSource === 'contact') that hasn't been checked/declined
+    // yet — deliberately skipped on a brand-new mail-search resolution to
+    // avoid racing addContact's own fire-and-forget save above; it'll get
+    // offered naturally the next time this same contact is emailed, once
+    // the save has landed. Detection alone never touches anything — only a
+    // "yes" (see resolvePending's await_cc_pattern_confirm case) saves it.
+    if (toSource === 'contact' && !resolvedContact.contact.cc && !resolvedContact.contact.cc_declined) {
+        let detectedCc = null;
+        try {
+            const { detectCcPattern } = require('../helpers/gmail');
+            detectedCc = await detectCcPattern(gmail, to);
+        } catch (err) {
+            console.warn(`[ACTIONS] Cc-pattern detection failed for "${targetName}":`, err.message);
+        }
+        if (detectedCc && detectedCc.length) {
+            const staged = await setPending(chatId, {
+                type: 'await_cc_pattern_confirm',
+                target_name: targetName, details, bkg_no: bkgNo || null, to, to_source: toSource,
+                detected_cc: detectedCc,
+            });
+            if (staged.queued) {
+                await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName}, but you have a pending "${staged.blockedBy}" first — I'll ask once that's resolved (and draft this email either way once it is).`);
+                return { action_taken: 'cc_pattern_confirm_queued' };
+            }
+            await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName} — save that as their standing cc for future emails? (yes/no — either way I'll draft this email next)`);
+            return { action_taken: 'cc_pattern_confirm_staged' };
+        }
+    }
+
     return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource);
 }
 
@@ -1408,7 +1500,14 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         return { action_taken: 'email_draft_failed' };
     }
 
-    const { cc, bcc } = ccBccFromSettings();
+    const { cc: globalCc, bcc } = ccBccFromSettings();
+    // Merge the global Cc with this contact's own standing Cc (if any),
+    // deduped — per Apsara's explicit instruction. Looked up by address
+    // (not name) since "manual" toSource entries won't have a contact
+    // record with that exact display name.
+    const contactRecord = require('../helpers/emailContacts').loadContacts()
+        .find((c) => c.email.toLowerCase() === String(to).toLowerCase());
+    const cc = mergeCc(globalCc, contactRecord?.cc);
     // Same reasoning as showBookingStatus/searchMail — registers this
     // booking as the active conversational context so a follow-up like
     // "any change in cutoff?" scopes to it instead of answering generically.
@@ -1611,7 +1710,7 @@ Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
 //      faking a thread reply it can't actually back up.
 // Same confirm-before-send posture either way — stages via the SAME
 // 'await_email_confirm' pending type sendDraftedEmail already handles.
-async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
+async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText) {
     if (!targetName) {
         await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
         return { action_taken: 'reply_missing_target' };
@@ -1625,6 +1724,16 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
     } catch (err) {
         await _send(chatId, `Can't reply — Gmail isn't configured (${err.message}).`);
         return { action_taken: 'reply_gmail_unavailable' };
+    }
+
+    // Same hallucinated-address guard as draftEmailForConfirm — see the long
+    // comment there (real bug, 2026-08-03: AI invented "mike@example.com"
+    // for a bare "Mike"). If target_name looks like an email but that exact
+    // string wasn't in what the manager actually typed, it's not trustworthy.
+    targetName = String(targetName).trim();
+    if (isValidEmail(targetName) && rawText && !String(rawText).toLowerCase().includes(targetName.toLowerCase())) {
+        console.warn(`[ACTIONS] target_name "${targetName}" looks like an email but wasn't in the manager's actual message ("${rawText}") — treating as an unverified/likely-hallucinated value, not an address.`);
+        targetName = targetName.split('@')[0];
     }
 
     // Two passes, direct-first: a from:X search only ever matches a REAL

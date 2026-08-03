@@ -1196,7 +1196,7 @@ function renderEmailContacts() {
         <div><div class="eyebrow">// Contacts</div><h2 style="font-size:24px; text-transform:uppercase;">Email contacts</h2></div>
         <button id="btnAddEmailContact" class="btn btn-primary">+ Add contact</button>
       </div>
-      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "email &lt;name&gt; about ..." or "reply to &lt;name&gt;..." on WhatsApp — Jarvis checks here before searching mail. Learned automatically too: the first time a name resolves via mail search, it's saved here for next time.</div>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "email &lt;name&gt; about ..." or "reply to &lt;name&gt;..." on WhatsApp — Jarvis checks here before searching mail. Learned automatically too: the first time a name resolves via mail search, it's saved here for next time. Standing cc's are also detected automatically from a recurring pattern in your sent mail — Jarvis asks on WhatsApp before saving one, shown below once confirmed.</div>
       <div class="card" style="padding:22px 24px;">
         <div id="emailContactRows" style="display:flex; flex-direction:column; gap:10px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
       </div>
@@ -1211,6 +1211,7 @@ function renderEmailContacts() {
           <div>
             <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.name)}</div>
             <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(c.email)}</div>
+            ${Array.isArray(c.cc) && c.cc.length ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Standing cc: ${esc(c.cc.join(', '))}</div>` : ''}
           </div>
           <button class="btn btn-danger btn-del-email-contact" data-name="${esc(c.name)}" style="padding:7px 12px; font-size:10px;">Remove</button>
         </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No saved contacts yet.</div>';
