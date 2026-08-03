@@ -52,6 +52,20 @@ const FILES = {
     // the dashboard's "Price list contacts" tab has been fully non-functional
     // in production — added here to close the gap.
     PRICELIST_CONTACTS_FILE: path.join(DATA_DIR, 'price_contacts.json'),
+    // THIRD instance of the same missing-constant bug, found 2026-08-03
+    // while wiring the pricelist send-city/webhook API routes: pricelist.js's
+    // checkForChangesAndNotify() has referenced cfg.PRICELIST_SNAPSHOT_FILE
+    // since it was written, and that function has ALREADY been running
+    // daily via scheduler.js's pricelistFallback cron (0 6 * * *) since this
+    // whole feature was deployed — meaning it has been silently
+    // crash-failing every single morning (ensureFile(undefined, ...) throws
+    // outside mutateJson's own try/catch, caught one level up by
+    // pricelistFallback's try/catch, logged as "[SCHED] pricelist fallback
+    // failed" and otherwise invisible). No snapshot has ever actually been
+    // established, so real price changes have never once been detected by
+    // this safety net. Same root-cause pattern as PRICELIST_CONTACTS_FILE
+    // above — fixed together for the same reason.
+    PRICELIST_SNAPSHOT_FILE: path.join(DATA_DIR, 'price_snapshot.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────

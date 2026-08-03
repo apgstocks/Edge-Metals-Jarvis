@@ -114,6 +114,35 @@ function createApi() {
     // ── Public routes (no auth) ───────────────────────────────────────────────
     app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
+    // ── Price list change-detection webhook (Apps Script → here) ─────────────
+    // Registered here, BEFORE the session-gate middleware below — public,
+    // same tier as /health — because Apps Script's UrlFetchApp can't easily
+    // carry the dashboard's session cookie, and asking whoever edits the
+    // Apps Script trigger later to correctly set an Authorization header is
+    // more failure-prone than a token pasted straight into the trigger's
+    // URL or POST body. The actual guard is PRICELIST_WEBHOOK_TOKEN, checked
+    // inside the handler — this route does nothing without a matching token.
+    // Real bug found + fixed alongside this (2026-08-03): checkForChangesAndNotify()
+    // has been silently crash-failing every day via scheduler.js's cron
+    // fallback too — see config.js's PRICELIST_SNAPSHOT_FILE comment.
+    app.post('/api/pricelist/webhook', async (req, res) => {
+        if (!cfg.PRICELIST_WEBHOOK_TOKEN) {
+            return res.status(503).json({ error: 'PRICELIST_WEBHOOK_TOKEN not configured on the server — set it in .env first' });
+        }
+        const got = req.query.token || req.body?.token;
+        if (got !== cfg.PRICELIST_WEBHOOK_TOKEN) {
+            return res.status(401).json({ error: 'invalid or missing token' });
+        }
+        try {
+            const pricelist = require('./helpers/pricelist');
+            const result = await pricelist.checkForChangesAndNotify();
+            res.json(result);
+        } catch (e) {
+            console.error('[API] pricelist webhook failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Login page — inline HTML so it works before the dashboard static mount
     app.get('/login', (req, res) => {
         res.set('Content-Type', 'text/html').send(LOGIN_HTML);
@@ -489,6 +518,23 @@ function createApi() {
         (body) => pricelist.addContact(body.name, body.whatsapp, body.standing),
         (name) => pricelist.removeContact(name),
     );
+
+    // Dashboard's "Send" button on the Price list contacts tab. `to` is
+    // whatever name/number the row's data-name carries (resolved the same
+    // way WhatsApp's own "send price list to X" does — see
+    // pricelist.resolveTarget); `fallbackChatId` (3rd arg) is deliberately
+    // null here — that branch only applies to a WhatsApp chat that asked
+    // with no name given, which can't happen from a dashboard button click.
+    app.post('/api/pricelist/send-city', async (req, res) => {
+        try {
+            const { to, city } = req.body;
+            if (!city) return res.status(400).json({ error: 'city required' });
+            const result = await pricelist.sendPriceListCityTo(to || null, city, null);
+            res.json(result);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
 
     // ── Alerts ────────────────────────────────────────────────────────────────
     app.get('/api/alerts', (req, res) => res.json(listAlerts()));
