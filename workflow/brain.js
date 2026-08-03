@@ -1034,6 +1034,10 @@ function pendingFullReminder(p) {
     if (p.type === 'await_cc_pattern_confirm') {
         return `(Still waiting: save ${p.detected_cc.join(', ')} as ${p.target_name}'s standing cc? Reply yes or no — either way I'll draft the email to them next.)`;
     }
+    if (p.type === 'await_contact_disambiguation') {
+        const listText = (p.matches || []).map((c, i) => `${i + 1}. ${c.name} <${c.email}>`).join('\n');
+        return `(Still waiting — which saved contact did you mean for "${p.target_name}"?\n${listText}\n\nReply with the number, or "cancel".)`;
+    }
     if (p.type === 'await_domain_learn_name') {
         return `(Still waiting on a name for ${(p.needs_name || []).join(', ')} before I can save the ${p.domain} contacts — or reply "cancel".)`;
     }

@@ -885,6 +885,20 @@ switch (pending.type) {
         await clearPending(chatId);
         return sendDraftedEmail(chatId, pending);
 
+    // Picked one of the ambiguous-match options shown above (by number or
+    // by name, via brain.js's generic p.options handling) — resume the
+    // original draft-email request with the chosen contact's address.
+    case 'await_contact_disambiguation': {
+        await clearPending(chatId);
+        const matches = pending.matches || [];
+        const chosen = matches.find((c) => c.name === selection) || (matches.length === 1 ? matches[0] : null);
+        if (!chosen) {
+            await _send(chatId, `Didn't catch which one — reply with the number (1-${matches.length}), or "cancel".`);
+            return { action_taken: 'contact_disambiguation_unresolved' };
+        }
+        return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, chosen.email, 'contact');
+    }
+
     // "yes" to the domain-tree proposal shown by stageDomainLearnConfirm.
     // "no" is already handled generically above (cancel, nothing saved).
     case 'await_domain_learn_confirm': {
@@ -1461,8 +1475,29 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
     let to;
     let toSource = null;
     if (resolvedContact && resolvedContact.type === 'ambiguous') {
-        const options = resolvedContact.matches.map((c) => `- ${c.name} <${c.email}>`).join('\n');
-        await _send(chatId, `A few saved contacts match "${targetName}" — which one did you mean?\n${options}\n\nRe-send with the exact name.`);
+        // REAL GAP (found 2026-08-04, live): this used to just list matches
+        // and tell her to "re-send with the exact name" — no pending was
+        // ever staged, so a reply like "1" (or a close-but-not-exact retype,
+        // e.g. "mk metals" for a saved "mkmetaltrading") went nowhere and
+        // she had to retype the FULL exact saved name from scratch. Per
+        // Apsara: "why should I give exact name... Jarvis should check mail
+        // and show closest matches" — fixed by staging a real pending with
+        // `options` set, which brain.js's section A already knows how to
+        // resolve generically (numeric pick OR partial-text match against
+        // the option strings) — same mechanism select_trucker/select_supplier
+        // already use elsewhere in this file.
+        const matches = resolvedContact.matches;
+        const listText = matches.map((c, i) => `${i + 1}. ${c.name} <${c.email}>`).join('\n');
+        const staged = await setPending(chatId, {
+            type: 'await_contact_disambiguation',
+            options: matches.map((c) => c.name),
+            matches, target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+        });
+        if (staged.queued) {
+            await _send(chatId, `A few saved contacts match "${targetName}", but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+            return { action_taken: 'email_contact_ambiguous_queued' };
+        }
+        await _send(chatId, `A few saved contacts match "${targetName}" — which one?\n${listText}\n\nReply with the number (or "cancel").`);
         return { action_taken: 'email_contact_ambiguous' };
     }
     if (resolvedContact) {

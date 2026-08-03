@@ -221,11 +221,27 @@ function proposeDomainRoles(tally, term, domain) {
         return { addr, counts, role, name };
     });
 
+    // REAL CASE (found 2026-08-04, live): mkmetaltrading.com has THREE real
+    // addresses, and the top two (marckang, export) are tied at From=11
+    // each. Picking one as primary here would just be a different flavor of
+    // guessing — Array.sort's tie-break (stable, so effectively "whichever
+    // was seen in a more recent message") isn't a real signal of who's
+    // actually primary, it's an accident of scan order. On an exact tie for
+    // the top spot, deliberately leave NOBODY marked primary — resolveContact
+    // already asks which person is meant whenever a domain has 2+ members
+    // and none is primary, so this just lets that existing "don't guess, ask"
+    // path do its job instead of a false-confidence auto-pick.
     const candidates = proposals.filter((p) => p.role === 'candidate');
     if (candidates.length) {
         candidates.sort((a, b) => b.counts.from - a.counts.from);
-        candidates[0].role = 'primary';
-        for (const c of candidates.slice(1)) c.role = 'secondary';
+        const topCount = candidates[0].counts.from;
+        const tiedForTop = candidates.filter((c) => c.counts.from === topCount);
+        if (tiedForTop.length > 1) {
+            for (const c of candidates) c.role = 'secondary';
+        } else {
+            candidates[0].role = 'primary';
+            for (const c of candidates.slice(1)) c.role = 'secondary';
+        }
     }
     return proposals;
 }
