@@ -29,7 +29,7 @@
 //      as the same booking number in one poll, and the second silently
 //      clobbered the first PDF in Drive before this guard existed.
 
-const { getGmail, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
+const { getGmailRead, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
 const { extractPdfFields, extractBookingFieldsFromText } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { uploadPdfToDrive } = require('../helpers/drive');
@@ -55,7 +55,7 @@ async function run() {
 
     let gmail;
     try {
-        gmail = getGmail();
+        gmail = getGmailRead();
     } catch (err) {
         console.error(`[${AGENT}] Gmail not configured — skipping poll:`, err.message);
         return;

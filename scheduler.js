@@ -50,7 +50,14 @@ async function dailyTruckerCheck() {
     // whatever pending was already there. Marking first means a crash after
     // this point just costs one skipped morning prompt, not a duplicate.
     await markSent(key);
-    await actions.setPending(teamChat, { type: 'wizard_start' });
+    const staged = await actions.setPending(teamChat, { type: 'wizard_start' });
+    if (staged.queued) {
+        // Something on this chat is already unresolved (e.g. last night's
+        // learning digest never got answered) — don't show a live yes/no
+        // prompt for a wizard that isn't actually the active pending yet.
+        await _sendToTeam(`(Morning trucker check queued — you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.)`);
+        return;
+    }
     await _sendToTeam('Morning — any bookings need to go out to a trucker today? (yes/no)');
 }
 
