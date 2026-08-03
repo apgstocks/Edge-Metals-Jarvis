@@ -34,7 +34,28 @@ _pushAlert     = pushAlert || (() => {});
 }
 
 // ── Pending action helpers (persist in brain.json — survive restarts) ─────────
+// A chat can only have ONE unresolved pending at a time (pending_actions is
+// keyed by chatId, not a list) — but several independent triggers can now
+// target the SAME chat: the 8:15AM trucker wizard, the end-of-day learning
+// digest, and a manager-initiated "email X about Y" confirm. Before this,
+// a later setPending() would silently overwrite an earlier unresolved one —
+// flagged as a real risk in dailyTruckerCheck's own comment in scheduler.js.
+// The failure mode isn't just a lost prompt: if the manager then replies
+// "yes" thinking they're answering the ORIGINAL question, resolvePending
+// resolves it against whatever silently replaced it instead — e.g. a "yes"
+// meant for the trucker wizard could instead confirm sending a drafted email.
+// Fix: never overwrite an unresolved pending. Queue the new one; it goes
+// live automatically the moment the current one resolves (see clearPending).
 async function setPending(chatId, action) {
+const existing = getPending(chatId);
+if (existing) {
+    await mutateBrain(b => {
+        b.pending_queue[chatId] = b.pending_queue[chatId] || [];
+        b.pending_queue[chatId].push(action);
+    });
+    console.warn(`[ACTIONS] ${chatId}: '${existing.type}' still unresolved — queued '${action.type}' behind it instead of overwriting`);
+    return { queued: true, blockedBy: existing.type };
+}
 await mutateBrain(b => {
     b.pending_actions[chatId] = {
         ...action,
@@ -42,12 +63,52 @@ await mutateBrain(b => {
         expires_at: new Date(Date.now() + cfg.PENDING_EXPIRY_MS).toISOString(),
     };
 });
+return { queued: false };
 }
 async function clearPending(chatId) {
 await mutateBrain(b => { delete b.pending_actions[chatId]; });
+// Deliberately NOT promoting a queued pending here — several flows (the
+// trucker wizard's wizardAdvance) call clearPending() then immediately
+// setPending() again for their OWN next step, in the same synchronous
+// handling of one message. Promoting here would let a queued item jump
+// in front of that continuation and silently break the wizard mid-flow.
+// Promotion happens once, in promoteQueued(), called from brain.js's
+// process() AFTER the whole message has finished routing — see there.
 }
 function getPending(chatId) {
 return loadBrain().pending_actions[chatId] || null;
+}
+
+// Called once per inbound message, after it's been fully routed (brain.js's
+// process()) — promotes the next queued pending for this chat, but ONLY if
+// the slot is genuinely still empty at that point (i.e. nothing from this
+// same message's own handling re-claimed it). Returns the promoted pending,
+// or null if nothing was promoted.
+async function promoteQueued(chatId) {
+if (getPending(chatId)) return null;
+let promoted = null;
+await mutateBrain(b => {
+    const queue = b.pending_queue[chatId] || [];
+    if (queue.length) {
+        promoted = queue.shift();
+        b.pending_actions[chatId] = {
+            ...promoted,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + cfg.PENDING_EXPIRY_MS).toISOString(),
+        };
+    }
+});
+if (promoted) {
+    try {
+        // Lazy require — brain.js requires this file at module scope, so a
+        // top-level require here would be circular. Safe at call time since
+        // brain.js is always fully loaded before any message is processed.
+        const { pendingFullReminder } = require('./brain');
+        const text = (pendingFullReminder && pendingFullReminder(promoted)) || `You also have a pending "${promoted.type}" waiting on this chat — go ahead and reply.`;
+        await _send(chatId, `(Next up — this was queued behind what you just answered:)\n${text}`);
+    } catch (e) { console.error('[ACTIONS] promote-queued notify failed:', e.message); }
+}
+return promoted;
 }
 
 // ── Menus / status ────────────────────────────────────────────────────────────
@@ -1259,11 +1320,20 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         return { action_taken: 'email_draft_failed' };
     }
 
-    await setPending(chatId, {
+    const staged = await setPending(chatId, {
         type: 'await_email_confirm',
         to, subject: draft.subject, body: draft.body,
         target_name: targetName, bkg_no: bkgNo || null,
     });
+    if (staged.queued) {
+        // Don't show a live "Send this? (yes/no)" prompt for something that
+        // isn't actually the active pending yet — see setPending's own
+        // comment for why silently overwriting the real one is worse.
+        await _send(chatId,
+            `Drafted the email to ${targetName} <${to}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`
+        );
+        return { action_taken: 'email_draft_queued' };
+    }
     await _send(chatId,
         `Draft email to ${targetName} <${to}>:\n\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
     );
@@ -1275,7 +1345,14 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     try {
-        await sendEmail({ to: pending.to, subject: pending.subject, body: pending.body });
+        // threadId/inReplyTo/references are only present when this pending
+        // came from draftReplyForConfirm (below) — undefined for a plain
+        // draftEmailForConfirm compose, and sendEmail/buildMimeMessage both
+        // already treat those as "new thread, no reply headers."
+        await sendEmail({
+            to: pending.to, subject: pending.subject, body: pending.body,
+            threadId: pending.threadId, inReplyTo: pending.inReplyTo, references: pending.references,
+        });
         await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.`);
         return { action_taken: 'email_sent' };
     } catch (err) {
@@ -1285,9 +1362,176 @@ async function sendDraftedEmail(chatId, pending) {
     }
 }
 
+// ── Read-only mail search ("did Zimex reply about DALA123 cutoff") ──────────
+// No pending/confirmation gate — unlike draft_email, this never changes
+// anything or reaches a third party. It's the same risk class as any other
+// "answer a question from data we have" action, just sourced from Gmail
+// instead of bookings.json. Reuses "note" (already used by ask_contact for
+// free-text) for the search topic instead of adding another schema field.
+async function searchMail(chatId, targetName, note, bkgNo) {
+    const { getGmail, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+    const { callGeminiJSON } = require('../helpers/gemini');
+
+    let gmail;
+    try {
+        gmail = getGmail();
+    } catch (err) {
+        await _send(chatId, `Can't search — Gmail isn't configured (${err.message}).`);
+        return { action_taken: 'search_mail_gmail_unavailable' };
+    }
+
+    const terms = [];
+    if (targetName) terms.push(`from:${targetName}`);
+    if (bkgNo) terms.push(bkgNo);
+    if (note) terms.push(note);
+    const q = terms.join(' ').trim();
+    if (!q) {
+        await _send(chatId, 'Search for what — a name, booking number, or keyword?');
+        return { action_taken: 'search_mail_missing_query' };
+    }
+
+    let messages;
+    try {
+        messages = await listMessages(gmail, q, 5);
+    } catch (err) {
+        await _send(chatId, `Mail search failed: ${err.message}`);
+        return { action_taken: 'search_mail_failed' };
+    }
+    if (!messages.length) {
+        await _send(chatId, `No matching emails found${targetName ? ` from ${targetName}` : ''}${bkgNo ? ` about ${bkgNo}` : ''}${note && !bkgNo ? ` re "${note}"` : ''}.`);
+        return { action_taken: 'search_mail_no_results' };
+    }
+
+    // Pull the top few, feed to Gemini for a direct answer instead of
+    // dumping raw email metadata — the manager asked a QUESTION ("did they
+    // reply"), not for a mail listing.
+    const found = [];
+    for (const m of messages.slice(0, 3)) {
+        try {
+            const full = await getMessage(gmail, m.id);
+            const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
+            const { body } = getEmailContent(full.payload);
+            found.push({ from: hdrs.From, date: hdrs.Date, subject: hdrs.Subject, body: (body || '').slice(0, 1500) });
+        } catch (err) {
+            console.error('[ACTIONS] searchMail: failed to read a matched message:', err.message);
+        }
+    }
+    if (!found.length) {
+        await _send(chatId, 'Found matching emails but could not read their contents — check Gmail directly.');
+        return { action_taken: 'search_mail_read_failed' };
+    }
+
+    const askedAbout = [targetName ? `whether ${targetName} replied` : null, note, bkgNo].filter(Boolean).join(' — ');
+    const prompt = `The manager asked about their mailbox: "${askedAbout || q}"
+Below are up to 3 matching emails (Gmail search results, not necessarily in relevance order). Answer the manager's question directly in 2-3 sentences, citing date and the relevant detail if you find it. If none of these actually answer the question, say so plainly instead of guessing.
+
+EMAILS:
+${found.map((d, i) => `--- Email ${i + 1} ---
+From: ${d.from}
+Date: ${d.date}
+Subject: ${d.subject}
+Body: ${d.body}`).join('\n\n')}
+
+Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
+
+    const result = await callGeminiJSON(prompt);
+    const answer = result?.answer || `Found ${found.length} matching email(s) but couldn't summarize them — check Gmail directly.`;
+    await _send(chatId, answer);
+    return { action_taken: 'search_mail_answered' };
+}
+
+// ── Reply within an existing thread ("reply to Zimex about DALA123: confirmed") ──
+// Distinct from draftEmailForConfirm: this finds a REAL prior email to reply
+// to and carries over its threadId/Message-ID/References, so the reply lands
+// in the same Gmail thread the manager and carrier are already using instead
+// of starting a fresh, disconnected one. Same confirm-before-send posture as
+// every other outbound path — stages via the SAME 'await_email_confirm'
+// pending type sendDraftedEmail already handles, just with thread fields
+// attached; no new pending type or send path needed.
+async function draftReplyForConfirm(chatId, targetName, details, bkgNo) {
+    if (!targetName) {
+        await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
+        return { action_taken: 'reply_missing_target' };
+    }
+    const { getGmail, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+    const { callGeminiJSON } = require('../helpers/gemini');
+
+    let gmail;
+    try {
+        gmail = getGmail();
+    } catch (err) {
+        await _send(chatId, `Can't reply — Gmail isn't configured (${err.message}).`);
+        return { action_taken: 'reply_gmail_unavailable' };
+    }
+
+    const terms = [`from:${targetName}`];
+    if (bkgNo) terms.push(bkgNo);
+    let messages;
+    try {
+        messages = await listMessages(gmail, terms.join(' '), 3);
+    } catch (err) {
+        await _send(chatId, `Couldn't search mail: ${err.message}`);
+        return { action_taken: 'reply_search_failed' };
+    }
+    if (!messages.length) {
+        // Deliberately doesn't fall back to composing a fresh email on its
+        // own — "reply to" is a specific instruction about an EXISTING
+        // thread; silently switching to a new one changes what the manager
+        // asked for. Ask instead.
+        await _send(chatId, `Couldn't find an email from ${targetName}${bkgNo ? ` about ${bkgNo}` : ''} to reply to. Want me to compose a new email instead?`);
+        return { action_taken: 'reply_no_thread_found' };
+    }
+
+    const full = await getMessage(gmail, messages[0].id);
+    const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
+    const fromAddr = (hdrs.From || '').match(/<([^>]+)>/)?.[1] || hdrs.From;
+    if (!fromAddr) {
+        await _send(chatId, "Found a matching email but couldn't parse the sender address — check Gmail directly.");
+        return { action_taken: 'reply_no_address' };
+    }
+    const origSubject = hdrs.Subject || '';
+    const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
+    const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
+    const references = [hdrs.References, messageIdHeader].filter(Boolean).join(' ').trim();
+    const { body: origBody } = getEmailContent(full.payload);
+
+    const bkg = bkgNo ? getBooking(bkgNo) : null;
+    const bookingLine = bkg
+        ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}.`
+        : '';
+    const prompt = `Draft a short, professional reply from Edge Metals Inc. to this email thread.
+Original email — From: ${hdrs.From}, Subject: ${origSubject}
+Original body: ${(origBody || '').slice(0, 1500)}
+
+What the reply needs to say: ${details || '(no further detail given — infer a reasonable, brief reply from context)'}
+${bookingLine ? `Relevant booking data (use only what's relevant): ${bookingLine}` : ''}
+Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+
+    const draft = await callGeminiJSON(prompt);
+    if (!draft || !draft.body) {
+        await _send(chatId, "Couldn't draft that reply — try rephrasing what it should say.");
+        return { action_taken: 'reply_draft_failed' };
+    }
+
+    const staged = await setPending(chatId, {
+        type: 'await_email_confirm',
+        to: fromAddr, subject: replySubject, body: draft.body,
+        threadId: full.threadId, inReplyTo: messageIdHeader, references,
+        target_name: targetName, bkg_no: bkgNo || null,
+    });
+    if (staged.queued) {
+        await _send(chatId, `Drafted a reply to ${targetName} <${fromAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
+        return { action_taken: 'reply_draft_queued' };
+    }
+    await _send(chatId,
+        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n\n${draft.body}\n\nSend this? (yes/no)`
+    );
+    return { action_taken: 'reply_draft_staged' };
+}
+
 module.exports = {
 init,
-setPending, clearPending, getPending, resolvePending,
+setPending, clearPending, getPending, resolvePending, promoteQueued,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
@@ -1297,6 +1541,6 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail,
+    draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };

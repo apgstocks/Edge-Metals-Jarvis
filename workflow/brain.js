@@ -314,6 +314,30 @@ function policyDecide(ctx) {
             };
         }
 
+        // "reply to X about Y" / "reply to X's email about Y: Z" / "reply to X saying Z" —
+        // finds a REAL prior email from X and replies inside that thread, not
+        // a fresh compose. Deliberately checked before search_mail/draft_email
+        // so "reply to..." always wins over the more general "email X..." shape.
+        if ((m = ctx.text.trim().match(/^(?:please\s+)?reply\s+to\s+(.+?)(?:'s\s+(?:last\s+)?(?:email|mail|message))?(?:\s*[:\-]\s*|\s+(?:about|re|regarding|saying|and\s+say)\s+)(.+)$/i))) {
+            const detailsBkg = resolveBookingNumber(m[2]);
+            return {
+                intent: 'reply_email', resolvedBy: 'policy',
+                data: { target_name: m[1].trim(), email_details: m[2].trim(), bkg_no: detailsBkg || ctx.activeBooking || null },
+            };
+        }
+
+        // "did X reply about Y" / "has X replied" / "search mail for X about Y" /
+        // "check email from X about Y" — read-only Gmail search, answered
+        // directly. No pending/confirmation needed, nothing is sent or changed.
+        if ((m = ctx.text.trim().match(/^(?:did|has)\s+(.+?)\s+repl(?:y|ied)(?:\s+yet)?(?:\s+(?:about|re|regarding)\s+(.+))?\??$/i)) ||
+            (m = ctx.text.trim().match(/^(?:search|check)\s+(?:mail|emails?)\s+(?:for|from)\s+(.+?)(?:\s+(?:about|re|regarding)\s+(.+))?$/i))) {
+            const detailsBkg = m[2] ? resolveBookingNumber(m[2]) : null;
+            return {
+                intent: 'search_mail', resolvedBy: 'policy',
+                data: { target_name: m[1].trim(), note: m[2] ? m[2].trim() : null, bkg_no: detailsBkg || ctx.activeBooking || null },
+            };
+        }
+
         // "email X about Y" / "email X re Y" / "please email X regarding Y" —
         // manager explicitly instructing an outbound email. Uses ctx.text (not
         // lowercased t) so the details clause keeps its original casing for the
@@ -600,7 +624,7 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup and draft_email. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup, draft_email, search_mail, and reply_email. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 
 - CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
@@ -666,7 +690,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, reply, silent, NEED_DATA, NEED_APPROVAL
+ask_contact, draft_email, search_mail, reply_email, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -691,7 +715,7 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email',
 ]);
 
 async function aiDecide(ctx) {
@@ -803,6 +827,8 @@ async function route(decision, ctx, sendMessage) {
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg);
+        case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
+        case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg);
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {
@@ -928,7 +954,12 @@ function pendingFullReminder(p) {
     if (p.type === 'wizard_await_port') return `(Still waiting: which port? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
     if (p.type === 'wizard_await_booking') return `(Still waiting: which booking? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
     if (p.type === 'wizard_confirm') return `(Still waiting: confirm ${p.bkg_no} — Supplier: ${p.supplier_name}, Trucker: ${p.trucker_name}? Reply yes or no.)`;
-    return null; // not a wizard pending — use the generic template
+    if (p.type === 'await_fact_batch') {
+        const list = (p.candidates || []).map((c, i) => `${i + 1}. ${c}`).join('\n');
+        return `(Still waiting: end-of-day review —\n${list}\n\nReply with numbers to accept (e.g. "1,3"), "all", or "no" to skip all.)`;
+    }
+    if (p.type === 'await_email_confirm') return `(Still waiting: send this email to ${p.target_name} <${p.to}>? Subject: ${p.subject}\n\n${p.body}\n\nReply yes or no.)`;
+    return null; // no type-specific text — use the generic template
 }
 
 async function process(rawEvent, sendMessage) {
@@ -967,6 +998,12 @@ async function process(rawEvent, sendMessage) {
         console.error('[BRAIN] Route failed:', err);
         if (inbound.isManagerOrTeam) await sendMessage(inbound.chatId, `Something broke while handling that: ${err.message}`);
     }
+
+    // If this message's own handling freed up the pending slot on this chat
+    // (answered a wizard step, confirmed/declined an email send, etc.) and
+    // didn't immediately re-claim it for a follow-up step of its own, bring
+    // in whatever was queued behind it — see actions.js's promoteQueued.
+    try { await actions.promoteQueued(inbound.chatId); } catch (e) { console.error('[BRAIN] promoteQueued failed:', e.message); }
 
     // Reminder tail — pending still open after an unrelated exchange
     if (inbound.isManagerOrTeam && pending &&
@@ -1052,4 +1089,4 @@ async function handleManagerLLMFallback(text, chatId, sendMessage) {
     return { intent: 'awaiting_confirmation', resolvedBy: 'llm', data: {}, confidence: decision.confidence };
 }
 
-module.exports = { process, normalize, policyDecide };
+module.exports = { process, normalize, policyDecide, pendingFullReminder };
