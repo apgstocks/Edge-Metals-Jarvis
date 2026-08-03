@@ -61,7 +61,8 @@ async function main() {
     console.log(`=== PROPOSAL for domain "${domain}" ===`);
     for (const p of proposals) {
         const nameStr = p.name ? p.name : '(no name — needs --name= override, will be SKIPPED)';
-        console.log(`${p.addr}  From=${p.counts.from} To=${p.counts.to} Cc=${p.counts.cc}  -> role=${p.role}  name=${nameStr}`);
+        const dnStr = p.displayName ? ` displayName="${p.displayName}"` : ' (no real name found in mail)';
+        console.log(`${p.addr}  From=${p.counts.from} To=${p.counts.to} Cc=${p.counts.cc}  -> role=${p.role}  name=${nameStr}${dnStr}`);
     }
 
     const sharedEmails = proposals.filter((p) => p.role === 'shared').map((p) => p.addr);
@@ -87,8 +88,12 @@ async function main() {
 
     for (const p of applyable) {
         const cc = p.role === 'shared' ? undefined : sharedEmails.filter((e) => e !== p.addr);
-        await emailContacts.addContact(p.name, p.addr, { domain, role: p.role, ...(cc && cc.length ? { cc } : {}) });
-        console.log(`Saved: ${p.name} <${p.addr}> role=${p.role}${cc && cc.length ? ` cc=[${cc.join(', ')}]` : ''}`);
+        await emailContacts.addContact(p.name, p.addr, {
+            domain, role: p.role,
+            ...(cc && cc.length ? { cc } : {}),
+            ...(p.displayName ? { displayName: p.displayName } : {}),
+        });
+        console.log(`Saved: ${p.name} <${p.addr}> role=${p.role}${cc && cc.length ? ` cc=[${cc.join(', ')}]` : ''}${p.displayName ? ` displayName="${p.displayName}"` : ''}`);
     }
     console.log('\nDone.');
 }

@@ -364,7 +364,7 @@ async function tallyAddressesForTerm(gmail, term, maxResults = 50) {
     const rawMessages = res.data.messages || [];
 
     const messages = [];
-    const tally = new Map(); // lowercased address -> { from, to, cc }
+    const tally = new Map(); // lowercased address -> { from, to, cc, displayName }
 
     for (const m of rawMessages) {
         let msg;
@@ -384,12 +384,50 @@ async function tallyAddressesForTerm(gmail, term, maxResults = 50) {
             for (const part of headerValue.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/)) {
                 if (!part.toLowerCase().includes(term.toLowerCase())) continue;
                 const addr = (extractAddress(part.trim()) || part.trim()).toLowerCase();
-                if (!tally.has(addr)) tally.set(addr, { from: 0, to: 0, cc: 0 });
-                tally.get(addr)[role]++;
+                if (!tally.has(addr)) tally.set(addr, { from: 0, to: 0, cc: 0, displayName: null });
+                const entry = tally.get(addr);
+                entry[role]++;
+                // REAL BUG (found 2026-08-04, live): domain-tree contacts
+                // only ever got a NAME inferred from the address's
+                // local-part (export@mkmetaltrading.com -> "export") — fine
+                // as a short lookup key ("mail export"), but wrong when it
+                // leaks into the actual drafted email's greeting ("Dear
+                // export"). The real name (e.g. "Marc Kang") is sitting
+                // right there in the From header of messages already being
+                // scanned — capture it here so callers can use a proper
+                // name in the email body while still using the short local-
+                // part as the typed lookup key. From-header wins if both
+                // From and Cc/To happen to carry a display name for the
+                // same address — Cc/To display names are less reliably "how
+                // this person signs their own mail."
+                // First occurrence wins, whatever role it's in — messages
+                // are scanned newest-first, so this is simply "the most
+                // recent display name seen for this address," which is a
+                // simpler and less bug-prone rule than trying to re-rank
+                // From over Cc/To after the fact (an earlier attempt at
+                // that ended up keeping the OLDEST From match instead of
+                // the newest, since every From occurrence kept overwriting
+                // the last).
+                if (!entry.displayName) {
+                    const dn = extractDisplayName(part.trim());
+                    if (dn) entry.displayName = dn;
+                }
             }
         }
     }
     return { query: q, messages, tally };
+}
+
+// "Marc Kang" <marckang@x.com> / Marc Kang <marckang@x.com> -> "Marc Kang".
+// Bare "marckang@x.com" (no display name at all) -> null. Used by
+// tallyAddressesForTerm so a domain-tree contact can carry a real human
+// name separately from its short lookup key.
+function extractDisplayName(headerValue) {
+    if (!headerValue) return null;
+    const m = headerValue.match(/^"?([^"<]+?)"?\s*<[^>]+>$/);
+    if (!m) return null;
+    const name = m[1].trim();
+    return name ? name : null;
 }
 
 // Splits a raw To/Cc header value into individual bare addresses. Comma-

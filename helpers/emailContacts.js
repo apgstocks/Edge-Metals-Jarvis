@@ -45,15 +45,19 @@ function loadContacts() {
     return loadJson(cfg.EMAIL_CONTACTS_FILE, []);
 }
 
-// extra: optional { domain, role, cc } — domain groups pass these; ordinary
-// single-name contacts (e.g. "jeyshree") never need to. Passing role:
-// 'primary' for a domain demotes any OTHER existing primary on that same
-// domain to 'secondary' first, so a domain can never silently end up with
-// two primaries (resolveContact would then have to guess between them).
+// extra: optional { domain, role, cc, displayName } — domain groups pass
+// these; ordinary single-name contacts (e.g. "jeyshree") never need to.
+// Passing role: 'primary' for a domain demotes any OTHER existing primary
+// on that same domain to 'secondary' first, so a domain can never silently
+// end up with two primaries (resolveContact would then have to guess
+// between them). displayName (built 2026-08-04, see proposeDomainRoles'
+// own comment) is the real human/company name for use IN an email's
+// greeting — separate from `name`, which is only ever the short typed
+// lookup key ("mail export") and should never itself appear in a draft.
 async function addContact(name, email, extra = {}) {
     if (!name || !email) throw new Error('name and email required');
     if (!isValidEmail(email)) throw new Error('email address looks invalid');
-    const { domain, role, cc } = extra;
+    const { domain, role, cc, displayName } = extra;
     await mutateJson(cfg.EMAIL_CONTACTS_FILE, [], (list) => {
         // GUARD (2026-08-03): actions.js has three separate call sites that
         // auto-save name→address pairings it just resolved (reply_email's
@@ -88,6 +92,7 @@ async function addContact(name, email, extra = {}) {
         if (domain) entry.domain = String(domain).trim().toLowerCase();
         if (role) entry.role = role;
         if (cc) entry.cc = Array.isArray(cc) ? cc : [cc];
+        if (displayName) entry.displayName = displayName;
         if (i >= 0) list[i] = { ...list[i], ...entry };
         else list.push(entry);
         return list;
@@ -237,6 +242,16 @@ function normalizeDomain(term) {
 // guessing a label like "docs"; the caller must supply one explicitly. This
 // is deliberate: auto-picking that name would just be a different flavor of
 // the exact guessing this whole feature exists to avoid.
+//
+// `name` is ONLY ever a short lookup key (so "mail export" works) — it is
+// NOT meant to appear inside an actual email. REAL BUG (found 2026-08-04,
+// live): mkmetaltrading's drafted emails greeted "Dear export" because
+// nothing distinguished the lookup key from a real name. `displayName`
+// (from tallyAddressesForTerm's real From-header capture, e.g. "Marc Kang")
+// is carried through separately here so callers can use it for the actual
+// email body/greeting while `name` stays the short typed key — null when
+// no display name was ever seen in the scanned mail (e.g. the domain's
+// been mentioned but this address has never actually sent anything).
 function proposeDomainRoles(tally, term, domain) {
     const bareTerm = String(term).replace(/\.com$/i, '').toLowerCase();
     const domainAddrs = [...tally.entries()].filter(([addr]) => addr.endsWith(`@${domain}`));
@@ -248,7 +263,7 @@ function proposeDomainRoles(tally, term, domain) {
         else if (counts.cc >= counts.from * 3 && counts.cc >= 10) role = 'shared';
         else role = 'candidate'; // resolved to primary/secondary below
         const name = localPart.toLowerCase() === bareTerm ? null : localPart;
-        return { addr, counts, role, name };
+        return { addr, counts, role, name, displayName: counts.displayName || null };
     });
 
     // REAL CASE (found 2026-08-04, live): mkmetaltrading.com has THREE real

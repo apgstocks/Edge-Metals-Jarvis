@@ -915,7 +915,11 @@ switch (pending.type) {
         const sharedEmails = proposals.filter((p) => p.role === 'shared').map((p) => p.addr);
         for (const p of proposals) {
             const cc = p.role === 'shared' ? undefined : sharedEmails.filter((e) => e !== p.addr);
-            await emailContacts.addContact(p.name, p.addr, { domain, role: p.role, ...(cc && cc.length ? { cc } : {}) });
+            await emailContacts.addContact(p.name, p.addr, {
+                domain, role: p.role,
+                ...(cc && cc.length ? { cc } : {}),
+                ...(p.displayName ? { displayName: p.displayName } : {}),
+            });
         }
         if (!resume) {
             await _send(chatId, `Saved ${proposals.length} contact(s) under ${domain}.${existingFlat ? ` (replaced the old flat "${bareTerm}" entry.)` : ''}`);
@@ -1692,8 +1696,22 @@ async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toS
         }
     }
 
+    // REAL BUG (found 2026-08-04, live): drafts greeted "Dear export" (or
+    // "Dear mkmetaltrading") because targetName is only ever a short typed
+    // lookup key ("export", or whatever the manager typed), never a real
+    // name. Looked up by address (not name) since "manual" toSource entries
+    // won't have a contact record with that exact key. displayName (the
+    // actual "Marc Kang"-style name captured from the address's own mail —
+    // see proposeDomainRoles/tallyAddressesForTerm) is used for the
+    // greeting when known; falls back to targetName otherwise, same as
+    // before this fix, so nothing regresses for a contact with no captured
+    // display name yet.
+    const contactRecord = require('../helpers/emailContacts').loadContacts()
+        .find((c) => c.email.toLowerCase() === String(to).toLowerCase());
+    const greetingName = contactRecord?.displayName || targetName;
+
     const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to a carrier/vendor contact.
-Recipient: ${targetName}
+Recipient: ${greetingName}
 What the email needs to say: ${details || (recentContext
         ? 'No specific ask was given — write a brief, genuinely relevant follow-up grounded in the recent correspondence below (e.g. reference what it was actually about). Do NOT write generic filler like "just checking in" or "hope all is well" with no real content.'
         : 'No specific ask was given and no past correspondence was found either — ask a brief, concrete question (e.g. current pricing/availability) rather than pure small talk.')}
@@ -1709,11 +1727,8 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 
     const { cc: globalCc, bcc } = ccBccFromSettings();
     // Merge the global Cc with this contact's own standing Cc (if any),
-    // deduped — per Apsara's explicit instruction. Looked up by address
-    // (not name) since "manual" toSource entries won't have a contact
-    // record with that exact display name.
-    const contactRecord = require('../helpers/emailContacts').loadContacts()
-        .find((c) => c.email.toLowerCase() === String(to).toLowerCase());
+    // deduped — per Apsara's explicit instruction. Reuses the contactRecord
+    // already looked up above for the greeting.
     const cc = mergeCc(globalCc, contactRecord?.cc);
     // Same reasoning as showBookingStatus/searchMail — registers this
     // booking as the active conversational context so a follow-up like
@@ -1848,7 +1863,9 @@ async function stageDomainProposal(chatId, term, domain, proposals, resume, intr
 // 'await_domain_learn_confirm' case in resolvePending below for the save
 // (and how `resume`, if present, continues the original email afterward).
 async function stageDomainLearnConfirm(chatId, term, domain, proposals, resume, intro) {
-    const summary = proposals.map((p) => `${p.name} <${p.addr}> -> ${p.role}`).join('\n');
+    const summary = proposals.map((p) =>
+        `${p.name}${p.displayName ? ` (${p.displayName})` : ' (no real name found in mail)'} <${p.addr}> -> ${p.role}`
+    ).join('\n');
     const staged = await setPending(chatId, { type: 'await_domain_learn_confirm', term, domain, proposals, resume });
     if (staged.queued) {
         await _send(chatId, `${intro || ''}Ready to save ${domain} contacts, but you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.`);
@@ -2175,7 +2192,14 @@ Return ONLY this JSON: { "address": "the email address, or null if you can't fin
         emailContacts.addContact(targetName, foundAddr).catch((err) =>
             console.warn(`[ACTIONS] Failed to save learned contact "${targetName}":`, err.message));
 
-        const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to ${targetName}. This is NOT a direct reply-in-thread — it's a fresh email prompted by a forwarded/quoted message, so don't reference "your email below" or similar framing the recipient won't recognize.
+        // Same "don't greet with the short lookup key" fix as
+        // draftEmailWithAddress — see its own comment. foundAddr may already
+        // have a saved displayName from an earlier domain-learn even though
+        // it's just now being resolved for a reply.
+        const fwdContactRecord = emailContacts.loadContacts().find((c) => c.email.toLowerCase() === String(foundAddr).toLowerCase());
+        const fwdGreetingName = fwdContactRecord?.displayName || targetName;
+
+        const prompt = `Draft a short, professional freight-ops email from Edge Metals Inc. to ${fwdGreetingName}. This is NOT a direct reply-in-thread — it's a fresh email prompted by a forwarded/quoted message, so don't reference "your email below" or similar framing the recipient won't recognize.
 Forwarded content for context (may include other people's messages — use only what's relevant to ${targetName}):
 ${(origBody || '').slice(0, 1500)}
 
