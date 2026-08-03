@@ -1639,6 +1639,46 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
         return { action_taken: 'email_no_address' };
     }
 
+    // REAL GAP (found 2026-08-04, live): "email Yurim to increase capacity
+    // of booking DALA51952300" drafted as a brand-new, disconnected email
+    // with an invented subject line, even though a real ongoing thread with
+    // Yurim about that exact booking almost certainly already existed. Per
+    // Apsara: "it should [be a] response to existing booking mail a?" — the
+    // compose-fresh-vs-reply-in-thread split used to be decided purely by
+    // which verb she typed ("email" vs "reply"), never by whether a thread
+    // actually existed. Fix: whenever a booking number is given, check for a
+    // real prior email involving THIS SPECIFIC resolved address (`to`) that
+    // ALSO mentions this exact booking number — scoped to the address
+    // already resolved above, so a booking number shared with multiple
+    // parties (carrier, trucker, consignee, etc., each discussing the same
+    // DALA number in their own separate thread) can't cross-contaminate:
+    // Yurim's thread only matches if Yurim's own address is actually on it.
+    // Found -> reply in that thread, same as an explicit "reply to X" would.
+    // Not found (including no bkgNo at all) -> falls straight through to
+    // compose-fresh below, exactly as before this fix.
+    if (bkgNo) {
+        try {
+            const { listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
+            const threadMsgs = await listMessages(gmail, `(from:${to} OR to:${to}) ${bkgNo}`, 1);
+            if (threadMsgs.length) {
+                const full = await getMessage(gmail, threadMsgs[0].id);
+                const threadHdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
+                const { body: threadBody } = getEmailContent(full.payload);
+                const bkgForThread = getBooking(bkgNo);
+                const threadBookingLine = bkgForThread
+                    ? `Booking ${bkgForThread.booking_number}: carrier ${bkgForThread.carrier || '—'}, ERD ${bkgForThread.erd_date || '—'}, cutoff ${bkgForThread.cutoff_date || '—'}, POL ${bkgForThread.port_of_loading || '—'}, POD ${bkgForThread.port_of_discharge || '—'}.`
+                    : '';
+                const { cc: threadGlobalCc, bcc: threadBcc } = ccBccFromSettings();
+                const threadCcForAddress = (addr) => emailContacts.loadContacts()
+                    .find((c) => c.email.toLowerCase() === String(addr).toLowerCase())?.cc;
+                return composeThreadReply(chatId, gmail, targetName, details, bkgNo, to,
+                    threadHdrs.Subject || '', threadHdrs, threadBody, threadGlobalCc, threadBcc, threadCcForAddress, threadBookingLine);
+            }
+        } catch (err) {
+            console.warn(`[ACTIONS] Booking-thread lookup failed for ${to}/${bkgNo} — falling back to compose-fresh:`, err.message);
+        }
+    }
+
     // Cc-pattern detection — per Apsara: "when I mail T, there is always
     // same type of people I am cc'ing." Only runs for an ALREADY-SAVED
     // contact (toSource === 'contact') that hasn't been checked/declined
@@ -2181,14 +2221,32 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText)
     }
 
     if (!isDirectSender) {
+        const extractSlice = (origBody || '').slice(0, 3000);
         const extractPrompt = `This email may be a FORWARD containing an earlier message from "${targetName}". Find "${targetName}"'s email address as it appears in the forwarded/quoted content (often shown as "From: Name <address>" inside a "---------- Forwarded message ---------" block).
 Email body:
-${(origBody || '').slice(0, 3000)}
+${extractSlice}
 Return ONLY this JSON: { "address": "the email address, or null if you can't find one for ${targetName} specifically" }`;
         const extracted = await callGeminiJSON(extractPrompt);
         let foundAddr = extracted && extracted.address && extracted.address !== 'null' ? extracted.address : null;
         if (foundAddr && !isValidEmail(foundAddr)) {
             console.warn(`[ACTIONS] Forward-extraction returned a non-address for "${targetName}": "${foundAddr}" — discarding`);
+            foundAddr = null;
+        }
+        // FOURTH hallucination case (audited 2026-08-04, no live incident yet
+        // — found by re-checking this path against the same failure class as
+        // the other three: target_name-as-email at line ~2112, email_details
+        // at line ~2123, and the original "mike@example.com" bug this whole
+        // guard pattern is named after). This extraction previously only
+        // checked that Gemini's answer LOOKED like a valid address — nothing
+        // verified it actually came FROM the forwarded text it was given.
+        // A confident guess at a plausible address for a known company
+        // domain would have sailed through isValidEmail() untouched. Mirrors
+        // detailsLookGrounded: if the literal address string isn't present
+        // in the exact slice Gemini was shown, it wasn't "found", it was
+        // invented — discard it and fall through to the saved-contacts /
+        // ask-manager paths below, same as any other extraction failure.
+        if (foundAddr && !extractSlice.toLowerCase().includes(foundAddr.toLowerCase())) {
+            console.warn(`[ACTIONS] Forward-extraction returned "${foundAddr}" for "${targetName}" but that address never actually appears in the forwarded text it was shown — treating as likely-hallucinated, discarding.`);
             foundAddr = null;
         }
 
@@ -2278,15 +2336,33 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     }
 
     // ── Direct email from the target — real thread-reply path ────────────
+    return composeThreadReply(chatId, gmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine);
+}
+
+// Shared "reply within an existing real thread" composer — extracted
+// 2026-08-04 so it has exactly ONE implementation instead of two that could
+// silently drift apart. Originally only draftReplyForConfirm's direct-sender
+// branch (explicit "reply to X") used this. Now ALSO called from
+// draftEmailForConfirm's own booking-thread auto-detection below — see that
+// comment for why: "email X about booking Y" used to always compose a fresh,
+// disconnected email even when a real thread with X about that exact booking
+// already existed, purely because "email" (not "reply") was the verb typed.
+// Per Apsara, live: "it should [be a] response to existing booking mail a?"
+// `replyToAddr` is passed explicitly rather than derived from the found
+// message's From header, because the booking-thread caller may have found
+// EITHER a message FROM the target OR one Apsara herself sent TO the target
+// — either way the correct reply recipient is the address Jarvis already
+// resolved and trusts, not whichever header happens to be on this one
+// message.
+async function composeThreadReply(chatId, gmail, targetName, details, bkgNo, replyToAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine) {
+    const { callGeminiJSON } = require('../helpers/gemini');
     const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
     const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
     const references = [hdrs.References, messageIdHeader].filter(Boolean).join(' ').trim();
 
     // Preserve the original thread's own Cc list on the reply — real
     // "reply-all" behavior, per Apsara: "reply_email.cc'd" (2026-08-03).
-    // Only done here, on the genuine same-thread reply path — the forward
-    // branch above deliberately does NOT do this (see its own comment for
-    // why). Excludes the target's own address (already the "to") and
+    // Excludes the reply recipient's own address (already the "to") and
     // Jarvis's own sending account (never cc yourself). getMyEmailAddress
     // failing isn't fatal — worst case, if it can't be determined, this
     // just skips the self-exclusion rather than blocking the whole reply.
@@ -2298,9 +2374,9 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         console.warn('[ACTIONS] Could not determine own account address for cc-exclusion:', err.message);
     }
     const origCc = parseAddressList(hdrs.Cc)
-        .filter((addr) => addr.toLowerCase() !== fromAddr.toLowerCase())
+        .filter((addr) => addr.toLowerCase() !== replyToAddr.toLowerCase())
         .filter((addr) => !myAddr || addr.toLowerCase() !== myAddr.toLowerCase());
-    const replyCc = mergeCc(globalCc, ccForAddress(fromAddr), origCc);
+    const replyCc = mergeCc(globalCc, ccForAddress(replyToAddr), origCc);
 
     const prompt = `Draft a short, professional reply from Edge Metals Inc. to this email thread.
 ${todayDateContext()}
@@ -2320,7 +2396,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
     if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
-        to: fromAddr, cc: replyCc, bcc, subject: replySubject, body: draft.body,
+        to: replyToAddr, cc: replyCc, bcc, subject: replySubject, body: draft.body,
         // No threadId — belongs to whichever mailbox this was read from,
         // invalid/meaningless when sending via a different account.
         // inReplyTo/References are plain headers and cross accounts fine —
@@ -2329,11 +2405,11 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         target_name: targetName, bkg_no: bkgNo || null,
     });
     if (staged.queued) {
-        await _send(chatId, `Drafted a reply to ${targetName} <${fromAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
+        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
         return { action_taken: 'reply_draft_queued' };
     }
     await _send(chatId,
-        `Reply to ${targetName} <${fromAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
+        `Reply to ${targetName} <${replyToAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
     );
     return { action_taken: 'reply_draft_staged' };
 }
