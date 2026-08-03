@@ -207,7 +207,14 @@ function findMatchingAddress(headerValue, needle) {
 // ever been copied (Cc) or addressed (To) on someone else's thread still
 // resolves, not just contacts who've emailed us directly.
 async function findLatestFrom(gmail, nameOrDomain) {
-    const q = `(from:${nameOrDomain} OR cc:${nameOrDomain} OR to:${nameOrDomain})`;
+    // The bare term (no operator) is the important addition here — from:/
+    // cc:/to: all need nameOrDomain to match as its OWN token, which fails
+    // whenever it's really just part of a longer domain word (e.g. "zimex"
+    // inside "zimexglt.com" doesn't match from:zimex, even though a plain
+    // text search for "zimex" WOULD find it via the signature block or
+    // anywhere else it appears as a standalone word). Real incident: this
+    // exact gap caused a genuine Zimex email to be reported as not found.
+    const q = `(from:${nameOrDomain} OR cc:${nameOrDomain} OR to:${nameOrDomain} OR ${nameOrDomain})`;
     const res = await gmail.users.messages.list({ userId: 'me', q, maxResults: 5 });
     const messages = res.data.messages || [];
     if (!messages.length) return null;

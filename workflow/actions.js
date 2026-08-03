@@ -1352,6 +1352,10 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     }
 
     const { cc, bcc } = ccBccFromSettings();
+    // Same reasoning as showBookingStatus/searchMail — registers this
+    // booking as the active conversational context so a follow-up like
+    // "any change in cutoff?" scopes to it instead of answering generically.
+    if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
         to, cc, bcc, subject: draft.subject, body: draft.body,
@@ -1415,8 +1419,16 @@ async function searchMail(chatId, targetName, note, bkgNo) {
         return { action_taken: 'search_mail_gmail_unavailable' };
     }
 
+    // (from:X OR X), not just from:X — Gmail's from: operator needs X to
+    // match as its own token, and a company name is very often only part
+    // of a longer domain (e.g. "zimex" inside "zimexglt.com" — NOT the
+    // same as the standalone word "zimex" appearing in a signature block
+    // like "Zimex GLT, Inc."). Real incident: from:zimex on its own missed
+    // a genuine Zimex email entirely because of exactly this. The bare
+    // term catches it via full-text match instead of relying on the
+    // header operator alone.
     const terms = [];
-    if (targetName) terms.push(`from:${targetName}`);
+    if (targetName) terms.push(`(from:${targetName} OR ${targetName})`);
     if (bkgNo) terms.push(bkgNo);
     if (note) terms.push(note);
     const q = terms.join(' ').trim();
@@ -1471,6 +1483,11 @@ Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
 
     const result = await callGeminiJSON(prompt);
     const answer = result?.answer || `Found ${found.length} matching email(s) but couldn't summarize them — check Gmail directly.`;
+    // Registers this booking as the conversation's active context — same as
+    // showBookingStatus does — so a natural follow-up like "any change in
+    // cutoff?" resolves against THIS booking instead of falling through to
+    // a generic answer with no booking scope at all.
+    if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
     await _send(chatId, answer);
     return { action_taken: 'search_mail_answered' };
 }
@@ -1590,6 +1607,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
             return { action_taken: 'reply_draft_failed' };
         }
 
+        if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
         const staged = await setPending(chatId, {
             type: 'await_email_confirm',
             to: foundAddr, cc, bcc, subject: draft.subject, body: draft.body,
@@ -1627,6 +1645,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         return { action_taken: 'reply_draft_failed' };
     }
 
+    if (bkgNo) updateSession(chatId, { activeBooking: bkgNo, currentTopic: 'email' });
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
         to: fromAddr, cc, bcc, subject: replySubject, body: draft.body,
