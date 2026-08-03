@@ -52,7 +52,17 @@ const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_
 // Google Drive (booking PDFs) — service-account JSON path
 const GDRIVE_KEYFILE          = process.env.GDRIVE_KEYFILE || path.join(DATA_DIR, 'gdrive-sa.json');
 const GMAIL_CREDENTIALS_FILE = process.env.GMAIL_CREDENTIALS_FILE || path.join(DATA_DIR, 'gmail-credentials.json');
+// Read and write are DIFFERENT Gmail accounts (bose@edgemetals.com reads —
+// that's where carrier booking mail arrives; apsara@edgemetals.com sends —
+// outbound mail should visibly come from Apsara, not the shared inbox).
+// Same OAuth client/credentials file works for both; each account just
+// needs its own consent + token, hence two separate token files. Run
+// scripts/gmail-auth.js --role=read (signed into bose) and --role=write
+// (signed into apsara) once each. GMAIL_TOKEN_FILE (no read/write suffix)
+// is kept only as a fallback default if someone hasn't split their .env yet.
 const GMAIL_TOKEN_FILE       = process.env.GMAIL_TOKEN_FILE       || path.join(DATA_DIR, 'gmail-token.json');
+const GMAIL_READ_TOKEN_FILE  = process.env.GMAIL_READ_TOKEN_FILE  || path.join(DATA_DIR, 'gmail-token-read.json');
+const GMAIL_WRITE_TOKEN_FILE = process.env.GMAIL_WRITE_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-write.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 
@@ -200,7 +210,7 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
-    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,EMAIL_PROCESSED_FILE, 
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, EMAIL_PROCESSED_FILE, 
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,

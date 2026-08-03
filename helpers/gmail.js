@@ -1,21 +1,33 @@
-// ── helpers/gmail.js — Gmail OAuth client + message/attachment fetch ─────────
-// OAuth2 (NOT a service account) — Gmail read access requires the mailbox
-// owner's explicit consent. Service accounts only work here with Workspace
-// domain-wide delegation, which this Gmail account is not set up for (that's
-// admin-console work, not a code change). Matches the pattern already used
-// for WhatsApp session persistence: auth once, persist a token file under
-// DATA_DIR (gitignored), reuse + auto-refresh on every boot.
+// ── helpers/gmail.js — Gmail OAuth clients + message/attachment fetch ────────
+// OAuth2 (NOT a service account) — Gmail access requires each mailbox
+// owner's explicit consent. Matches the pattern already used for WhatsApp
+// session persistence: auth once, persist a token file under DATA_DIR
+// (gitignored), reuse + auto-refresh on every boot.
 //
-// Token is generated ONCE by running scripts/gmail-auth.js locally (needs a
-// browser for the consent screen) and deploying the resulting token file to
-// the VM's DATA_DIR. The VM itself never runs the interactive flow.
+// TWO SEPARATE ACCOUNTS, deliberately: reading (booking mail intake, mail
+// search, finding a thread to reply to) happens against bose@edgemetals.com
+// — that's where carrier booking confirmations actually land. Sending
+// happens against apsara@edgemetals.com — outbound mail should visibly come
+// from Apsara, not the shared read inbox. Same OAuth client/credentials
+// file works for both (the app registration isn't account-specific); each
+// account just needs its own consent + its own token file. Never merge
+// these into one client — a bug in the read path must not be able to send
+// as apsara, and a bug in the send path must not be able to read bose's
+// inbox.
+//
+// Each token is generated ONCE by running scripts/gmail-auth.js --role=read
+// (signed into bose) or --role=write (signed into apsara) locally (needs a
+// browser for the consent screen), then deploying the resulting token file
+// to the VM's DATA_DIR. The VM itself never runs the interactive flow.
 
 const fs  = require('fs');
 const cfg = require('../config');
 
-const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send'];
+const READ_SCOPES  = ['https://www.googleapis.com/auth/gmail.readonly'];
+const WRITE_SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
 
-let gmailClient = null;
+let readClient  = null;
+let writeClient = null;
 
 function readClientSecret() {
     if (!fs.existsSync(cfg.GMAIL_CREDENTIALS_FILE)) {
@@ -33,33 +45,49 @@ function getOAuthClient() {
     return new google.auth.OAuth2(client_id, client_secret, (redirect_uris && redirect_uris[0]) || 'http://localhost:8081/oauth2callback');
 }
 
-function loadToken() {
-    if (!fs.existsSync(cfg.GMAIL_TOKEN_FILE)) {
-        throw new Error(`Gmail token missing: ${cfg.GMAIL_TOKEN_FILE}. Run scripts/gmail-auth.js locally, then copy the file here.`);
+function loadTokenFrom(tokenFile) {
+    if (!fs.existsSync(tokenFile)) {
+        throw new Error(`Gmail token missing: ${tokenFile}. Run scripts/gmail-auth.js --role=read|write, then copy the file here.`);
     }
-    return JSON.parse(fs.readFileSync(cfg.GMAIL_TOKEN_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
 }
 
-function getGmail() {
-    if (gmailClient) return gmailClient;
+function buildClient(tokenFile, label) {
     const { google } = require('googleapis');
     const oAuth2Client = getOAuthClient();
-    oAuth2Client.setCredentials(loadToken());
+    oAuth2Client.setCredentials(loadTokenFrom(tokenFile));
 
     // googleapis auto-refreshes the access_token using the refresh_token; persist
     // whatever comes back so a VM restart doesn't force re-auth.
     oAuth2Client.on('tokens', (tokens) => {
         try {
-            const merged = { ...loadToken(), ...tokens };
-            fs.writeFileSync(cfg.GMAIL_TOKEN_FILE, JSON.stringify(merged, null, 2));
-            console.log('[GMAIL] Token refreshed + persisted');
+            const merged = { ...loadTokenFrom(tokenFile), ...tokens };
+            fs.writeFileSync(tokenFile, JSON.stringify(merged, null, 2));
+            console.log(`[GMAIL] ${label} token refreshed + persisted`);
         } catch (err) {
-            console.error('[GMAIL] Failed to persist refreshed token:', err.message);
+            console.error(`[GMAIL] Failed to persist refreshed ${label} token:`, err.message);
         }
     });
 
-    gmailClient = google.gmail({ version: 'v1', auth: oAuth2Client });
-    return gmailClient;
+    return google.gmail({ version: 'v1', auth: oAuth2Client });
+}
+
+// bose@edgemetals.com — used everywhere Jarvis READS existing mail:
+// emailWatcher.js's booking poll, searchMail, and finding the original
+// message to reply to. Never used for sending.
+function getGmailRead() {
+    if (readClient) return readClient;
+    readClient = buildClient(cfg.GMAIL_READ_TOKEN_FILE, 'read');
+    return readClient;
+}
+
+// apsara@edgemetals.com — used ONLY by sendEmail() below. Narrow-scoped to
+// gmail.send only, so this client can never read bose's inbox even if
+// something here goes wrong.
+function getGmailWrite() {
+    if (writeClient) return writeClient;
+    writeClient = buildClient(cfg.GMAIL_WRITE_TOKEN_FILE, 'write');
+    return writeClient;
 }
 
 // ── Message helpers ───────────────────────────────────────────────────────────
@@ -107,20 +135,26 @@ async function getMessage(gmail, id) {
 }
 
 // ── Sending ────────────────────────────────────────────────────────────────
-// Requires the gmail.send scope above. IMPORTANT: OAuth scope is fixed at
-// consent time — adding a scope here does nothing for a token that was
-// already granted under the old (readonly-only) SCOPES. scripts/gmail-auth.js
-// must be re-run locally to produce a new token before sendEmail() will work;
-// until then this will fail with an insufficient-scope 403, not silently
-// no-op.
+// Requires a WRITE_SCOPES token for apsara@edgemetals.com — run
+// scripts/gmail-auth.js --role=write once, signed into that account, and
+// deploy the resulting GMAIL_WRITE_TOKEN_FILE to the VM. Until that token
+// exists, getGmailWrite() throws "Gmail token missing" rather than silently
+// no-op-ing.
 
-function buildMimeMessage({ to, subject, body, inReplyTo, references }) {
+function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) {
     const headers = [
         `To: ${to}`,
         `Subject: ${subject}`,
         'Content-Type: text/plain; charset="UTF-8"',
         'MIME-Version: 1.0',
     ];
+    // Cc is a normal header — visible to every recipient. Bcc is ALSO just a
+    // header in the raw RFC822 message; Gmail's send API strips it from the
+    // copy that actually reaches To/Cc recipients while still delivering to
+    // the Bcc'd address (standard SMTP-level behavior, not something this
+    // code has to implement itself).
+    if (cc) headers.push(`Cc: ${cc}`);
+    if (bcc) headers.push(`Bcc: ${bcc}`);
     if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
     if (references) headers.push(`References: ${references}`);
     const raw = `${headers.join('\r\n')}\r\n\r\n${body}`;
@@ -128,15 +162,22 @@ function buildMimeMessage({ to, subject, body, inReplyTo, references }) {
     return Buffer.from(raw).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-// Sends via the authenticated mailbox (userId 'me'). Caller is responsible
-// for having already gotten manager confirmation — this function sends
-// unconditionally the moment it's called, no confirmation gate of its own.
-async function sendEmail({ to, subject, body, threadId, inReplyTo, references }) {
-    const gmail = getGmail();
-    const requestBody = { raw: buildMimeMessage({ to, subject, body, inReplyTo, references }) };
-    if (threadId) requestBody.threadId = threadId;
+// Sends via apsara@edgemetals.com. Caller is responsible for having already
+// gotten manager confirmation — this function sends unconditionally the
+// moment it's called, no confirmation gate of its own.
+//
+// threadId is deliberately NOT accepted here even though Gmail's send API
+// supports it — a threadId is only valid within the SAME mailbox that owns
+// the thread. Since reads happen on bose's account and sends happen on
+// apsara's, a threadId captured from a read is meaningless (and Gmail will
+// reject it) here. In-Reply-To/References are plain email headers, valid
+// regardless of which account sends — those alone are enough for the
+// RECIPIENT's mail client to thread this correctly.
+async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references }) {
+    const gmail = getGmailWrite();
+    const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) };
     const res = await gmail.users.messages.send({ userId: 'me', requestBody });
-    return res.data; // { id, threadId, ... }
+    return res.data; // { id, threadId, ... } — threadId here is apsara's own, unrelated to bose's copy
 }
 
 // "Zimex Line <bookings@zimexline.com>" → pull out the bare address; falls
@@ -185,7 +226,7 @@ async function findLatestFrom(gmail, nameOrDomain) {
 }
 
 module.exports = {
-    SCOPES, getOAuthClient, getGmail,
+    READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite,
     parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom,
 };
