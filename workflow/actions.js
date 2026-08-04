@@ -2300,17 +2300,24 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     let messages;
     try {
         if (subjectHint) {
-            // An explicit subject beats a blind name search — quoted exact
-            // match first (most precise), then a looser match on the
-            // subject's own significant words if that finds nothing (she
-            // may have paraphrased slightly), still scoped to the target so
-            // an unrelated same-subject thread with someone else can't
-            // match instead.
-            messages = await listMessages(gmail, `subject:"${subjectHint}" (from:${targetName} OR to:${targetName})`, 3);
+            // REAL BUG (found 2026-08-04, live): originally scoped this to
+            // (from:X OR to:X) alongside the subject, reasoning that would
+            // stop an unrelated same-subject thread from matching. Per
+            // Apsara, live: "Don't just check from matthew. Check for
+            // subject if given" — that scoping is exactly what broke it.
+            // The saved/typed name isn't always how the real thread's
+            // From/To header actually reads (could be a group mailbox, a
+            // CC'd colleague who actually sent it, a slightly different
+            // saved spelling, etc.) — an explicit subject given BY HER is
+            // already a strong, specific-enough signal on its own; AND-ing
+            // in a name match can only ever eliminate matches, never help
+            // find one. Search by subject alone now — exact quoted phrase
+            // first, then a looser word match if she paraphrased slightly.
+            messages = await listMessages(gmail, `subject:"${subjectHint}"`, 3);
             if (!messages.length) {
                 const words = subjectHint.replace(/[^a-z0-9 ]/gi, ' ').split(/\s+/).filter((w) => w.length > 2);
                 if (words.length) {
-                    messages = await listMessages(gmail, `subject:(${words.join(' ')}) (from:${targetName} OR to:${targetName})`, 3);
+                    messages = await listMessages(gmail, `subject:(${words.join(' ')})`, 3);
                 }
             }
             if (!messages.length) {
@@ -2319,7 +2326,7 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
                 // wants THAT thread, not whatever a broader search happens
                 // to surface (that's exactly how the fabricated-content bug
                 // above happened). Ask instead of guessing.
-                await _send(chatId, `Couldn't find an email with subject "${subjectHint}" involving ${targetName} — check the subject, or tell me to search more broadly.`);
+                await _send(chatId, `Couldn't find an email with subject "${subjectHint}" anywhere in mail — check the exact subject, or tell me to search more broadly.`);
                 return { action_taken: 'reply_subject_not_found' };
             }
         } else {
@@ -2360,21 +2367,28 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // direct email, real thread to reply into. No match = treat as a
     // forward (or any other indirect mention) and compose fresh instead.
     //
-    // REAL BUG (found 2026-08-04, live): this only ever checked the
-    // extracted ADDRESS (fromAddr) — for "Mathew <whittakerm@schneider.
-    // com>" that's "whittakerm@schneider.com", which does NOT contain
-    // "mathew" (real corporate address convention: lastname + first
-    // initial, not firstname). isDirectSender came back false even though
-    // this genuinely WAS Mathew's own message, so a real direct thread got
-    // treated as an indirect forward — composing a disconnected fresh
-    // email via the fabrication-prone extraction path instead of a proper
-    // threaded reply. Checking the RAW header (hdrs.From) instead of just
-    // the extracted address also covers the DISPLAY NAME ("Mathew" in
-    // "Mathew <...>"), which is exactly where a first name actually shows
-    // up for a real person. Strictly a superset of the old check — fromAddr
-    // is always a substring of hdrs.From, so nothing that matched before
-    // stops matching now.
-    const isDirectSender = hdrs.From && hdrs.From.toLowerCase().includes(targetName.toLowerCase());
+    // REAL BUG, TWO LAYERS (found 2026-08-04, live). Layer 1: this only
+    // checked the extracted ADDRESS (fromAddr) against targetName — for
+    // "Mathew <whittakerm@schneider.com>" that's "whittakerm@schneider.
+    // com", which doesn't contain "mathew" (corporate convention: lastname
+    // + first initial, not firstname). Fixed by ALSO checking the raw
+    // header (display name included). Layer 2, found immediately after —
+    // even that still failed on the exact same real case, because the
+    // manager had been typing "Mathew" (one T) the whole time and the real
+    // contact's name is "Matthew" (two Ts) — a one-letter typo that makes
+    // ANY substring match against a name fundamentally unreliable, no
+    // matter which header field it checks. Per Apsara, live: "Even then
+    // your logic was wrong." Fixed properly this time: cross-check the
+    // message's fromAddr against whatever address is ALREADY SAVED for
+    // this name in contacts — an exact address match doesn't care how the
+    // name is spelled either way, since it never compares names at all.
+    // This is the primary signal now; the header-substring check stays
+    // only as a fallback for a target with no saved contact yet.
+    const emailContacts = require('../helpers/emailContacts');
+    const savedForTarget = emailContacts.resolveContact(targetName);
+    const savedAddr = savedForTarget && savedForTarget.type !== 'ambiguous' ? savedForTarget.contact?.email : null;
+    const isDirectSender = (savedAddr && fromAddr && savedAddr.toLowerCase() === String(fromAddr).toLowerCase())
+        || (hdrs.From && hdrs.From.toLowerCase().includes(targetName.toLowerCase()));
 
     if (isDirectSender) {
         // Direct, header-confirmed address for targetName — save it so a
