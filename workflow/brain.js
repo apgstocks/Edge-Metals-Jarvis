@@ -804,8 +804,29 @@ async function aiDecide(ctx) {
     };
     const VERIFY_PHRASING = /\b(check|whether|verify|confirm|has|did|is)\b/i;
     const detectedIntent = ctx.isManagerOrTeam ? actions.detectExpectedIntent(ctx.text) : null;
+    // REAL BUG (found 2026-08-04, live): "Send a mail to Mathew ... whether
+    // they have reached the pickup location? it should [be] a reply to
+    // subject: Loading schedule from LA to Humble..." got hijacked into
+    // "No trucker assigned to that booking yet, so I can't verify this with
+    // anyone" — the exact canned reply from the guard below, which has
+    // nothing to do with email at all. Root cause: detectExpectedIntent()
+    // regex-matches ANY substring containing "pick...up" to
+    // picked_up_confirmed, and VERIFY_PHRASING matches "whether" — between
+    // the two, this override fired and threw away whatever the AI had
+    // almost certainly already correctly classified (draft_email or
+    // reply_email — she said "Send a mail"/"Email to Mathew" and "reply to
+    // subject:..." explicitly). "Pickup" is an extremely common word in
+    // ordinary freight email requests, not just in physical status reports,
+    // so this wasn't a rare edge case — any "email X about pickup ___"
+    // message was at risk. The guard's whole PURPOSE (per the comment
+    // above) is catching the manager's own message being misread as a
+    // trucker/supplier physically reporting an event — an explicit email
+    // request is never that, so it must never be a candidate for this
+    // override in the first place, regardless of what words happen to
+    // appear inside the email's own content.
+    const EMAIL_ACTIONS = new Set(['draft_email', 'reply_email', 'search_mail']);
     let effectiveAction = decision.action;
-    if (detectedIntent && VERIFY_PHRASING.test(ctx.text) && decision.action !== 'ask_contact') {
+    if (detectedIntent && VERIFY_PHRASING.test(ctx.text) && decision.action !== 'ask_contact' && !EMAIL_ACTIONS.has(decision.action)) {
         console.warn(`[AI] Text pattern-matched to "${detectedIntent}" despite AI choosing "${decision.action}" — overriding before the guard below runs`);
         effectiveAction = detectedIntent;
     }
