@@ -2233,6 +2233,23 @@ Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
 //      faking a thread reply it can't actually back up.
 // Same confirm-before-send posture either way — stages via the SAME
 // 'await_email_confirm' pending type sendDraftedEmail already handles.
+
+// REAL BUG (found 2026-08-04, live): "...it should a reply to
+// subject:Loading schedule from LA to Humble-8/4 @7am" — the manager gave
+// the EXACT subject of the thread to reply to, but the search below only
+// ever looked at from:targetName, completely ignoring it. Gmail's own
+// relevance ranking then surfaced a DIFFERENT, unrelated message that just
+// happened to mention the target's name, isDirectSender came back false,
+// and the forward-extraction fallback invented a fabricated subject/
+// content ("Inquiry Regarding Trucker Location - PO 12345" — no PO 12345
+// anywhere in her request) out of irrelevant context. Grounded by
+// construction, same as extractScheduleClause — the captured text IS a
+// literal substring of what she actually typed.
+function extractSubjectHint(rawText) {
+    const m = String(rawText || '').match(/subj(?:ect)?\s*:\s*(.+?)\s*$/i);
+    return m ? m[1].trim() : null;
+}
+
 async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText) {
     if (!targetName) {
         await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
@@ -2279,11 +2296,37 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // lose to an unrelated forward just because Gmail's own relevance
     // ranking on the combined OR query happened to rank the forward first.
     const bkgTerm = bkgNo ? ` ${bkgNo}` : '';
+    const subjectHint = extractSubjectHint(rawText);
     let messages;
     try {
-        messages = await listMessages(gmail, `from:${targetName}${bkgTerm}`, 3);
-        if (!messages.length) {
-            messages = await listMessages(gmail, `(from:${targetName} OR ${targetName})${bkgTerm}`, 3);
+        if (subjectHint) {
+            // An explicit subject beats a blind name search — quoted exact
+            // match first (most precise), then a looser match on the
+            // subject's own significant words if that finds nothing (she
+            // may have paraphrased slightly), still scoped to the target so
+            // an unrelated same-subject thread with someone else can't
+            // match instead.
+            messages = await listMessages(gmail, `subject:"${subjectHint}" (from:${targetName} OR to:${targetName})`, 3);
+            if (!messages.length) {
+                const words = subjectHint.replace(/[^a-z0-9 ]/gi, ' ').split(/\s+/).filter((w) => w.length > 2);
+                if (words.length) {
+                    messages = await listMessages(gmail, `subject:(${words.join(' ')}) (from:${targetName} OR to:${targetName})`, 3);
+                }
+            }
+            if (!messages.length) {
+                // Deliberately does NOT fall back to the generic from:name
+                // search here — she gave a SPECIFIC subject because she
+                // wants THAT thread, not whatever a broader search happens
+                // to surface (that's exactly how the fabricated-content bug
+                // above happened). Ask instead of guessing.
+                await _send(chatId, `Couldn't find an email with subject "${subjectHint}" involving ${targetName} — check the subject, or tell me to search more broadly.`);
+                return { action_taken: 'reply_subject_not_found' };
+            }
+        } else {
+            messages = await listMessages(gmail, `from:${targetName}${bkgTerm}`, 3);
+            if (!messages.length) {
+                messages = await listMessages(gmail, `(from:${targetName} OR ${targetName})${bkgTerm}`, 3);
+            }
         }
     } catch (err) {
         await _send(chatId, `Couldn't search mail: ${err.message}`);
@@ -2316,7 +2359,22 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // just appear somewhere in a forwarded/quoted body? Header match =
     // direct email, real thread to reply into. No match = treat as a
     // forward (or any other indirect mention) and compose fresh instead.
-    const isDirectSender = fromAddr && fromAddr.toLowerCase().includes(targetName.toLowerCase());
+    //
+    // REAL BUG (found 2026-08-04, live): this only ever checked the
+    // extracted ADDRESS (fromAddr) — for "Mathew <whittakerm@schneider.
+    // com>" that's "whittakerm@schneider.com", which does NOT contain
+    // "mathew" (real corporate address convention: lastname + first
+    // initial, not firstname). isDirectSender came back false even though
+    // this genuinely WAS Mathew's own message, so a real direct thread got
+    // treated as an indirect forward — composing a disconnected fresh
+    // email via the fabrication-prone extraction path instead of a proper
+    // threaded reply. Checking the RAW header (hdrs.From) instead of just
+    // the extracted address also covers the DISPLAY NAME ("Mathew" in
+    // "Mathew <...>"), which is exactly where a first name actually shows
+    // up for a real person. Strictly a superset of the old check — fromAddr
+    // is always a substring of hdrs.From, so nothing that matched before
+    // stops matching now.
+    const isDirectSender = hdrs.From && hdrs.From.toLowerCase().includes(targetName.toLowerCase());
 
     if (isDirectSender) {
         // Direct, header-confirmed address for targetName — save it so a
