@@ -12,6 +12,36 @@ const { buildContext, formatForAI, updateSession } = require('../helpers/context
 const { resolveBookingNumber, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
 const { callGeminiJSON }                           = require('../helpers/gemini');
 const { getLATime }                                = require('../helpers/time');
+
+// ── Scheduled-send detection ("email X ... at 7am LA time") ─────────────────
+// Built 2026-08-04: "Send a mail to Mathew at 7 am LA time whether they have
+// reached the pickup location?" needed the SEND itself held until 7am, not
+// fired immediately. Deliberately regex-based, not another AI-extracted JSON
+// field — same "AI classifies intent, deterministic code does exact
+// extraction" split already used throughout this file (resolveBookingNumber,
+// the policy regexes above). A regex match against ctx.text is grounded by
+// construction (it IS a literal substring of what the manager actually
+// typed), so unlike target_name/email_details there's no separate
+// hallucination-guard needed here — the match itself IS the proof. Only
+// returns the matched phrase; helpers/time.js's parseNaturalTime (already
+// deterministic) does the actual date math. Ordered most-specific first so
+// e.g. "next monday at 9am" is captured whole rather than the generic
+// "at CLOCK" pattern only grabbing "at 9am" out of it.
+const SCHEDULE_PATTERNS = [
+    /\b((?:next|this)\s+(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))?)\b/i,
+    /\b(tomorrow\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i,
+    /\b(today\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i,
+    /\b(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?))\b/i,
+    /\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)(?:\s*(?:la|los angeles|pacific)\s*time)?)\b/i,
+];
+function extractScheduleClause(rawText) {
+    const text = String(rawText || '');
+    for (const re of SCHEDULE_PATTERNS) {
+        const m = text.match(re);
+        if (m) return m[1];
+    }
+    return null;
+}
 const { matchTruckerByChat }                       = require('./truckers');
 const { matchSupplierByChat }                      = require('./suppliers');
 const actions = require('./actions');
@@ -903,9 +933,9 @@ async function route(decision, ctx, sendMessage) {
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
-        case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text);
+        case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
-        case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text);
+        case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);

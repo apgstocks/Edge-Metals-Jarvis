@@ -428,6 +428,40 @@ async function taskRunner() {
                 continue;
             }
 
+            // ── Scheduled email — "email X at 7am" (2026-08-04) ────────────
+            // Fires a real Gmail send instead of a WhatsApp message. Reuses
+            // this SAME due/condition/retry/archive machinery rather than a
+            // parallel scheduler, per the same "single execution gateway"
+            // reasoning actions.js states at its own top — one place that
+            // fires things, not two. chatId here is always the manager's own
+            // WhatsApp (target_kind: 'manager', set by
+            // actions.js's scheduleDraftedEmail), used only to notify her the
+            // email went out — never the email's own To/Cc/Bcc, which live
+            // in task.email_payload and were fully resolved and confirmed by
+            // her at drafting time, long before this ever fires.
+            if (task.type === 'scheduled_email') {
+                await tasks.updateTask(task.id, { status: 'firing' });
+                try {
+                    const { sendEmail } = require('./helpers/gmail');
+                    await sendEmail(task.email_payload);
+                    await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
+                    await _sendMessage(chatId, `Scheduled email sent to ${task.email_payload.target_name || ''} <${task.email_payload.to}>: ${task.email_payload.subject}`);
+                    console.log(`[TASK] Scheduled email fired ${task.id} → ${task.email_payload.to}`);
+                } catch (err) {
+                    const nextTries = (task.tries || 0) + 1;
+                    if (nextTries >= (task.max_tries || 3)) {
+                        await tasks.archive(task.id, { status: 'failed', result_note: 'send_failed: ' + err.message });
+                        await _sendMessage(chatId, `Scheduled email to ${task.email_payload.to} FAILED after ${nextTries} tries: ${err.message}. Not retried further — you'll need to resend manually.`);
+                    } else {
+                        await tasks.updateTask(task.id, {
+                            status: 'pending', tries: nextTries,
+                            fire_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                        });
+                    }
+                }
+                continue;
+            }
+
             // 3. Send. Auto-prefix booking/container label so the recipient has context.
             //    Skips prefix if the message already mentions the booking number.
             await tasks.updateTask(task.id, { status: 'firing' });

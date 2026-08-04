@@ -850,7 +850,8 @@ if (pending.type === 'await_cc_pattern_confirm') {
         emailContacts.declineCcSuggestion(pending.target_name).catch((err) =>
             console.warn(`[ACTIONS] Failed to record cc-suggestion decline for "${pending.target_name}":`, err.message));
     }
-    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, pending.to, pending.to_source);
+    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, pending.to, pending.to_source,
+        pending.scheduled_for ? new Date(pending.scheduled_for) : null);
 }
 
 if (answer === 'no') {
@@ -883,7 +884,7 @@ switch (pending.type) {
         return executeRecall(chatId, pending.bkg_no);
     case 'await_email_confirm':
         await clearPending(chatId);
-        return sendDraftedEmail(chatId, pending);
+        return pending.scheduled_for ? scheduleDraftedEmail(chatId, pending) : sendDraftedEmail(chatId, pending);
 
     // Picked one of the ambiguous-match options shown above (by number or
     // by name, via brain.js's generic p.options handling) — resume the
@@ -896,7 +897,8 @@ switch (pending.type) {
             await _send(chatId, `Didn't catch which one — reply with the number (1-${matches.length}), or "cancel".`);
             return { action_taken: 'contact_disambiguation_unresolved' };
         }
-        return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, chosen.email, 'contact');
+        return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, chosen.email, 'contact',
+            pending.scheduled_for ? new Date(pending.scheduled_for) : null);
     }
 
     // "yes" to the domain-tree proposal shown by stageDomainLearnConfirm.
@@ -942,7 +944,8 @@ switch (pending.type) {
             await _send(chatId, `Saved ${proposals.length} contact(s) under ${domain}, but none is marked primary — who should I actually send your original email to? Reply with their name.`);
             return { action_taken: 'domain_learn_saved_no_default' };
         }
-        return draftEmailWithAddress(chatId, term, resume.details, resume.bkg_no, resolved.contact.email, 'contact');
+        return draftEmailWithAddress(chatId, term, resume.details, resume.bkg_no, resolved.contact.email, 'contact',
+            resume.scheduled_for ? new Date(resume.scheduled_for) : null);
     }
 
     // Daily guided trucker-assignment wizard — see wizardAdvance above.
@@ -1474,11 +1477,44 @@ function todayDateContext() {
     return `Today's date is ${formatted}. If the message references a relative date ("tomorrow", "next Monday", "in 3 days", etc.), resolve it to an ACTUAL calendar date and use that in the email — never leave a placeholder like "[Date]" or "[Insert Date]" for the manager to fill in themselves.`;
 }
 
-async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText) {
+// Scheduled-send display — always LA time, matching helpers/time.js's
+// getLATime and every other freight-deadline display in this app.
+function formatScheduledFor(date) {
+    return require('../helpers/time').getLATime(date) + ' LA time';
+}
+
+// Turns the raw phrase brain.js's extractScheduleClause() pulled out of the
+// manager's own message (e.g. "7 am LA time", "next monday") into an actual
+// Date, using helpers/time.js's parseNaturalTime — deterministic, not an AI
+// guess (see that function's own comment for why). Grounded by construction:
+// sendAtText, when present, IS a literal substring of rawText already (that's
+// how extractScheduleClause found it), so there's no separate hallucination
+// check needed here the way target_name/email_details need one. A phrase
+// that fails to parse just means "don't schedule" rather than blocking the
+// email entirely — same fail-open posture as every other best-effort
+// enrichment in this file (recentContext, cc-pattern detection, etc.).
+function resolveScheduledFor(sendAtText) {
+    if (!sendAtText) return null;
+    try {
+        const { parseNaturalTime } = require('../helpers/time');
+        const d = parseNaturalTime(sendAtText);
+        if (!d || isNaN(d.getTime())) {
+            console.warn(`[ACTIONS] Couldn't parse schedule phrase "${sendAtText}" — sending immediately instead of scheduling.`);
+            return null;
+        }
+        return d;
+    } catch (err) {
+        console.warn(`[ACTIONS] Schedule parse failed for "${sendAtText}":`, err.message);
+        return null;
+    }
+}
+
+async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
         return { action_taken: 'email_missing_target' };
     }
+    const scheduledFor = resolveScheduledFor(sendAtText);
     const { getGmailRead, findLatestFrom } = require('../helpers/gmail');
 
     let gmail;
@@ -1546,6 +1582,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
             type: 'await_contact_disambiguation',
             options: matches.map((c) => c.name),
             matches, target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+            scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         });
         if (staged.queued) {
             await _send(chatId, `A few saved contacts match "${targetName}", but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
@@ -1597,7 +1634,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
                 if (proposals.length > 1) {
                     handledAsDomainLearn = true;
                     return stageDomainProposal(chatId, targetName, domain, proposals,
-                        { details: details || '', bkg_no: bkgNo || null },
+                        { details: details || '', bkg_no: bkgNo || null, scheduled_for: scheduledFor ? scheduledFor.toISOString() : null },
                         `"${targetName}" resolved to ${domain}, which has ${proposals.length} real addresses, not just one — setting that up properly before sending anything.\n\n`);
                 }
             } catch (err) {
@@ -1630,6 +1667,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
         const staged = await setPending(chatId, {
             type: 'await_manual_email_address',
             mode: 'draft', target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+            scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         });
         if (staged.queued) {
             await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to, and you already have a pending "${staged.blockedBy}" to answer first. I'll ask for ${targetName}'s address once that's resolved.`);
@@ -1672,7 +1710,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
                 const threadCcForAddress = (addr) => emailContacts.loadContacts()
                     .find((c) => c.email.toLowerCase() === String(addr).toLowerCase())?.cc;
                 return composeThreadReply(chatId, gmail, targetName, details, bkgNo, to,
-                    threadHdrs.Subject || '', threadHdrs, threadBody, threadGlobalCc, threadBcc, threadCcForAddress, threadBookingLine);
+                    threadHdrs.Subject || '', threadHdrs, threadBody, threadGlobalCc, threadBcc, threadCcForAddress, threadBookingLine, scheduledFor);
             }
         } catch (err) {
             console.warn(`[ACTIONS] Booking-thread lookup failed for ${to}/${bkgNo} — falling back to compose-fresh:`, err.message);
@@ -1718,6 +1756,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
                 type: 'await_cc_pattern_confirm',
                 target_name: targetName, details, bkg_no: bkgNo || null, to, to_source: toSource,
                 detected_cc: detectedCc,
+                scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
             });
             if (staged.queued) {
                 await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName}, but you have a pending "${staged.blockedBy}" first — I'll ask once that's resolved (and draft this email either way once it is).`);
@@ -1728,7 +1767,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
         }
     }
 
-    return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource);
+    return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor);
 }
 
 // Shared drafting tail — called once an address is known, whether resolved
@@ -1736,7 +1775,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText)
 // pending above) typed directly by the manager. Factored out 2026-08-03 so
 // all three paths produce an identical draft/preview/confirm flow instead of
 // three slightly-diverging copies.
-async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource) {
+async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor = null) {
     const { callGeminiJSON } = require('../helpers/gemini');
     const bkg = bkgNo ? getBooking(bkgNo) : null;
     const bookingLine = bkg
@@ -1814,18 +1853,20 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         type: 'await_email_confirm',
         to, cc, bcc, subject: draft.subject, body: draft.body,
         target_name: targetName, bkg_no: bkgNo || null,
+        scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
     });
+    const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
         // Don't show a live "Send this? (yes/no)" prompt for something that
         // isn't actually the active pending yet — see setPending's own
         // comment for why silently overwriting the real one is worse.
         await _send(chatId,
-            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`
+            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`
         );
         return { action_taken: 'email_draft_queued' };
     }
     await _send(chatId,
-        `Draft email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact — reply "no" if that\'s the wrong one)' : ''}:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+        `Draft email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact — reply "no" if that\'s the wrong one)' : ''}:\n${ccBccPreviewLine({ cc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this${whenSuffix}? (yes/no)`
     );
     return { action_taken: 'email_draft_staged' };
 }
@@ -1865,7 +1906,8 @@ async function resolveManualEmailAddress(chatId, addressText) {
     require('../helpers/emailContacts').addContact(pending.target_name, addr).catch((err) =>
         console.warn(`[ACTIONS] Failed to save manually-given contact "${pending.target_name}":`, err.message));
 
-    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, addr, 'manual');
+    return draftEmailWithAddress(chatId, pending.target_name, pending.details, pending.bkg_no, addr, 'manual',
+        pending.scheduled_for ? new Date(pending.scheduled_for) : null);
 }
 
 // ── Domain-tree contact learning ("learn radmetals contacts") ──────────────
@@ -2013,6 +2055,41 @@ async function sendDraftedEmail(chatId, pending) {
     }
 }
 
+// Scheduled-send counterpart to sendDraftedEmail — same "yes" confirm, but
+// instead of sending now, hands the fully-drafted email off to
+// helpers/tasks.js's existing persistent task queue (already deployed and
+// running every minute via scheduler.js's taskRunner — see that function's
+// 'scheduled_email' branch for the actual send at fire time). Per Apsara's
+// explicit choice: confirm content now, auto-send at the scheduled time, no
+// second confirmation — same UX as Gmail's own "Schedule send." The manager
+// is NOT notified again until it actually fires (success or failure);
+// nothing further to approve between now and then.
+async function scheduleDraftedEmail(chatId, pending) {
+    const tasks = require('../helpers/tasks');
+    const emailPayload = {
+        to: pending.to, cc: pending.cc, bcc: pending.bcc, subject: pending.subject, body: pending.body,
+        inReplyTo: pending.inReplyTo, references: pending.references,
+        target_name: pending.target_name,
+    };
+    await tasks.enqueue({
+        type: 'scheduled_email',
+        // 'direct_chat' — deliberately NOT 'manager': scheduler.js's
+        // taskRunner overrides target_kind:'manager' with whatever the
+        // globally configured manager_number setting is, which may not be
+        // the exact chat she typed this in from (a team group vs a 1:1,
+        // etc.). This needs to notify the SAME chat she asked from, so it
+        // uses a target_kind that falls through to target_chat as-is.
+        target_kind: 'direct_chat',
+        target_chat: chatId,
+        bkg_no: pending.bkg_no || null,
+        email_payload: emailPayload,
+        message: `Scheduled email to ${pending.target_name} <${pending.to}>: ${pending.subject}`,
+        fire_at: pending.scheduled_for,
+    });
+    await _send(chatId, `Scheduled — will send to ${pending.target_name} <${pending.to}> at ${formatScheduledFor(new Date(pending.scheduled_for))}.`);
+    return { action_taken: 'email_scheduled' };
+}
+
 // ── Read-only mail search ("did Zimex reply about DALA123 cutoff") ──────────
 // No pending/confirmation gate — unlike draft_email, this never changes
 // anything or reaches a third party. It's the same risk class as any other
@@ -2128,11 +2205,12 @@ Return ONLY this JSON: { "answer": "direct answer, 2-3 sentences max" }`;
 //      faking a thread reply it can't actually back up.
 // Same confirm-before-send posture either way — stages via the SAME
 // 'await_email_confirm' pending type sendDraftedEmail already handles.
-async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText) {
+async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText) {
     if (!targetName) {
         await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
         return { action_taken: 'reply_missing_target' };
     }
+    const scheduledFor = resolveScheduledFor(sendAtText);
     const { getGmailRead, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
     const { callGeminiJSON } = require('../helpers/gemini');
 
@@ -2324,19 +2402,21 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
             // usable Message-ID for the ORIGINAL sender, so there's nothing
             // real to thread against. This sends as a fresh conversation.
             target_name: targetName, bkg_no: bkgNo || null,
+            scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         });
+        const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
         if (staged.queued) {
-            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
+            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`);
             return { action_taken: 'reply_via_forward_queued' };
         }
         await _send(chatId,
-            `Found this via a forwarded email, not a direct thread — composing a NEW email (not threaded) to ${targetName} <${foundAddr}>:\n${ccBccPreviewLine({ cc: forwardCc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this? (yes/no)`
+            `Found this via a forwarded email, not a direct thread — composing a NEW email (not threaded) to ${targetName} <${foundAddr}>:\n${ccBccPreviewLine({ cc: forwardCc, bcc })}\nSubject: ${draft.subject}\n\n${draft.body}\n\nSend this${whenSuffix}? (yes/no)`
         );
         return { action_taken: 'reply_via_forward_staged' };
     }
 
     // ── Direct email from the target — real thread-reply path ────────────
-    return composeThreadReply(chatId, gmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine);
+    return composeThreadReply(chatId, gmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor);
 }
 
 // Shared "reply within an existing real thread" composer — extracted
@@ -2354,7 +2434,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 // — either way the correct reply recipient is the address Jarvis already
 // resolved and trusts, not whichever header happens to be on this one
 // message.
-async function composeThreadReply(chatId, gmail, targetName, details, bkgNo, replyToAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine) {
+async function composeThreadReply(chatId, gmail, targetName, details, bkgNo, replyToAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor = null) {
     const { callGeminiJSON } = require('../helpers/gemini');
     const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
     const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
@@ -2403,13 +2483,15 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         // that's what actually threads it for the recipient.
         inReplyTo: messageIdHeader, references,
         target_name: targetName, bkg_no: bkgNo || null,
+        scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
     });
+    const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
-        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this once that's resolved.`);
+        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`);
         return { action_taken: 'reply_draft_queued' };
     }
     await _send(chatId,
-        `Reply to ${targetName} <${replyToAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this? (yes/no)`
+        `Reply to ${targetName} <${replyToAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this${whenSuffix}? (yes/no)`
     );
     return { action_taken: 'reply_draft_staged' };
 }
@@ -2455,7 +2537,7 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };
