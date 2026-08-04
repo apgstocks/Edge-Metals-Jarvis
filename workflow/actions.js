@@ -1861,7 +1861,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         // isn't actually the active pending yet — see setPending's own
         // comment for why silently overwriting the real one is worse.
         await _send(chatId,
-            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`
+            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`
         );
         return { action_taken: 'email_draft_queued' };
     }
@@ -2088,6 +2088,34 @@ async function scheduleDraftedEmail(chatId, pending) {
     });
     await _send(chatId, `Scheduled — will send to ${pending.target_name} <${pending.to}> at ${formatScheduledFor(new Date(pending.scheduled_for))}.`);
     return { action_taken: 'email_scheduled' };
+}
+
+// REAL BUG (found 2026-08-04, live): with an already-drafted "send this
+// email to Mathew? yes/no" pending active, "Schedule this mail @7am LA
+// time" was being reclassified as a brand-new email request from scratch —
+// found the SAME still-unresolved pending and just queued a second,
+// redundant draft behind it. brain.js's Section A now catches "schedule"
+// phrasing while an await_email_confirm is active and routes here directly
+// instead of letting it fall through to general classification. Reuses the
+// ALREADY-DRAFTED to/cc/bcc/subject/body/inReplyTo/references exactly as
+// they were confirmed-and-shown — this never re-resolves the recipient or
+// re-drafts content, it only decides WHEN to send it.
+async function reschedulePendingEmail(chatId, pending, sendAtText) {
+    if (!pending || pending.type !== 'await_email_confirm') {
+        console.warn('[ACTIONS] reschedulePendingEmail called with no matching pending — ignoring');
+        return { action_taken: 'reschedule_no_pending' };
+    }
+    const scheduledFor = resolveScheduledFor(sendAtText);
+    if (!scheduledFor) {
+        // Deliberately does NOT clear the pending — same "keep asking until
+        // it's valid or cancelled" posture as resolveManualEmailAddress.
+        // The original draft is still sitting there waiting for yes/no/a
+        // valid schedule time.
+        await _send(chatId, `Didn't catch a time in "${sendAtText}" — try something like "schedule this at 7am LA time", or just reply yes/no.`);
+        return { action_taken: 'reschedule_unparseable' };
+    }
+    await clearPending(chatId);
+    return scheduleDraftedEmail(chatId, { ...pending, scheduled_for: scheduledFor.toISOString() });
 }
 
 // ── Read-only mail search ("did Zimex reply about DALA123 cutoff") ──────────
@@ -2406,7 +2434,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         });
         const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
         if (staged.queued) {
-            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`);
+            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
             return { action_taken: 'reply_via_forward_queued' };
         }
         await _send(chatId,
@@ -2487,7 +2515,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
     });
     const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
-        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled for${whenSuffix})` : ''} once that's resolved.`);
+        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
         return { action_taken: 'reply_draft_queued' };
     }
     await _send(chatId,
@@ -2537,7 +2565,7 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
 };

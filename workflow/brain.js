@@ -27,12 +27,18 @@ const { getLATime }                                = require('../helpers/time');
 // deterministic) does the actual date math. Ordered most-specific first so
 // e.g. "next monday at 9am" is captured whole rather than the generic
 // "at CLOCK" pattern only grabbing "at 9am" out of it.
+// "@" is treated as a synonym for "at" before a clock time throughout —
+// real incident, 2026-08-04: "Schedule this mail @7am LA time" wasn't
+// caught because every pattern only recognized the WORD "at", not the "@"
+// shorthand she actually uses (also seen in her own subject lines, e.g.
+// "Loading schedule from LA to Humble-8/4 @7am").
+const AT = '(?:at\\s+|@\\s*)';
 const SCHEDULE_PATTERNS = [
-    /\b((?:next|this)\s+(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))?)\b/i,
-    /\b(tomorrow\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i,
-    /\b(today\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i,
+    /\b((?:next|this)\s+(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)(?:\s*(?:at\s+|@\s*)\d{1,2}(?::\d{2})?\s*(?:am|pm))?)\b/i,
+    new RegExp(`\\b(tomorrow\\s*${AT}\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b`, 'i'),
+    new RegExp(`\\b(today\\s*${AT}\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b`, 'i'),
     /\b(in\s+\d+\s+(?:minutes?|mins?|hours?|hrs?|days?))\b/i,
-    /\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)(?:\s*(?:la|los angeles|pacific)\s*time)?)\b/i,
+    new RegExp(`${AT}(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)(?:\\s*(?:la|los angeles|pacific)\\s*time)?)\\b`, 'i'),
 ];
 function extractScheduleClause(rawText) {
     const text = String(rawText || '');
@@ -258,6 +264,23 @@ function policyDecide(ctx) {
         const p = ctx.pendingAction;
         if (YES.includes(t)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
         if (NO.includes(t))  return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
+        // REAL BUG (found 2026-08-04, live): with an already-drafted
+        // "send this email to Mathew? yes/no" pending active, "Schedule
+        // this mail @7am LA time" fell through Section A entirely (it's
+        // not yes/no, has no options) and got reclassified from scratch by
+        // the AI as a brand-new email request — which then found the SAME
+        // pending still unresolved and just queued a second, redundant
+        // draft behind it, going in circles. "Schedule ___" while an email
+        // confirm is already pending is unambiguously an answer to THAT
+        // pending (send later instead of now/not-at-all), not a new
+        // request — must be caught here, before it ever reaches general
+        // classification. Reuses the already-drafted to/cc/bcc/subject/body
+        // as-is; only converts WHEN it sends, never re-drafts anything.
+        if (p.type === 'await_email_confirm' && /\bschedule\b/i.test(ctx.text)) {
+            const clause = extractScheduleClause(ctx.text);
+            if (clause) return { intent: 'reschedule_pending_email', resolvedBy: 'policy', data: { send_at_text: clause } };
+            return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Schedule it for when? e.g. "schedule this at 7am LA time" or "schedule for tomorrow 9am".' } };
+        }
         if (p.options) {
             const pick = resolveListSelection(ctx.text, p.options);
             if (pick) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: pick } };
@@ -919,6 +942,7 @@ async function route(decision, ctx, sendMessage) {
 
     switch (decision.intent) {
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection);
+        case 'reschedule_pending_email': return actions.reschedulePendingEmail(chatId, ctx.pendingAction, d.send_at_text);
         case 'resolve_fact_batch':     return actions.resolveFactBatch(chatId, ctx.pendingAction, d.selection);
         case 'show_menu':              return actions.showMenu(chatId);
         case 'bookings_menu':          return actions.showBookingsMenu(chatId);
