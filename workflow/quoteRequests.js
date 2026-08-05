@@ -306,15 +306,34 @@ async function cancelPendingTasksForLeg(requestId, truckerName) {
 // entirely) — this is a new, narrow poll: for every active email leg, check
 // whether its own Gmail thread (captured at send time via sendEmail's
 // returned threadId) has grown past 1 message, meaning a reply arrived.
-// Uses getGmailWrite() — sends AND this poll both operate against
-// apsara@edgemetals.com, the same account the quote request was actually
-// sent from, so the thread lookup is guaranteed to be in the right mailbox.
+//
+// REAL BUG (found 2026-08-05, caught by Apsara asking "will it check
+// apsara's inbox?" before this had ever actually run against a live reply):
+// this originally called getGmailWrite() to read the thread — but per
+// helpers/gmail.js's own header, that client is deliberately scoped to
+// gmail.send ONLY ("structurally cannot list or read anything"), precisely
+// so a bug in the send path can never accidentally read anyone's inbox. A
+// read call against a send-only token fails with an insufficient-scope
+// error from Gmail's API every single time — this poll would have silently
+// errored on every tick and never once detected a real reply. The correct
+// client is getGmailSenderRead() — READ access to apsara@'s own mailbox,
+// same account, separate token (gmail-token-sender-read.json). That token
+// does not exist yet (confirmed: only gmail-token-read.json and
+// gmail-token-write.json are present) — getGmailSenderRead() returns null
+// (not a throw) until scripts/gmail-auth.js --role=sender-read is run once,
+// signed into apsara@edgemetals.com, and the resulting token file is
+// deployed to the VM's DATA_DIR. Until then this poll no-ops loudly (one
+// warning per tick) rather than silently doing nothing.
 async function pollEmailReplies() {
     const legs = qr.findActiveEmailLegs();
     if (!legs.length) return { checked: 0, replied: 0 };
 
-    const { getGmailWrite } = require('../helpers/gmail');
-    const gmail = getGmailWrite();
+    const { getGmailSenderRead } = require('../helpers/gmail');
+    const gmail = getGmailSenderRead();
+    if (!gmail) {
+        console.warn('[QUOTE] pollEmailReplies: gmail-token-sender-read.json not set up yet — run scripts/gmail-auth.js --role=sender-read (signed into apsara@edgemetals.com) and deploy the token file. Email-leg replies will NOT be detected until then.');
+        return { checked: legs.length, replied: 0, skipped: 'sender_read_token_missing' };
+    }
     let replied = 0;
 
     for (const { request, leg } of legs) {
