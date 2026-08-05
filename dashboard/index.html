@@ -646,9 +646,94 @@ $('btnSaveBooking').addEventListener('click', async () => {
   }
 });
 
+// Sort key for a cutoff_date string (MM/DD/YYYY). Missing/unparseable dates
+// sort LAST within their group (Infinity) — a booking with no cutoff yet
+// shouldn't visually jump to the front of an ascending-urgency list.
+function cutoffSortMs(dateStr) {
+  const m = String(dateStr || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return Infinity;
+  const t = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])).getTime();
+  return isNaN(t) ? Infinity : t;
+}
+
 function renderBookings(bookingsObj) {
   bookingsCache = bookingsObj;
   const list = Object.values(bookingsObj);
+
+  // Group by Port of Loading, sub-group by Port of Discharge, and within each
+  // POL/POD pair sort bookings by cutoff ascending (soonest cutoff first —
+  // matches how these get worked in practice). POL/POD groups themselves are
+  // ordered alphabetically for a stable, predictable layout.
+  const polOf = (b) => String(b.port_of_loading || '').trim() || '(No POL)';
+  const podOf = (b) => String(b.port_of_discharge || '').trim() || '(No POD)';
+  const polGroups = new Map(); // pol -> Map(pod -> bookings[])
+  for (const b of list) {
+    const pol = polOf(b), pod = podOf(b);
+    if (!polGroups.has(pol)) polGroups.set(pol, new Map());
+    const podGroups = polGroups.get(pol);
+    if (!podGroups.has(pod)) podGroups.set(pod, []);
+    podGroups.get(pod).push(b);
+  }
+  const polNames = [...polGroups.keys()].sort((a, z) => a.localeCompare(z));
+  for (const pol of polNames) {
+    const podGroups = polGroups.get(pol);
+    for (const pod of [...podGroups.keys()]) {
+      podGroups.get(pod).sort((a, z) => cutoffSortMs(a.cutoff_date) - cutoffSortMs(z.cutoff_date));
+    }
+  }
+
+  const COLS = '24px 150px 1fr 100px 100px 130px 130px';
+  function bookingRow(b) {
+    const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{ seq: 1, size: b.container_size, container_number: b.container_number, stage: 'not_started' }];
+    const subRows = containers.map(c => `
+      <div style="display:grid; grid-template-columns:24px 60px 1fr 140px 120px 90px; gap:14px; padding:9px 18px 9px 40px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); font-size:12px; align-items:center;">
+        <div></div>
+        <div style="font-family:var(--font-mono); color:var(--copper-400); font-weight:700;">#${c.seq}</div>
+        <div style="font-family:var(--font-mono);">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div>
+        <div style="font-family:var(--font-mono); color:${c.supplier || c.trucker ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(c.supplier && c.trucker ? c.supplier + ' → ' + c.trucker : (c.supplier || c.trucker || '—'))}</div>
+        <div><span class="badge" style="background:var(--surface-card); border:1px solid var(--border-subtle); color:var(--text-body);">${esc((c.stage || 'not_started').replace(/_/g, ' '))}</span></div>
+        <div></div>
+      </div>`).join('');
+    return `
+    <div data-bkg-group="${esc(b.booking_number)}">
+      <div class="row-hover" data-bk-expand="${esc(b.booking_number)}" style="display:grid; grid-template-columns:${COLS}; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center; cursor:pointer;">
+        <div style="color:var(--text-faint); font-family:var(--font-mono);" class="bk-chevron">▸</div>
+        <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
+        <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${containers.length}</div>
+        <div style="display:flex; gap:6px; justify-content:flex-end;" onclick="event.stopPropagation();">
+          <button class="btn btn-secondary btn-edit-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Edit</button>
+          <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
+        </div>
+      </div>
+      <div class="bk-containers hidden">${subRows}</div>
+    </div>`;
+  }
+
+  function polHeader(pol, count) {
+    return `<div style="padding:14px 18px 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); border-top:2px solid var(--copper-400);">
+      <div style="font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--copper-400);">// Port of loading: ${esc(pol)}</div>
+      <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:2px;">${count} booking${count === 1 ? '' : 's'}</div>
+    </div>`;
+  }
+  function podHeader(pod, count) {
+    return `<div style="padding:9px 18px 9px 34px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle);">
+      <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">→ ${esc(pod)} <span style="color:var(--text-faint); font-weight:400; text-transform:none; letter-spacing:normal;">(${count})</span></div>
+    </div>`;
+  }
+
+  const groupedHtml = polNames.map(pol => {
+    const podGroups = polGroups.get(pol);
+    const podNames = [...podGroups.keys()].sort((a, z) => a.localeCompare(z));
+    const polCount = podNames.reduce((sum, pod) => sum + podGroups.get(pod).length, 0);
+    return polHeader(pol, polCount) + podNames.map(pod => {
+      const bookings = podGroups.get(pod);
+      return podHeader(pod, bookings.length) + bookings.map(bookingRow).join('');
+    }).join('');
+  }).join('');
+
   $('viewRoot').innerHTML = `
     <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
@@ -656,37 +741,10 @@ function renderBookings(bookingsObj) {
         <button id="btnAddBooking" class="btn btn-primary">+ Add booking</button>
       </div>
       <div class="card" style="overflow:hidden;">
-        <div style="display:grid; grid-template-columns:24px 150px 1fr 100px 100px 130px 130px; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+        <div style="display:grid; grid-template-columns:${COLS}; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
           <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
         </div>
-        ${list.length ? list.map(b => {
-          const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{ seq: 1, size: b.container_size, container_number: b.container_number, stage: 'not_started' }];
-          const subRows = containers.map(c => `
-            <div style="display:grid; grid-template-columns:24px 60px 1fr 140px 120px 90px; gap:14px; padding:9px 18px 9px 40px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); font-size:12px; align-items:center;">
-              <div></div>
-              <div style="font-family:var(--font-mono); color:var(--copper-400); font-weight:700;">#${c.seq}</div>
-              <div style="font-family:var(--font-mono);">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div>
-              <div style="font-family:var(--font-mono); color:${c.supplier || c.trucker ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(c.supplier && c.trucker ? c.supplier + ' → ' + c.trucker : (c.supplier || c.trucker || '—'))}</div>
-              <div><span class="badge" style="background:var(--surface-card); border:1px solid var(--border-subtle); color:var(--text-body);">${esc((c.stage || 'not_started').replace(/_/g, ' '))}</span></div>
-              <div></div>
-            </div>`).join('');
-          return `
-          <div data-bkg-group="${esc(b.booking_number)}">
-            <div class="row-hover" data-bk-expand="${esc(b.booking_number)}" style="display:grid; grid-template-columns:24px 150px 1fr 100px 100px 130px 130px; gap:14px; padding:14px 18px; border-bottom:1px solid var(--border-subtle); align-items:center; cursor:pointer;">
-              <div style="color:var(--text-faint); font-family:var(--font-mono);" class="bk-chevron">▸</div>
-              <div style="font-family:var(--font-mono); font-size:12.5px; font-weight:600; color:var(--text-strong);">${esc(b.booking_number)}</div>
-              <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${containers.length}</div>
-              <div style="display:flex; gap:6px; justify-content:flex-end;" onclick="event.stopPropagation();">
-                <button class="btn btn-secondary btn-edit-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Edit</button>
-                <button class="btn btn-danger btn-del-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Del</button>
-              </div>
-            </div>
-            <div class="bk-containers hidden">${subRows}</div>
-          </div>`;
-        }).join('') : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
+        ${list.length ? groupedHtml : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
       </div>
     </section>`;
   $('btnAddBooking').addEventListener('click', openBookingModalForAdd);

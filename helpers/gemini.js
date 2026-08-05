@@ -31,6 +31,19 @@ function extractJson(text) {
     try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { return null; }
 }
 
+// Decide the final cutoff_date IN CODE, not by trusting the model to have
+// resolved "which of several cutoffs" correctly on its own — a real Zimex
+// booking confirmation still came back with the doc cutoff despite an
+// explicit prompt instruction telling it not to. port_cutoff_date and
+// doc_cutoff_date are extracted as separate, label-scoped fields specifically
+// so this can be a plain, deterministic, testable function instead of prose
+// the model may or may not follow. Exported so it can be unit-tested without
+// needing a live Gemini call.
+function resolveCutoffDate(fields) {
+    if (!fields) return null;
+    return fields.port_cutoff_date || fields.cutoff_date || null;
+}
+
 async function callGeminiJSON(prompt, retries = 2) {
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
@@ -57,7 +70,8 @@ async function extractBookingFieldsFromText(emailBodyText, retries = 2) {
 Schema (every field can be null if not present):
 {
   "booking_number": null, "carrier": null, "port_of_loading": null, "port_of_discharge": null,
-  "cutoff_date": null, "erd_date": null, "etd": null, "eta": null, "vessel_voyage": null,
+  "cutoff_date": null, "port_cutoff_date": null, "doc_cutoff_date": null,
+  "erd_date": null, "etd": null, "eta": null, "vessel_voyage": null,
   "container_size": null, "container_number": null, "shipper": null, "consignee": null, "buyer": null
 }
 
@@ -65,12 +79,19 @@ etd = Estimated Time of Departure, eta = Estimated Time of Arrival — these are
 two DIFFERENT dates, do not confuse them or copy one into the other; leave
 either null if the email doesn't actually state it.
 
-cutoff_date = the PORT / TERMINAL / CY / GATE cutoff — the deadline the
-container must physically be at the terminal. Carriers often also list a
-Document / SI / VGM cutoff, which is a paperwork deadline (usually earlier)
-and is NOT what belongs in cutoff_date — do not use it, even if it's the
-only cutoff labeled clearly. If both appear, always use the port/terminal/
-CY/gate one.
+Cutoff dates — carriers often list SEVERAL under one heading (e.g. a table
+with rows like "Port Open", "Port", "Rail", "Warehouse", "Doc", "VGM"). Fill
+these two SEPARATELY, by label, and do not guess:
+- port_cutoff_date: the date next to a label containing "Port" (Port, Port
+  Cutoff, CY Cutoff, Terminal Cutoff, Gate Cutoff) — the deadline the
+  container must physically be at the terminal. If the document only has ONE
+  cutoff and doesn't break it out by label at all, put that single value here.
+- doc_cutoff_date: the date next to a label containing "Doc" (Doc, Document
+  Cutoff, SI Cutoff, VGM Cutoff) — a paperwork deadline, usually earlier than
+  port_cutoff_date. Leave null if the document doesn't separately call this out.
+- cutoff_date: leave this at your best single guess too, as a fallback — but
+  port_cutoff_date/doc_cutoff_date are what actually get used, so get THOSE
+  right even if you're unsure about this one.
 
 Convert all dates to MM/DD/YYYY. Port fields must be city names only. Return the JSON object and nothing else.
 
@@ -86,7 +107,10 @@ ${emailBodyText.slice(0, 6000)}
             });
             const result = await model.generateContent(prompt);
             const fields = extractJson(result.response.text());
-            if (fields) return fields;
+            if (fields) {
+                fields.cutoff_date = resolveCutoffDate(fields);
+                return fields;
+            }
             console.warn(`[GEMINI] Body extraction returned unparseable JSON (attempt ${attempt + 1})`);
         } catch (err) {
             console.error(`[GEMINI] Body extraction failed (attempt ${attempt + 1}):`, err.message);
@@ -113,7 +137,9 @@ async function extractPdfFields(pdfBase64, retries = 2) {
   "carrier": null,          // e.g. "MSC", "Maersk", "COSCO"
   "port_of_loading": null,  // city only, e.g. "Houston"
   "port_of_discharge": null,// city only, e.g. "Busan"
-  "cutoff_date": null,      // MM/DD/YYYY — the PORT/TERMINAL/CY/GATE cutoff (when the container must physically be at the terminal). NOT the Document/SI/VGM cutoff — that's a separate, usually earlier, paperwork deadline. If the document lists both, use the port/terminal/CY/gate one, never the doc/SI/VGM one.
+  "cutoff_date": null,      // MM/DD/YYYY — your best single guess, kept as a fallback only. port_cutoff_date/doc_cutoff_date below are what actually get used — get those right even if unsure about this one.
+  "port_cutoff_date": null, // MM/DD/YYYY — the date next to a label CONTAINING "Port" (e.g. "Port", "Port Cutoff", "CY Cutoff", "Terminal Cutoff", "Gate Cutoff") — when the container must physically be at the terminal. Many carrier documents show a CUT-OFF DATE table with several rows: "Port Open", "Port", "Rail", "Warehouse", "Doc", "VGM" — use ONLY the "Port" row's value, never "Port Open", "Doc", or "VGM". If the document has just ONE cutoff with no such table, put that single value here instead.
+  "doc_cutoff_date": null,  // MM/DD/YYYY — the date next to a label CONTAINING "Doc" (e.g. "Doc", "Document Cutoff", "SI Cutoff", "VGM Cutoff") — a paperwork deadline, usually earlier than port_cutoff_date. Leave null if the document doesn't separately call this out. Never copy this value into port_cutoff_date.
   "erd_date": null,         // MM/DD/YYYY format — Earliest Return Date
   "etd": null,              // MM/DD/YYYY — Estimated Time of Departure
   "eta": null,              // MM/DD/YYYY — Estimated Time of Arrival (different date than etd — don't conflate)
@@ -140,7 +166,8 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
             ]);
             const fields = extractJson(result.response.text());
             if (fields) {
-                console.log(`[GEMINI] PDF extraction: bkg=${fields.booking_number || '?'} carrier=${fields.carrier || '?'}`);
+                fields.cutoff_date = resolveCutoffDate(fields);
+                console.log(`[GEMINI] PDF extraction: bkg=${fields.booking_number || '?'} carrier=${fields.carrier || '?'} cutoff=${fields.cutoff_date || '?'}`);
                 return fields;
             }
             console.warn(`[GEMINI] PDF extraction returned unparseable JSON (attempt ${attempt + 1})`);
@@ -175,4 +202,4 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
 // already includes full chat context (session, last 5 messages, facts,
 // business context). If a lighter-weight text-only Gemini call is needed
 // again later, re-add it deliberately — don't restore this dead pair as-is.
-module.exports = { callGeminiJSON, extractPdfFields ,extractBookingFieldsFromText   };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate };
