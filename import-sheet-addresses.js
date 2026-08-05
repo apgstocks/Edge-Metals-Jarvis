@@ -22,7 +22,15 @@
 const { loadAddressBook, mergeEntries } = require('./helpers/addressBook');
 const { mutateJson } = require('./helpers/json');
 const cfg = require('./config');
-const curated = require('./_sheet_addresses_curated');
+// Both hand-curated batches, run together — batch 2 includes one deliberate
+// UPDATE to a batch-1 entry (Pan Metal Korea (Hwaseong) gaining phone/fax),
+// which relies on batch 1 having already added that entry first. Order here
+// matters for that reason; mergeEntries processes the combined list in
+// order, so batch 1's add happens before batch 2's update is evaluated.
+const curated = [
+    ...require('./_sheet_addresses_curated'),
+    ...require('./_sheet_addresses_curated_batch2'),
+];
 
 const APPLY = process.argv.includes('--apply');
 

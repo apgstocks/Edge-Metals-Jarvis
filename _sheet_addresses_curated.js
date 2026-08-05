@@ -63,7 +63,7 @@ module.exports = [
   { aliases: ['Indicaa USA Inc.'], raw: '6420, Suite 530-06,\nRichmond Ave.,\nHouston, Texas 77057' },
   { aliases: ['KAINAN METALS INDUSTRIES CO.,LTD.'], raw: '43,MIN TZU RD.\nKANG CHIEN VILL HSIN SZU HSIANG,\nTAINAN HSIEN,TAIWAN.\nTEL: 06-5994751 FAX: 06-5995707' },
   { aliases: ['KWANG MYUNG METAL CO., LTD.'], raw: '123, HAKSANG-1GIL, GASAN-MYEON,\nCHILGOK-GUN, GYEONGSANGBUK-DO, KOREA\nTEL : 82-54-971-2161' },
-  { aliases: ['Pan Metal Korea (Hwaseong)'], raw: '720-7, CHOROK-RO, YANGGAM-MYEON, HWASEONG-SI, GYEONGGI-DO, KOREA' },
+  { aliases: ['Pan Metal Korea (Hwaseong)'], raw: '720-7, Chorok-ro, Yanggam-myeon,\nHwaseong-si, Gyeonggi-do, Korea\nTel : 031-384-2384\nFax : 031-384-2385' },
   { aliases: ['Pan Korea Co., Ltd.'], raw: "2210-1, O'Biztower, 126, Beolmal-ro,\nDongan-gu, Anyang-si,\nGyeonggi-do, Korea\nPhone : 82-31-384-2384\nFax : 82-31-384-2385" },
   { aliases: ['SHIN WEN CHING METAL ENT. COMPANY LTD'], raw: 'NO. 55, MING CHU ST., SHOU SHUIHSIANG\nCHANGHUA, TAIWAN.' },
   { aliases: ['SA METAL CO., LTD'], raw: '22, MAJUNG 2-RO, SEO-GU,\nINCHEON,KOREA' },

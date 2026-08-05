@@ -7,23 +7,24 @@
 // data, no name-only fragments without a real street address, no duplicates
 // of anything already in data/address_book.json.
 //
-// Real conflicts found this pass — NOT silently resolved, flagged to Apsara
-// instead (see chat reply):
-//   - Taewon: this paste shows the phone changed to 82-55-582-6181; the
-//     stored Doc-sourced entry still has 82-55-583-6181.
-//   - "Dawon Alloy" appears with a SECOND, different address (Hwasan
-//     1-gil, Onsan-eup, Ulju-gun, Ulsan) — different from the
+// Real conflicts found this pass — per Apsara's explicit instruction
+// ("if you find any discrepancy, just don't upload it"), these are NOT
+// included below at all — noted here only as a record of what was excluded
+// and why:
+//   - "Dawon Alloy" appeared with a SECOND, different address (Hwasan
+//     1-gil, Onsan-eup, Ulju-gun, Ulsan) — conflicts with the
 //     "DAWON ALLOY CO.LTD." already stored (Injusandan-ro, Asan-si,
-//     Chungcheongnam-do). Added as a distinctly-labeled second entry
-//     rather than guessing which is current.
-//   - "MGK INTERNATIONAL DWC LLC" appears with a DIFFERENT PO Box (390667)
-//     than the Doc-stored "MGK DWC LLC" (712900). Added as a distinctly-
-//     labeled second entry, not merged into the existing one.
-//   - The Doc's own "[MAPTRASCO/GREEN METAL/ABSHIEK]" entry only ever
-//     stored MAPTRASCO's address — this paste shows "Green Metal
-//     Recyclers Pte. Ltd." is actually a DIFFERENT company with its own
-//     Singapore address, incorrectly implied to share MAPTRASCO's address
-//     by that alias grouping in the source Doc itself. Added separately.
+//     Chungcheongnam-do). EXCLUDED.
+//   - "MGK INTERNATIONAL DWC LLC" appeared with a DIFFERENT PO Box (390667)
+//     than the Doc-stored "MGK DWC LLC" (712900). EXCLUDED.
+//   - Taewon: this paste shows the phone changed to 82-55-582-6181; the
+//     stored Doc-sourced entry still has 82-55-583-6181 — not touched here
+//     either way (the Doc is that entry's source of truth; fix it there if
+//     the number really changed, then re-run sync-address-book.js).
+//
+// "Green Metal Recyclers Pte. Ltd." IS included — not a conflict about the
+// same entity, just a real company with its own address that the Doc's
+// "[MAPTRASCO/GREEN METAL/ABSHIEK]" alias group never actually stored.
 
 module.exports = [
   { aliases: ['Advanced Atlantic Corp'], raw: '5158 Cliffwood Dr\nMontclair, CA-91764\nPH NO: 510-913-4526\nmeowater@gmail.com' },
@@ -35,7 +36,6 @@ module.exports = [
   { aliases: ['CM GLOBAL CO., LTD', 'Joey'], raw: '1001, DONGWON-BIZ PLATFORM, 329, SEONGSEO-RO,\nDALSEO-GU, DAEGU, KOREA\nEmail: goodcmglobal@gmail.com' },
   { aliases: ['Sasaran Utama SDN BHD'], raw: 'N0.6 Jalan Korporat 1B/KU9, Kawasan Perindustrain Meru 42200,\nKlang, Malaysia\nTel : 011-271966224' },
   { aliases: ['RND INTERNATIONAL'], raw: '222 E. REDONDO BEACH BLVD\nGARDENA, CA, 90248 USA\nTEL: 1-310-808-0905' },
-  { aliases: ['Dawon Alloy (Ulsan)'], raw: '30, Hwasan 1-gil, Onsan-eup,\nUlju-gun, Ulsan, 45009, Korea\n(CNG TRADING / ROBIN — different address than DAWON ALLOY CO.LTD. already on file; not yet confirmed which is current)' },
   { aliases: ['Sigma Recycling Inc'], raw: '5675 Jimmy Carter Blvd #598\nNorcross, GA-30071\nGaurav Choraria <Gaurav.Choraria@asc.geminitrade.com>' },
   { aliases: ['Texas Lines Transport LLC', 'Texas Lines'], raw: '2395 Mystic Shore Dr\nCedar Hill, TX 75104' },
   { aliases: ['Progressive Scrap Metals, Inc.', 'Progressive Metals'], raw: '1931 Mateo St\nLos Angeles, CA 90021' },
@@ -47,16 +47,14 @@ module.exports = [
   { aliases: ['KRISHNA METALS'], raw: 'PLOT 19 & 20, GONDAL HIGHWAY, NR KANGASIYANI CHOWKDI,\nLODIKA, DHOLARA, RAJKOT, 360024, INDIA\nPhone: +919987005885\nEmail: sales@krishnametals.co.in' },
   { aliases: ['Punjab steel syndicate'], raw: 'Plot No.06, 12 & 13, Survey No 84 Industrial\nplot B/H Rishi Kiran Farm House Village\nMeghpur Borichi Tal - Anjar Kutch, India' },
   { aliases: ['Ascorp Singapore Pte Ltd', 'Nik'], raw: '10, Anson Road, 30-12, International Plaza,\nSingapore-079903\nTel : 65 6222 0557' },
-  { aliases: ['MGK INTERNATIONAL DWC LLC (Business Centre)'], raw: 'P O BOX NO.390667, BUSINESS CENTRE, DUBAI WORLD CENTRAL,\nDUBAI, UAE\nEMAIL:- docs@mgkint.com\nO: 201.332.5645\nF: 646.843.4704\n(different PO Box than "MGK DWC LLC" already on file — not yet confirmed which is current)' },
   { aliases: ['Franco Trucking Inc.'], raw: '1842 East 213th Street\nCarson, CA 90745\n(310) 866-0653\nfrancisco@francotruckinginc.com' },
   { aliases: ['AL QARYAN INTERNATIONAL DMCC'], raw: 'Plot No: JLT-PH 1-12, Platinum Tower,\nJumeirah Lake Towers, Dubai, UAE\nVAT Registration No: 100454021500003' },
   { aliases: ['DRM Iron & Metal LLC'], raw: '6444 E. Spring St\nLong Beach, CA 90815\nJose.srmironandmetal@gmail.com\ndavidm.drmironandmetal@gmail.com' },
   { aliases: ['REMETAL INTERNATIONAL, INC'], raw: '400 SPECTRUM CENTER DR, STE 1900\nIRVINE, CA 92618, USA\n(contact: Henry from Staz)' },
   { aliases: ['FAR EAST METALS, INC'], raw: '531 E, CARSON STREET, SUITE D\nCARSON, CA 90745\n(contact: Henry from Staz)' },
   { aliases: ['Featherlite Logistics LLC', 'Houston Trucking Company'], raw: '10711 Belshill St\nRichmond, TX-77407' },
-  // Same alias as batch 1's "Pan Metal Korea (Hwaseong)" — raw text enriched
-  // with phone/fax seen in this paste (matching address, purely additive),
-  // so mergeEntries treats this as an UPDATE to the existing entry, not a
-  // new one.
-  { aliases: ['Pan Metal Korea (Hwaseong)'], raw: '720-7, Chorok-ro, Yanggam-myeon,\nHwaseong-si, Gyeonggi-do, Korea\nTel : 031-384-2384\nFax : 031-384-2385' },
+  // "Pan Metal Korea (Hwaseong)" (phone/fax seen in this paste) folded
+  // directly into batch 1's entry instead of duplicated here — having the
+  // same alias set appear twice across the combined list caused a harmless
+  // but confusing double-update (revert-then-refix) every run.
 ];
