@@ -25,6 +25,7 @@
 // trucker/supplier contact for the same real person are two separate
 // records on purpose; nothing here touches Supabase.
 
+const crypto = require('crypto');
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
@@ -104,7 +105,7 @@ function mergeEntries(stored, parsed) {
         if (match) {
             if (match.raw !== entry.raw) { match.raw = entry.raw; updated.push(match.aliases[0]); }
         } else {
-            result.push({ aliases: [...entry.aliases], raw: entry.raw, added_at: new Date().toISOString() });
+            result.push({ id: crypto.randomUUID(), aliases: [...entry.aliases], raw: entry.raw, added_at: new Date().toISOString() });
             added.push(entry.aliases[0]);
         }
     }
@@ -159,4 +160,65 @@ function resolveAddress(nameOrAlias) {
     return null;
 }
 
-module.exports = { parseAddressBookDoc, mergeEntries, loadAddressBook, syncFromDoc, resolveAddress };
+// ── Manual CRUD — dashboard's "Add Contact" / Edit buttons ─────────────────
+// Built 2026-08-05, separate from the Doc/Sheet sync path on purpose: sync
+// matches records by full alias-SET equality (see mergeEntries above), which
+// is the right key for "did this same [Label] block come back unchanged" but
+// is the WRONG key for a manual edit UI — if Apsara edits an entry's alias
+// itself, matching by the (now-changed) alias set would silently create a
+// duplicate instead of updating. Every entry gets a stable `id` (assigned by
+// mergeEntries for synced entries, here for manual ones) so edit/delete
+// always target the exact right record regardless of what the aliases say.
+function validateEntryInput(aliases, raw) {
+    const cleanAliases = (Array.isArray(aliases) ? aliases : String(aliases || '').split('/'))
+        .map((a) => String(a || '').trim()).filter(Boolean);
+    if (!cleanAliases.length) throw new Error('at least one name/alias is required');
+    const cleanRaw = String(raw || '').trim();
+    if (!cleanRaw) throw new Error('address text is required');
+    return { aliases: cleanAliases, raw: cleanRaw };
+}
+
+async function addManualEntry(aliases, raw) {
+    const clean = validateEntryInput(aliases, raw);
+    const entry = { id: crypto.randomUUID(), ...clean, added_at: new Date().toISOString(), source: 'manual' };
+    await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => { book.push(entry); return book; });
+    return entry;
+}
+
+async function updateEntryById(id, { aliases, raw }) {
+    if (!id) throw new Error('id required');
+    const clean = validateEntryInput(aliases, raw);
+    // Deliberately doesn't throw for a missing id inside the mutator —
+    // mutateJson's own catch block would swallow that throw (it fails soft
+    // and just logs), turning a clean 404 into a confusing generic "[JSON]
+    // Mutate failed" log line. Returning null and checking it here instead
+    // gives the caller (api.js) an honest signal either way.
+    let updated = null;
+    await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => {
+        const entry = book.find((e) => e.id === id);
+        if (!entry) return book;
+        entry.aliases = clean.aliases;
+        entry.raw = clean.raw;
+        entry.updated_at = new Date().toISOString();
+        updated = entry;
+        return book;
+    });
+    return updated;
+}
+
+async function deleteEntryById(id) {
+    if (!id) throw new Error('id required');
+    let existed = false;
+    await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => {
+        const before = book.length;
+        const next = book.filter((e) => e.id !== id);
+        existed = next.length < before;
+        return next;
+    });
+    return existed;
+}
+
+module.exports = {
+    parseAddressBookDoc, mergeEntries, loadAddressBook, syncFromDoc, resolveAddress,
+    addManualEntry, updateEntryById, deleteEntryById,
+};

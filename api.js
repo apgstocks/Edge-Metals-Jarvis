@@ -535,6 +535,28 @@ function createApi() {
         try { res.json(await require('./helpers/addressBook').syncFromDoc()); }
         catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // Manual add/edit/delete — the "Add Contact" button and per-entry Edit
+    // button on the address-book page. Separate from the sync path above;
+    // see helpers/addressBook.js's own comment on why these key by `id`
+    // instead of alias matching.
+    app.post('/api/address-book', async (req, res) => {
+        try { res.json(await require('./helpers/addressBook').addManualEntry(req.body.aliases, req.body.raw)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.put('/api/address-book/:id', async (req, res) => {
+        try {
+            const updated = await require('./helpers/addressBook').updateEntryById(req.params.id, req.body);
+            if (!updated) return res.status(404).json({ error: 'no address-book entry with that id' });
+            res.json(updated);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.delete('/api/address-book/:id', async (req, res) => {
+        try {
+            const existed = await require('./helpers/addressBook').deleteEntryById(req.params.id);
+            if (!existed) return res.status(404).json({ error: 'no address-book entry with that id' });
+            res.json({ ok: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
 
     // Dashboard's "Send" button on the Price list contacts tab. `to` is
     // whatever name/number the row's data-name carries (resolved the same

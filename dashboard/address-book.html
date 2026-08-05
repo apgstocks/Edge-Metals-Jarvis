@@ -56,6 +56,8 @@ input::placeholder { color:var(--steel-500); }
 .card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
 .spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
+.hidden { display:none !important; }
+textarea { font-family:inherit; }
 ::-webkit-scrollbar { width:10px; height:10px; }
 ::-webkit-scrollbar-thumb { background:var(--steel-700); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
 ::-webkit-scrollbar-track { background:transparent; }
@@ -66,12 +68,42 @@ input::placeholder { color:var(--steel-500); }
   <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
   <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
     <div><div class="eyebrow">// Directory</div><h2 style="font-size:24px; text-transform:uppercase;">Address book</h2></div>
-    <button id="btnSyncAddressBook" class="btn btn-primary">Sync from Doc</button>
+    <div style="display:flex; gap:10px;">
+      <button id="btnAddContact" class="btn btn-secondary">+ Add contact</button>
+      <button id="btnSyncAddressBook" class="btn btn-primary">Sync from Doc</button>
+    </div>
   </div>
-  <div style="font-size:13px; color:var(--text-muted); margin-bottom:18px;">Start typing a name (supplier, trucker, or customer) to find their full pickup/delivery address — paste straight into a WhatsApp quote request. Source of truth is the address-book Google Doc; hit "Sync from Doc" after editing it there.</div>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:18px;">Start typing a name (supplier, trucker, or customer) to find their full pickup/delivery address — paste straight into a WhatsApp quote request. Source of truth is the address-book Google Doc; hit "Sync from Doc" after editing it there, or add/edit a one-off entry directly here.</div>
   <input id="abSearch" placeholder="Start typing a name…" autocomplete="off" style="width:100%; background:var(--surface-sunken); border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:12px 16px; font-size:15px; color:var(--text-strong); outline:none; margin-bottom:18px;">
   <div id="abResults" style="display:flex; flex-direction:column; gap:10px;"></div>
 </section>
+
+<div id="abModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; display:flex; align-items:flex-start; justify-content:center; padding:44px 24px; overflow-y:auto;">
+  <div style="background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:520px; box-shadow:0 24px 60px rgba(0,0,0,.55); overflow:hidden;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle);">
+      <h2 id="abModalTitle" style="font-size:16px; text-transform:uppercase;">Add contact</h2>
+      <button id="btnAbModalClose" class="btn btn-secondary" style="padding:6px 10px;">&times;</button>
+    </div>
+    <div style="padding:24px 26px; max-height:62vh; overflow-y:auto; display:flex; flex-direction:column; gap:16px;">
+      <div id="abModalError" style="font-size:12.5px; color:var(--status-danger);"></div>
+      <div>
+        <label style="display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Name(s) / alias — separate multiple with "/"</label>
+        <input id="abModalAliases" placeholder="e.g. Rad Metal / RM" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none;">
+      </div>
+      <div>
+        <label style="display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Full address (paste as-is, multiple lines OK)</label>
+        <textarea id="abModalRaw" rows="6" placeholder="Company name&#10;Street address&#10;City, State ZIP" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; resize:vertical;"></textarea>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken);">
+      <button id="btnAbModalDelete" class="btn btn-secondary hidden" style="color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
+      <div style="display:flex; gap:10px; margin-left:auto;">
+        <button id="btnAbModalCancel" class="btn btn-secondary">Cancel</button>
+        <button id="btnAbModalSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── ADDRESS BOOK ─────────────────────────────────────────────────────────
@@ -129,7 +161,10 @@ const entryCard = (e) => `
   <div class="card" style="padding:16px 18px;">
     <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px;">
       <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(e.aliases.join(' / '))}</div>
-      <button class="btn btn-secondary btn-copy-address" data-raw="${esc(e.raw)}" style="padding:6px 12px; font-size:11px; flex-shrink:0;">Copy</button>
+      <div style="display:flex; gap:8px; flex-shrink:0;">
+        <button class="btn btn-secondary btn-edit-address" data-id="${esc(e.id || '')}" style="padding:6px 12px; font-size:11px;">Edit</button>
+        <button class="btn btn-secondary btn-copy-address" data-raw="${esc(e.raw)}" style="padding:6px 12px; font-size:11px;">Copy</button>
+      </div>
     </div>
     <pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>
   </div>`;
@@ -137,14 +172,75 @@ const entryCard = (e) => `
 function renderResults() {
   const matches = filterAddressBook(addressBookData, searchEl.value);
   if (!addressBookData.length) {
-    resultsEl.innerHTML = `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No addresses synced yet. Click "Sync from Doc" above.</div>`;
+    resultsEl.innerHTML = `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No addresses yet. Click "+ Add contact" or "Sync from Doc" above.</div>`;
     return;
   }
   resultsEl.innerHTML = matches.length
     ? matches.map(entryCard).join('')
     : `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No matches for "${esc(searchEl.value)}".</div>`;
   resultsEl.querySelectorAll('.btn-copy-address').forEach(btn => btn.addEventListener('click', () => copyRaw(btn.dataset.raw, btn)));
+  resultsEl.querySelectorAll('.btn-edit-address').forEach(btn => btn.addEventListener('click', () => {
+    const entry = addressBookData.find(e => e.id === btn.dataset.id);
+    if (entry) openAbModal(entry);
+  }));
 }
+
+// ── Add/Edit modal ───────────────────────────────────────────────────────
+let abModalEditingId = null;
+const abModalOverlay = $('abModalOverlay');
+const abModalAliases = $('abModalAliases');
+const abModalRaw = $('abModalRaw');
+const abModalError = $('abModalError');
+
+function openAbModal(entry) {
+  abModalEditingId = entry ? entry.id : null;
+  $('abModalTitle').textContent = entry ? 'Edit contact' : 'Add contact';
+  abModalAliases.value = entry ? entry.aliases.join(' / ') : '';
+  abModalRaw.value = entry ? entry.raw : '';
+  abModalError.textContent = '';
+  $('btnAbModalDelete').classList.toggle('hidden', !entry);
+  abModalOverlay.classList.remove('hidden');
+  abModalAliases.focus();
+}
+function closeAbModal() { abModalOverlay.classList.add('hidden'); }
+
+$('btnAddContact').addEventListener('click', () => openAbModal(null));
+$('btnAbModalClose').addEventListener('click', closeAbModal);
+$('btnAbModalCancel').addEventListener('click', closeAbModal);
+abModalOverlay.addEventListener('click', (e) => { if (e.target === abModalOverlay) closeAbModal(); });
+
+$('btnAbModalSave').addEventListener('click', async () => {
+  const aliases = abModalAliases.value.split('/').map(s => s.trim()).filter(Boolean);
+  const raw = abModalRaw.value.trim();
+  if (!aliases.length) { abModalError.textContent = 'At least one name is required.'; return; }
+  if (!raw) { abModalError.textContent = 'Address text is required.'; return; }
+  const btn = $('btnAbModalSave');
+  btn.disabled = true; const original = btn.textContent; btn.innerHTML = '<span class="spinner"></span>Saving…';
+  try {
+    if (abModalEditingId) await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'PUT', body: JSON.stringify({ aliases, raw }) });
+    else await api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases, raw }) });
+    addressBookData = await api('/api/address-book');
+    renderResults();
+    closeAbModal();
+  } catch (e) {
+    abModalError.textContent = e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = original;
+  }
+});
+
+$('btnAbModalDelete').addEventListener('click', async () => {
+  if (!abModalEditingId) return;
+  if (!confirm('Remove this contact from the address book?')) return;
+  try {
+    await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'DELETE' });
+    addressBookData = await api('/api/address-book');
+    renderResults();
+    closeAbModal();
+  } catch (e) {
+    abModalError.textContent = e.message;
+  }
+});
 
 searchEl.addEventListener('input', renderResults);
 
