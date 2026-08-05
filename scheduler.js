@@ -462,6 +462,28 @@ async function taskRunner() {
                 continue;
             }
 
+            // ── Quote-request reminder / escalation (2026-08-05) ────────────
+            // Both delegate entirely to workflow/quoteRequests.js — the
+            // condition gate already skipped this task above if the leg
+            // resolved before its fire_at, so by the time we're here it's a
+            // genuine "still no price" case. Mirrors the 'scheduled_email'
+            // pattern just above: reuse this SAME due/retry/archive
+            // machinery rather than a parallel scheduler.
+            if (task.type === 'quote_reminder' || task.type === 'quote_escalation') {
+                await tasks.updateTask(task.id, { status: 'firing' });
+                const quoteRequests = require('./workflow/quoteRequests');
+                try {
+                    const result = task.type === 'quote_reminder'
+                        ? await quoteRequests.handleQuoteReminderTask(task, { send: _sendMessage })
+                        : await quoteRequests.handleQuoteEscalationTask(task, { send: _sendMessage });
+                    await tasks.archive(task.id, { status: 'done', result_note: result.fired ? 'fired' : (result.reason || 'send_failed') });
+                } catch (err) {
+                    console.error(`[TASK] quote task ${task.id} failed:`, err.message);
+                    await tasks.archive(task.id, { status: 'failed', result_note: 'runner_exception: ' + err.message });
+                }
+                continue;
+            }
+
             // 3. Send. Auto-prefix booking/container label so the recipient has context.
             //    Skips prefix if the message already mentions the booking number.
             await tasks.updateTask(task.id, { status: 'firing' });
@@ -498,6 +520,24 @@ async function taskRunner() {
     }
 }
 
+// ── Quote-request email-leg reply poll (2026-08-05) ─────────────────────────
+// No inbound-email watcher exists anywhere for trucker-style correspondence
+// (emailWatcher.js's poll is scoped to bose@'s carrier-booking intake, a
+// different mailbox/purpose) — reminders/escalation timers don't need this
+// (they're pure timers), but detecting "did the email-channel trucker
+// actually reply with a price" does. Runs every 5 minutes — frequent enough
+// that a price via email doesn't sit unnoticed for long, infrequent enough
+// not to hammer the Gmail API for what's normally a handful of open legs.
+async function quoteEmailReplyWatch() {
+    try {
+        const quoteRequests = require('./workflow/quoteRequests');
+        const result = await quoteRequests.pollEmailReplies();
+        if (result.replied) console.log(`[SCHED] quote email poll: ${result.replied}/${result.checked} legs had a new reply`);
+    } catch (err) {
+        console.error('[SCHED] quote-email-poll:', err.message);
+    }
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -507,6 +547,7 @@ function start() {
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
+    cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
     cron.schedule('45 23 * * *', () => {
         const settings = cfg.getSettings ? cfg.getSettings() : {};

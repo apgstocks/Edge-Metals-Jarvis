@@ -295,6 +295,7 @@ const NAV_ITEMS = [
   { id: 'contacts',  label: 'Contacts', adminOnly: true },
   { id: 'email-contacts', label: 'Email Contacts', adminOnly: true },
   { id: 'address-book', label: 'Address Book', adminOnly: true },
+  { id: 'quote-requests', label: 'Quote Requests', adminOnly: true },
   { id: 'settings',  label: 'Settings', adminOnly: true },
   { id: 'bot',       label: 'Bot' },
   { id: 'tasks',     label: 'Tasks' },
@@ -319,6 +320,8 @@ function renderNav() {
     // served via the /address-book route), not an in-app tab — same session
     // gate applies (see api.js), it's just a real page nav, not a fetch.
     if (b.dataset.tab === 'address-book') { window.location.href = '/address-book'; return; }
+    // Same standalone-page pattern as address-book above.
+    if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }

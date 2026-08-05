@@ -15,6 +15,7 @@ const trust = require('../helpers/trust');
 const { updateSession }        = require('../helpers/context');
 const truckers  = require('./truckers');
 const suppliers = require('./suppliers');
+const quoteHelper = require('../helpers/quoteRequests');
 const cfg       = require('../config');
 const { sendCapture } = require('../helpers/wa-state');
 
@@ -900,6 +901,41 @@ switch (pending.type) {
     case 'await_email_confirm':
         await clearPending(chatId);
         return pending.scheduled_for ? scheduleDraftedEmail(chatId, pending) : sendDraftedEmail(chatId, pending);
+
+    // Picked one of the ambiguous address-book matches shown for the quote
+    // request's origin or destination — same options/matches pattern as
+    // await_contact_disambiguation above. Resumes continueQuoteFlow with
+    // that field pinned to the confirmed alias (guaranteed to resolve
+    // exactly next time), which may immediately hit ambiguity on the OTHER
+    // field too — that's fine, it just pauses again the same way.
+    case 'confirm_quote_lane': {
+        await clearPending(chatId);
+        const matches = pending.matches || [];
+        const chosen = matches.find((e) => e.aliases[0] === selection) || (matches.length === 1 ? matches[0] : null);
+        if (!chosen) {
+            await _send(chatId, `Didn't catch which one — reply with the number (1-${matches.length}), or "cancel".`);
+            await setPending(chatId, pending);
+            return { action_taken: 'quote_lane_disambiguation_unresolved' };
+        }
+        const nextState = { ...pending.state, [pending.field === 'origin' ? 'originQuery' : 'destinationQuery']: chosen.aliases[0] };
+        return continueQuoteFlow(chatId, nextState);
+    }
+
+    // Picked one of the ambiguous trucker-name matches — same pattern.
+    // Re-runs trucker resolution with the confirmed name substituted back
+    // in among whatever other names hadn't been resolved yet.
+    case 'confirm_quote_trucker': {
+        await clearPending(chatId);
+        const matches = pending.matches || [];
+        const chosen = matches.find((t) => t.name === selection) || (matches.length === 1 ? matches[0] : null);
+        if (!chosen) {
+            await _send(chatId, `Didn't catch which one — reply with the number (1-${matches.length}), or "cancel".`);
+            await setPending(chatId, pending);
+            return { action_taken: 'quote_trucker_disambiguation_unresolved' };
+        }
+        const nextNames = [chosen.name, ...(pending.remainingNames || [])];
+        return continueQuoteFlow(chatId, { ...pending.state, names: nextNames, resolvedSoFar: pending.resolvedSoFar || [] });
+    }
 
     // Picked one of the ambiguous-match options shown above (by number or
     // by name, via brain.js's generic p.options handling) — resume the
@@ -2729,6 +2765,180 @@ async function backfillCutoffs(chatId) {
     return { action_taken: 'cutoff_backfill_done', count: results.length };
 }
 
+// ── Multi-trucker quote requests (2026-08-05) ────────────────────────────────
+// Per Apsara: "get quote from LA to Richmond" → resolve both ends against
+// the address book, resolve whichever truckers she named (or ask her which
+// ones if she didn't), send the ask over whatever channel each trucker
+// actually has on file, then hand off to workflow/quoteRequests.js for the
+// actual send + reminder scheduling. Ambiguity anywhere (a lane query or a
+// trucker name matching more than one saved entry) pauses with a
+// disambiguation pending — same options/matches convention used everywhere
+// else in this file (see await_contact_disambiguation above) — rather than
+// ever guessing which one she meant.
+
+function splitQuoteNames(namesText) {
+    return String(namesText || '')
+        .split(/,|&|\band\b/i)
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+// state: { originQuery, destinationQuery, names: string[]|null, resolvedSoFar?: [{name,trucker}] }
+// The single reentrant function every quote-request pending resumes
+// through — lane resolution is redone on every call (pure/idempotent, cheap)
+// so a field already confirmed via a prior disambiguation pause just
+// resolves 'exact' again instantly.
+async function continueQuoteFlow(chatId, state) {
+    const origin = quoteHelper.resolveLaneEntry(state.originQuery);
+    if (!origin) {
+        await _send(chatId, `"${state.originQuery}" doesn't match anything in the address book — add it first, or try a different name.`);
+        return { action_taken: 'quote_lane_unresolved' };
+    }
+    if (origin.type === 'ambiguous') return pauseForLaneAmbiguity(chatId, 'origin', origin.matches, state);
+
+    const destination = quoteHelper.resolveLaneEntry(state.destinationQuery);
+    if (!destination) {
+        await _send(chatId, `"${state.destinationQuery}" doesn't match anything in the address book — add it first, or try a different name.`);
+        return { action_taken: 'quote_lane_unresolved' };
+    }
+    if (destination.type === 'ambiguous') return pauseForLaneAmbiguity(chatId, 'destination', destination.matches, state);
+
+    if (!state.names || !state.names.length) {
+        return askWhichTruckers(chatId, { originQuery: state.originQuery, destinationQuery: state.destinationQuery });
+    }
+
+    const quoteFlow = require('./quoteRequests');
+    const { resolved, ambiguous, unresolved } = await quoteFlow.resolveTruckerNames(state.names);
+    const allResolved = [...(state.resolvedSoFar || []), ...resolved];
+
+    if (ambiguous.length) {
+        return pauseForTruckerAmbiguity(
+            chatId, ambiguous[0],
+            { originQuery: state.originQuery, destinationQuery: state.destinationQuery },
+            allResolved,
+            [...ambiguous.slice(1).map((a) => a.query), ...unresolved],
+        );
+    }
+
+    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved);
+}
+
+async function pauseForLaneAmbiguity(chatId, field, matches, state) {
+    const staged = await setPending(chatId, {
+        type: 'confirm_quote_lane', field, matches,
+        options: matches.map((e) => e.aliases[0]),
+        state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [] },
+    });
+    const query = field === 'origin' ? state.originQuery : state.destinationQuery;
+    const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
+    if (staged.queued) {
+        await _send(chatId, `"${query}" matches more than one saved address, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+        return { action_taken: 'quote_lane_ambiguous_queued' };
+    }
+    await _send(chatId, `"${query}" matches more than one saved address — which one?\n${listText}\n\nReply with the number.`);
+    return { action_taken: 'quote_lane_ambiguous' };
+}
+
+async function pauseForTruckerAmbiguity(chatId, ambiguousOne, state, resolvedSoFar, remainingNames) {
+    const matches = ambiguousOne.matches;
+    const staged = await setPending(chatId, {
+        type: 'confirm_quote_trucker', matches,
+        options: matches.map((t) => t.name),
+        state, resolvedSoFar, remainingNames,
+    });
+    const listText = matches.map((t, i) => `${i + 1}. ${t.name}${t.locality ? ` (${t.locality})` : ''}`).join('\n');
+    if (staged.queued) {
+        await _send(chatId, `"${ambiguousOne.query}" matches more than one saved trucker, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+        return { action_taken: 'quote_trucker_ambiguous_queued' };
+    }
+    await _send(chatId, `"${ambiguousOne.query}" matches more than one saved trucker — which one?\n${listText}\n\nReply with the number.`);
+    return { action_taken: 'quote_trucker_ambiguous' };
+}
+
+// No trucker named at all — per Apsara's answer ("just ask"): list every
+// trucker that has SOME usable contact channel and let her pick one or more.
+async function askWhichTruckers(chatId, state) {
+    const all = await loadTruckers();
+    const reachable = all.filter((t) => quoteHelper.resolveTruckerChannel(t));
+    if (!reachable.length) {
+        await _send(chatId, 'No truckers with a saved WhatsApp number, group, or email on file — add one from the dashboard first.');
+        return { action_taken: 'quote_no_truckers' };
+    }
+    const staged = await setPending(chatId, {
+        type: 'await_quote_truckers',
+        options: reachable.map((t) => t.name),
+        state,
+    });
+    const listText = reachable.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
+    if (staged.queued) {
+        await _send(chatId, `Ready to ask about ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask who once that's resolved.`);
+        return { action_taken: 'quote_awaiting_truckers_queued' };
+    }
+    await _send(chatId, `Who should I ask for ${state.originQuery} → ${state.destinationQuery}?\n${listText}\n\nReply with names or numbers — comma-separated for more than one.`);
+    return { action_taken: 'quote_awaiting_truckers' };
+}
+
+// Called directly from brain.js's route() for intent 'quote_truckers_selected'
+// (the multi-select reply to askWhichTruckers above) — NOT a resolvePending
+// case, since that reply needs its own comma/number-list parsing in
+// policyDecide rather than the generic single-pick p.options handling.
+async function resumeQuoteWithTruckerNames(chatId, pending, names) {
+    await clearPending(chatId);
+    return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [] });
+}
+
+// Everything's resolved — actually send. Truckers with no usable channel
+// (no group/whatsapp/email on file at all) are reported, not silently
+// dropped; same for names that never matched anyone.
+async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames) {
+    const legs = [];
+    const noChannel = [];
+    for (const { trucker } of resolvedTruckers) {
+        const ch = quoteHelper.resolveTruckerChannel(trucker);
+        if (!ch) { noChannel.push(trucker.name); continue; }
+        legs.push({ name: trucker.name, channel: ch.channel, target: ch.target });
+    }
+    if (!legs.length) {
+        const bits = [];
+        if (unresolvedNames.length) bits.push(`couldn't find: ${unresolvedNames.join(', ')}`);
+        if (noChannel.length) bits.push(`no contact info on file for: ${noChannel.join(', ')}`);
+        await _send(chatId, `Couldn't send to anyone — ${bits.join('; ') || 'nothing resolved'}.`);
+        return { action_taken: 'quote_request_failed' };
+    }
+
+    const quoteFlow = require('./quoteRequests');
+    const { sentTo, failed } = await quoteFlow.startQuoteRequest({
+        originQuery, destinationQuery, truckerLegs: legs, askedByChat: chatId, send: _send,
+    });
+
+    const lines = [`Quote request sent to ${sentTo.join(', ') || '(nobody — all sends failed)'} for ${originQuery} → ${destinationQuery}.`];
+    if (failed.length) lines.push(`Send failed for: ${failed.join(', ')}.`);
+    if (noChannel.length) lines.push(`Skipped (no WhatsApp/email on file): ${noChannel.join(', ')}.`);
+    if (unresolvedNames.length) lines.push(`Couldn't find a trucker named: ${unresolvedNames.join(', ')}.`);
+    if (sentTo.length) lines.push(`I'll follow up at 30/60/90 min if there's no price yet, then loop in the manager.`);
+    await _send(chatId, lines.join('\n'));
+    return { action_taken: sentTo.length ? 'quote_request_sent' : 'quote_request_failed' };
+}
+
+// Entry point from brain.js's 'get_quote' intent.
+async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, namesText) {
+    return continueQuoteFlow(chatId, {
+        originQuery, destinationQuery,
+        names: namesText ? splitQuoteNames(namesText) : null,
+    });
+}
+
+// Entry point from brain.js's 'quote_leg_reply_received' intent — a message
+// from a chat currently awaiting a price on some open quote request.
+// Deliberately silent back to the trucker (no auto-ack) — Apsara only asked
+// for these events to surface as dashboard notifications, not for Jarvis to
+// start chatting with the trucker on her behalf.
+async function handleQuoteLegReply(chatId, text) {
+    const quoteFlow = require('./quoteRequests');
+    const result = await quoteFlow.handleIncomingReply(chatId, text);
+    return { action_taken: result ? 'quote_leg_reply_recorded' : 'quote_leg_reply_no_match' };
+}
+
 module.exports = {
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,
@@ -2744,4 +2954,5 @@ scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledg
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
+    startQuoteRequestFlow, resumeQuoteWithTruckerNames, handleQuoteLegReply,
 };

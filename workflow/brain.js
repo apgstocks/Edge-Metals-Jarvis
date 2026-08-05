@@ -243,6 +243,47 @@ function policyDecide(ctx) {
         return { intent: 'domain_learn_name_received', resolvedBy: 'policy', data: { name_text: ctx.text.trim() } };
     }
 
+    // ── A0f. Multi-select reply to "who should I ask?" (quote request with
+    // no trucker named — see helpers/quoteRequests.js / workflow/quoteRequests.js).
+    // Unlike every other p.options pending (single-pick, handled generically
+    // in section A below), this one needs MULTIPLE picks from one reply
+    // ("Joey, Daekwang" or "1,3") — same comma-list parsing style as
+    // await_fact_batch above, just against names/numbers instead of digits only.
+    if (ctx.pendingAction?.type === 'await_quote_truckers') {
+        const p = ctx.pendingAction;
+        const tt = ctx.text.trim();
+        if (/^(no|none|cancel)$/i.test(tt)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
+        const tokens = tt.split(/,|&|\band\b/i).map((s) => s.trim()).filter(Boolean);
+        const picked = [];
+        for (const tok of tokens) {
+            if (/^\d+$/.test(tok)) {
+                const i = parseInt(tok, 10) - 1;
+                if (i >= 0 && i < p.options.length) picked.push(p.options[i]);
+            } else {
+                const match = p.options.find((o) => o.toLowerCase() === tok.toLowerCase() || o.toLowerCase().includes(tok.toLowerCase()));
+                if (match) picked.push(match);
+            }
+        }
+        if (picked.length) return { intent: 'quote_truckers_selected', resolvedBy: 'policy', data: { names: [...new Set(picked)] } };
+        return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Didn\'t catch a name/number — reply with names or numbers (comma-separated for more than one), or "cancel".' } };
+    }
+
+    // ── A0g. Active quote-request leg reply — a message from a chat that's
+    // currently awaiting a price on an open quote request is almost
+    // certainly that reply, not a new command. Backed by its own store
+    // (data/quote_requests.json), looked up directly by chatId rather than
+    // through ctx.pendingAction — a trucker's own chat normally has no
+    // pending_actions entry at all, so this can't be folded into the A0
+    // pendingAction checks above. Only kicks in when there ISN'T already a
+    // more specific pending on this exact chat (e.g. an unrelated
+    // await_ready_check), so it never hijacks a flow already in progress.
+    if (!ctx.pendingAction) {
+        const { findActiveLegByTarget } = require('../helpers/quoteRequests');
+        if (findActiveLegByTarget(ctx.chatId).length) {
+            return { intent: 'quote_leg_reply_received', resolvedBy: 'policy', data: {} };
+        }
+    }
+
     // ── A0b. End-of-day fact-batch confirmation — same "runs before section A's
     // generic yes/no" reasoning as await_ready_check above: "all" and "1,3"
     // don't match the YES/NO arrays or a plain list selection, so this needs
@@ -420,6 +461,21 @@ function policyDecide(ctx) {
             return {
                 intent: 'schedule_followup', resolvedBy: 'policy',
                 data: { target_name: m[1].trim(), minutes, bkg_no: (m[4] || ctx.activeBooking || null)?.toUpperCase?.() || m[4] || ctx.activeBooking || null },
+            };
+        }
+
+        // "get quote from LA to Richmond" / "get quote from LA to Richmond ask
+        // Joey and Daekwang" — multi-trucker quote-request flow (2026-08-05).
+        // Matched against the ORIGINAL text (case-insensitive), not the
+        // fuzzy-corrected/lowercased `t`, so names after "ask" keep their
+        // real casing — same reasoning as the "reply to X" pattern just
+        // below. Deliberately checked before search_mail/draft_email/reply_email
+        // so "get quote" always wins over any of those being misread as
+        // vaguely email-shaped.
+        if ((m = ctx.text.trim().match(/^get\s+quotes?\s+from\s+(.+?)\s+to\s+(.+?)(?:\s*[,]?\s*ask\s+(.+))?$/i))) {
+            return {
+                intent: 'get_quote', resolvedBy: 'policy',
+                data: { origin: m[1].trim(), destination: m[2].trim(), names_text: m[3] ? m[3].trim() : null },
             };
         }
 
@@ -961,6 +1017,9 @@ async function route(decision, ctx, sendMessage) {
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
+        case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text);
+        case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
+        case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {

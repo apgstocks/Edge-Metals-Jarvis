@@ -150,6 +150,20 @@ function evaluateCondition(task) {
         const target  = order.indexOf(task.condition.step);
         return (current >= 0 && target >= 0 && current >= target) ? 'skip' : 'fire';
     }
+    // Quote-request reminder/escalation gate (2026-08-05) — 'skip' the moment
+    // a trucker's reply resolves the leg (price_received/no_response_escalated),
+    // so a reminder that's already due when the price finally comes in doesn't
+    // fire a stale "any price yet?" a few seconds later. Backed by
+    // data/quote_requests.json, NOT workflow.json — a wholly separate store,
+    // hence its own condition type rather than reusing workflow_flag_true.
+    if (task.condition.type === 'quote_leg_awaiting_reply') {
+        const { loadQuoteRequests } = require('./quoteRequests');
+        const request = loadQuoteRequests().find((r) => r.id === task.condition.request_id);
+        const leg = request && request.legs.find((l) => l.trucker_name === task.condition.trucker_name);
+        if (!leg) return 'skip'; // request/leg no longer exists — nothing to remind about
+        return leg.status === 'awaiting_reply' ? 'fire' : 'skip';
+    }
+
     // Per-container stage check — used when task is tied to a specific container.
     // Skips (auto-completes) if the target container's stage has reached or passed
     // the condition's step.

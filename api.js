@@ -558,6 +558,16 @@ function createApi() {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────
+    // Read-only — every mutation (send/reminder/escalation/reply) happens
+    // through the WhatsApp flow (workflow/quoteRequests.js) or the scheduler,
+    // never from the dashboard directly. Full list in one shot, same
+    // "small dataset, let the client filter" reasoning as address-book above.
+    app.get('/api/quote-requests', (req, res) => {
+        try { res.json(require('./helpers/quoteRequests').loadQuoteRequests()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // Dashboard's "Send" button on the Price list contacts tab. `to` is
     // whatever name/number the row's data-name carries (resolved the same
     // way WhatsApp's own "send price list to X" does — see
@@ -762,6 +772,12 @@ function createApi() {
     // have served dashboard/address-book.html anyway once mounted.
     app.get('/address-book', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'address-book.html'));
+    });
+
+    // Quote requests comparison table — same standalone-page pattern as
+    // address-book above, registered before the static mount for the same reason.
+    app.get('/quote-requests', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'quote-requests.html'));
     });
 
     // ── Static dashboard ──────────────────────────────────────────────────────

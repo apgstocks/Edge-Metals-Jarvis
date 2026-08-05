@@ -124,6 +124,22 @@ const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Fo
 const ADDRESS_BOOK_DOC_ID   = process.env.ADDRESS_BOOK_DOC_ID   || '1u-hKBqVvqS1GIpckUXWbT5AQtTGWjWK69rre5IlSHio';
 const ADDRESS_BOOK_FILE     = path.join(DATA_DIR, 'address_book.json');
 
+// Multi-trucker quote requests — built 2026-08-05 per Apsara: "get quote
+// from LA to Richmond" fans a quote ask out to one or more truckers (over
+// whichever channel each one actually uses — WhatsApp group, WhatsApp DM,
+// or email), tracks each trucker's reply independently, reminds on a fixed
+// 30/60/90-minute schedule if no price comes back, and escalates to the
+// manager after that. See helpers/quoteRequests.js for the full design.
+// Own flat-array store, same pattern as address_book.json — one row per
+// quote request, each holding an array of per-trucker "legs".
+const QUOTE_REQUESTS_FILE = path.join(DATA_DIR, 'quote_requests.json');
+// Fixed reminder schedule (minutes since the request was sent to that
+// trucker) — per Apsara: "first reminder @30 minutes. next @60 min.
+// another. then ask manager to send reminder." Kept as an ordered array so
+// scheduler.js can look up "what's the next stage after this one" generically
+// instead of hardcoding three separate branches.
+const QUOTE_REMINDER_SCHEDULE_MIN = [30, 60, 90];
+
 // Google Sheets (price list) — reuses GDRIVE_KEYFILE's service account, just a
 // different API/scope (see helpers/sheets.js). Sheet must be shared with that
 // SA's client_email as Viewer — same constraint as the Shared Drive above.
@@ -269,6 +285,7 @@ module.exports = {
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
+    QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,

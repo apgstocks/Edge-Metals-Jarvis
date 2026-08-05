@@ -1,0 +1,348 @@
+// ── workflow/quoteRequests.js — multi-trucker quote-request orchestration ───
+// Built 2026-08-05 per Apsara's spec (see helpers/quoteRequests.js's header
+// for the full design). This file is the ORCHESTRATION layer — actually
+// sending messages/emails, scheduling reminder tasks, pushing dashboard
+// alerts — on top of the pure data/logic functions in helpers/quoteRequests.js.
+// Same helpers/ vs workflow/ split used throughout this codebase (compare
+// workflow/truckers.js sitting on top of helpers/json's loadTruckers).
+//
+// Entry points other files call:
+//   startQuoteRequest()        — workflow/actions.js, from brain.js's 'get_quote' intent
+//   handleIncomingReply()      — workflow/actions.js / brain.js, for WhatsApp leg replies
+//   handleQuoteReminderTask()  — scheduler.js's taskRunner, task.type === 'quote_reminder'
+//   handleQuoteEscalationTask()— scheduler.js's taskRunner, task.type === 'quote_escalation'
+//   pollEmailReplies()         — scheduler.js cron, for email-channel legs
+
+const cfg = require('../config');
+const tasks = require('../helpers/tasks');
+const { pushAlert } = require('../alerts');
+const { loadSettings } = require('../helpers/json');
+const { getTruckersByName } = require('./truckers');
+const qr = require('../helpers/quoteRequests');
+
+function managerChatId() {
+    const settings = loadSettings();
+    return (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
+}
+
+// ── Trucker name resolution (wraps workflow/truckers.js with the same
+// "ambiguous → ask, don't guess" rule Apsara asked for on lane resolution) ──
+// Returns { resolved: [{name, trucker}], ambiguous: [{query, matches}], unresolved: [query] }
+async function resolveTruckerNames(names) {
+    const resolved = [];
+    const ambiguous = [];
+    const unresolved = [];
+    for (const query of names) {
+        const matches = await getTruckersByName(query);
+        if (matches.length === 1) resolved.push({ name: query, trucker: matches[0] });
+        else if (matches.length > 1) ambiguous.push({ query, matches });
+        else unresolved.push(query);
+    }
+    return { resolved, ambiguous, unresolved };
+}
+
+// ── Sending the initial ask to one leg ───────────────────────────────────────
+// send: injected WhatsApp sender (index.js's sendMessage). Returns true/false.
+async function dispatchLeg(request, leg, send) {
+    const message = qr.buildQuoteMessage(request);
+    try {
+        if (leg.channel === 'whatsapp_group' || leg.channel === 'whatsapp_individual') {
+            const ok = await send(leg.target, message);
+            if (!ok) return false;
+            await qr.markLegSent(request.id, leg.trucker_name);
+        } else if (leg.channel === 'email') {
+            const { sendEmail } = require('../helpers/gmail');
+            const sent = await sendEmail({
+                to: leg.target,
+                subject: `Quote request: ${request.origin_query} to ${request.destination_query}`,
+                body: message,
+            });
+            await qr.markLegSent(request.id, leg.trucker_name, { email_thread_id: sent.threadId || null });
+        } else {
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error(`[QUOTE] dispatchLeg failed for ${leg.trucker_name} (${leg.channel}):`, err.message);
+        return false;
+    }
+}
+
+// Schedules the FIRST reminder (stage 1, +30min from now — the moment the
+// ask was actually sent) for one leg. Later stages are chained by
+// handleQuoteReminderTask itself once each fires, not scheduled up front —
+// keeps this simple and lets a leg that resolves early just skip the rest
+// via the condition gate instead of needing 3 tasks cancelled at once.
+async function scheduleFirstReminder(request, leg) {
+    await tasks.enqueue({
+        type: 'quote_reminder',
+        target_kind: 'trucker',
+        target_name: leg.trucker_name,
+        target_chat: leg.channel !== 'email' ? leg.target : null,
+        message: qr.buildReminderMessage(request, 1), // display-only fallback; actual text rebuilt at fire time
+        fire_at: new Date(Date.now() + cfg.QUOTE_REMINDER_SCHEDULE_MIN[0] * 60000).toISOString(),
+        condition: { type: 'quote_leg_awaiting_reply', request_id: request.id, trucker_name: leg.trucker_name },
+        created_by: 'quote_request',
+        quote_request_id: request.id,
+        quote_stage: 1,
+    });
+}
+
+// ── Main entry point: "get quote from LA to Richmond, ask Joey and Daekwang" ─
+// truckerLegs: already-resolved [{ name, channel, target }] — ambiguity/
+// no-match handling happens one layer up (workflow/actions.js), since THAT
+// layer is the one talking to Apsara via pending confirmations; this
+// function assumes everything handed to it is ready to actually send.
+async function startQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat, send }) {
+    const request = await qr.createQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat });
+
+    const sentTo = [];
+    const failed = [];
+    for (const leg of request.legs) {
+        const ok = await dispatchLeg(request, leg, send);
+        if (ok) {
+            sentTo.push(leg.trucker_name);
+            await scheduleFirstReminder(request, request.legs.find((l) => l.trucker_name === leg.trucker_name));
+        } else {
+            failed.push(leg.trucker_name);
+        }
+    }
+
+    await pushAlert({
+        type: 'quote_request_sent',
+        bkgNo: null,
+        message: `Quote request sent to ${sentTo.join(', ') || '(nobody — all sends failed)'} for ${request.origin_query} → ${request.destination_query}`,
+        severity: 'info',
+    });
+
+    return { request, sentTo, failed };
+}
+
+// ── Reminder firing (scheduler.js taskRunner → task.type === 'quote_reminder') ─
+// The condition gate (helpers/tasks.js) already guarantees this only fires
+// when the leg is STILL awaiting_reply, so no re-check needed here.
+async function handleQuoteReminderTask(task, { send }) {
+    const request = qr.getRequestById(task.quote_request_id);
+    if (!request) return { fired: false, reason: 'request_gone' };
+    const leg = request.legs.find((l) => l.trucker_name === task.condition.trucker_name);
+    if (!leg) return { fired: false, reason: 'leg_gone' };
+
+    const stage = task.quote_stage;
+    const message = qr.buildReminderMessage(request, stage);
+    const ok = leg.channel === 'email'
+        ? await sendEmailReminder(request, leg, message)
+        : await send(leg.target, message);
+
+    if (ok) {
+        await qr.recordReminderSent(request.id, leg.trucker_name, stage);
+        await pushAlert({
+            type: 'quote_reminder_sent', bkgNo: null,
+            message: `Reminder ${stage} sent to ${leg.trucker_name} (${request.origin_query} → ${request.destination_query})`,
+            severity: 'info',
+        });
+    }
+
+    if (stage < cfg.QUOTE_REMINDER_SCHEDULE_MIN.length) {
+        // More reminders left in the fixed schedule — schedule the next one,
+        // timed off the leg's ORIGINAL sent_at (not "now"), so a late-firing
+        // cron tick doesn't push every later stage back too.
+        const sentAtMs = new Date(leg.sent_at).getTime();
+        await tasks.enqueue({
+            type: 'quote_reminder',
+            target_kind: 'trucker', target_name: leg.trucker_name,
+            target_chat: leg.channel !== 'email' ? leg.target : null,
+            message: qr.buildReminderMessage(request, stage + 1),
+            fire_at: new Date(sentAtMs + cfg.QUOTE_REMINDER_SCHEDULE_MIN[stage] * 60000).toISOString(),
+            condition: { type: 'quote_leg_awaiting_reply', request_id: request.id, trucker_name: leg.trucker_name },
+            created_by: 'quote_request',
+            quote_request_id: request.id,
+            quote_stage: stage + 1,
+        });
+    } else {
+        // Fixed reminder schedule exhausted (30/60/90 all sent, still no
+        // price) — per Apsara: "then ask manager to send reminder." One more
+        // wait of the same 30-minute cadence before pinging the manager,
+        // rather than escalating the instant the 3rd reminder goes out
+        // (that would give the trucker zero time to answer stage 3 at all).
+        // This interval is our own reasonable default, not something Apsara
+        // specified a number for — flagged as such, easy to retune via
+        // QUOTE_REMINDER_SCHEDULE_MIN + this one constant if 30 min feels
+        // wrong in practice.
+        const sentAtMs = new Date(leg.sent_at).getTime();
+        const lastStageMin = cfg.QUOTE_REMINDER_SCHEDULE_MIN[cfg.QUOTE_REMINDER_SCHEDULE_MIN.length - 1];
+        await tasks.enqueue({
+            type: 'quote_escalation',
+            target_kind: 'manager',
+            message: `No price yet from ${leg.trucker_name} for ${request.origin_query} → ${request.destination_query} after 3 reminders — can you follow up?`,
+            fire_at: new Date(sentAtMs + (lastStageMin + 30) * 60000).toISOString(),
+            condition: { type: 'quote_leg_awaiting_reply', request_id: request.id, trucker_name: leg.trucker_name },
+            created_by: 'quote_request',
+            quote_request_id: request.id,
+        });
+    }
+    return { fired: ok, stage };
+}
+
+async function sendEmailReminder(request, leg, message) {
+    try {
+        const { sendEmail } = require('../helpers/gmail');
+        await sendEmail({
+            to: leg.target,
+            subject: `Re: Quote request: ${request.origin_query} to ${request.destination_query}`,
+            body: message,
+        });
+        return true;
+    } catch (err) {
+        console.error(`[QUOTE] email reminder failed for ${leg.trucker_name}:`, err.message);
+        return false;
+    }
+}
+
+// ── Escalation firing (scheduler.js taskRunner → task.type === 'quote_escalation') ─
+async function handleQuoteEscalationTask(task, { send }) {
+    const request = qr.getRequestById(task.quote_request_id);
+    if (!request) return { fired: false, reason: 'request_gone' };
+    const leg = request.legs.find((l) => l.trucker_name === task.condition.trucker_name);
+    if (!leg) return { fired: false, reason: 'leg_gone' };
+
+    const ok = await send(managerChatId(), task.message);
+    if (ok) {
+        await qr.markLegEscalated(request.id, leg.trucker_name);
+        await qr.maybeCloseRequest(request.id);
+        await pushAlert({
+            type: 'quote_escalated', bkgNo: null,
+            message: `No response from ${leg.trucker_name} for ${request.origin_query} → ${request.destination_query} — escalated to manager`,
+            severity: 'warning',
+        });
+    }
+    return { fired: ok };
+}
+
+// ── Incoming WhatsApp reply from an active leg's chat ────────────────────────
+// Called from brain.js (before normal intent classification — see its own
+// A(-1) check) once findActiveLegByTarget confirms this chatId is genuinely
+// waiting on a price. Cancels the pending reminder/escalation chain the
+// moment a price lands, per Apsara: "until you get price."
+async function handleIncomingReply(chatId, text) {
+    const matches = qr.findActiveLegByTarget(chatId);
+    if (!matches.length) return null;
+    // Same "one live ask per chat at a time in practice" assumption as
+    // findActiveLegByTarget's own comment — take the first, but this is the
+    // spot to revisit if that assumption ever breaks in real use.
+    const { request, leg } = matches[0];
+
+    const { classification } = await qr.recordLegReply(request.id, leg.trucker_name, text);
+
+    if (classification.isPrice) {
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.trucker_name);
+        await qr.maybeCloseRequest(request.id);
+        await pushAlert({
+            type: 'quote_price_received', bkgNo: null,
+            message: `Price received from ${leg.trucker_name}: ${classification.matchedText} (${request.origin_query} → ${request.destination_query})`,
+            severity: 'info',
+        });
+        console.log(`[QUOTE] ${leg.trucker_name} priced ${classification.matchedText} — cancelled ${cancelled} pending reminder task(s)`);
+    } else {
+        // Still worth surfacing — Apsara asked for ALL these events
+        // (sent/reminder/escalation/price) as dashboard notifications, and a
+        // non-price reply ("call me", "not today") is real signal even
+        // though the reminder schedule keeps running unchanged.
+        await pushAlert({
+            type: 'quote_reply_received', bkgNo: null,
+            message: `Reply from ${leg.trucker_name} (no price detected): "${text.slice(0, 120)}"`,
+            severity: 'info',
+        });
+    }
+    return { request, leg, classification };
+}
+
+// Cancels every still-pending quote_reminder/quote_escalation task tied to
+// this (request, trucker) pair. tasks.js's own cancelMatching() filters by
+// bkg_no/container_seq, which these tasks don't have — a small local filter
+// here instead of stretching that helper to fit a shape it wasn't built for.
+async function cancelPendingTasksForLeg(requestId, truckerName) {
+    const pending = tasks.loadTasks().filter((t) =>
+        t.status === 'pending' &&
+        (t.type === 'quote_reminder' || t.type === 'quote_escalation') &&
+        t.quote_request_id === requestId &&
+        t.condition?.trucker_name === truckerName
+    );
+    for (const t of pending) await tasks.cancel(t.id, 'price_received');
+    return pending.length;
+}
+
+// ── Email reply polling (scheduler.js cron) ──────────────────────────────────
+// No inbound-email watcher exists anywhere else in this codebase for
+// trucker-style correspondence (emailWatcher.js's poll is scoped to
+// bose@edgemetals.com's carrier booking intake, a different mailbox/purpose
+// entirely) — this is a new, narrow poll: for every active email leg, check
+// whether its own Gmail thread (captured at send time via sendEmail's
+// returned threadId) has grown past 1 message, meaning a reply arrived.
+// Uses getGmailWrite() — sends AND this poll both operate against
+// apsara@edgemetals.com, the same account the quote request was actually
+// sent from, so the thread lookup is guaranteed to be in the right mailbox.
+async function pollEmailReplies() {
+    const legs = qr.findActiveEmailLegs();
+    if (!legs.length) return { checked: 0, replied: 0 };
+
+    const { getGmailWrite } = require('../helpers/gmail');
+    const gmail = getGmailWrite();
+    let replied = 0;
+
+    for (const { request, leg } of legs) {
+        try {
+            const res = await gmail.users.threads.get({ userId: 'me', id: leg.email_thread_id, format: 'full' });
+            const messages = res.data.messages || [];
+            if (messages.length < 2) continue; // still just our own original send
+
+            // Last message in the thread — if it's not from us, it's the reply.
+            const last = messages[messages.length - 1];
+            const headers = last.payload.headers || [];
+            const from = (headers.find((h) => h.name === 'From')?.value || '').toLowerCase();
+            const { getMyEmailAddress } = require('../helpers/gmail');
+            const myAddress = (await getMyEmailAddress(gmail)).toLowerCase();
+            if (from.includes(myAddress)) continue; // last message is still ours (e.g. our own reminder)
+
+            const { getEmailContent } = require('../helpers/gmail');
+            const { body } = getEmailContent(last.payload);
+            await handleEmailLegReply(request, leg, body || '(empty body)');
+            replied++;
+        } catch (err) {
+            console.error(`[QUOTE] pollEmailReplies failed for ${leg.trucker_name}'s thread:`, err.message);
+        }
+    }
+    return { checked: legs.length, replied };
+}
+
+// Same logic as handleIncomingReply, but keyed by (requestId, truckerName)
+// directly since there's no chatId for an email leg — kept as a separate
+// small function rather than overloading handleIncomingReply's chatId-based
+// lookup with an alternate identity path.
+async function handleEmailLegReply(request, leg, text) {
+    const { classification } = await qr.recordLegReply(request.id, leg.trucker_name, text);
+    if (classification.isPrice) {
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.trucker_name);
+        await qr.maybeCloseRequest(request.id);
+        await pushAlert({
+            type: 'quote_price_received', bkgNo: null,
+            message: `Price received from ${leg.trucker_name} (email): ${classification.matchedText} (${request.origin_query} → ${request.destination_query})`,
+            severity: 'info',
+        });
+        console.log(`[QUOTE] ${leg.trucker_name} (email) priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
+    } else {
+        await pushAlert({
+            type: 'quote_reply_received', bkgNo: null,
+            message: `Email reply from ${leg.trucker_name} (no price detected): "${text.slice(0, 120)}"`,
+            severity: 'info',
+        });
+    }
+}
+
+module.exports = {
+    resolveTruckerNames,
+    startQuoteRequest,
+    handleQuoteReminderTask,
+    handleQuoteEscalationTask,
+    handleIncomingReply,
+    pollEmailReplies,
+};
