@@ -65,6 +65,13 @@ etd = Estimated Time of Departure, eta = Estimated Time of Arrival — these are
 two DIFFERENT dates, do not confuse them or copy one into the other; leave
 either null if the email doesn't actually state it.
 
+cutoff_date = the PORT / TERMINAL / CY / GATE cutoff — the deadline the
+container must physically be at the terminal. Carriers often also list a
+Document / SI / VGM cutoff, which is a paperwork deadline (usually earlier)
+and is NOT what belongs in cutoff_date — do not use it, even if it's the
+only cutoff labeled clearly. If both appear, always use the port/terminal/
+CY/gate one.
+
 Convert all dates to MM/DD/YYYY. Port fields must be city names only. Return the JSON object and nothing else.
 
 Email body:
@@ -106,7 +113,7 @@ async function extractPdfFields(pdfBase64, retries = 2) {
   "carrier": null,          // e.g. "MSC", "Maersk", "COSCO"
   "port_of_loading": null,  // city only, e.g. "Houston"
   "port_of_discharge": null,// city only, e.g. "Busan"
-  "cutoff_date": null,      // MM/DD/YYYY format
+  "cutoff_date": null,      // MM/DD/YYYY — the PORT/TERMINAL/CY/GATE cutoff (when the container must physically be at the terminal). NOT the Document/SI/VGM cutoff — that's a separate, usually earlier, paperwork deadline. If the document lists both, use the port/terminal/CY/gate one, never the doc/SI/VGM one.
   "erd_date": null,         // MM/DD/YYYY format — Earliest Return Date
   "etd": null,              // MM/DD/YYYY — Estimated Time of Departure
   "eta": null,              // MM/DD/YYYY — Estimated Time of Arrival (different date than etd — don't conflate)

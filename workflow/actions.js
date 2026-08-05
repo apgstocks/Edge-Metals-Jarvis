@@ -193,8 +193,23 @@ if (containerSeq != null) {
 } else if (cList.length > 0) {
     targetContainer = containers.nextUnassignedContainer(booking, 'trucker');
     if (!targetContainer) {
-        await _send(chatId, `${bkgNo}: all ${cList.length} container${cList.length > 1 ? 's' : ''} already assigned to truckers. Nothing to forward.`);
-        return { action_taken: 'max_capacity' };
+        // Every container has a trucker NAME on it — but that name can get there
+        // two ways: (a) a real forward, which sends the WhatsApp message + PDF
+        // and advances stage to 'forwarded', or (b) a manual edit via the
+        // dashboard's "Stage (manual)" override, which the dashboard itself
+        // warns does NOT notify the trucker. Case (b) left the field looking
+        // "assigned" while nothing was ever actually sent — a real report from
+        // a booking where the trucker was typed into the dashboard directly.
+        // So before giving up, check for a container stuck at a pre-forward
+        // stage despite having a trucker name — that one still genuinely needs
+        // the notification sent, and IS what "forward" should act on.
+        const notYetNotified = cList.find(c => c.trucker && ['not_started', 'supplier_assigned'].includes(c.stage || 'not_started'));
+        if (notYetNotified) {
+            targetContainer = notYetNotified;
+        } else {
+            await _send(chatId, `${bkgNo}: all ${cList.length} container${cList.length > 1 ? 's' : ''} already assigned to truckers. Nothing to forward.`);
+            return { action_taken: 'max_capacity' };
+        }
     }
 } else {
     targetContainer = null; // Legacy flat — no containers[] at all
