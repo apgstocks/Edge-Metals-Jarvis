@@ -263,6 +263,29 @@ function policyDecide(ctx) {
     // so ANY next message is treated as "the address I asked for", not
     // reclassified from scratch.
     if (ctx.pendingAction?.type === 'await_manual_email_address') {
+        // REAL BUG (found 2026-08-05, live): a typo'd "get quote" ("ote from
+        // LA to Richmond email X" — autocorrect/typing glitch ate the "get
+        // qu") didn't match the get_quote pattern at all, fell through to
+        // the OLD draft_email/ask_contact classifier, and staged THIS
+        // pending. Every message after that — including a perfectly-typed
+        // "get quote from LA to Richmond email apg0596@gmail.com" on the
+        // NEXT try — got swallowed as "the address I asked for" instead of
+        // ever reaching the get_quote regex below, since this check runs
+        // first and (by design, for good reason in its original context)
+        // treats ANY next message as the answer, no reclassification. A
+        // fresh, clearly-recognizable "get quote from X to Y" command is
+        // clearly NOT an email address and clearly NOT answering this
+        // pending — same "let a distinctly different, well-formed command
+        // jump the pending queue" reasoning as the 'await_email_confirm' +
+        // "schedule" carve-out above. route() clears this stale pending
+        // when it sees this intent (search for this comment there).
+        const parsed = parseGetQuoteCommand(ctx.text);
+        if (parsed) {
+            return {
+                intent: 'get_quote', resolvedBy: 'policy',
+                data: { origin: parsed.origin, destination: parsed.destination, names_text: parsed.namesText, emails: parsed.emails },
+            };
+        }
         return { intent: 'manual_email_address_received', resolvedBy: 'policy', data: { address_text: ctx.text.trim() } };
     }
 
@@ -1037,6 +1060,13 @@ async function route(decision, ctx, sendMessage) {
     // resolves and every message after the first "which city?" answer keeps
     // getting re-interpreted as another city reply.
     if (ctx.pendingAction?.type === 'await_pricelist_city') {
+        try { await actions.clearPending(chatId); } catch {}
+    }
+    // Same reasoning again for the manual-email-address prompt, but ONLY
+    // when policyDecide's A0d carve-out (above) has already decided this
+    // message is really a fresh get_quote command, not the address it asked
+    // for — see that carve-out's comment for the real incident this fixes.
+    if (ctx.pendingAction?.type === 'await_manual_email_address' && decision.intent === 'get_quote') {
         try { await actions.clearPending(chatId); } catch {}
     }
 
