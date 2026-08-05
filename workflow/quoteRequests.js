@@ -121,8 +121,8 @@ async function scheduleFirstReminder(request, leg) {
 // no-match handling happens one layer up (workflow/actions.js), since THAT
 // layer is the one talking to Apsara via pending confirmations; this
 // function assumes everything handed to it is ready to actually send.
-async function startQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat, send }) {
-    const request = await qr.createQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat });
+async function startQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat, send, cargoDetails }) {
+    const request = await qr.createQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat, cargoDetails });
 
     const sentTo = [];
     const failed = [];

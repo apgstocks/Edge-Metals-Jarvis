@@ -2832,7 +2832,22 @@ async function continueQuoteFlow(chatId, state) {
         }
     }
 
-    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved, state.directEmails || []);
+    // Cargo description/value — per Apsara 2026-08-06: "I want jarvis to ask
+    // about cargo description, cargo value" before the quote actually goes
+    // out, not just pickup/delivery addresses. Asked LAST (recipients
+    // already locked in) so it's a single extra question regardless of how
+    // many disambiguation rounds it took to get here. typeof-check (not
+    // truthy-check) so an explicit "skip" — stored as null by
+    // resumeWithCargoDetails below — is treated as "already asked, don't
+    // ask again", not "still need to ask".
+    if (typeof state.cargoDetails === 'undefined') {
+        return askForCargoDetails(chatId, {
+            originQuery: state.originQuery, destinationQuery: state.destinationQuery,
+            resolvedTruckers: allResolved, unresolvedNames: unresolved, directEmails: state.directEmails || [],
+        });
+    }
+
+    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved, state.directEmails || [], state.cargoDetails);
 }
 
 async function pauseForLaneAmbiguity(chatId, field, matches, state) {
@@ -2899,13 +2914,40 @@ async function resumeQuoteWithTruckerNames(chatId, pending, names) {
     return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [], directEmails: pending.state.directEmails || null });
 }
 
+// Last question before actually sending — recipients are already fully
+// resolved by this point (state carries the finished resolvedTruckers/
+// unresolvedNames/directEmails, not raw names), so this does NOT re-enter
+// continueQuoteFlow on resume — that would needlessly re-run the trucker-name
+// DB lookup a second time. Goes straight to dispatchQuoteToTruckers instead.
+async function askForCargoDetails(chatId, state) {
+    const staged = await setPending(chatId, { type: 'await_quote_cargo_details', state });
+    if (staged.queued) {
+        await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask for cargo details once that's resolved.`);
+        return { action_taken: 'quote_awaiting_cargo_queued' };
+    }
+    await _send(chatId, `What's the cargo — description and value? (e.g. "Aluminum scrap, approx $5,000") Reply "skip" to send without it.`);
+    return { action_taken: 'quote_awaiting_cargo' };
+}
+
+// Verbatim capture, same "no fixed format to validate against" reasoning as
+// the other single-shot quote-request prompts — "skip"/"none"/"n/a" (any
+// casing) sends without cargo info; anything else is used as-is in the
+// outbound message.
+async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
+    await clearPending(chatId);
+    const clean = String(cargoText || '').trim();
+    const skipped = /^(skip|none|no|n\/a|na)$/i.test(clean);
+    const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails } = pending.state;
+    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, skipped ? null : clean);
+}
+
 // Everything's resolved — actually send. Truckers with no usable channel
 // (no group/whatsapp/email on file at all) are reported, not silently
 // dropped; same for names that never matched anyone. directEmails are
 // one-off recipients given directly in the command ("...email
 // someone@x.com") — not looked up against the truckers table at all, so
 // they can never be "unresolved"/"no channel", just sent to as-is.
-async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails = []) {
+async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails = [], cargoDetails = null) {
     const legs = [];
     const noChannel = [];
     for (const { trucker } of resolvedTruckers) {
@@ -2926,10 +2968,11 @@ async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, re
 
     const quoteFlow = require('./quoteRequests');
     const { sentTo, failed } = await quoteFlow.startQuoteRequest({
-        originQuery, destinationQuery, truckerLegs: legs, askedByChat: chatId, send: _send,
+        originQuery, destinationQuery, truckerLegs: legs, askedByChat: chatId, send: _send, cargoDetails,
     });
 
     const lines = [`Quote request sent to ${sentTo.join(', ') || '(nobody — all sends failed)'} for ${originQuery} → ${destinationQuery}.`];
+    if (cargoDetails) lines.push(`Cargo: ${cargoDetails}`);
     if (failed.length) lines.push(`Send failed for: ${failed.join(', ')}.`);
     if (noChannel.length) lines.push(`Skipped (no WhatsApp/email on file): ${noChannel.join(', ')}.`);
     if (unresolvedNames.length) lines.push(`Couldn't find a trucker named: ${unresolvedNames.join(', ')}.`);
@@ -2975,5 +3018,5 @@ scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledg
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
-    startQuoteRequestFlow, resumeQuoteWithTruckerNames, handleQuoteLegReply,
+    startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, handleQuoteLegReply,
 };

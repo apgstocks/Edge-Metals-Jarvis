@@ -138,7 +138,8 @@ function requestCard(r) {
         <div style="font-size:15px; font-weight:700; color:var(--text-strong);">${esc(r.origin_query)} &rarr; ${esc(r.destination_query)}</div>
         <span class="badge" style="background:${closed ? 'rgba(87,97,106,.25)' : 'rgba(61,168,54,.15)'}; color:${closed ? 'var(--text-faint)' : 'var(--leaf-400)'};">${closed ? 'Closed' : 'Active'}</span>
       </div>
-      <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:12px;">Asked ${fmtTime(r.created_at)}</div>
+      <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:4px;">Asked ${fmtTime(r.created_at)}</div>
+      ${r.cargo_details ? `<div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"><strong style="color:var(--text-body);">Cargo:</strong> ${esc(r.cargo_details)}</div>` : '<div style="margin-bottom:12px;"></div>'}
       <div style="overflow-x:auto;">
         <table>
           <thead><tr><th>Trucker</th><th>Channel</th><th>Status</th><th>Price</th><th>Last reply</th><th>Reminders</th><th>Sent</th></tr></thead>

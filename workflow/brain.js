@@ -299,6 +299,19 @@ function policyDecide(ctx) {
         return { intent: 'domain_learn_name_received', resolvedBy: 'policy', data: { name_text: ctx.text.trim() } };
     }
 
+    // ── A0f0. Cargo description/value prompt (2026-08-06, per Apsara: "I
+    // want jarvis to ask about cargo description, cargo value") — asked
+    // right before a quote request actually sends, once recipients are
+    // already locked in. Same verbatim-capture reasoning as A0b/A0c/A0d/A0e
+    // above: no fixed format for "cargo description and value" to validate
+    // against, so whatever she replies IS the answer — "skip"/"none"/"n/a"
+    // (any casing) is the one recognized escape hatch, handled inside
+    // actions.js's resumeQuoteWithCargoDetails rather than here, so this
+    // stays a plain pass-through like the others.
+    if (ctx.pendingAction?.type === 'await_quote_cargo_details') {
+        return { intent: 'quote_cargo_details_received', resolvedBy: 'policy', data: { cargo_text: ctx.text.trim() } };
+    }
+
     // ── A0f. Multi-select reply to "who should I ask?" (quote request with
     // no trucker named — see helpers/quoteRequests.js / workflow/quoteRequests.js).
     // Unlike every other p.options pending (single-pick, handled generically
@@ -1093,6 +1106,7 @@ async function route(decision, ctx, sendMessage) {
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
+        case 'quote_cargo_details_received': return actions.resumeQuoteWithCargoDetails(chatId, ctx.pendingAction, d.cargo_text);
         case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);

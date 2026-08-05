@@ -149,17 +149,16 @@ function classifyQuoteReply(text) {
 // ── Message building ─────────────────────────────────────────────────────────
 // Mirrors Apsara's own real WhatsApp pattern (short ask line + full pickup/
 // delivery address blocks pasted separately) rather than inventing a new
-// format.
+// format. cargo_details (2026-08-06, per Apsara: "I want jarvis to ask about
+// cargo description, cargo value") is optional — omitted entirely when she
+// skipped it, rather than printing an empty "Cargo:" line.
 function buildQuoteMessage(request) {
-    return [
-        `Hi — can you quote a haul from ${request.origin_query} to ${request.destination_query}?`,
-        '',
-        'Pickup:',
-        request.origin_raw,
-        '',
-        'Delivery:',
-        request.destination_raw,
-    ].join('\n');
+    const lines = [`Hi — can you quote a haul from ${request.origin_query} to ${request.destination_query}?`];
+    if (request.cargo_details) {
+        lines.push('', `Cargo: ${request.cargo_details}`);
+    }
+    lines.push('', 'Pickup:', request.origin_raw, '', 'Delivery:', request.destination_raw);
+    return lines.join('\n');
 }
 function buildReminderMessage(request, stage) {
     const ordinal = { 1: 'Just following up', 2: 'Following up again', 3: 'One more follow-up' }[stage] || 'Following up';
@@ -190,7 +189,7 @@ function resolveOrThrow(query) {
 // (workflow/quoteRequests.js resolves trucker names via workflow/truckers.js
 // before calling this; keeping Supabase truckers lookups out of this
 // helpers-layer file, consistent with truckers.js/suppliers.js owning that).
-async function createQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat }) {
+async function createQuoteRequest({ originQuery, destinationQuery, truckerLegs, askedByChat, cargoDetails }) {
     const originEntry = resolveOrThrow(originQuery);
     const destinationEntry = resolveOrThrow(destinationQuery);
     if (!Array.isArray(truckerLegs) || !truckerLegs.length) {
@@ -205,6 +204,7 @@ async function createQuoteRequest({ originQuery, destinationQuery, truckerLegs, 
         destination_entry_id: destinationEntry.id,
         origin_raw: originEntry.raw,
         destination_raw: destinationEntry.raw,
+        cargo_details: cargoDetails ? String(cargoDetails).trim() : null,
         created_at: new Date().toISOString(),
         asked_by_chat: askedByChat || null,
         status: 'active',
