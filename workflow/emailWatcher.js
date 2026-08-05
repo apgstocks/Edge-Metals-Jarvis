@@ -188,42 +188,59 @@ async function _runOnce() {
                 }
             }
             const bkg = String(fields.booking_number).toUpperCase().replace(/\s+/g, '');
-            const existing = bookings[bkg]; // reflects in-run creates too, see mirror updates below
+            const existing = bookings[bkg]; // in-run snapshot — good enough to DECIDE update-vs-create, not safe to trust for the actual write (see below)
             const duplicateThisRun = seenThisRun.has(bkg);
             seenThisRun.add(bkg);
 
-            if (existing) {
-                const fillable = {};
-                for (const [k, v] of Object.entries(fields)) {
-                    if (k === 'booking_number') continue;
-                    if (v != null && v !== '' && (existing[k] == null || existing[k] === '')) fillable[k] = v;
+            // The `existing` check above is only ever as fresh as `bookings`,
+            // loaded once at the top of this run — it can go stale if
+            // anything else (a manual dashboard save, an API call) touches
+            // this exact booking number while this run is still going.
+            // helpers/json.js's mutateJson() already takes a real file lock
+            // and re-reads the CURRENT on-disk state before applying its
+            // mutator, so the fix is to make the actual create/merge decision
+            // INSIDE that mutator, against the fresh state — never blind-
+            // write a pre-built record and never blind Object.assign a
+            // pre-computed field list. This is what "never allow duplicate
+            // bookings" actually requires: not just serializing this run
+            // against itself (the _running lock above handles that), but
+            // making sure no write here can ever clobber or fork a booking
+            // that was created/changed by someone else in the meantime.
+            let actuallyCreated = false;
+            let appliedFields = null;
+            const finalAll = await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
+                if (all[bkg]) {
+                    const fillable = {};
+                    for (const [k, v] of Object.entries(fields)) {
+                        if (k === 'booking_number') continue;
+                        if (v != null && v !== '' && (all[bkg][k] == null || all[bkg][k] === '')) fillable[k] = v;
+                    }
+                    if (Object.keys(fillable).length) Object.assign(all[bkg], fillable);
+                    appliedFields = fillable;
+                } else {
+                    actuallyCreated = true;
+                    all[bkg] = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
                 }
-                if (Object.keys(fillable).length) {
-                    await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
-                        if (all[bkg]) Object.assign(all[bkg], fillable);
-                        return all;
-                    });
-                    Object.assign(existing, fillable); // keep in-memory mirror current
+                return all;
+            });
+            bookings[bkg] = finalAll[bkg]; // keep in-memory mirror current — reflects what ACTUALLY landed, not what we guessed
+
+            if (actuallyCreated) {
+                await updateWorkflow(bkg, {});
+                created.push(bkg);
+                await syncBookingToSheet(bkg);
+                await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_created', resolvedBy: 'ai', confidence: null, actionTaken: 'created', subject, fields });
+            } else {
+                if (appliedFields && Object.keys(appliedFields).length) {
                     updated.push(bkg);
                     await syncBookingToSheet(bkg);
-                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_updated', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: fillable });
+                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_updated', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: appliedFields });
                 }
                 if (duplicateThisRun) {
                     console.warn(`[${AGENT}] ${bkg} matched a SECOND email in this run ("${subject.slice(0, 60)}") — not touching its Drive PDF, flagging for review`);
                     flagged.push(bkg);
                     await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'duplicate_flagged', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject });
                 }
-            } else {
-                const record = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
-                await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
-                    all[bkg] = record;
-                    return all;
-                });
-                bookings[bkg] = record; // keep in-memory mirror current so a later duplicate this run is treated as "existing"
-                await updateWorkflow(bkg, {});
-                created.push(bkg);
-                await syncBookingToSheet(bkg);
-                await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_created', resolvedBy: 'ai', confidence: null, actionTaken: 'created', subject, fields });
             }
 
             // Upload the PDF to Drive ONLY the first time we see this booking number

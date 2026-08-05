@@ -28,6 +28,7 @@ const WRITE_SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
 
 let readClient  = null;
 let writeClient = null;
+let senderReadClient = null;
 
 function readClientSecret() {
     if (!fs.existsSync(cfg.GMAIL_CREDENTIALS_FILE)) {
@@ -88,6 +89,24 @@ function getGmailWrite() {
     if (writeClient) return writeClient;
     writeClient = buildClient(cfg.GMAIL_WRITE_TOKEN_FILE, 'write');
     return writeClient;
+}
+
+// apsara@edgemetals.com AGAIN, but with READ scope this time — a separate
+// token from getGmailWrite() above, which is send-only and structurally
+// cannot list or read anything. Real gap found 2026-08-05: any thread Apsara
+// starts herself (emailing a trucker/broker directly, not routed through
+// bose@'s carrier-mail intake) is invisible to getGmailRead(), so "reply to
+// X" / "email X about booking Y" searches can only ever check bose@ and can
+// end up matching the wrong conversation off a coincidental subject/word
+// overlap. Returns null — NOT a throw — when the token file doesn't exist
+// yet, so every caller can fail soft back to bose@-only search until this
+// is deployed (run scripts/gmail-auth.js --role=sender-read, signed into
+// apsara, once).
+function getGmailSenderRead() {
+    if (senderReadClient) return senderReadClient;
+    if (!fs.existsSync(cfg.GMAIL_SENDER_READ_TOKEN_FILE)) return null;
+    senderReadClient = buildClient(cfg.GMAIL_SENDER_READ_TOKEN_FILE, 'sender-read');
+    return senderReadClient;
 }
 
 // ── Message helpers ───────────────────────────────────────────────────────────
@@ -455,7 +474,7 @@ async function getMyEmailAddress(gmail) {
 }
 
 module.exports = {
-    READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite,
+    READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite, getGmailSenderRead,
     parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
     tallyAddressesForTerm,

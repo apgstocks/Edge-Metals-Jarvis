@@ -44,10 +44,13 @@ const { getOAuthClient, READ_SCOPES, WRITE_SCOPES } = require('../helpers/gmail'
 function parseRole() {
     const arg = process.argv.find((a) => a.startsWith('--role='));
     const role = arg ? arg.split('=')[1] : null;
-    if (role !== 'read' && role !== 'write' && role !== 'both') {
-        console.error('Usage: node scripts/gmail-auth.js --role=both    (one account, read+write — use this for now)');
-        console.error('   or: node scripts/gmail-auth.js --role=read    (read-only, a separate account)');
-        console.error('   or: node scripts/gmail-auth.js --role=write   (write-only, a separate account)');
+    if (role !== 'read' && role !== 'write' && role !== 'both' && role !== 'sender-read') {
+        console.error('Usage: node scripts/gmail-auth.js --role=both         (one account, read+write — use this for now)');
+        console.error('   or: node scripts/gmail-auth.js --role=read         (read-only, a separate account — e.g. bose@)');
+        console.error('   or: node scripts/gmail-auth.js --role=write        (write-only, a separate account — e.g. apsara@)');
+        console.error('   or: node scripts/gmail-auth.js --role=sender-read  (READ access to the SAME account as --role=write —');
+        console.error('                                                       e.g. apsara@ — so threads Apsara starts herself can');
+        console.error('                                                       be found too, not just carrier mail in bose@\'s inbox)');
         process.exit(1);
     }
     return role;
@@ -55,12 +58,14 @@ function parseRole() {
 
 async function main() {
     const role      = parseRole();
-    const scopes    = role === 'both' ? [...READ_SCOPES, ...WRITE_SCOPES] : role === 'read' ? READ_SCOPES : WRITE_SCOPES;
-    const tokenFiles = role === 'both' ? [cfg.GMAIL_READ_TOKEN_FILE, cfg.GMAIL_WRITE_TOKEN_FILE]
-                      : role === 'read' ? [cfg.GMAIL_READ_TOKEN_FILE]
+    const scopes    = role === 'both' ? [...READ_SCOPES, ...WRITE_SCOPES] : role === 'write' ? WRITE_SCOPES : READ_SCOPES; // 'read' and 'sender-read' both just need READ_SCOPES
+    const tokenFiles = role === 'both'        ? [cfg.GMAIL_READ_TOKEN_FILE, cfg.GMAIL_WRITE_TOKEN_FILE]
+                      : role === 'read'        ? [cfg.GMAIL_READ_TOKEN_FILE]
+                      : role === 'sender-read' ? [cfg.GMAIL_SENDER_READ_TOKEN_FILE]
                       : [cfg.GMAIL_WRITE_TOKEN_FILE];
-    const account   = role === 'both'  ? 'the ONE account that should both read and send (e.g. apsara@edgemetals.com)'
-                     : role === 'read'  ? 'whichever account should be the READ-ONLY source (booking mail intake)'
+    const account   = role === 'both'        ? 'the ONE account that should both read and send (e.g. apsara@edgemetals.com)'
+                     : role === 'read'        ? 'whichever account should be the READ-ONLY source (booking mail intake)'
+                     : role === 'sender-read' ? 'the SAME account you used for --role=write (e.g. apsara@edgemetals.com) — this just adds read access on top'
                      : 'whichever account should SEND outbound mail';
 
     const oAuth2Client = getOAuthClient();

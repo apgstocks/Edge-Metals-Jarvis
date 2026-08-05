@@ -1524,6 +1524,37 @@ function resolveScheduledFor(sendAtText) {
     }
 }
 
+// Search apsara's own mailbox FIRST (if that token's set up — see
+// helpers/gmail.js's getGmailSenderRead(), which returns null rather than
+// throwing when it isn't), then fall back to bose@. Real gap found
+// 2026-08-05: threads Apsara starts herself (emailing a trucker/broker
+// directly from apsara@) never touch bose@'s carrier-mail-intake inbox at
+// all, so a search hardcoded to bose@ is structurally blind to them — worse,
+// it can match some unrelated message off a coincidental word/subject
+// overlap and thread a reply onto the WRONG conversation. Returns which
+// account's client actually produced the match, since getMessage() on the
+// result MUST reuse that same client — message IDs aren't portable across
+// Gmail accounts.
+async function searchOwnThenBose(query, maxResults, gmailBose) {
+    const { getGmailSenderRead, listMessages } = require('../helpers/gmail');
+    let senderGmail = null;
+    try {
+        senderGmail = getGmailSenderRead();
+    } catch (err) {
+        console.warn('[ACTIONS] getGmailSenderRead() failed — falling back to bose@ only:', err.message);
+    }
+    if (senderGmail) {
+        try {
+            const messages = await listMessages(senderGmail, query, maxResults);
+            if (messages.length) return { messages, gmail: senderGmail };
+        } catch (err) {
+            console.warn('[ACTIONS] Sender-mailbox search failed, falling back to bose@:', err.message);
+        }
+    }
+    const messages = await listMessages(gmailBose, query, maxResults);
+    return { messages, gmail: gmailBose };
+}
+
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText) {
     if (!targetName) {
         await _send(chatId, 'Email who? Give me a name or company, e.g. "email Zimex about DALA123 cutoff".');
@@ -1711,10 +1742,14 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
     // compose-fresh below, exactly as before this fix.
     if (bkgNo) {
         try {
-            const { listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
-            const threadMsgs = await listMessages(gmail, `(from:${to} OR to:${to}) ${bkgNo}`, 1);
+            const { getMessage, getEmailContent } = require('../helpers/gmail');
+            // searchOwnThenBose — same reasoning as draftReplyForConfirm's
+            // subject-hint search below: a thread with `to` about this
+            // booking may live only in apsara's own mailbox (she emailed
+            // them directly), invisible to a bose@-only search.
+            const { messages: threadMsgs, gmail: threadGmail } = await searchOwnThenBose(`(from:${to} OR to:${to}) ${bkgNo}`, 1, gmail);
             if (threadMsgs.length) {
-                const full = await getMessage(gmail, threadMsgs[0].id);
+                const full = await getMessage(threadGmail, threadMsgs[0].id);
                 const threadHdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
                 const { body: threadBody } = getEmailContent(full.payload);
                 const bkgForThread = getBooking(bkgNo);
@@ -1724,7 +1759,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
                 const { cc: threadGlobalCc, bcc: threadBcc } = ccBccFromSettings();
                 const threadCcForAddress = (addr) => emailContacts.loadContacts()
                     .find((c) => c.email.toLowerCase() === String(addr).toLowerCase())?.cc;
-                return composeThreadReply(chatId, gmail, targetName, details, bkgNo, to,
+                return composeThreadReply(chatId, threadGmail, targetName, details, bkgNo, to,
                     threadHdrs.Subject || '', threadHdrs, threadBody, threadGlobalCc, threadBcc, threadCcForAddress, threadBookingLine, scheduledFor);
             }
         } catch (err) {
@@ -2312,7 +2347,7 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // ranking on the combined OR query happened to rank the forward first.
     const bkgTerm = bkgNo ? ` ${bkgNo}` : '';
     const subjectHint = extractSubjectHint(rawText);
-    let messages;
+    let messages, searchGmail = gmail;
     try {
         if (subjectHint) {
             // REAL BUG (found 2026-08-04, live): originally scoped this to
@@ -2328,13 +2363,29 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
             // in a name match can only ever eliminate matches, never help
             // find one. Search by subject alone now — exact quoted phrase
             // first, then a looser word match if she paraphrased slightly.
-            messages = await listMessages(gmail, `subject:"${subjectHint}"`, 3);
-            if (!messages.length) {
+            //
+            // REAL GAP (found 2026-08-05, live): "reply to subject: Loading
+            // schedule from LA to Humble-8/4 @7am" — that thread was one
+            // Apsara started herself, straight from apsara@edgemetals.com,
+            // and never touched bose@'s inbox. Since this search only ever
+            // checked bose@ (via getGmailRead()), it either found nothing or
+            // — worse — matched some unrelated message off a coincidental
+            // subject/word overlap and threaded the reply onto the WRONG
+            // conversation's Message-ID chain. searchOwnThenBose() below
+            // checks apsara's own mailbox first (if that token's been set
+            // up — see helpers/gmail.js's getGmailSenderRead()), since a
+            // thread she's asking to reply to is very likely one she's
+            // personally on, before falling back to bose@ for carrier-
+            // initiated booking mail that never reached her directly.
+            let result = await searchOwnThenBose(`subject:"${subjectHint}"`, 3, gmail);
+            if (!result.messages.length) {
                 const words = subjectHint.replace(/[^a-z0-9 ]/gi, ' ').split(/\s+/).filter((w) => w.length > 2);
                 if (words.length) {
-                    messages = await listMessages(gmail, `subject:(${words.join(' ')})`, 3);
+                    result = await searchOwnThenBose(`subject:(${words.join(' ')})`, 3, gmail);
                 }
             }
+            messages = result.messages;
+            searchGmail = result.gmail;
             if (!messages.length) {
                 // Deliberately does NOT fall back to the generic from:name
                 // search here — she gave a SPECIFIC subject because she
@@ -2345,10 +2396,12 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
                 return { action_taken: 'reply_subject_not_found' };
             }
         } else {
-            messages = await listMessages(gmail, `from:${targetName}${bkgTerm}`, 3);
-            if (!messages.length) {
-                messages = await listMessages(gmail, `(from:${targetName} OR ${targetName})${bkgTerm}`, 3);
+            let result = await searchOwnThenBose(`from:${targetName}${bkgTerm}`, 3, gmail);
+            if (!result.messages.length) {
+                result = await searchOwnThenBose(`(from:${targetName} OR ${targetName})${bkgTerm}`, 3, gmail);
             }
+            messages = result.messages;
+            searchGmail = result.gmail;
         }
     } catch (err) {
         await _send(chatId, `Couldn't search mail: ${err.message}`);
@@ -2363,9 +2416,41 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
         return { action_taken: 'reply_no_thread_found' };
     }
 
-    const full = await getMessage(gmail, messages[0].id);
+    // NOT `gmail` — must be whichever account (apsara's own mailbox or
+    // bose@) actually found this match. Message IDs aren't portable across
+    // accounts; using the wrong client here throws or fetches nothing.
+    const full = await getMessage(searchGmail, messages[0].id);
     const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
-    const fromAddr = (hdrs.From || '').match(/<([^>]+)>/)?.[1] || hdrs.From;
+    let fromAddr = (hdrs.From || '').match(/<([^>]+)>/)?.[1] || hdrs.From;
+
+    // REAL GAP (found 2026-08-05, alongside the own-mailbox search fix
+    // above): searchOwnThenBose() can now return a message APSARA HERSELF
+    // sent — e.g. the exact "Loading schedule" email she originally wrote
+    // to Matthew, found in her own mailbox. fromAddr in that case is
+    // APSARA'S OWN address, not the target's — using it as the reply-to
+    // would draft a reply back to ourselves instead of to Matthew. If the
+    // found message's From is our own sending account, the real recipient
+    // is on the To/Cc line instead.
+    try {
+        const { getMyEmailAddress, parseAddressList } = require('../helpers/gmail');
+        const myAddr = await getMyEmailAddress(searchGmail).catch(() => null);
+        if (myAddr && fromAddr && fromAddr.toLowerCase() === myAddr.toLowerCase()) {
+            const recipients = [...parseAddressList(hdrs.To), ...parseAddressList(hdrs.Cc)];
+            const emailContactsForRecipient = require('../helpers/emailContacts');
+            const savedForRecipient = emailContactsForRecipient.resolveContact(targetName);
+            const savedRecipientAddr = savedForRecipient && savedForRecipient.type !== 'ambiguous' ? savedForRecipient.contact?.email : null;
+            const picked = (savedRecipientAddr && recipients.find((r) => r.toLowerCase() === savedRecipientAddr.toLowerCase()))
+                || recipients.find((r) => r.toLowerCase().includes(targetName.toLowerCase()))
+                || recipients[0] || null;
+            if (picked) {
+                console.log(`[ACTIONS] Found message was self-sent (From: ${fromAddr}) — using recipient ${picked} from To/Cc instead`);
+                fromAddr = picked;
+            }
+        }
+    } catch (err) {
+        console.warn('[ACTIONS] Self-sent-message recipient resolution failed — continuing with From header as-is:', err.message);
+    }
+
     const origSubject = hdrs.Subject || '';
     const { body: origBody } = getEmailContent(full.payload);
     const { cc: globalCc, bcc } = ccBccFromSettings();
@@ -2531,7 +2616,11 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     }
 
     // ── Direct email from the target — real thread-reply path ────────────
-    return composeThreadReply(chatId, gmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor);
+    // searchGmail, not gmail — composeThreadReply only uses this for
+    // getMyEmailAddress() (cc-self-exclusion), so passing whichever account
+    // actually found the thread is fine either way, and correctly reports
+    // apsara@ when the match came from her own mailbox.
+    return composeThreadReply(chatId, searchGmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor);
 }
 
 // Shared "reply within an existing real thread" composer — extracted

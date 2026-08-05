@@ -93,6 +93,19 @@ const GMAIL_CREDENTIALS_FILE = process.env.GMAIL_CREDENTIALS_FILE || path.join(D
 const GMAIL_TOKEN_FILE       = process.env.GMAIL_TOKEN_FILE       || path.join(DATA_DIR, 'gmail-token.json');
 const GMAIL_READ_TOKEN_FILE  = process.env.GMAIL_READ_TOKEN_FILE  || path.join(DATA_DIR, 'gmail-token-read.json');
 const GMAIL_WRITE_TOKEN_FILE = process.env.GMAIL_WRITE_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-write.json');
+// A THIRD token, real gap found 2026-08-05: bose@ only ever sees carrier-
+// initiated booking mail — any thread Apsara starts herself (emailing a
+// trucker/broker directly from apsara@) never touches bose@'s inbox at all,
+// so "reply to X" searches (hardcoded to bose@ via getGmailRead()) are
+// structurally blind to it, and can end up matching the wrong thread
+// entirely off a coincidental subject/word overlap. This token grants
+// READ access to apsara@'s OWN mailbox (separate from GMAIL_WRITE_TOKEN_FILE,
+// which is send-only scope and can't list/read anything) — see
+// helpers/gmail.js's getGmailSenderRead(). Run scripts/gmail-auth.js
+// --role=sender-read, signed into apsara, once. Optional: every caller
+// treats a missing file here as "not set up yet" and falls back to the
+// existing bose@-only search, so nothing breaks before this is deployed.
+const GMAIL_SENDER_READ_TOKEN_FILE = process.env.GMAIL_SENDER_READ_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-sender-read.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 
@@ -240,7 +253,7 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
-    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, EMAIL_PROCESSED_FILE, 
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
