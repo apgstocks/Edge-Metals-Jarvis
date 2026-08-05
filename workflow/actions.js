@@ -2783,7 +2783,12 @@ function splitQuoteNames(namesText) {
         .filter(Boolean);
 }
 
-// state: { originQuery, destinationQuery, names: string[]|null, resolvedSoFar?: [{name,trucker}] }
+// state: { originQuery, destinationQuery, names: string[]|null, resolvedSoFar?: [{name,trucker}], directEmails?: string[]|null }
+// directEmails is a one-off recipient given directly ("...email
+// apg0596@gmail.com") — bypasses trucker-name lookup entirely, since it's
+// not necessarily a saved trucker at all. Real gap found 2026-08-05: this
+// didn't exist before, so an email-only request had no way to specify WHO
+// to send to at all.
 // The single reentrant function every quote-request pending resumes
 // through — lane resolution is redone on every call (pure/idempotent, cheap)
 // so a field already confirmed via a prior disambiguation pause just
@@ -2803,31 +2808,38 @@ async function continueQuoteFlow(chatId, state) {
     }
     if (destination.type === 'ambiguous') return pauseForLaneAmbiguity(chatId, 'destination', destination.matches, state);
 
-    if (!state.names || !state.names.length) {
+    const hasNames = state.names && state.names.length;
+    const hasEmails = state.directEmails && state.directEmails.length;
+    if (!hasNames && !hasEmails) {
         return askWhichTruckers(chatId, { originQuery: state.originQuery, destinationQuery: state.destinationQuery });
     }
 
-    const quoteFlow = require('./quoteRequests');
-    const { resolved, ambiguous, unresolved } = await quoteFlow.resolveTruckerNames(state.names);
-    const allResolved = [...(state.resolvedSoFar || []), ...resolved];
+    let allResolved = state.resolvedSoFar || [];
+    let unresolved = [];
+    if (hasNames) {
+        const quoteFlow = require('./quoteRequests');
+        const { resolved, ambiguous, unresolved: u } = await quoteFlow.resolveTruckerNames(state.names);
+        allResolved = [...allResolved, ...resolved];
+        unresolved = u;
 
-    if (ambiguous.length) {
-        return pauseForTruckerAmbiguity(
-            chatId, ambiguous[0],
-            { originQuery: state.originQuery, destinationQuery: state.destinationQuery },
-            allResolved,
-            [...ambiguous.slice(1).map((a) => a.query), ...unresolved],
-        );
+        if (ambiguous.length) {
+            return pauseForTruckerAmbiguity(
+                chatId, ambiguous[0],
+                { originQuery: state.originQuery, destinationQuery: state.destinationQuery, directEmails: state.directEmails || null },
+                allResolved,
+                [...ambiguous.slice(1).map((a) => a.query), ...unresolved],
+            );
+        }
     }
 
-    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved);
+    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved, state.directEmails || []);
 }
 
 async function pauseForLaneAmbiguity(chatId, field, matches, state) {
     const staged = await setPending(chatId, {
         type: 'confirm_quote_lane', field, matches,
         options: matches.map((e) => e.aliases[0]),
-        state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [] },
+        state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [], directEmails: state.directEmails || null },
     });
     const query = field === 'origin' ? state.originQuery : state.destinationQuery;
     const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
@@ -2884,19 +2896,25 @@ async function askWhichTruckers(chatId, state) {
 // policyDecide rather than the generic single-pick p.options handling.
 async function resumeQuoteWithTruckerNames(chatId, pending, names) {
     await clearPending(chatId);
-    return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [] });
+    return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [], directEmails: pending.state.directEmails || null });
 }
 
 // Everything's resolved — actually send. Truckers with no usable channel
 // (no group/whatsapp/email on file at all) are reported, not silently
-// dropped; same for names that never matched anyone.
-async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames) {
+// dropped; same for names that never matched anyone. directEmails are
+// one-off recipients given directly in the command ("...email
+// someone@x.com") — not looked up against the truckers table at all, so
+// they can never be "unresolved"/"no channel", just sent to as-is.
+async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails = []) {
     const legs = [];
     const noChannel = [];
     for (const { trucker } of resolvedTruckers) {
         const ch = quoteHelper.resolveTruckerChannel(trucker);
         if (!ch) { noChannel.push(trucker.name); continue; }
         legs.push({ name: trucker.name, channel: ch.channel, target: ch.target });
+    }
+    for (const addr of directEmails) {
+        legs.push({ name: addr, channel: 'email', target: addr });
     }
     if (!legs.length) {
         const bits = [];
@@ -2920,11 +2938,14 @@ async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, re
     return { action_taken: sentTo.length ? 'quote_request_sent' : 'quote_request_failed' };
 }
 
-// Entry point from brain.js's 'get_quote' intent.
-async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, namesText) {
+// Entry point from brain.js's 'get_quote' intent. emails is an optional
+// array of one-off recipients parsed out of an "...email addr[, addr2]"
+// clause — independent of (and combinable with) names/"ask ___".
+async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, namesText, emails) {
     return continueQuoteFlow(chatId, {
         originQuery, destinationQuery,
         names: namesText ? splitQuoteNames(namesText) : null,
+        directEmails: emails && emails.length ? emails : null,
     });
 }
 

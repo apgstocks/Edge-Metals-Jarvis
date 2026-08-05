@@ -48,6 +48,39 @@ function extractScheduleClause(rawText) {
     }
     return null;
 }
+
+// Parses "get quote from <origin> to <destination> [ask <names>] [email
+// <addr[, addr2...]>]" — "ask" and "email" clauses can appear in either
+// order, or not at all. Pulling both OUT of the "to ___" tail (rather than
+// one combined regex trying to capture destination/names/emails all in one
+// pass) is what lets "Richmond email apg0596@gmail.com" correctly split into
+// destination "Richmond" + emails ["apg0596@gmail.com"] instead of reading
+// the whole trailing phrase as one (nonexistent) address-book destination —
+// the real gap found 2026-08-05 when this syntax didn't exist yet at all.
+// Returns null if the text isn't a "get quote" command in the first place.
+function parseGetQuoteCommand(rawText) {
+    const base = String(rawText || '').trim().match(/^get\s+quotes?\s+from\s+(.+?)\s+to\s+(.+)$/i);
+    if (!base) return null;
+    const origin = base[1].trim();
+    let rest = base[2].trim();
+
+    let emails = null;
+    const emailMatch = rest.match(/,?\s*\bemail\b\s+([\w.+-]+@[\w.-]+\.[a-z]{2,}(?:\s*(?:,|&|\band\b)\s*[\w.+-]+@[\w.-]+\.[a-z]{2,})*)/i);
+    if (emailMatch) {
+        emails = emailMatch[1].split(/,|&|\band\b/i).map((s) => s.trim()).filter(Boolean);
+        rest = (rest.slice(0, emailMatch.index) + rest.slice(emailMatch.index + emailMatch[0].length)).trim();
+    }
+
+    let namesText = null;
+    const askMatch = rest.match(/,?\s*\bask\b\s+(.+)$/i);
+    if (askMatch) {
+        namesText = askMatch[1].trim();
+        rest = rest.slice(0, askMatch.index).trim();
+    }
+
+    const destination = rest.replace(/,\s*$/, '').trim();
+    return { origin, destination, namesText, emails };
+}
 const { matchTruckerByChat }                       = require('./truckers');
 const { matchSupplierByChat }                      = require('./suppliers');
 const actions = require('./actions');
@@ -464,19 +497,30 @@ function policyDecide(ctx) {
             };
         }
 
-        // "get quote from LA to Richmond" / "get quote from LA to Richmond ask
-        // Joey and Daekwang" — multi-trucker quote-request flow (2026-08-05).
-        // Matched against the ORIGINAL text (case-insensitive), not the
-        // fuzzy-corrected/lowercased `t`, so names after "ask" keep their
-        // real casing — same reasoning as the "reply to X" pattern just
-        // below. Deliberately checked before search_mail/draft_email/reply_email
-        // so "get quote" always wins over any of those being misread as
-        // vaguely email-shaped.
-        if ((m = ctx.text.trim().match(/^get\s+quotes?\s+from\s+(.+?)\s+to\s+(.+?)(?:\s*[,]?\s*ask\s+(.+))?$/i))) {
-            return {
-                intent: 'get_quote', resolvedBy: 'policy',
-                data: { origin: m[1].trim(), destination: m[2].trim(), names_text: m[3] ? m[3].trim() : null },
-            };
+        // "get quote from LA to Richmond" / "...ask Joey and Daekwang" /
+        // "...email apg0596@gmail.com" / both together, either order —
+        // multi-trucker quote-request flow (2026-08-05). Matched against the
+        // ORIGINAL text (case-insensitive), not the fuzzy-corrected/
+        // lowercased `t`, so names/emails keep their real casing — same
+        // reasoning as the "reply to X" pattern just below. Deliberately
+        // checked before search_mail/draft_email/reply_email so "get quote"
+        // always wins over any of those being misread as vaguely email-shaped.
+        //
+        // REAL GAP (found 2026-08-05, live): "get quote from LA to Richmond
+        // email apg0596@gmail.com" — a one-off recipient who isn't a saved
+        // trucker at all — wasn't supported; the old single regex had no
+        // "email ___" clause, so "Richmond email apg0596@gmail.com" was read
+        // as one (nonexistent) destination string. parseGetQuoteCommand
+        // below pulls "ask ___" and "email ___" out of whatever trails "to",
+        // in either order, and whatever's left over is the real destination.
+        {
+            const parsed = parseGetQuoteCommand(ctx.text);
+            if (parsed) {
+                return {
+                    intent: 'get_quote', resolvedBy: 'policy',
+                    data: { origin: parsed.origin, destination: parsed.destination, names_text: parsed.namesText, emails: parsed.emails },
+                };
+            }
         }
 
         // "reply to X about Y" / "reply to X's email about Y: Z" / "reply to X saying Z" —
@@ -1017,7 +1061,7 @@ async function route(decision, ctx, sendMessage) {
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
-        case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text);
+        case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
         case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
