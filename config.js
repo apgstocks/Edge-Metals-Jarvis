@@ -109,6 +109,21 @@ const GMAIL_SENDER_READ_TOKEN_FILE = process.env.GMAIL_SENDER_READ_TOKEN_FILE ||
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 
+// Address book — real need found 2026-08-05: quote-request messages to
+// truckers need full pickup/delivery address blocks (yard/company name +
+// street + city/state/zip), which Apsara currently retypes by hand every
+// time from a running Google Doc. That Doc is free-text, not a table — one
+// [Name/alias1/alias2] label line followed by a multi-line address block,
+// blank-line separated. Reuses the SAME Drive service account already set
+// up for booking PDFs (helpers/drive.js's exportDocAsText) — no new OAuth
+// scope needed, just share this specific Doc with the service account's
+// email (see data/gdrive-sa.json's client_email) as Viewer, same
+// prerequisite as helpers/sheets.js's price list. The Doc is the source of
+// truth — syncing overwrites Jarvis's stored copy, it never merges/preserves
+// a Jarvis-side edit, since nobody edits addresses from inside Jarvis.
+const ADDRESS_BOOK_DOC_ID   = process.env.ADDRESS_BOOK_DOC_ID   || '1u-hKBqVvqS1GIpckUXWbT5AQtTGWjWK69rre5IlSHio';
+const ADDRESS_BOOK_FILE     = path.join(DATA_DIR, 'address_book.json');
+
 // Google Sheets (price list) — reuses GDRIVE_KEYFILE's service account, just a
 // different API/scope (see helpers/sheets.js). Sheet must be shared with that
 // SA's client_email as Viewer — same constraint as the Shared Drive above.
@@ -253,6 +268,7 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
+    ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,

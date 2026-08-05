@@ -198,7 +198,25 @@ async function downloadPdfById(fileId) {
     return Buffer.from(res.data).toString('base64');
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification };
+// Export a native Google Doc's content as plain text, by file ID — for
+// helpers/addressBook.js's syncFromDoc(). Uses files.export (Drive API's
+// standard way to pull a Google Doc's content), not files.get — files.get's
+// alt:'media' only works on actual binary files (PDFs, etc.), not native
+// Docs, which don't have raw bytes of their own. Reuses the SAME service
+// account already authorized for booking PDFs; the target Doc just needs to
+// be shared with that account's email as Viewer (same prerequisite as
+// helpers/sheets.js's price list). NOT scoped to the Shared Drive — a
+// regular personal/shared Doc works as long as it's shared with the SA.
+async function exportDocAsText(docId) {
+    const drive = getDrive();
+    const res = await drive.files.export(
+        { fileId: docId, mimeType: 'text/plain' },
+        { responseType: 'arraybuffer' }
+    );
+    return Buffer.from(res.data).toString('utf8');
+}
+
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

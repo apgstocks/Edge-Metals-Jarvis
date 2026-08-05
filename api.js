@@ -519,6 +519,23 @@ function createApi() {
         (name) => pricelist.removeContact(name),
     );
 
+    // ── Address book (supplier/trucker/customer pickup/delivery addresses) ──
+    // Built 2026-08-05 alongside helpers/addressBook.js. Read-heavy, no
+    // add/delete-by-name UI here on purpose — the Google Doc is the source of
+    // truth (see addressBook.js's header comment); the dashboard only reads
+    // the synced result and lets Apsara trigger a fresh sync. Full list is
+    // returned in one shot (dataset is ~30-100 entries) so the dashboard can
+    // do instant client-side typeahead filtering with no per-keystroke
+    // network round-trip.
+    app.get('/api/address-book', async (req, res) => {
+        try { res.json(require('./helpers/addressBook').loadAddressBook()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/address-book/sync', async (req, res) => {
+        try { res.json(await require('./helpers/addressBook').syncFromDoc()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // Dashboard's "Send" button on the Price list contacts tab. `to` is
     // whatever name/number the row's data-name carries (resolved the same
     // way WhatsApp's own "send price list to X" does — see
@@ -713,6 +730,16 @@ function createApi() {
             console.error('[API] bot/command failed:', err.message);
             res.status(500).json({ error: err.message });
         }
+    });
+
+    // Address book — standalone page, not part of index.html's SPA tab
+    // system (explicit request 2026-08-05). Registered before the static
+    // mount below so the route is unambiguous; inherits the same session/
+    // API_TOKEN gate as everything else (that middleware runs earlier, at
+    // the top of this file) even though express.static would technically
+    // have served dashboard/address-book.html anyway once mounted.
+    app.get('/address-book', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'address-book.html'));
     });
 
     // ── Static dashboard ──────────────────────────────────────────────────────
