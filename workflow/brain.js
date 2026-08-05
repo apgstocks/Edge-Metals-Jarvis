@@ -59,7 +59,16 @@ function extractScheduleClause(rawText) {
 // the real gap found 2026-08-05 when this syntax didn't exist yet at all.
 // Returns null if the text isn't a "get quote" command in the first place.
 function parseGetQuoteCommand(rawText) {
-    const base = String(rawText || '').trim().match(/^get\s+quotes?\s+from\s+(.+?)\s+to\s+(.+)$/i);
+    // REAL GAP (found 2026-08-06, live): "send a quote from LA to Humble
+    // email Jose" / "request a quote from LA to Humble email Jose" both
+    // missed this entirely — the old regex only accepted the literal verb
+    // "get". Neither fell through to a sane fallback either: with no
+    // policy match, the AI classifier read "email Jose" as a generic
+    // draft_email target and staged an unrelated "what's Jose's address"
+    // pending, which then swallowed her well-formed retry too (same
+    // pending is reused for reclassification below — see A0d). Broadened
+    // to accept get/send/request/obtain as the leading verb.
+    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?\s+from\s+(.+?)\s+to\s+(.+)$/i);
     if (!base) return null;
     const origin = base[1].trim();
     let rest = base[2].trim();
@@ -71,8 +80,13 @@ function parseGetQuoteCommand(rawText) {
         rest = (rest.slice(0, emailMatch.index) + rest.slice(emailMatch.index + emailMatch[0].length)).trim();
     }
 
+    // "ask Jose" (always meant a saved-trucker name) — and now also
+    // "email Jose", the colloquial version of the same thing, once a real
+    // email ADDRESS clause (handled above) has already been stripped out.
+    // By the time we get here, "email <real@address>" is gone from `rest`,
+    // so a leftover bare "email <word(s)>" can only mean a trucker name.
     let namesText = null;
-    const askMatch = rest.match(/,?\s*\bask\b\s+(.+)$/i);
+    const askMatch = rest.match(/,?\s*\b(?:ask|email)\b\s+(.+)$/i);
     if (askMatch) {
         namesText = askMatch[1].trim();
         rest = rest.slice(0, askMatch.index).trim();
