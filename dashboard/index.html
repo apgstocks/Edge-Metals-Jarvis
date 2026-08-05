@@ -443,7 +443,10 @@ function renderBoardView() {
 // ── Shared: contact-option builder for booking container dropdowns ────────
 function buildContactOptions(list, selectedName, port) {
   const p = normLoc(port);
-  const visible = p ? list.filter(c => localityMatchesPort(c.locality, p) || (selectedName && c.name === selectedName)) : list;
+  // Contacts with no locality set are always shown (matches the "Leave blank
+  // to always show" hint on the contact form) — only exclude a contact when
+  // it HAS a locality that doesn't match this booking's port of loading.
+  const visible = p ? list.filter(c => !normLoc(c.locality) || localityMatchesPort(c.locality, p) || (selectedName && c.name === selectedName)) : list;
   let html = '<option value="">—</option>';
   html += visible.map(c => `<option value="${esc(c.name)}" ${selectedName === c.name ? 'selected' : ''}>${esc(c.name)}${c.locality ? ' · ' + esc(c.locality) : ''}</option>`).join('');
   return html;
