@@ -94,6 +94,10 @@ textarea { font-family:inherit; }
         <label style="display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Full address (paste as-is, multiple lines OK)</label>
         <textarea id="abModalRaw" rows="6" placeholder="Company name&#10;Street address&#10;City, State ZIP" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; resize:vertical;"></textarea>
       </div>
+      <label style="display:flex; align-items:flex-start; gap:9px; font-size:12.5px; color:var(--text-muted); cursor:pointer;">
+        <input id="abModalLocked" type="checkbox" checked style="margin-top:2px;">
+        <span>Keep my edits — don't let "Sync from Doc" overwrite this entry. Uncheck if you want this entry to go back to tracking the Doc/Sheet.</span>
+      </label>
     </div>
     <div style="display:flex; justify-content:space-between; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken);">
       <button id="btnAbModalDelete" class="btn btn-secondary hidden" style="color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
@@ -160,10 +164,14 @@ const copyRaw = async (raw, btn) => {
 const entryCard = (e) => `
   <div class="card" style="padding:16px 18px;">
     <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px;">
-      <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(e.aliases.join(' / '))}</div>
+      <div style="font-size:14px; font-weight:700; color:var(--text-strong); display:flex; align-items:center; gap:8px;">
+        ${esc(e.aliases.join(' / '))}
+        ${e.manually_edited ? '<span class="badge" title="Won\'t be overwritten by Sync from Doc" style="background:rgba(215,126,61,.15); color:var(--copper-300); font-weight:600;">Edited — protected</span>' : ''}
+      </div>
       <div style="display:flex; gap:8px; flex-shrink:0;">
         <button class="btn btn-secondary btn-edit-address" data-id="${esc(e.id || '')}" style="padding:6px 12px; font-size:11px;">Edit</button>
         <button class="btn btn-secondary btn-copy-address" data-raw="${esc(e.raw)}" style="padding:6px 12px; font-size:11px;">Copy</button>
+        <button class="btn btn-secondary btn-delete-address" data-id="${esc(e.id || '')}" data-name="${esc(e.aliases.join(' / '))}" style="padding:6px 12px; font-size:11px; color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
       </div>
     </div>
     <pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>
@@ -183,6 +191,19 @@ function renderResults() {
     const entry = addressBookData.find(e => e.id === btn.dataset.id);
     if (entry) openAbModal(entry);
   }));
+  resultsEl.querySelectorAll('.btn-delete-address').forEach(btn => btn.addEventListener('click', () => deleteEntry(btn.dataset.id, btn.dataset.name)));
+}
+
+async function deleteEntry(id, name) {
+  if (!id) return;
+  if (!confirm(`Remove "${name}" from the address book?`)) return;
+  try {
+    await api(`/api/address-book/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    addressBookData = await api('/api/address-book');
+    renderResults();
+  } catch (e) {
+    alert('Could not delete: ' + e.message);
+  }
 }
 
 // ── Add/Edit modal ───────────────────────────────────────────────────────
@@ -197,6 +218,11 @@ function openAbModal(entry) {
   $('abModalTitle').textContent = entry ? 'Edit contact' : 'Add contact';
   abModalAliases.value = entry ? entry.aliases.join(' / ') : '';
   abModalRaw.value = entry ? entry.raw : '';
+  // Defaults checked (protected) either way — for a new entry there's
+  // nothing to protect FROM yet, but if a later Doc/Sheet sync happens to
+  // introduce the same alias set, defaulting locked keeps her manual entry
+  // from being silently clobbered by a coincidental match.
+  $('abModalLocked').checked = entry ? !!entry.manually_edited : true;
   abModalError.textContent = '';
   $('btnAbModalDelete').classList.toggle('hidden', !entry);
   abModalOverlay.classList.remove('hidden');
@@ -216,9 +242,10 @@ $('btnAbModalSave').addEventListener('click', async () => {
   if (!raw) { abModalError.textContent = 'Address text is required.'; return; }
   const btn = $('btnAbModalSave');
   btn.disabled = true; const original = btn.textContent; btn.innerHTML = '<span class="spinner"></span>Saving…';
+  const locked = $('abModalLocked').checked;
   try {
-    if (abModalEditingId) await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'PUT', body: JSON.stringify({ aliases, raw }) });
-    else await api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases, raw }) });
+    if (abModalEditingId) await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'PUT', body: JSON.stringify({ aliases, raw, locked }) });
+    else await api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases, raw, locked }) });
     addressBookData = await api('/api/address-book');
     renderResults();
     closeAbModal();
@@ -251,8 +278,9 @@ $('btnSyncAddressBook').addEventListener('click', async () => {
     const summary = await api('/api/address-book/sync', { method: 'POST' });
     addressBookData = await api('/api/address-book');
     renderResults();
-    btn.textContent = `Synced (+${summary.added.length}, ~${summary.updated.length})`;
-    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2200);
+    const lockedNote = summary.lockedSkipped && summary.lockedSkipped.length ? `, ${summary.lockedSkipped.length} protected` : '';
+    btn.textContent = `Synced (+${summary.added.length}, ~${summary.updated.length}${lockedNote})`;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2600);
   } catch (e) {
     alert('Sync failed: ' + e.message);
     btn.textContent = original; btn.disabled = false;

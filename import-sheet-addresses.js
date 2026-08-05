@@ -46,18 +46,22 @@ async function main() {
     console.log(`${curated.length} hand-curated entries from the Sheet.\n`);
 
     const stored = loadAddressBook();
-    const { result, added, updated } = mergeEntries(stored, curated);
+    const { result, added, updated, lockedSkipped } = mergeEntries(stored, curated);
 
-    // Tag source on the entries this import actually added/touched, so
-    // there's a durable record of where they came from (mergeEntries itself
-    // doesn't carry extra fields through — see this script's own comment).
+    // Tag source on entries this import actually added/updated — NOT on
+    // locked ones (mergeEntries left those untouched on purpose; relabeling
+    // a manually-edited entry's source here would misrepresent where its
+    // current content actually came from).
+    const touched = new Set([...added, ...updated]);
     for (const entry of curated) {
+        if (!touched.has(entry.aliases[0])) continue;
         const match = result.find((e) => sameAliasSet(e.aliases, entry.aliases));
-        if (match) match.source = 'google_sheet_2026-08-05';
+        if (match && !match.manually_edited) match.source = 'google_sheet_2026-08-05';
     }
 
     console.log(`Would add:    ${added.length ? added.join(', ') : '(none)'}`);
     console.log(`Would update: ${updated.length ? updated.join(', ') : '(none)'}`);
+    if (lockedSkipped.length) console.log(`Would SKIP (protected — edited on the website): ${lockedSkipped.join(', ')}`);
     console.log(`Total entries after import: ${result.length} (currently ${stored.length})`);
 
     if (!added.length && !updated.length) {

@@ -76,9 +76,17 @@ function sameAliasSet(a, b) {
     return setA.size === b.length;
 }
 
-// Merge freshly-parsed Doc entries into the stored list. Doc wins — an
-// entry's raw text is fully replaced by whatever's currently in the Doc, not
-// merged field-by-field (there ARE no fields to merge; it's one text blob).
+// Merge freshly-parsed Doc/Sheet entries into the stored list. Doc/Sheet
+// wins for entries nobody has touched by hand — an entry's raw text is
+// fully replaced, not merged field-by-field (there ARE no fields to merge;
+// it's one text blob). EXCEPT: an entry with `manually_edited: true` is
+// skipped entirely, not overwritten. Built 2026-08-05 per Apsara — the
+// website's Add/Edit UI (see addManualEntry/updateEntryById below) is real
+// data-entry work; without this, the very next "Sync from Doc" click would
+// silently discard any correction she just made, since the old code always
+// let the Doc win unconditionally. addManualEntry/updateEntryById set this
+// flag by default; the dashboard exposes a checkbox to clear it again if
+// she wants a specific entry to go back to tracking the Doc/Sheet.
 //
 // Matching an existing stored record requires the FULL alias set to match
 // (case-insensitive, order-independent) — NOT merely sharing one alias.
@@ -99,21 +107,26 @@ function mergeEntries(stored, parsed) {
     const result = stored.map((e) => ({ ...e, aliases: [...e.aliases] }));
     const added = [];
     const updated = [];
+    const lockedSkipped = [];
 
     for (const entry of parsed) {
         const match = result.find((e) => sameAliasSet(e.aliases, entry.aliases));
         if (match) {
+            if (match.manually_edited) {
+                if (match.raw !== entry.raw) lockedSkipped.push(match.aliases[0]);
+                continue;
+            }
             if (match.raw !== entry.raw) { match.raw = entry.raw; updated.push(match.aliases[0]); }
         } else {
             result.push({ id: crypto.randomUUID(), aliases: [...entry.aliases], raw: entry.raw, added_at: new Date().toISOString() });
             added.push(entry.aliases[0]);
         }
     }
-    return { result, added, updated };
+    return { result, added, updated, lockedSkipped };
 }
 
 // Fetches the Doc, parses it, and overwrites data/address_book.json.
-// Returns { added: [...names], updated: [...names], total }.
+// Returns { added: [...names], updated: [...names], lockedSkipped: [...names], total }.
 async function syncFromDoc(docId = cfg.ADDRESS_BOOK_DOC_ID) {
     const { exportDocAsText } = require('./drive');
     const text = await exportDocAsText(docId);
@@ -124,7 +137,7 @@ async function syncFromDoc(docId = cfg.ADDRESS_BOOK_DOC_ID) {
     let summary;
     await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (stored) => {
         const merged = mergeEntries(stored, parsed);
-        summary = { added: merged.added, updated: merged.updated, total: merged.result.length };
+        summary = { added: merged.added, updated: merged.updated, lockedSkipped: merged.lockedSkipped, total: merged.result.length };
         return merged.result;
     });
     return summary;
@@ -178,14 +191,19 @@ function validateEntryInput(aliases, raw) {
     return { aliases: cleanAliases, raw: cleanRaw };
 }
 
-async function addManualEntry(aliases, raw) {
+// `locked` defaults to true — anything typed into the website is real work
+// Apsara just did; it should survive the next Doc/Sheet sync by default
+// rather than silently vanish the next time someone clicks "Sync from Doc".
+// She can uncheck the "keep my edits" box in the modal to explicitly hand a
+// specific entry back to the Doc/Sheet going forward.
+async function addManualEntry(aliases, raw, locked = true) {
     const clean = validateEntryInput(aliases, raw);
-    const entry = { id: crypto.randomUUID(), ...clean, added_at: new Date().toISOString(), source: 'manual' };
+    const entry = { id: crypto.randomUUID(), ...clean, added_at: new Date().toISOString(), source: 'manual', manually_edited: !!locked };
     await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => { book.push(entry); return book; });
     return entry;
 }
 
-async function updateEntryById(id, { aliases, raw }) {
+async function updateEntryById(id, { aliases, raw, locked = true }) {
     if (!id) throw new Error('id required');
     const clean = validateEntryInput(aliases, raw);
     // Deliberately doesn't throw for a missing id inside the mutator —
@@ -199,6 +217,7 @@ async function updateEntryById(id, { aliases, raw }) {
         if (!entry) return book;
         entry.aliases = clean.aliases;
         entry.raw = clean.raw;
+        entry.manually_edited = !!locked;
         entry.updated_at = new Date().toISOString();
         updated = entry;
         return book;

@@ -668,6 +668,21 @@ function cutoffSortMs(dateStr) {
   return isNaN(t) ? Infinity : t;
 }
 
+// Port of LA and Port of Long Beach are the same physical port complex (San
+// Pedro Bay, adjacent terminals) — carriers and booking docs use either name
+// for what is, for her purposes, the same place. Grouped together per
+// Apsara (2026-08-05): "los angeles/long beach both are same only". Only
+// affects the GROUP KEY — each booking row still shows its own real
+// port_of_loading value untouched (bookingRow reads b.port_of_loading
+// directly, not this normalized key).
+function normalizePol(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '(No POL)';
+  const lower = s.toLowerCase();
+  if (/\blos angeles\b/.test(lower) || /\blong beach\b/.test(lower)) return 'Los Angeles / Long Beach';
+  return s;
+}
+
 function renderBookings(bookingsObj) {
   bookingsCache = bookingsObj;
   const list = Object.values(bookingsObj);
@@ -676,7 +691,7 @@ function renderBookings(bookingsObj) {
   // POL/POD pair sort bookings by cutoff ascending (soonest cutoff first —
   // matches how these get worked in practice). POL/POD groups themselves are
   // ordered alphabetically for a stable, predictable layout.
-  const polOf = (b) => String(b.port_of_loading || '').trim() || '(No POL)';
+  const polOf = (b) => normalizePol(b.port_of_loading);
   const podOf = (b) => String(b.port_of_discharge || '').trim() || '(No POD)';
   const polGroups = new Map(); // pol -> Map(pod -> bookings[])
   for (const b of list) {
@@ -724,15 +739,34 @@ function renderBookings(bookingsObj) {
     </div>`;
   }
 
-  function polHeader(pol, count) {
-    return `<div style="padding:14px 18px 8px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); border-top:2px solid var(--copper-400);">
-      <div style="font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--copper-400);">// Port of loading: ${esc(pol)}</div>
-      <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:2px;">${count} booking${count === 1 ? '' : 's'}</div>
-    </div>`;
-  }
   function podHeader(pod, count) {
     return `<div style="padding:9px 18px 9px 34px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle);">
       <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">→ ${esc(pod)} <span style="color:var(--text-faint); font-weight:400; text-transform:none; letter-spacing:normal;">(${count})</span></div>
+    </div>`;
+  }
+
+  // Each Port-of-Loading group is its own collapsible card — click the
+  // header to expand/collapse. Starts expanded (matches the old always-open
+  // behavior) so nothing looks different until she actually collapses one.
+  function polCard(pol, count, bodyHtml) {
+    return `
+    <div class="card pol-group" data-pol-group style="overflow:hidden;">
+      <div class="pol-toggle" data-pol-toggle style="cursor:pointer; display:flex; align-items:center; justify-content:space-between; padding:16px 20px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); border-top:2px solid var(--copper-400);">
+        <div>
+          <div class="eyebrow" style="margin-bottom:2px;">// Port of loading</div>
+          <div style="font-size:15px; font-weight:700; color:var(--text-strong); text-transform:uppercase;">${esc(pol)}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span class="badge" style="background:var(--surface-card); border:1px solid var(--border-subtle); color:var(--text-muted);">${count} booking${count === 1 ? '' : 's'}</span>
+          <span class="pol-chevron" style="font-family:var(--font-mono); font-size:15px; color:var(--text-faint);">▾</span>
+        </div>
+      </div>
+      <div class="pol-body" data-pol-body>
+        <div style="display:grid; grid-template-columns:${COLS}; gap:14px; padding:10px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
+          <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
+        </div>
+        ${bodyHtml}
+      </div>
     </div>`;
   }
 
@@ -740,10 +774,11 @@ function renderBookings(bookingsObj) {
     const podGroups = polGroups.get(pol);
     const podNames = [...podGroups.keys()].sort((a, z) => a.localeCompare(z));
     const polCount = podNames.reduce((sum, pod) => sum + podGroups.get(pod).length, 0);
-    return polHeader(pol, polCount) + podNames.map(pod => {
+    const bodyHtml = podNames.map(pod => {
       const bookings = podGroups.get(pod);
       return podHeader(pod, bookings.length) + bookings.map(bookingRow).join('');
     }).join('');
+    return polCard(pol, polCount, bodyHtml);
   }).join('');
 
   $('viewRoot').innerHTML = `
@@ -752,14 +787,19 @@ function renderBookings(bookingsObj) {
         <div><div class="eyebrow">// Bookings</div><h2 style="font-size:24px; text-transform:uppercase;">Booking ledger</h2></div>
         <button id="btnAddBooking" class="btn btn-primary">+ Add booking</button>
       </div>
-      <div class="card" style="overflow:hidden;">
-        <div style="display:grid; grid-template-columns:${COLS}; gap:14px; padding:12px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
-        </div>
-        ${list.length ? groupedHtml : '<div style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
+      <div style="display:flex; flex-direction:column; gap:16px;">
+        ${list.length ? groupedHtml : '<div class="card" style="padding:40px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bookings yet.</div>'}
       </div>
     </section>`;
   $('btnAddBooking').addEventListener('click', openBookingModalForAdd);
+  document.querySelectorAll('[data-pol-toggle]').forEach(header => header.addEventListener('click', () => {
+    const group = header.closest('[data-pol-group]');
+    const body = group.querySelector('[data-pol-body]');
+    const chev = header.querySelector('.pol-chevron');
+    const open = !body.classList.contains('hidden');
+    body.classList.toggle('hidden', open);
+    chev.textContent = open ? '▸' : '▾';
+  }));
   document.querySelectorAll('[data-bk-expand]').forEach(row => row.addEventListener('click', () => {
     const group = row.closest('[data-bkg-group]');
     const detail = group.querySelector('.bk-containers');

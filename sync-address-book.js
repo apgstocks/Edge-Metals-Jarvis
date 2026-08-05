@@ -29,9 +29,10 @@ async function main() {
         const parsed = parseAddressBookDoc(text);
         console.log(`Parsed ${parsed.length} entries from the Doc.`);
         const stored = loadAddressBook();
-        const { added, updated, result } = mergeEntries(stored, parsed);
+        const { added, updated, lockedSkipped, result } = mergeEntries(stored, parsed);
         console.log(`Would add:    ${added.length ? added.join(', ') : '(none)'}`);
         console.log(`Would update: ${updated.length ? updated.join(', ') : '(none)'}`);
+        if (lockedSkipped.length) console.log(`Would SKIP (protected — edited on the website): ${lockedSkipped.join(', ')}`);
         console.log(`Total entries after sync: ${result.length} (currently ${stored.length})`);
         return;
     }
@@ -40,6 +41,7 @@ async function main() {
     const summary = await syncFromDoc();
     console.log(`Added ${summary.added.length}: ${summary.added.join(', ') || '(none)'}`);
     console.log(`Updated ${summary.updated.length}: ${summary.updated.join(', ') || '(none)'}`);
+    if (summary.lockedSkipped.length) console.log(`Skipped (protected — edited on the website, Doc had different content): ${summary.lockedSkipped.join(', ')}`);
     console.log(`Total entries: ${before} -> ${summary.total}`);
 }
 
