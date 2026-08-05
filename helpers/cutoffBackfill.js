@@ -86,20 +86,19 @@ async function backfillOne(bkgNo, gmail) {
             const { body, pdfParts } = getEmailContent(full.payload);
 
             let fields = null;
-            if (body && body.trim()) {
-                fields = await extractBookingFieldsFromText(body);
-            }
-            const hasAnyFromBody = fields && BACKFILL_FIELDS.some((f) => fields[f]);
 
-            // Body had nothing usable — plenty of carriers (Zimex confirmed as
-            // a real case) send the actual booking confirmation as a PDF
-            // attachment with little or no useful text in the message body
-            // itself. Same fallback workflow/emailWatcher.js and
-            // reextract-cutoffs.js already use: download each attachment and
-            // try extractPdfFields, gated on is_booking_confirmation so an
-            // unrelated attachment (invoice, rate sheet) can't get treated as
-            // a source for these fields.
-            if (!hasAnyFromBody && pdfParts && pdfParts.length) {
+            // PDF attachments FIRST when present, not as a fallback. Real
+            // evidence from a live run of the sibling reextract-cutoffs.js:
+            // for a booking whose body text is just "please see attached",
+            // extractBookingFieldsFromText still returned SOME non-null
+            // field on one run — which, being non-null, would have silently
+            // skipped the PDF-attachment path entirely under a body-first
+            // order. A PDF is a structured, is_booking_confirmation-gated
+            // document — far less prone to producing a plausible-but-wrong
+            // value than freeform body text with barely any content. Same
+            // download/extractPdfFields approach workflow/emailWatcher.js
+            // already uses for new bookings.
+            if (pdfParts && pdfParts.length) {
                 for (const part of pdfParts) {
                     try {
                         const att = await downloadAttachment(gmail, m.id, part);
@@ -112,6 +111,14 @@ async function backfillOne(bkgNo, gmail) {
                         console.error(`[${AGENT}] Attachment read failed for ${bkgNo}:`, err.message);
                     }
                 }
+            }
+
+            // Body text only as a fallback — no PDF attachment on this
+            // message at all, or none of its attachments yielded a usable,
+            // gated result.
+            const hasAnyFromPdf = fields && BACKFILL_FIELDS.some((f) => fields[f]);
+            if (!hasAnyFromPdf && body && body.trim()) {
+                fields = await extractBookingFieldsFromText(body);
             }
 
             if (!fields) continue;

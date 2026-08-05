@@ -47,18 +47,19 @@ async function reextractOne(bkgNo, currentCutoff, gmail) {
             const { body, pdfParts } = getEmailContent(full.payload);
 
             let fields = null;
-            if (body && body.trim()) {
-                fields = await extractBookingFieldsFromText(body);
-            }
 
-            // Body text often has nothing usable — plenty of carriers (Zimex
-            // confirmed as a real case) send the actual booking confirmation
-            // as a PDF attachment with little or no cutoff info in the message
-            // body itself. Same fallback workflow/emailWatcher.js already uses
-            // for new bookings: download each attachment and try extractPdfFields.
-            // is_booking_confirmation gates it so we don't trust a date pulled
-            // from an unrelated attached PDF (an invoice, a rate sheet, etc).
-            if ((!fields || !fields.cutoff_date) && pdfParts.length) {
+            // PDF attachments FIRST when present, not as a fallback. Real
+            // evidence from a live run: for 274991940 (body text is just
+            // "please see attached"), extractBookingFieldsFromText still
+            // returned SOME non-null cutoff_date on one run — which, being
+            // non-null, silently skipped the PDF-attachment path entirely
+            // (the old code only tried the PDF when body found NOTHING). A
+            // PDF is a structured, is_booking_confirmation-gated document —
+            // far less prone to producing a plausible-but-wrong value than
+            // freeform body text with barely any content. Same download/
+            // extractPdfFields approach workflow/emailWatcher.js already
+            // uses for new bookings.
+            if (pdfParts.length) {
                 for (const part of pdfParts) {
                     try {
                         const att = await downloadAttachment(gmail, m.id, part);
@@ -71,6 +72,13 @@ async function reextractOne(bkgNo, currentCutoff, gmail) {
                         console.error(`[REEXTRACT] Attachment read failed for ${bkgNo}:`, err.message);
                     }
                 }
+            }
+
+            // Body text only as a fallback — when this message has no PDF
+            // attachment at all, or none of its attachments yielded a usable,
+            // gated result.
+            if ((!fields || !fields.cutoff_date) && body && body.trim()) {
+                fields = await extractBookingFieldsFromText(body);
             }
 
             if (!fields || !fields.cutoff_date) continue;
