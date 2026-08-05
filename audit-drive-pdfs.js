@@ -37,6 +37,35 @@ async function main() {
         console.log('No PDFs found in the configured Drive folder.');
         return;
     }
+    // Duplicate filenames — a real bug found via a live audit (DALA79158000.pdf
+    // and DALA62677900.pdf each existed twice): uploadPdfToDrive()'s "does this
+    // already exist" check and its "create new" call aren't atomic, so two
+    // overlapping uploads for the same booking number (e.g. two overlapping
+    // emailWatcher.run() cron ticks — now fixed separately) could each create
+    // their own file before either one was visible to the other's existence
+    // check. Unlike a normal filesystem, Drive allows two files with the same
+    // name in the same folder, so this doesn't error — it silently doubles up.
+    // Reported here, not auto-resolved: deleting the wrong copy would be worse
+    // than leaving both, so this just surfaces file IDs + modified times so you
+    // can open each in Drive and decide which one to keep.
+    const byName = new Map();
+    for (const f of files) {
+        if (!byName.has(f.name)) byName.set(f.name, []);
+        byName.get(f.name).push(f);
+    }
+    const duplicateGroups = [...byName.entries()].filter(([, group]) => group.length > 1);
+    if (duplicateGroups.length) {
+        console.log(`\n=== DUPLICATE FILENAMES — ${duplicateGroups.length} booking(s) have more than one Drive file ===`);
+        duplicateGroups.forEach(([name, group]) => {
+            console.log(`  ${name}:`);
+            group
+                .slice()
+                .sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime))
+                .forEach((f, i) => console.log(`    ${i === 0 ? '(newest)' : '        '} id=${f.id}  modified=${f.modifiedTime}`));
+        });
+        console.log('  Nothing was changed. Open each file ID in Drive, confirm which one is the real/current confirmation, then trash the other(s) by hand.\n');
+    }
+
     console.log(`Found ${files.length} PDF(s). Checking each against classifyDocument()...\n`);
 
     const bookings = loadBookings();
@@ -57,7 +86,7 @@ async function main() {
         }
 
         const flaggedNotBooking = !!classification && (!classification.is_booking_confirmation || classification.is_invoice_or_other);
-        results.push({ file: f.name, fileId: f.id, bkgGuess, trackedInBookingsJson: !!trackedBooking, wfStep, classification, flaggedNotBooking });
+        results.push({ file: f.name, fileId: f.id, bkgGuess, trackedInBookingsJson: !!trackedBooking, wfStep, trackedBooking, classification, flaggedNotBooking });
 
         const label = classification
             ? `${classification.is_booking_confirmation ? 'BOOKING' : 'NOT-BOOKING'} (${classification.document_type || '?'})`
@@ -75,29 +104,35 @@ async function main() {
 
     if (flagged.length) {
         console.log('\nFlagged files — review manually, nothing was changed:');
-        // Suggested action is a HINT, not a decision — always read manually before
-        // archiving. Logic: a Bill of Lading is only issued after cargo is loaded,
-        // so if the booking has already reached a late workflow stage (picked up,
-        // ingated, done), a flagged "not a confirmation" file is very likely the
-        // known B/L-overwrite pattern (real booking, safe to archive out of
-        // active once you've confirmed it shipped). If the stage is still EARLY
-        // (not even picked up yet), a flagged file is suspicious for a different
-        // reason — something's off (wrong upload, bad classification, or a
-        // phantom record) and needs a manual look, not an auto-archive.
-        const LATE_STAGES = ['picked_up', 'ingate_received', 'done'];
+        // Workflow stage turned out NOT to be a usable signal in practice — real
+        // production data showed every booking checked sitting at "not_started"
+        // regardless of whether it had actually shipped, so a stage-based
+        // "late stage = safe to archive" rule would silently mislabel almost
+        // everything. Dropped that. Using booking DATA COMPLETENESS instead:
+        // a real booking (confirmation just got overwritten by a later doc like
+        // a B/L) still has real carrier/vessel fields from when it was first
+        // created. A phantom booking created FROM the flagged document itself
+        // (the invoice-auto-create bug, pre-dating the classification gate fix)
+        // tends to have thin/placeholder fields, because there was never a real
+        // confirmation to extract them from. This is still a HINT, not a
+        // verdict — the actual field values are printed so you can judge it
+        // yourself; don't archive anything without looking.
+        const looksReal = (b) => !!b && !!b.carrier && b.carrier !== '?' && !!b.vessel_voyage;
         flagged.forEach(r => {
+            const b = r.trackedBooking;
             let suggestion;
-            if (!r.trackedInBookingsJson) {
+            if (!b) {
                 suggestion = 'no bookings.json record — nothing "active" to remove; stray Drive file only';
-            } else if (LATE_STAGES.includes(r.wfStep)) {
-                suggestion = `LIKELY SAFE TO ARCHIVE — booking is at stage "${r.wfStep}" (already shipped), matches the known B/L-overwrite pattern. Confirm, then archive from the dashboard.`;
+            } else if (looksReal(b)) {
+                suggestion = `booking record has real freight data — looks like a genuine booking whose PDF got replaced by a ${r.classification.document_type || 'later document'}. Verify it actually shipped/matches, then archive from the dashboard if so.`;
             } else {
-                suggestion = `NEEDS MANUAL REVIEW — booking is still at stage "${r.wfStep || 'not_started'}" (too early to have a real B/L). Don't auto-archive; check what this file actually is.`;
+                suggestion = `booking record looks thin (carrier="${b.carrier || 'null'}", vessel="${b.vessel_voyage || 'null'}") — may be a PHANTOM booking created from this very document rather than a real booking that got overwritten. Look closer before archiving.`;
             }
             console.log(
                 `  ${r.file}  [${r.classification.document_type || 'unknown'}]  ` +
-                `bookings.json record: ${r.trackedInBookingsJson ? `YES — ${r.bkgGuess}` : 'no'}\n` +
-                `    -> ${suggestion}`
+                `bookings.json record: ${b ? `YES — ${r.bkgGuess}` : 'no'}` +
+                (b ? `  (carrier="${b.carrier || 'null'}", pol="${b.port_of_loading || 'null'}", pod="${b.port_of_discharge || 'null'}", vessel="${b.vessel_voyage || 'null'}", cutoff="${b.cutoff_date || 'null'}", created="${b.created_at || 'null'}")` : '') +
+                `\n    -> ${suggestion}`
             );
         });
     }

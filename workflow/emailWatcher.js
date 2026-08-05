@@ -50,8 +50,36 @@ async function saveProcessed(set) {
     await saveJson(cfg.EMAIL_PROCESSED_FILE, [...set]);
 }
 
+// Root cause of real duplicate Drive uploads (DALA79158000.pdf, DALA62677900.pdf
+// each showing up twice): scheduler.js fires run() every 15 minutes with no
+// overlap protection, and saveProcessed() only persists once at the very end
+// of the whole loop (errors mid-loop deliberately skip marking-processed too,
+// so a slow run leaves messages looking "unprocessed" to anyone else who
+// checks). If one run is still mid-loop — stuck on a slow Gemini call, or
+// working through a backlog — when the next cron tick fires, the second run
+// re-reads the same not-yet-marked messages and independently uploads the
+// same booking's PDF a second time before the first run's Drive file exists
+// to be found by findPdfByBooking(). Same-run duplicates were already guarded
+// (see seenThisRun below); cross-run duplicates were not. This flag closes
+// that gap the simple way: since scheduler.js and this module run in the same
+// Node process, an in-memory lock is enough — no cross-process locking needed.
+let _running = false;
+
 async function run() {
     if (!cfg.GMAIL_WATCH_ENABLED) return;
+    if (_running) {
+        console.log(`[${AGENT}] Previous run still in progress — skipping this tick to avoid duplicate processing`);
+        return;
+    }
+    _running = true;
+    try {
+        await _runOnce();
+    } finally {
+        _running = false;
+    }
+}
+
+async function _runOnce() {
 
     let gmail;
     try {
