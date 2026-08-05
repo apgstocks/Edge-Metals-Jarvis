@@ -16,13 +16,36 @@
 const cfg = require('../config');
 const tasks = require('../helpers/tasks');
 const { pushAlert } = require('../alerts');
-const { loadSettings } = require('../helpers/json');
+const { loadSettings, loadTruckers } = require('../helpers/json');
 const { getTruckersByName } = require('./truckers');
 const qr = require('../helpers/quoteRequests');
 
 function managerChatId() {
     const settings = loadSettings();
     return (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
+}
+
+// REAL BUG (found 2026-08-05, live): Apsara typed "ask Jey Oakland" for a
+// trucker actually saved as name "Jey" with locality "Oakland" — got
+// "couldn't find: Jey Oakland" back. getTruckersByName's exact/substring
+// check only looks at the `name` field, and only in ONE direction (does the
+// SAVED name contain the typed query) — a query that's MORE specific than
+// the saved name (adding a location to disambiguate, exactly the way a
+// person naturally qualifies a common first name) can never match that way.
+// This fallback — tried only when getTruckersByName finds nothing at all —
+// requires every WORD the user typed to appear somewhere across name +
+// locality combined, in any order. Deliberately NOT changed inside
+// workflow/truckers.js's getTruckersByName itself: that function is shared
+// with forwardBooking/assignSupplier elsewhere in the app, and loosening it
+// there would change matching behavior for flows this fix was never tested
+// against. Scoped to quote-request trucker resolution only.
+function matchTruckersByTokens(query, allTruckers) {
+    const tokens = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    return allTruckers.filter((t) => {
+        const haystack = `${t.name || ''} ${t.locality || ''}`.toLowerCase();
+        return tokens.every((tok) => haystack.includes(tok));
+    });
 }
 
 // ── Trucker name resolution (wraps workflow/truckers.js with the same
@@ -32,8 +55,13 @@ async function resolveTruckerNames(names) {
     const resolved = [];
     const ambiguous = [];
     const unresolved = [];
+    let allTruckersCache = null;
     for (const query of names) {
-        const matches = await getTruckersByName(query);
+        let matches = await getTruckersByName(query);
+        if (!matches.length) {
+            if (!allTruckersCache) allTruckersCache = await loadTruckers();
+            matches = matchTruckersByTokens(query, allTruckersCache);
+        }
         if (matches.length === 1) resolved.push({ name: query, trucker: matches[0] });
         else if (matches.length > 1) ambiguous.push({ query, matches });
         else unresolved.push(query);

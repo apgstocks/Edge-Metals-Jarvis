@@ -113,6 +113,13 @@ function resolveTruckerChannel(trucker) {
 // human glance than silently drop a real quote).
 const PRICE_PATTERNS = [
     /\$\s?([\d,]+(?:\.\d{1,2})?)/,                              // "$450", "$1,200.50"
+    // REAL BUG (found 2026-08-05, live): a real trucker (Jey) replied
+    // "1250$" — dollar sign AFTER the number, a very common casual way to
+    // text a price — and it went completely undetected, so the reminder
+    // chain kept firing "any price yet?" at him twice after he'd already
+    // answered. The pattern above only matches "$" BEFORE the digits; this
+    // one covers "$" (or "usd"/"dollars") trailing the number instead.
+    /([\d,]+(?:\.\d{1,2})?)\s?\$/,                                // "1250$", "1,250 $"
     /\b([\d,]{2,}(?:\.\d{1,2})?)\s*(?:dollars|usd|flat|per\s?load|each|\/load)\b/i, // "500 dollars", "1200 flat", "900/load"
 ];
 function classifyQuoteReply(text) {
@@ -126,11 +133,12 @@ function classifyQuoteReply(text) {
             return { isPrice: true, amount: Number.isFinite(amount) ? amount : null, matchedText: m[0] };
         }
     }
-    // Bare-number reply — a terse trucker just typing "450" with nothing
-    // else. Only treat the WHOLE message as a price this way (not a number
-    // buried in a longer sentence — that's much more likely to be a phone
-    // number, a booking number, or something else entirely).
-    const bareNumber = clean.match(/^\$?\s?([\d,]{2,}(?:\.\d{1,2})?)$/);
+    // Bare-number reply — a terse trucker just typing "450" (or "450$") with
+    // nothing else. Only treat the WHOLE message as a price this way (not a
+    // number buried in a longer sentence — that's much more likely to be a
+    // phone number, a booking number, or something else entirely). Allows an
+    // optional "$" on EITHER side, same leading-or-trailing reasoning as above.
+    const bareNumber = clean.match(/^\$?\s?([\d,]{2,}(?:\.\d{1,2})?)\s?\$?$/);
     if (bareNumber) {
         const amount = parseFloat(bareNumber[1].replace(/,/g, ''));
         return { isPrice: true, amount: Number.isFinite(amount) ? amount : null, matchedText: clean };

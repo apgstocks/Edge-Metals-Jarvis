@@ -1225,8 +1225,21 @@ async function process(rawEvent, sendMessage) {
     try { await actions.promoteQueued(inbound.chatId); } catch (e) { console.error('[BRAIN] promoteQueued failed:', e.message); }
 
     // Reminder tail — pending still open after an unrelated exchange
+    // REAL BUG (found 2026-08-05, live): a "get quote from LA to Richmond
+    // ask X" sent while an earlier quote-request pending was ALREADY
+    // unresolved on that chat gets queued behind it (setPending's own
+    // never-overwrite rule) — pauseForLaneAmbiguity/pauseForTruckerAmbiguity/
+    // askWhichTruckers already say so explicitly ("...but you have a pending
+    // X to answer first"). Without this exclusion, THIS generic tail fires
+    // right after that same message and re-prints the still-active pending's
+    // full question again — a redundant second message describing the exact
+    // same thing the first one just said. The three *_queued outcomes below
+    // are the only action_taken values those three functions return when
+    // setPending reports queued:true — excluding them here doesn't touch any
+    // other pending type's reminder-tail behavior.
     if (inbound.isManagerOrTeam && pending &&
-        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled'].includes(result?.action_taken)) {
+        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled',
+          'quote_lane_ambiguous_queued', 'quote_trucker_ambiguous_queued', 'quote_awaiting_truckers_queued'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
             const fullReminder = pendingFullReminder(fresh);
