@@ -405,21 +405,107 @@ async function taskRunner() {
                 continue;
             }
 
+            // ── Quote-request reminder / escalation (2026-08-05) ────────────
+            // Both delegate entirely to workflow/quoteRequests.js, which
+            // resolves its OWN destination per leg (handleQuoteReminderTask
+            // picks sendEmailReminder vs send(leg.target) off leg.channel;
+            // handleQuoteEscalationTask resolves managerChatId() itself), so
+            // neither needs the outer chatId resolved below at all.
+            //
+            // REAL BUG (found 2026-08-06, live — Apsara: "if a reminder of
+            // quote goes idle, saying that chat id is missing"): this block
+            // used to sit BELOW the chatId resolution + `if (!chatId)` gate.
+            // workflow/quoteRequests.js deliberately sets target_chat:null
+            // for EMAIL legs (see scheduleFirstReminder — "leg.channel !==
+            // 'email' ? leg.target : null"), expecting this delegation to
+            // handle delivery. But for an email-only trucker (no group_id,
+            // no whatsapp) the name lookup below couldn't fill chatId either,
+            // so the task hit that gate, burned all 3 tries, and archived as
+            // 'no_chatid_resolved' — the reminder chain silently dying
+            // without one reminder ever being sent, exactly as reported.
+            //
+            // SECOND BUG, introduced by me EARLIER TODAY in the
+            // preferred_mode work below and caught here: that new branch
+            // fires on any targetRecord with preferred_mode==='email', which
+            // includes quote_reminder tasks — it would have intercepted them
+            // and sent task.message as a plain generic email, bypassing
+            // handleQuoteReminderTask entirely. That skips recordReminderSent,
+            // the dashboard alert, AND the scheduling of the next reminder
+            // stage/escalation — so the 30/60/90 chain would fire stage 1 and
+            // then stop dead. Hoisting this block above both is what makes
+            // that impossible rather than merely unlikely.
+            if (task.type === 'quote_reminder' || task.type === 'quote_escalation') {
+                await tasks.updateTask(task.id, { status: 'firing' });
+                const quoteRequests = require('./workflow/quoteRequests');
+                try {
+                    const result = task.type === 'quote_reminder'
+                        ? await quoteRequests.handleQuoteReminderTask(task, { send: _sendMessage })
+                        : await quoteRequests.handleQuoteEscalationTask(task, { send: _sendMessage });
+                    await tasks.archive(task.id, { status: 'done', result_note: result.fired ? 'fired' : (result.reason || 'send_failed') });
+                } catch (err) {
+                    console.error(`[TASK] quote task ${task.id} failed:`, err.message);
+                    await tasks.archive(task.id, { status: 'failed', result_note: 'runner_exception: ' + err.message });
+                }
+                continue;
+            }
+
             // 2. Resolve target chatId. Look up by name; fall back to explicit chat if not found.
             let chatId = task.target_chat || null;
+            let targetRecord = null;
             if (task.target_kind === 'trucker' && task.target_name) {
                 const truckers = await loadTruckers();
-                const t = truckers.find(x => x.name === task.target_name);
-                if (t?.group_id)      chatId = t.group_id;
-                else if (t?.whatsapp) chatId = t.whatsapp + '@c.us';
+                targetRecord = truckers.find(x => x.name === task.target_name);
+                if (targetRecord?.group_id)      chatId = targetRecord.group_id;
+                else if (targetRecord?.whatsapp) chatId = targetRecord.whatsapp + '@c.us';
             } else if (task.target_kind === 'supplier' && task.target_name) {
                 const suppliers = await loadSuppliers();
-                const s = suppliers.find(x => x.name === task.target_name);
-                if (s?.group_id)      chatId = s.group_id;
-                else if (s?.whatsapp) chatId = s.whatsapp + '@c.us';
+                targetRecord = suppliers.find(x => x.name === task.target_name);
+                if (targetRecord?.group_id)      chatId = targetRecord.group_id;
+                else if (targetRecord?.whatsapp) chatId = targetRecord.whatsapp + '@c.us';
             } else if (task.target_kind === 'manager') {
                 chatId = managerChat;
             }
+
+            // REAL BUG (found 2026-08-06, live — Apsara: "fix supplier/trucker
+            // mode of communication is email"), same class as the fix in
+            // workflow/actions.js's notifyContactRespectingChannel: this
+            // generic nudge/reminder firing loop had no email option at all —
+            // an email-preferred trucker/supplier either got a WhatsApp
+            // message anyway (if they happened to have a number on file too)
+            // or, worse, got marked "no_chatid_resolved" and silently failed
+            // after 3 tries if they didn't. Checked BEFORE the no-chatId
+            // failure below so an email-only contact doesn't get wrongly
+            // failed for lacking a WhatsApp chatId it was never going to use.
+            if (targetRecord && targetRecord.preferred_mode === 'email' && targetRecord.email) {
+                await tasks.updateTask(task.id, { status: 'firing' });
+                let msg = task.message;
+                if (task.bkg_no && !msg.includes(task.bkg_no)) {
+                    const label = task.container_seq != null ? `${task.bkg_no}/${task.container_seq}` : task.bkg_no;
+                    msg = `${label}: ${msg}`;
+                }
+                const subject = task.bkg_no ? `${task.bkg_no} — update` : 'Update';
+                try {
+                    const { sendEmail } = require('./helpers/gmail');
+                    const sent = await sendEmail({ to: targetRecord.email, subject, body: msg });
+                    require('./helpers/emailThreads').trackSentEmail({
+                        threadId: sent?.threadId, to: targetRecord.email, targetName: targetRecord.name, subject, bkgNo: task.bkg_no || null,
+                    }).catch((e) => console.error('[SCHED] emailThreads.trackSentEmail failed (non-fatal):', e.message));
+                    await tasks.archive(task.id, { status: 'done', result_note: 'fired_email' });
+                    console.log(`[TASK] Fired ${task.id} → ${targetRecord.email} (email): "${task.message.slice(0, 60)}"`);
+                } catch (err) {
+                    const nextTries = (task.tries || 0) + 1;
+                    if (nextTries >= (task.max_tries || 3)) {
+                        await tasks.archive(task.id, { status: 'failed', result_note: 'email_send_failed: ' + err.message });
+                    } else {
+                        await tasks.updateTask(task.id, {
+                            status: 'pending', tries: nextTries,
+                            fire_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+                        });
+                    }
+                }
+                continue;
+            }
+
             if (!chatId) {
                 await tasks.updateTask(task.id, { tries: (task.tries || 0) + 1 });
                 if ((task.tries || 0) + 1 >= (task.max_tries || 3)) {
@@ -443,7 +529,15 @@ async function taskRunner() {
                 await tasks.updateTask(task.id, { status: 'firing' });
                 try {
                     const { sendEmail } = require('./helpers/gmail');
-                    await sendEmail(task.email_payload);
+                    const sent = await sendEmail(task.email_payload);
+                    // Same reply-tracking as the immediate-send path in
+                    // actions.js's sendDraftedEmail — a scheduled email is
+                    // still a general sent email that can get a reply worth
+                    // surfacing in the bell (2026-08-06).
+                    require('./helpers/emailThreads').trackSentEmail({
+                        threadId: sent?.threadId, to: task.email_payload.to, targetName: task.email_payload.target_name,
+                        subject: task.email_payload.subject, bkgNo: task.bkg_no,
+                    }).catch((e) => console.error('[SCHED] emailThreads.trackSentEmail failed (non-fatal):', e.message));
                     await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
                     await _sendMessage(chatId, `Scheduled email sent to ${task.email_payload.target_name || ''} <${task.email_payload.to}>: ${task.email_payload.subject}`);
                     console.log(`[TASK] Scheduled email fired ${task.id} → ${task.email_payload.to}`);
@@ -458,28 +552,6 @@ async function taskRunner() {
                             fire_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
                         });
                     }
-                }
-                continue;
-            }
-
-            // ── Quote-request reminder / escalation (2026-08-05) ────────────
-            // Both delegate entirely to workflow/quoteRequests.js — the
-            // condition gate already skipped this task above if the leg
-            // resolved before its fire_at, so by the time we're here it's a
-            // genuine "still no price" case. Mirrors the 'scheduled_email'
-            // pattern just above: reuse this SAME due/retry/archive
-            // machinery rather than a parallel scheduler.
-            if (task.type === 'quote_reminder' || task.type === 'quote_escalation') {
-                await tasks.updateTask(task.id, { status: 'firing' });
-                const quoteRequests = require('./workflow/quoteRequests');
-                try {
-                    const result = task.type === 'quote_reminder'
-                        ? await quoteRequests.handleQuoteReminderTask(task, { send: _sendMessage })
-                        : await quoteRequests.handleQuoteEscalationTask(task, { send: _sendMessage });
-                    await tasks.archive(task.id, { status: 'done', result_note: result.fired ? 'fired' : (result.reason || 'send_failed') });
-                } catch (err) {
-                    console.error(`[TASK] quote task ${task.id} failed:`, err.message);
-                    await tasks.archive(task.id, { status: 'failed', result_note: 'runner_exception: ' + err.message });
                 }
                 continue;
             }
@@ -538,6 +610,22 @@ async function quoteEmailReplyWatch() {
     }
 }
 
+// ── General sent-email reply poll (2026-08-06) ──────────────────────────────
+// Same cadence/reasoning as quoteEmailReplyWatch just above, for the general
+// draftEmailForConfirm/sendDraftedEmail flow instead of quote-request legs —
+// see workflow/emailReplyWatch.js's own header. Kept as its own function/cron
+// entry (not folded into quoteEmailReplyWatch) so a failure or slowdown in
+// one poll can't affect the other.
+async function generalEmailReplyWatch() {
+    try {
+        const { pollGeneralEmailReplies } = require('./workflow/emailReplyWatch');
+        const result = await pollGeneralEmailReplies();
+        if (result.replied) console.log(`[SCHED] general email poll: ${result.replied}/${result.checked} thread(s) had a new reply`);
+    } catch (err) {
+        console.error('[SCHED] general-email-poll:', err.message);
+    }
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -548,6 +636,7 @@ function start() {
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
+    cron.schedule('*/5 * * * *',  () => generalEmailReplyWatch().catch(e => console.error('[SCHED] general-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
     cron.schedule('45 23 * * *', () => {
         const settings = cfg.getSettings ? cfg.getSettings() : {};

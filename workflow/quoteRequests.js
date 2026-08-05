@@ -133,8 +133,31 @@ async function startQuoteRequest({ originQuery, destinationQuery, truckerLegs, a
             await scheduleFirstReminder(request, request.legs.find((l) => l.trucker_name === leg.trucker_name));
         } else {
             failed.push(leg.trucker_name);
+            // Per Apsara 2026-08-06: a leg whose send actually failed must
+            // NOT stay 'awaiting_reply' — see markLegFailed's own comment
+            // for the real incident (stuck-forever leg, no reminder, never
+            // auto-closes) this closes off.
+            await qr.markLegFailed(request.id, leg.trucker_name, `dispatch_failed_channel_${leg.channel}`);
+            // Own alert, not just folded into the "nobody — all sends
+            // failed" text below — that summary line only fires once per
+            // whole request and gets buried when other legs DID send. A
+            // failed leg needs to surface on its own in the bell (2026-08-06:
+            // "there should be a notification bell... which works exactly
+            // for this"), same as reminders/prices/escalations already do.
+            await pushAlert({
+                type: 'quote_leg_failed',
+                bkgNo: null,
+                message: `Couldn't send quote request to ${leg.trucker_name} (${request.origin_query} → ${request.destination_query}) — ${leg.channel} send failed.`,
+                severity: 'warning',
+            });
         }
     }
+    // A request whose every leg failed to send has nothing left awaiting a
+    // reply — close it immediately rather than leaving it 'active' with zero
+    // live legs (maybeCloseRequest's own check already covers this the
+    // moment every leg is non-awaiting, this just doesn't wait for a later
+    // trigger to notice).
+    if (!sentTo.length) await qr.maybeCloseRequest(request.id);
 
     await pushAlert({
         type: 'quote_request_sent',
