@@ -23,8 +23,8 @@
 // value — only overwrites a booking when a fresh, non-null cutoff_date was
 // actually found in its mail this time.
 
-const { getGmailRead, listMessages, getMessage, getEmailContent } = require('./helpers/gmail');
-const { extractBookingFieldsFromText } = require('./helpers/gemini');
+const { getGmailRead, listMessages, getMessage, getEmailContent, downloadAttachment } = require('./helpers/gmail');
+const { extractBookingFieldsFromText, extractPdfFields } = require('./helpers/gemini');
 const { loadBookings, mutateJson } = require('./helpers/json');
 const { syncBookingToSheet } = require('./helpers/bookingTracker');
 const { appendAuditLog } = require('./helpers/auditlog');
@@ -44,9 +44,35 @@ async function reextractOne(bkgNo, currentCutoff, gmail) {
     for (const m of messages) {
         try {
             const full = await getMessage(gmail, m.id);
-            const { body } = getEmailContent(full.payload);
-            if (!body || !body.trim()) continue;
-            const fields = await extractBookingFieldsFromText(body);
+            const { body, pdfParts } = getEmailContent(full.payload);
+
+            let fields = null;
+            if (body && body.trim()) {
+                fields = await extractBookingFieldsFromText(body);
+            }
+
+            // Body text often has nothing usable — plenty of carriers (Zimex
+            // confirmed as a real case) send the actual booking confirmation
+            // as a PDF attachment with little or no cutoff info in the message
+            // body itself. Same fallback workflow/emailWatcher.js already uses
+            // for new bookings: download each attachment and try extractPdfFields.
+            // is_booking_confirmation gates it so we don't trust a date pulled
+            // from an unrelated attached PDF (an invoice, a rate sheet, etc).
+            if ((!fields || !fields.cutoff_date) && pdfParts.length) {
+                for (const part of pdfParts) {
+                    try {
+                        const att = await downloadAttachment(gmail, m.id, part);
+                        const pdfFields = await extractPdfFields(att.base64);
+                        if (pdfFields && pdfFields.is_booking_confirmation && pdfFields.cutoff_date) {
+                            fields = pdfFields;
+                            break;
+                        }
+                    } catch (err) {
+                        console.error(`[REEXTRACT] Attachment read failed for ${bkgNo}:`, err.message);
+                    }
+                }
+            }
+
             if (!fields || !fields.cutoff_date) continue;
 
             const before   = currentCutoff;

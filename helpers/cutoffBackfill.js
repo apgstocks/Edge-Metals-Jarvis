@@ -42,8 +42,8 @@
 // workflow/actions.js's backfillCutoffs ("backfill missing cutoffs" / "fill
 // in whatever's missing" on WhatsApp) — both call this same run().
 
-const { getGmailRead, listMessages, getMessage, getEmailContent } = require('./gmail');
-const { extractBookingFieldsFromText } = require('./gemini');
+const { getGmailRead, listMessages, getMessage, getEmailContent, downloadAttachment } = require('./gmail');
+const { extractBookingFieldsFromText, extractPdfFields } = require('./gemini');
 const { appendAuditLog } = require('./auditlog');
 const { loadBookings, mutateJson } = require('./json');
 const { syncBookingToSheet } = require('./bookingTracker');
@@ -83,9 +83,37 @@ async function backfillOne(bkgNo, gmail) {
     for (const m of messages) {
         try {
             const full = await getMessage(gmail, m.id);
-            const { body } = getEmailContent(full.payload);
-            if (!body || !body.trim()) continue;
-            const fields = await extractBookingFieldsFromText(body);
+            const { body, pdfParts } = getEmailContent(full.payload);
+
+            let fields = null;
+            if (body && body.trim()) {
+                fields = await extractBookingFieldsFromText(body);
+            }
+            const hasAnyFromBody = fields && BACKFILL_FIELDS.some((f) => fields[f]);
+
+            // Body had nothing usable — plenty of carriers (Zimex confirmed as
+            // a real case) send the actual booking confirmation as a PDF
+            // attachment with little or no useful text in the message body
+            // itself. Same fallback workflow/emailWatcher.js and
+            // reextract-cutoffs.js already use: download each attachment and
+            // try extractPdfFields, gated on is_booking_confirmation so an
+            // unrelated attachment (invoice, rate sheet) can't get treated as
+            // a source for these fields.
+            if (!hasAnyFromBody && pdfParts && pdfParts.length) {
+                for (const part of pdfParts) {
+                    try {
+                        const att = await downloadAttachment(gmail, m.id, part);
+                        const pdfFields = await extractPdfFields(att.base64);
+                        if (pdfFields && pdfFields.is_booking_confirmation && BACKFILL_FIELDS.some((f) => pdfFields[f])) {
+                            fields = pdfFields;
+                            break;
+                        }
+                    } catch (err) {
+                        console.error(`[${AGENT}] Attachment read failed for ${bkgNo}:`, err.message);
+                    }
+                }
+            }
+
             if (!fields) continue;
             const hasAnyBackfillable = BACKFILL_FIELDS.some((f) => fields[f]);
             if (!hasAnyBackfillable) continue;
