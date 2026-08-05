@@ -128,7 +128,43 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     return created.data;
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking };
+// ── List every PDF in the upload folder (paginated) ───────────────────────
+// Read-only — never touches file content or metadata. Built for one-off
+// audits (e.g. checking which stored "booking" PDFs are actually invoices
+// or other documents that slipped through the creation gate).
+async function listAllPdfs() {
+    const drive = getDrive();
+    if (!cfg.GDRIVE_UPLOAD_FOLDER_ID) throw new Error('GDRIVE_UPLOAD_FOLDER_ID not configured');
+    const files = [];
+    let pageToken = null;
+    do {
+        const res = await drive.files.list({
+            q: `'${cfg.GDRIVE_UPLOAD_FOLDER_ID}' in parents and mimeType = 'application/pdf' and trashed = false`,
+            fields: 'nextPageToken, files(id, name, modifiedTime)',
+            pageSize: 100,
+            pageToken,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+            corpora: 'drive',
+            driveId: cfg.GDRIVE_FOLDER_ID,
+        });
+        files.push(...(res.data.files || []));
+        pageToken = res.data.nextPageToken || null;
+    } while (pageToken);
+    return files;
+}
+
+// Raw PDF bytes as base64, by file ID — for classification/extraction calls.
+async function downloadPdfById(fileId) {
+    const drive = getDrive();
+    const res = await drive.files.get(
+        { fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'arraybuffer' }
+    );
+    return Buffer.from(res.data).toString('base64');
+}
+
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

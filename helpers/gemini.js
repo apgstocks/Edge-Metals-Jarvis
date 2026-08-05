@@ -120,6 +120,59 @@ ${emailBodyText.slice(0, 6000)}
     return null;
 }
 
+// ── Multimodal: dedicated document classification (separate from extraction) ──
+// A narrow, single-job call: "is this a booking confirmation, yes or no."
+// Deliberately separate from extractPdfFields, where is_booking_confirmation
+// is just one field among 13 others — the same failure class as the port/doc
+// cutoff bug: a judgment buried inside a big compound schema doesn't get the
+// model's full attention and isn't reliable enough on its own. Used as a
+// SECOND, INDEPENDENT opinion before trusting extractPdfFields's own flag for
+// anything as consequential as auto-creating a new booking record. Real
+// report: invoices that merely mention a booking/container number were
+// getting is_booking_confirmation:true from the bundled extraction call and
+// silently creating phantom bookings.
+async function classifyDocument(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are a freight operations expert. Look at this PDF and classify ONLY what kind of document it is — do not extract any fields. Return ONLY raw JSON, no markdown, no prose.
+
+{
+  "is_booking_confirmation": false, // true ONLY if this document itself IS a carrier booking confirmation or shipping instruction establishing a specific shipment booking — the kind of document a carrier (Maersk, MSC, Zimex, HMM, ONE, etc.) issues to confirm a container booking, typically titled "BOOKING CONFIRMATION" or similar, showing vessel/voyage, port of loading/discharge, and cutoff dates.
+  "is_invoice_or_other": false,     // true if this is an invoice, rate quote, bill, receipt, container release notice, arrival notice, demurrage/detention notice, customs document, or any other freight-adjacent document that is NOT itself a booking confirmation — even if it mentions a booking number, container number, vessel, or words like "booking"/"cutoff" somewhere in it. An invoice that references a booking number is still an invoice, not a booking confirmation.
+  "document_type": null            // your best short label, e.g. "booking confirmation", "invoice", "rate quote", "arrival notice", "customs form"
+}
+
+Judge by what the document actually IS and what its title/purpose is — not by whether booking-shaped keywords or numbers appear somewhere in it. Return the JSON object and nothing else.`;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed) return parsed;
+            console.warn(`[GEMINI] Classification returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Classification failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+                continue;
+            }
+            // Classification is a safety CHECK, not the primary extraction — a
+            // hard failure here shouldn't crash the whole pipeline. Caller
+            // treats null as "couldn't confirm" and fails safe (skip, don't create).
+            if (attempt >= retries) return null;
+        }
+    }
+    return null;
+}
+
 // ── Multimodal: extract booking fields from a PDF ─────────────────────────────
 // Sends the PDF bytes directly to Gemini. Used by the Bookings tab.
 // Fields extracted match the shape used by POST /api/bookings.
@@ -202,4 +255,4 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
 // already includes full chat context (session, last 5 messages, facts,
 // business context). If a lighter-weight text-only Gemini call is needed
 // again later, re-add it deliberately — don't restore this dead pair as-is.
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument };

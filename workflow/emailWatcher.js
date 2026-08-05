@@ -30,7 +30,7 @@
 //      clobbered the first PDF in Drive before this guard existed.
 
 const { getGmailRead, getEmailContent, downloadAttachment, listMessages, getMessage } = require('../helpers/gmail');
-const { extractPdfFields, extractBookingFieldsFromText } = require('../helpers/gemini');
+const { extractPdfFields, extractBookingFieldsFromText, classifyDocument } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
@@ -107,12 +107,35 @@ async function run() {
                     console.error(`[${AGENT}] Extraction failed on ${att.filename}:`, err.message);
                     return null;
                 });
-                if (extracted && extracted.is_booking_confirmation && extracted.booking_number) {
-                    fields = extracted;
-                    pdfBase64 = att.base64;
-                    filename = att.filename;
-                    break;
+                if (!extracted || !extracted.is_booking_confirmation || !extracted.booking_number) continue;
+
+                // Second, independent opinion before trusting this enough to
+                // auto-create a booking record. Real report: invoices that
+                // merely mention a booking/container number were getting
+                // is_booking_confirmation:true from the bundled extraction
+                // call above and silently creating phantom bookings. Only
+                // proceed if a SEPARATE, narrowly-scoped classification call
+                // also agrees. Fails safe: a classification error or
+                // disagreement skips this PDF rather than trusting extraction
+                // alone.
+                const classification = await classifyDocument(att.base64).catch((err) => {
+                    console.error(`[${AGENT}] Classification failed on ${att.filename}:`, err.message);
+                    return null;
+                });
+                if (!classification || !classification.is_booking_confirmation || classification.is_invoice_or_other) {
+                    console.warn(`[${AGENT}] Extraction called it a booking confirmation but classification disagreed (type=${classification?.document_type || 'unknown/failed'}) — skipping ${att.filename}`);
+                    await appendAuditLog({
+                        source: 'email_watcher', intent: 'classification_mismatch', resolvedBy: 'ai', confidence: null,
+                        actionTaken: 'skipped', subject, messageId: m.id,
+                        note: `extraction said booking_number=${extracted.booking_number}, classification said ${classification?.document_type || 'unknown/failed'}`,
+                    });
+                    continue;
                 }
+
+                fields = extracted;
+                pdfBase64 = att.base64;
+                filename = att.filename;
+                break;
             }
 
             if (!fields) {
