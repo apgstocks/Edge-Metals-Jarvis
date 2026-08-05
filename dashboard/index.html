@@ -635,8 +635,13 @@ $('btnSaveBooking').addEventListener('click', async () => {
       ? await api(`/api/bookings/${encodeURIComponent(editingBookingNumber)}`, { method: 'PUT', body: JSON.stringify(payload) })
       : await api('/api/bookings', { method: 'POST', body: JSON.stringify(payload) });
     if (modalPdfBase64) {
+      // Booking fields already saved above by this point — a PDF refusal here
+      // (e.g. Drive's overwrite guard rejecting a non-confirmation document)
+      // must NOT be swallowed silently, or the old PDF stays on file with no
+      // indication anything went wrong. Surface it, but don't block the modal
+      // from closing since the booking record itself did save successfully.
       try { await api('/api/bookings/upload-pdf', { method: 'POST', body: JSON.stringify({ booking_number: bkg, pdf_base64: modalPdfBase64, original_filename: modalPdfFile?.name }) }); }
-      catch (e) { console.warn('[UPLOAD]', e.message); }
+      catch (e) { console.warn('[UPLOAD]', e.message); alert(`Booking saved, but the PDF was NOT attached:\n\n${e.message}`); }
     }
     closeBookingModal();
     if (CURRENT_TAB === 'bookings') loadTab('bookings'); else if (CURRENT_TAB === 'board') loadTab('board');

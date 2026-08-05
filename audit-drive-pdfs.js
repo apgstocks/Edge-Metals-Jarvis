@@ -21,7 +21,7 @@
 
 const { listAllPdfs, downloadPdfById } = require('./helpers/drive');
 const { classifyDocument } = require('./helpers/gemini');
-const { loadBookings } = require('./helpers/json');
+const { loadBookings, loadWorkflow } = require('./helpers/json');
 
 async function main() {
     console.log('=== Drive PDF audit — read-only, changes nothing ===\n');
@@ -40,11 +40,13 @@ async function main() {
     console.log(`Found ${files.length} PDF(s). Checking each against classifyDocument()...\n`);
 
     const bookings = loadBookings();
+    const workflow = loadWorkflow();
     const results = [];
 
     for (const f of files) {
         const bkgGuess = f.name.replace(/\.pdf$/i, '');
         const trackedBooking = bookings[bkgGuess] || null;
+        const wfStep = workflow[bkgGuess]?.step || (trackedBooking ? 'not_started' : null);
 
         let classification = null;
         try {
@@ -55,12 +57,12 @@ async function main() {
         }
 
         const flaggedNotBooking = !!classification && (!classification.is_booking_confirmation || classification.is_invoice_or_other);
-        results.push({ file: f.name, fileId: f.id, bkgGuess, trackedInBookingsJson: !!trackedBooking, classification, flaggedNotBooking });
+        results.push({ file: f.name, fileId: f.id, bkgGuess, trackedInBookingsJson: !!trackedBooking, wfStep, classification, flaggedNotBooking });
 
         const label = classification
             ? `${classification.is_booking_confirmation ? 'BOOKING' : 'NOT-BOOKING'} (${classification.document_type || '?'})`
             : 'CHECK FAILED';
-        console.log(`${f.name.padEnd(28)} tracked=${String(!!trackedBooking).padEnd(5)} -> ${label}`);
+        console.log(`${f.name.padEnd(28)} tracked=${String(!!trackedBooking).padEnd(5)} stage=${(wfStep || '-').padEnd(18)} -> ${label}`);
     }
 
     const flagged     = results.filter(r => r.flaggedNotBooking);
@@ -73,10 +75,31 @@ async function main() {
 
     if (flagged.length) {
         console.log('\nFlagged files — review manually, nothing was changed:');
-        flagged.forEach(r => console.log(
-            `  ${r.file}  [${r.classification.document_type || 'unknown'}]  ` +
-            `bookings.json record: ${r.trackedInBookingsJson ? `YES — a real booking exists for ${r.bkgGuess}, check its fields` : 'no'}`
-        ));
+        // Suggested action is a HINT, not a decision — always read manually before
+        // archiving. Logic: a Bill of Lading is only issued after cargo is loaded,
+        // so if the booking has already reached a late workflow stage (picked up,
+        // ingated, done), a flagged "not a confirmation" file is very likely the
+        // known B/L-overwrite pattern (real booking, safe to archive out of
+        // active once you've confirmed it shipped). If the stage is still EARLY
+        // (not even picked up yet), a flagged file is suspicious for a different
+        // reason — something's off (wrong upload, bad classification, or a
+        // phantom record) and needs a manual look, not an auto-archive.
+        const LATE_STAGES = ['picked_up', 'ingate_received', 'done'];
+        flagged.forEach(r => {
+            let suggestion;
+            if (!r.trackedInBookingsJson) {
+                suggestion = 'no bookings.json record — nothing "active" to remove; stray Drive file only';
+            } else if (LATE_STAGES.includes(r.wfStep)) {
+                suggestion = `LIKELY SAFE TO ARCHIVE — booking is at stage "${r.wfStep}" (already shipped), matches the known B/L-overwrite pattern. Confirm, then archive from the dashboard.`;
+            } else {
+                suggestion = `NEEDS MANUAL REVIEW — booking is still at stage "${r.wfStep || 'not_started'}" (too early to have a real B/L). Don't auto-archive; check what this file actually is.`;
+            }
+            console.log(
+                `  ${r.file}  [${r.classification.document_type || 'unknown'}]  ` +
+                `bookings.json record: ${r.trackedInBookingsJson ? `YES — ${r.bkgGuess}` : 'no'}\n` +
+                `    -> ${suggestion}`
+            );
+        });
     }
     if (checkFailed.length) {
         console.log('\nCould not classify (transient API errors — rerun to retry):');

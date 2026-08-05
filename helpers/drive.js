@@ -80,11 +80,27 @@ async function fetchPdfFromDrive(bkgNo) {
     }
 }
 
+// Pure decision, pulled out so it's directly testable without a live Drive/
+// Gemini call: does this classification result mean the incoming file is
+// genuinely a booking confirmation and therefore safe to let it replace an
+// existing one? Fails closed — null, a missing flag, or is_invoice_or_other
+// all resolve to "no."
+function isConfirmationClassification(classification) {
+    return !!classification && classification.is_booking_confirmation === true && !classification.is_invoice_or_other;
+}
+
 // ── Upload a booking PDF to Shared Drive (used by the Bookings tab) ──────────
 // Naming convention: <BKG_NO>.pdf so findPdfByBooking() locates it later.
 // If a PDF with the same booking number already exists, we update it in-place
-// so the booking never has two PDFs (last-upload-wins matches user expectation).
-// Returns { fileId, name, webViewLink } or throws.
+// so the booking never has two PDFs (last-upload-wins matches user expectation)
+// — BUT ONLY when the new upload is itself a booking confirmation. A real
+// booking (GLTOEH-27233) lost its confirmation PDF this way: its Bill of
+// Lading legitimately shares the SAME booking/reference number (completely
+// normal in freight — a carrier issues a booking confirmation first, then a
+// B/L once cargo is loaded), and used to silently overwrite the confirmation
+// here with zero warning. A later "forward booking to trucker" would then
+// send the B/L instead of the confirmation. Returns { fileId, name,
+// webViewLink } or throws — including when refusing to overwrite.
 async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     if (!bkgNo) throw new Error('booking number required');
     if (!pdfBase64) throw new Error('PDF data required');
@@ -100,13 +116,31 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     const media    = { mimeType: 'application/pdf', body: Readable.from(buffer) };
 
     if (existing) {
+        // Classify the INCOMING file before letting it replace whatever's
+        // already on file. Fails safe: a classification error or a "no"
+        // both refuse the overwrite rather than trusting the upload blindly.
+        const { classifyDocument } = require('./gemini');
+        const classification = await classifyDocument(pdfBase64).catch((err) => {
+            console.error(`[DRIVE] Classification failed for ${bkgNo} upload — refusing to overwrite the existing PDF as a precaution:`, err.message);
+            return null;
+        });
+        if (!isConfirmationClassification(classification)) {
+            const docType = classification?.document_type || 'an unclassifiable document';
+            console.warn(`[DRIVE] ${bkgNo}: refused to overwrite existing PDF — new upload looks like ${docType}, not a booking confirmation. Existing file left untouched: ${existing.name} (${existing.id})`);
+            const err = new Error(`Refused to overwrite ${bkgNo}'s existing booking confirmation — the new file looks like ${docType}, not a booking confirmation. The existing PDF was left untouched.`);
+            err.code = 'NOT_A_BOOKING_CONFIRMATION';
+            err.existingFile = { id: existing.id, name: existing.name };
+            err.classification = classification;
+            throw err;
+        }
+
         const updated = await drive.files.update({
             fileId: existing.id,
             media,
             fields: 'id, name, webViewLink',
             supportsAllDrives: true,
         });
-        console.log(`[DRIVE] Updated ${name} (${updated.data.id})`);
+        console.log(`[DRIVE] Updated ${name} (${updated.data.id}) — new upload confirmed as a booking confirmation`);
         return updated.data;
     }
 
@@ -164,7 +198,7 @@ async function downloadPdfById(fileId) {
     return Buffer.from(res.data).toString('base64');
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById };
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete
