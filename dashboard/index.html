@@ -264,6 +264,31 @@ input::placeholder { color:var(--steel-500); }
   </div>
 </div>
 
+<!-- Quick assign/forward — the REAL action (sends the actual WhatsApp message
+     via workflow/actions.js's assignSupplier/forwardBooking, same as typing
+     "assign"/"forward" on WhatsApp or in the Bot tab below), NOT the booking-
+     edit modal's "Stage (manual)" override, which deliberately does not
+     notify anyone. Built 2026-08-05 per Apsara: a real Forward button on the
+     Bookings tab, that asks her to assign a supplier first if one isn't set. -->
+<div id="forwardModal" class="hidden modal-overlay">
+  <div class="modal-shell" style="max-width:460px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div><div class="eyebrow" style="margin-bottom:3px;">// <span id="fwd_eyebrow">Forward</span></div><div id="fwd_title" style="font-family:var(--font-display); font-size:18px; font-weight:800; text-transform:uppercase; color:var(--text-strong);">Forward to trucker</div></div>
+      <button id="btnCloseForwardModal" aria-label="Close" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:20px; padding:6px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="fwd_subtitle" style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;"></div>
+      <div class="field"><label id="fwd_label">Trucker</label><select id="fwd_contact"></select></div>
+      <div id="fwd_error" style="color:var(--status-danger); font-size:12.5px; margin-top:8px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btnCancelForward" class="btn btn-secondary">Cancel</button>
+      <button id="btnConfirmForward" class="btn btn-primary">Send</button>
+    </div>
+  </div>
+</div>
+
 <script src="/qrcode.min.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════════════
@@ -713,6 +738,23 @@ function renderBookings(bookingsObj) {
   }
 
   const COLS = '24px 150px 1fr 100px 100px 130px 130px';
+  // A container is "settled" (nothing to quick-assign/forward here anymore)
+  // once it's reached 'forwarded' or any later stage — the stage badge
+  // already shows that state, no action button needed in that slot.
+  const FORWARDED_OR_LATER = new Set(['forwarded', 'empty_dropped', 'load_ready', 'picked_up', 'ingate_received', 'done']);
+  function containerActionCell(bkg, c) {
+    if (FORWARDED_OR_LATER.has(c.stage || 'not_started')) return '<div></div>';
+    // No supplier yet → per Apsara: "if supplier/trucker not assigned, ask
+    // them to assign first" — the Assign button IS that ask, not a blocking
+    // alert with nowhere to go. Only once a supplier is on file does the
+    // slot switch to Forward (which is itself both "pick a trucker" AND
+    // "send it" in one step — matches workflow/actions.js's forwardBooking,
+    // there's no separate silent "assign trucker" concept on the backend).
+    if (!c.supplier) {
+      return `<button class="btn btn-secondary btn-quick-assign" data-bkg="${esc(bkg)}" data-seq="${c.seq}" style="padding:6px 12px; font-size:10px;">Assign</button>`;
+    }
+    return `<button class="btn btn-primary btn-quick-forward" data-bkg="${esc(bkg)}" data-seq="${c.seq}" style="padding:6px 12px; font-size:10px;">Forward</button>`;
+  }
   function bookingRow(b) {
     const containers = Array.isArray(b.containers) && b.containers.length ? b.containers : [{ seq: 1, size: b.container_size, container_number: b.container_number, stage: 'not_started' }];
     const subRows = containers.map(c => `
@@ -722,7 +764,7 @@ function renderBookings(bookingsObj) {
         <div style="font-family:var(--font-mono);">${esc(c.size || '—')} ${c.container_number ? '· ' + esc(c.container_number) : ''}</div>
         <div style="font-family:var(--font-mono); color:${c.supplier || c.trucker ? 'var(--text-strong)' : 'var(--text-faint)'};">${esc(c.supplier && c.trucker ? c.supplier + ' → ' + c.trucker : (c.supplier || c.trucker || '—'))}</div>
         <div><span class="badge" style="background:var(--surface-card); border:1px solid var(--border-subtle); color:var(--text-body);">${esc((c.stage || 'not_started').replace(/_/g, ' '))}</span></div>
-        <div></div>
+        <div onclick="event.stopPropagation();" style="text-align:right;">${containerActionCell(b.booking_number, c)}</div>
       </div>`).join('');
     return `
     <div data-bkg-group="${esc(b.booking_number)}">
@@ -817,7 +859,77 @@ function renderBookings(bookingsObj) {
     await api(`/api/bookings/${encodeURIComponent(btn.dataset.bkg)}`, { method: 'DELETE' });
     loadTab('bookings');
   }));
+  document.querySelectorAll('.btn-quick-assign').forEach(btn => btn.addEventListener('click', () => openForwardModal(btn.dataset.bkg, Number(btn.dataset.seq), 'assign')));
+  document.querySelectorAll('.btn-quick-forward').forEach(btn => btn.addEventListener('click', () => openForwardModal(btn.dataset.bkg, Number(btn.dataset.seq), 'forward')));
 }
+
+// ── Quick assign/forward modal ────────────────────────────────────────────
+// Fires the REAL "assign"/"forward" command through /api/bot/command — the
+// exact same execution path as typing it on WhatsApp or in the Bot tab
+// (workflow/actions.js's assignSupplier/forwardBooking → executeAssign/
+// executeForward), so the supplier/trucker actually gets notified. This is
+// deliberately NOT the booking-edit modal's per-container Supplier/Trucker/
+// Stage fields — those are an explicit "manual override, does not notify
+// anyone" escape hatch (see its own on-screen warning), wrong tool for a
+// real assign/forward action.
+let forwardModalState = { bkg: null, seq: null, kind: null };
+async function openForwardModal(bkg, seq, kind) {
+  forwardModalState = { bkg, seq, kind };
+  const isAssign = kind === 'assign';
+  $('fwd_eyebrow').textContent = isAssign ? 'Assign' : 'Forward';
+  $('fwd_title').textContent = isAssign ? 'Assign supplier' : 'Forward to trucker';
+  $('fwd_label').textContent = isAssign ? 'Supplier' : 'Trucker';
+  $('fwd_subtitle').textContent = `${bkg} / container #${seq}${isAssign ? ' — this sends the supplier their assignment notice on WhatsApp.' : ' — this sends the trucker the booking + PDF on WhatsApp.'}`;
+  $('fwd_error').textContent = '';
+  $('btnConfirmForward').disabled = false;
+  $('btnConfirmForward').textContent = 'Send';
+
+  // Contact list + booking POL for locality filtering — reuses the exact
+  // same loader/filter the booking-edit modal already uses (loadModalContacts,
+  // buildContactOptions), so "which contacts show up" behaves identically
+  // in both places rather than drifting into two different filtering rules.
+  // Always refetches fresh (same as the edit modal does on every open) —
+  // no staleness risk if a trucker/supplier was just added elsewhere.
+  await loadModalContacts();
+  const b = bookingsCache[bkg];
+  const pol = b?.port_of_loading || '';
+  const list = isAssign ? modalSuppliersList : modalTruckersList;
+  $('fwd_contact').innerHTML = buildContactOptions(list, '', pol);
+
+  $('forwardModal').classList.remove('hidden');
+}
+function closeForwardModal() { $('forwardModal').classList.add('hidden'); }
+$('btnCloseForwardModal').addEventListener('click', closeForwardModal);
+$('btnCancelForward').addEventListener('click', closeForwardModal);
+$('forwardModal').addEventListener('click', (e) => { if (e.target.id === 'forwardModal') closeForwardModal(); });
+$('btnConfirmForward').addEventListener('click', async () => {
+  const { bkg, seq, kind } = forwardModalState;
+  const name = $('fwd_contact').value;
+  if (!name) { $('fwd_error').textContent = 'Pick one first.'; return; }
+  const btn = $('btnConfirmForward');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  $('fwd_error').textContent = '';
+  try {
+    const text = `${kind} ${bkg}/${seq} to ${name}`;
+    const res = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
+    const replies = (res.replies || []).map(r => r.text || '').filter(Boolean);
+    // The backend's own guards (no supplier assigned, container not found,
+    // trucker not on file, etc.) come back as plain reply text, not an HTTP
+    // error — surface them as an error in the modal instead of pretending
+    // it worked, so a blocked forward doesn't silently look like a success.
+    const blocked = replies.some(t => /^(Can't|No booking found|Container .* not found|Trucker ".*" not found|Supplier ".*" not found)/.test(t));
+    if (blocked) {
+      $('fwd_error').textContent = replies.join(' ');
+      btn.disabled = false; btn.textContent = 'Send';
+      return;
+    }
+    closeForwardModal();
+    await loadTab('bookings');
+  } catch (e) {
+    $('fwd_error').textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Send';
+  }
+});
 
 // ── TRUCKERS / SUPPLIERS (shared contact modal) ──────────────────────────
 let contactKind = null;
