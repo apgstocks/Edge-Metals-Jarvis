@@ -130,6 +130,29 @@ input::placeholder { color:var(--steel-500); }
 </button>
 <div id="sidebarBackdrop"></div>
 
+<!-- ══ NOTIFICATION BELL — 2026-08-06, per Apsara: "there should be a
+     notification bell icon in the website which works exactly for this"
+     (the quote-request send-failed/reminder/price/reply thread), and "if a
+     new mail got received it should get as notification". Both already
+     land in alerts.js's pushAlert() — quote_request_sent, quote_leg_failed,
+     quote_reminder_sent, quote_price_received, quote_reply_received (this
+     last one fires from BOTH the live WhatsApp path and the 5-min email
+     poll — pollEmailReplies -> handleEmailLegReply -> pushAlert, so an
+     email reply lands here with zero extra wiring), quote_escalated. This
+     bell is a new, generic READ of the existing GET /api/alerts endpoint
+     (already existed, just had no UI consuming it) — fixed position so it's
+     visible on every tab, not tied to viewRoot's per-tab re-render. -->
+<div id="alertBell" style="position:fixed; top:18px; right:24px; z-index:60;">
+  <button id="alertBellBtn" aria-label="Notifications" style="position:relative; width:38px; height:38px; border-radius:50%; background:var(--steel-900); border:1px solid var(--steel-700); color:var(--steel-200); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:17px;">
+    🔔
+    <span id="alertBellBadge" class="hidden" style="position:absolute; top:-3px; right:-3px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--status-danger); color:#fff; font-family:var(--font-mono); font-size:10px; font-weight:700; line-height:16px; text-align:center;"></span>
+  </button>
+  <div id="alertBellPanel" class="hidden" style="position:absolute; top:46px; right:0; width:360px; max-height:440px; overflow-y:auto; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 12px 32px rgba(0,0,0,.35);">
+    <div style="padding:12px 14px; border-bottom:1px solid var(--border-default); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Notifications</div>
+    <div id="alertBellList"></div>
+  </div>
+</div>
+
 <div style="display:flex; height:100vh; overflow:hidden;">
 
   <!-- ══ SIDEBAR ══ -->
@@ -203,6 +226,12 @@ input::placeholder { color:var(--steel-500); }
         <div class="field"><label>Port of discharge</label><input id="f_pod" placeholder="Busan"></div>
         <div class="field"><label>ERD date</label><input id="f_erd" placeholder="YYYY-MM-DD"></div>
         <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="YYYY-MM-DD"></div>
+        <!-- Added 2026-08-06 per Apsara — ERD/Cutoff were already editable
+             here, ETD/ETA were display-only (auto-extraction/backfill only,
+             no way to type or correct one by hand). Same field/placeholder
+             pattern as the two above. -->
+        <div class="field"><label>ETD</label><input id="f_etd" placeholder="YYYY-MM-DD"></div>
+        <div class="field"><label>ETA</label><input id="f_eta" placeholder="YYYY-MM-DD"></div>
         <div class="field"><label>Buyer</label><input id="f_buyer"></div>
       </div>
 
@@ -577,6 +606,8 @@ $('scanBtn').addEventListener('click', async () => {
     if (f.port_of_discharge) $('f_pod').value = f.port_of_discharge;
     if (f.erd_date) $('f_erd').value = f.erd_date;
     if (f.cutoff_date) $('f_cutoff').value = f.cutoff_date;
+    if (f.etd) $('f_etd').value = f.etd;
+    if (f.eta) $('f_eta').value = f.eta;
     if (f.vessel_voyage) $('f_vessel').value = f.vessel_voyage;
     if (f.buyer) $('f_buyer').value = f.buyer; else if (f.consignee) $('f_buyer').value = f.consignee;
     if (f.container_size) {
@@ -601,7 +632,7 @@ $('scanBtn').addEventListener('click', async () => {
 
 function resetBookingModal() {
   modalPdfBase64 = null; modalPdfFile = null; editingBookingNumber = null;
-  ['f_bkg', 'f_carrier', 'f_vessel', 'f_pol', 'f_pod', 'f_erd', 'f_cutoff', 'f_buyer'].forEach(id => $(id).value = '');
+  ['f_bkg', 'f_carrier', 'f_vessel', 'f_pol', 'f_pod', 'f_erd', 'f_cutoff', 'f_etd', 'f_eta', 'f_buyer'].forEach(id => $(id).value = '');
   $('f_bkg').disabled = false;
   modalContainers = [{ seq: 1, size: '40HC', container_number: '', supplier: '', trucker: '', stage: 'not_started' }];
   $('modalError').textContent = '';
@@ -629,6 +660,8 @@ async function openBookingModalForEdit(bkg) {
   $('f_pod').value = b.port_of_discharge || '';
   $('f_erd').value = b.erd_date || '';
   $('f_cutoff').value = b.cutoff_date || '';
+  $('f_etd').value = b.etd || '';
+  $('f_eta').value = b.eta || '';
   $('f_vessel').value = b.vessel_voyage || '';
   $('f_buyer').value = b.buyer || b.consignee || '';
   modalContainers = Array.isArray(b.containers) && b.containers.length
@@ -659,6 +692,8 @@ $('btnSaveBooking').addEventListener('click', async () => {
       port_of_discharge: $('f_pod').value.trim() || null,
       erd_date: $('f_erd').value.trim() || null,
       cutoff_date: $('f_cutoff').value.trim() || null,
+      etd: $('f_etd').value.trim() || null,
+      eta: $('f_eta').value.trim() || null,
       vessel_voyage: $('f_vessel').value.trim() || null,
       buyer: $('f_buyer').value.trim() || null,
       containers: modalContainers.map(c => ({
@@ -737,7 +772,16 @@ function renderBookings(bookingsObj) {
     }
   }
 
-  const COLS = '24px 150px 1fr 100px 100px 130px 130px';
+  // Widened 2026-08-06 per Apsara ("i want erd,cutoff,etd,eta to show in
+  // bookings tab website") — ERD/Cutoff were already columns here; added
+  // ETD/ETA alongside them (same b.erd_date/b.cutoff_date/b.etd/b.eta
+  // fields Gemini extracts from the carrier PDF and cutoffBackfill.js fills
+  // in later — see helpers/booking.js's own formatting for the same 4
+  // fields used in the WhatsApp-side ERD/cutoff replies). Route shrunk from
+  // 1fr's full remaining space isn't practical to preserve with 2 more date
+  // columns added — Containers/Actions narrowed slightly to make room
+  // instead of letting the row overflow.
+  const COLS = '24px 140px 1fr 92px 92px 92px 92px 90px 120px';
   // A container is "settled" (nothing to quick-assign/forward here anymore)
   // once it's reached 'forwarded' or any later stage — the stage badge
   // already shows that state, no action button needed in that slot.
@@ -774,6 +818,8 @@ function renderBookings(bookingsObj) {
         <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-body);">${esc(b.port_of_loading || '—')} → ${esc(b.port_of_discharge || '—')}</div>
         <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.erd_date || '—')}</div>
         <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.cutoff_date || '—')}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.etd || '—')}</div>
+        <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b.eta || '—')}</div>
         <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${containers.length}</div>
         <div style="display:flex; gap:6px; justify-content:flex-end;" onclick="event.stopPropagation();">
           <button class="btn btn-secondary btn-edit-booking" data-bkg="${esc(b.booking_number)}" style="padding:6px 12px; font-size:10px;">Edit</button>
@@ -808,7 +854,7 @@ function renderBookings(bookingsObj) {
       </div>
       <div class="pol-body" data-pol-body>
         <div style="display:grid; grid-template-columns:${COLS}; gap:14px; padding:10px 18px; background:var(--surface-sunken); border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">
-          <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>Containers</div><div style="text-align:right;">Actions</div>
+          <div></div><div>Booking</div><div>Route</div><div>ERD</div><div>Cutoff</div><div>ETD</div><div>ETA</div><div>Containers</div><div style="text-align:right;">Actions</div>
         </div>
         ${bodyHtml}
       </div>
@@ -1687,6 +1733,71 @@ $('btnSignout').addEventListener('click', async () => {
 // and the pass-2 redesign). Wire it to actually switch tabs.
 $('linkDownBanner').addEventListener('click', () => switchTab('whatsapp'));
 
+// ── Notification bell (2026-08-06) ──────────────────────────────────────────
+// GET /api/alerts (alerts.js's listAlerts()) already existed and already had
+// every event type this bell shows — quote sent/failed/reminder/price/reply/
+// escalated — nothing new to wire server-side except quote_leg_failed
+// (added alongside the "still in queue" fix). "Unread" is purely a client
+// concept — alerts.js has no read/unread field — tracked as a single
+// last-seen timestamp in localStorage (real browser storage on Apsara's
+// actual deployed site, not a Claude.ai artifact — persists across reloads,
+// which is the point).
+const ALERT_SEEN_KEY = 'jarvis_alerts_last_seen_at';
+const ALERT_SEVERITY_COLOR = { high: 'var(--status-danger)', warning: 'var(--status-warning)', info: 'var(--status-info)' };
+let alertBellPanelOpen = false;
+
+function alertBellTimeAgo(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+async function refreshAlertBell() {
+  let alerts = [];
+  try { alerts = await api('/api/alerts'); } catch { return; } // e.g. logged out — fail quiet, boot()'s own api('/api/me') already handles that redirect
+  const lastSeen = localStorage.getItem(ALERT_SEEN_KEY);
+  const unseenCount = lastSeen ? alerts.filter(a => a.at > lastSeen).length : alerts.length;
+
+  const badge = $('alertBellBadge');
+  if (unseenCount > 0) { badge.textContent = unseenCount > 99 ? '99+' : String(unseenCount); badge.classList.remove('hidden'); }
+  else badge.classList.add('hidden');
+
+  const list = $('alertBellList');
+  list.innerHTML = alerts.length ? alerts.slice(0, 30).map(a => {
+    const isUnseen = !lastSeen || a.at > lastSeen;
+    const color = ALERT_SEVERITY_COLOR[a.severity] || 'var(--text-faint)';
+    return `
+      <div style="display:flex; gap:10px; padding:11px 14px; border-bottom:1px solid var(--border-subtle); ${isUnseen ? 'background:var(--surface-hover);' : ''}">
+        <span style="flex-shrink:0; width:7px; height:7px; margin-top:5px; border-radius:50%; background:${color};"></span>
+        <div style="min-width:0;">
+          <div style="font-size:12.5px; color:var(--text-strong); line-height:1.4;">${esc(a.message)}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:3px;">${alertBellTimeAgo(a.at)}</div>
+        </div>
+      </div>`;
+  }).join('') : `<div style="padding:24px 14px; text-align:center; font-size:12.5px; color:var(--text-faint);">No notifications yet.</div>`;
+}
+
+function toggleAlertBellPanel(forceOpen) {
+  alertBellPanelOpen = forceOpen ?? !alertBellPanelOpen;
+  $('alertBellPanel').classList.toggle('hidden', !alertBellPanelOpen);
+  if (alertBellPanelOpen) {
+    // Opening the bell IS "read" — mark everything up to now seen, then
+    // re-render so the badge clears and the highlighted-unseen rows drop
+    // their highlight immediately rather than waiting for the next poll.
+    localStorage.setItem(ALERT_SEEN_KEY, new Date().toISOString());
+    refreshAlertBell();
+  }
+}
+$('alertBellBtn').addEventListener('click', (e) => { e.stopPropagation(); toggleAlertBellPanel(); });
+document.addEventListener('click', (e) => {
+  if (alertBellPanelOpen && !$('alertBell').contains(e.target)) toggleAlertBellPanel(false);
+});
+
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
@@ -1702,6 +1813,12 @@ async function boot() {
     $('waStatusText').textContent = 'Signed in';
     $('waStatusDot').style.background = 'var(--steel-500)';
   }
+  // Notifications for everyone (trucker/supplier-facing send failures and
+  // reply events matter to whoever's watching this dashboard, not just
+  // admins) — same 15s cadence as the WA status poll above; the 5-min email
+  // cron means anything faster than that just burns requests for no benefit.
+  refreshAlertBell();
+  setInterval(refreshAlertBell, 15000);
 }
 boot();
 </script>

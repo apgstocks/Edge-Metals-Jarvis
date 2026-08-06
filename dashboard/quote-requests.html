@@ -103,6 +103,11 @@ const STATUS_LABEL = {
   awaiting_reply: { text: 'Awaiting reply', color: 'var(--status-warning)' },
   price_received: { text: 'Priced', color: 'var(--status-success)' },
   no_response_escalated: { text: 'No response — escalated', color: 'var(--status-danger)' },
+  // Added 2026-08-06 alongside actions.js/quoteRequests.js's markLegFailed —
+  // a leg whose initial send actually failed (bad channel, Gmail error,
+  // etc.) used to stay 'awaiting_reply' forever, indistinguishable here from
+  // a real still-pending ask.
+  send_failed: { text: 'Send failed', color: 'var(--status-danger)' },
 };
 const CHANNEL_LABEL = { whatsapp_group: 'WhatsApp (group)', whatsapp_individual: 'WhatsApp (DM)', email: 'Email' };
 

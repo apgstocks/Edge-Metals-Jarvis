@@ -185,16 +185,23 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references })
 // gotten manager confirmation — this function sends unconditionally the
 // moment it's called, no confirmation gate of its own.
 //
-// threadId is deliberately NOT accepted here even though Gmail's send API
-// supports it — a threadId is only valid within the SAME mailbox that owns
-// the thread. Since reads happen on bose's account and sends happen on
-// apsara's, a threadId captured from a read is meaningless (and Gmail will
-// reject it) here. In-Reply-To/References are plain email headers, valid
-// regardless of which account sends — those alone are enough for the
-// RECIPIENT's mail client to thread this correctly.
-async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references }) {
+// threadId — UPDATED 2026-08-06: the original reasoning ("threadId is only
+// valid within the SAME mailbox that owns the thread — reads happen on
+// bose's account, sends happen on apsara's, so a threadId read elsewhere is
+// meaningless here") still holds for threadIds read from bose's mailbox.
+// It does NOT apply to a threadId that was ALSO produced by a PRIOR
+// sendEmail() call on this same apsara@ account — that's exactly the case
+// helpers/emailThreads.js tracks (general emails, and now relayed
+// questions) and workflow/emailReplyWatch.js's poller reads back via
+// getGmailSenderRead (same account, different scope). Passing that same-
+// account threadId back in here lets an acknowledgment reply land in the
+// original thread instead of starting a new one — needed for
+// relayReplyReceivedViaEmail's acknowledgment send. Optional and additive:
+// every existing caller that doesn't pass it behaves exactly as before.
+async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references, threadId }) {
     const gmail = getGmailWrite();
     const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) };
+    if (threadId) requestBody.threadId = threadId;
     const res = await gmail.users.messages.send({ userId: 'me', requestBody });
     return res.data; // { id, threadId, ... } — threadId here is apsara's own, unrelated to bose's copy
 }

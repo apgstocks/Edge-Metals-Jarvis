@@ -263,6 +263,63 @@ await _send(chatId, `Forward ${label} to ${t.name}? (yes/no)`);
 return { action_taken: 'awaiting_confirmation' };
 }
 
+// REAL BUG (found 2026-08-06, live — Apsara: "fix supplier/trucker mode of
+// communication is email"): the fix earlier today only covered quote
+// requests (helpers/quoteRequests.js's resolveTruckerChannel). The general
+// booking-notification path — forward/assign — had the SAME gap: it always
+// resolved a WhatsApp chatId via getTruckerChatId/getSupplierChatId and had
+// no email option at all, so a trucker/supplier explicitly set to
+// "Preferred: Email" still got a WhatsApp message (or nothing, if they had
+// no WhatsApp on file at all).
+//
+// Scoped deliberately: this covers executeForward/executeAssign below —
+// one-way "here's your job" notifications with no reply-tracking need.
+// relayQuestionToContact (a manager's ad-hoc question that a REPLY must
+// route back from) is NOT extended here — its whole mechanism is a WhatsApp
+// chatId-keyed pending that fires the moment a live message arrives
+// (relayReplyReceived, called from brain.js's inbound handler). An email
+// reply doesn't arrive that way — it'd need the same kind of thread-polling
+// this session already built for general emails (helpers/emailThreads.js),
+// PLUS a way to turn a poll-detected reply into "relay this back to the
+// manager," which nothing here does yet. Flagged as a separate, bigger
+// piece of work rather than half-built.
+//
+// record: the trucker/supplier row itself (already fetched by both callers
+// below) — resolveTruckerChannel is generic on the {whatsapp, group_id,
+// email, preferred_mode} shape, works identically for either table.
+// pdfDriveId: optional — executeForward's WhatsApp path sends the actual
+// PDF as media; Gmail's send here has no attachment support at all
+// (helpers/gmail.js's buildMimeMessage is plain-text only), so the email
+// path links to the same Drive file instead of attaching it. Flagged, not
+// silently downgraded — a real follow-up if inline PDF attachments turn
+// out to matter for the email-preferred contacts in practice.
+async function notifyContactRespectingChannel(record, { waChatId, text, subject, bkgNo, pdfDriveId }) {
+    const ch = quoteHelper.resolveTruckerChannel(record);
+    if (ch && ch.channel === 'email') {
+        const { sendEmail } = require('../helpers/gmail');
+        const body = pdfDriveId ? `${text}\n\nBooking PDF: https://drive.google.com/file/d/${pdfDriveId}/view` : text;
+        try {
+            const sent = await sendEmail({ to: ch.target, subject, body });
+            require('../helpers/emailThreads').trackSentEmail({
+                threadId: sent?.threadId, to: ch.target, targetName: record.name, subject, bkgNo,
+            }).catch((e) => console.error('[ACTIONS] emailThreads.trackSentEmail failed (non-fatal):', e.message));
+            return { channel: 'email', ok: true, target: ch.target };
+        } catch (err) {
+            console.error(`[ACTIONS] notifyContactRespectingChannel: email send failed for ${record.name}:`, err.message);
+            return { channel: 'email', ok: false, error: err.message };
+        }
+    }
+    // WhatsApp — either genuinely preferred, or email was preferred but
+    // there's no address on file to honor it with (resolveTruckerChannel's
+    // own fallback chain already handles that silently; waChatId is the
+    // pre-resolved value the existing callers already had, kept as the
+    // primary source so this doesn't change WhatsApp behavior for anyone
+    // at all — only adds the email branch above it).
+    if (!waChatId) return { channel: 'none', ok: false };
+    await _send(waChatId, text);
+    return { channel: 'whatsapp', ok: true, target: waChatId };
+}
+
 // Executes after manager confirms.
 // containerSeq (optional): write the trucker onto that specific container.
 async function executeForward(chatId, bkgNo, truckerName, containerSeq) {
@@ -273,15 +330,24 @@ const truckerChat = await truckers.getTruckerChatId(truckerName);
 const t           = await truckers.getTrucker(truckerName);
 const label       = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-await _send(truckerChat,
-    [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'));
+const forwardNotice = await notifyContactRespectingChannel(t, {
+    waChatId: truckerChat, bkgNo,
+    subject: `New booking — ${label}`,
+    text: [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'),
+    pdfDriveId: booking.pdf_drive_id || null,
+});
 
-// PDF side track — never blocks the forward
-try {
-    const { fetchPdfFromDrive } = require('../helpers/drive');
-    const pdf = await fetchPdfFromDrive(bkgNo);
-    if (pdf) await _send(truckerChat, null, pdf);
-} catch (e) { console.log('[ACTIONS] PDF skip:', e.message); }
+// PDF side track — never blocks the forward. WhatsApp-only: the email
+// path above already linked the same Drive file inline instead (see
+// notifyContactRespectingChannel's own comment — no attachment support
+// in the email send path yet).
+if (forwardNotice.channel === 'whatsapp') {
+    try {
+        const { fetchPdfFromDrive } = require('../helpers/drive');
+        const pdf = await fetchPdfFromDrive(bkgNo);
+        if (pdf) await _send(truckerChat, null, pdf);
+    } catch (e) { console.log('[ACTIONS] PDF skip:', e.message); }
+}
 
 // Per-container: write trucker + stage onto the target container. ALWAYS
 // runs, not gated on containerSeq being explicitly set — a real bug found
@@ -390,8 +456,11 @@ const supplierChat = await suppliers.getSupplierChatId(supplierName);
 const s            = await suppliers.getSupplier(supplierName);
 const label        = containerSeq != null ? `${bkgNo}/${containerSeq}` : bkgNo;
 
-await _send(supplierChat,
-    [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'));
+await notifyContactRespectingChannel(s, {
+    waChatId: supplierChat, bkgNo,
+    subject: `New assignment — ${label}`,
+    text: [`New assignment — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm material readiness and share the target load date.'].join('\n'),
+});
 
 // Per-container: write supplier + stage onto the target container. ALWAYS
 // runs — see executeForward's identical fix above for the full reasoning.
@@ -1304,20 +1373,94 @@ if (!t && !s) {
     return { action_taken: 'not_found' };
 }
 const contact = t || s;
+const bkgLabel = bkgNo ? ` (re ${bkgNo})` : '';
+const expectedIntent = detectExpectedIntent(clean);
+
+// REAL GAP (found 2026-08-06, live — Apsara: "relay-to-email reply
+// routing", the deferred half of "fix supplier/trucker mode of
+// communication is email"): this always resolved a WhatsApp chatId and set
+// a chatId-keyed pending (await_relay_reply) to catch the reply — an
+// email-preferred contact either got nothing ("no WhatsApp number or group
+// on file") or, if they happened to have a number too, got WhatsApp anyway
+// regardless of their saved preference. Checked first now via the same
+// resolveTruckerChannel used for quote requests/forward/assign — email
+// wins when that's the saved preference and an address is on file.
+const ch = quoteHelper.resolveTruckerChannel(contact);
+if (ch && ch.channel === 'email') {
+    const { sendEmail } = require('../helpers/gmail');
+    const subject = `Question${bkgLabel}`;
+    try {
+        const sent = await sendEmail({ to: ch.target, subject, body: `${clean}${bkgLabel}` });
+        // relayTo/askedOf/question/expectedIntent — this is what lets
+        // workflow/emailReplyWatch.js's poller recognize this thread as a
+        // relay (route the reply back to managerChatId) instead of treating
+        // it like a plain general email (just a bell alert). See
+        // relayReplyReceivedViaEmail below for that side.
+        require('../helpers/emailThreads').trackSentEmail({
+            threadId: sent?.threadId, to: ch.target, targetName: contact.name, subject, bkgNo: bkgNo || null,
+            relayTo: managerChatId, askedOf: contact.name, question: clean, expectedIntent,
+        }).catch((e) => console.error('[ACTIONS] emailThreads.trackSentEmail failed (non-fatal):', e.message));
+        await _send(managerChatId, `Asked ${contact.name}${bkgLabel} by email — I'll let you know what they say.`);
+        return { action_taken: 'relayed_email' };
+    } catch (err) {
+        console.error(`[ACTIONS] relayQuestionToContact: email send failed for ${contact.name}:`, err.message);
+        await _send(managerChatId, `Couldn't email ${contact.name}: ${err.message}`);
+        return { action_taken: 'relay_email_failed' };
+    }
+}
+
 const targetChat = t
     ? await truckers.getTruckerChatId(contact.name)
     : await suppliers.getSupplierChatId(contact.name);
 if (!targetChat) {
-    await _send(managerChatId, `${contact.name} has no WhatsApp number or group on file — can't reach them.`);
+    await _send(managerChatId, `${contact.name} has no WhatsApp or email on file — can't reach them.`);
     return { action_taken: 'no_destination' };
 }
 
-const bkgLabel = bkgNo ? ` (re ${bkgNo})` : '';
 await _send(targetChat, `${clean}${bkgLabel}`);
-const expectedIntent = detectExpectedIntent(clean);
 await setPending(targetChat, { type: 'await_relay_reply', relay_to: managerChatId, bkg_no: bkgNo || null, question: clean, asked_of: contact.name, expected_intent: expectedIntent });
 await _send(managerChatId, `Asked ${contact.name}${bkgLabel} — I'll let you know what they say.`);
 return { action_taken: 'relayed' };
+}
+
+// Email counterpart to relayReplyReceived — called from
+// workflow/emailReplyWatch.js's poller when a reply lands on a thread that
+// has relay_to set (i.e. this thread came from relayQuestionToContact's
+// email branch above, not a plain general email). Mirrors
+// relayReplyReceived's yes/no-detection + auto-fire-workflow-transition
+// logic exactly — the only real differences are: no chatId-keyed pending to
+// clear (there isn't one for an email thread), and the acknowledgment back
+// to the contact is a threaded email reply instead of a WhatsApp message.
+async function relayReplyReceivedViaEmail(threadEntry, replyText) {
+const { relay_to, bkg_no, question, asked_of, expected_intent, thread_id, to, subject } = threadEntry;
+const clean = String(replyText || '').trim();
+const lower = clean.toLowerCase();
+const bkgLabel = bkg_no ? ` (re ${bkg_no})` : '';
+
+async function ack(text) {
+    try {
+        const { sendEmail } = require('../helpers/gmail');
+        await sendEmail({ to, subject: subject ? `Re: ${subject}` : 'Re: your reply', body: text, threadId: thread_id });
+    } catch (err) {
+        console.error(`[ACTIONS] relayReplyReceivedViaEmail: acknowledgment send failed for ${asked_of}:`, err.message);
+    }
+}
+
+if (expected_intent && bkg_no && YES_WORDS.has(lower)) {
+    await ack('Thanks — noted.');
+    const result = await fireResolvedStateIntent(expected_intent, bkg_no, null, asked_of, false);
+    await _send(relay_to, `${asked_of || 'Contact'}${bkgLabel} confirmed by email: ${question} → Yes. Status updated.`);
+    return result;
+}
+if (expected_intent && bkg_no && NO_WORDS.has(lower)) {
+    await ack('Got it, thanks.');
+    await _send(relay_to, `${asked_of || 'Contact'}${bkgLabel} replied by email to "${question}": ${clean}`);
+    return { action_taken: 'relay_reply_forwarded' };
+}
+
+await ack('Thanks, relayed.');
+await _send(relay_to, `${asked_of || 'Contact'}${bkgLabel} replied by email to "${question}": ${clean}`);
+return { action_taken: 'relay_reply_forwarded' };
 }
 
 // Their reply comes back here — relay it to whoever originally asked,
@@ -2128,10 +2271,21 @@ async function sendDraftedEmail(chatId, pending) {
         // apsara's account regardless — no threadId is ever passed, since a
         // threadId captured from bose's mailbox (where the original lived)
         // is meaningless on a different account's send.
-        await sendEmail({
+        const sent = await sendEmail({
             to: pending.to, cc: pending.cc, bcc: pending.bcc, subject: pending.subject, body: pending.body,
             inReplyTo: pending.inReplyTo, references: pending.references,
         });
+        // REAL GAP (found 2026-08-06, live — Apsara: "notification bell icon
+        // in website for reply thread"): this send's threadId used to be
+        // discarded on the spot — nothing outside quote requests ever
+        // tracked "did this email get a reply." Track it here (apsara's own
+        // account sent it, so the SAME account's read-scoped token can poll
+        // it later — see helpers/emailThreads.js's own header for why this
+        // is a separate, simpler store from quote_requests.json).
+        require('../helpers/emailThreads').trackSentEmail({
+            threadId: sent?.threadId, to: pending.to, targetName: pending.target_name,
+            subject: pending.subject, bkgNo: pending.bkg_no,
+        }).catch((e) => console.error('[ACTIONS] emailThreads.trackSentEmail failed (non-fatal):', e.message));
         await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.`);
         return { action_taken: 'email_sent' };
     } catch (err) {
@@ -2777,9 +2931,17 @@ async function backfillCutoffs(chatId) {
 // ever guessing which one she meant.
 
 function splitQuoteNames(namesText) {
+    // REAL BUG (found 2026-08-06, live): "...email /Jose" — a stray leading
+    // "/" (typo/autocomplete artifact) — was kept verbatim as the name,
+    // so neither getTruckersByName's substring match nor the token-fallback
+    // matcher recognized "/Jose" as "Jose". It sailed all the way through
+    // the cargo-details question before failing at dispatch with "couldn't
+    // find: /Jose" — a wasted round-trip. Stripping stray leading/trailing
+    // punctuation here fixes it at the source for any pending trucker-name
+    // input, not just this one call site.
     return String(namesText || '')
         .split(/,|&|\band\b/i)
-        .map((s) => s.trim())
+        .map((s) => s.trim().replace(/^[^\w]+|[^\w]+$/g, ''))
         .filter(Boolean);
 }
 
@@ -2829,6 +2991,23 @@ async function continueQuoteFlow(chatId, state) {
                 allResolved,
                 [...ambiguous.slice(1).map((a) => a.query), ...unresolved],
             );
+        }
+
+        // REAL BUG (found 2026-08-06, live): a genuinely-unmatched name
+        // (zero candidates — not ambiguous, just not found) used to sail
+        // straight through the cargo-details question below and only fail
+        // at the very end, at dispatch — "Couldn't send to anyone —
+        // couldn't find: X" — after she'd already typed out cargo details
+        // for a request that could never go anywhere. Only pauses when
+        // NOBODY resolved (and there's no direct-email fallback either);
+        // if at least one name/email is good, the request still has a
+        // real recipient, so that partial-failure case is left to report
+        // normally in the final confirmation, same as before.
+        if (unresolved.length && !allResolved.length && !hasEmails) {
+            return pauseForUnresolvedTrucker(chatId, unresolved, {
+                originQuery: state.originQuery, destinationQuery: state.destinationQuery,
+                resolvedSoFar: allResolved, directEmails: state.directEmails || null,
+            });
         }
     }
 
@@ -2882,6 +3061,22 @@ async function pauseForTruckerAmbiguity(chatId, ambiguousOne, state, resolvedSoF
     return { action_taken: 'quote_trucker_ambiguous' };
 }
 
+// A given name matched NO saved trucker at all (not ambiguous — genuinely
+// zero candidates) and there's no direct-email fallback either, so this
+// request currently has nobody to go to. Per Apsara 2026-08-06 ("rather
+// than rejecting straightaway confirm whom to ask?") — pause and ask her
+// to correct the name or give an email, instead of silently continuing
+// to the cargo-details question and only failing at the very end.
+async function pauseForUnresolvedTrucker(chatId, unresolvedNames, state) {
+    const staged = await setPending(chatId, { type: 'await_quote_trucker_retry', unresolvedNames, state });
+    if (staged.queued) {
+        await _send(chatId, `Couldn't find a saved trucker named "${unresolvedNames.join(', ')}", but you have a pending "${staged.blockedBy}" to answer first. I'll ask again once that's resolved.`);
+        return { action_taken: 'quote_trucker_unresolved_queued' };
+    }
+    await _send(chatId, `Couldn't find a saved trucker named "${unresolvedNames.join(', ')}" — reply with the correct name, or their email address (or "cancel").`);
+    return { action_taken: 'quote_trucker_unresolved' };
+}
+
 // No trucker named at all — per Apsara's answer ("just ask"): list every
 // trucker that has SOME usable contact channel and let her pick one or more.
 async function askWhichTruckers(chatId, state) {
@@ -2912,6 +3107,31 @@ async function askWhichTruckers(chatId, state) {
 async function resumeQuoteWithTruckerNames(chatId, pending, names) {
     await clearPending(chatId);
     return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [], directEmails: pending.state.directEmails || null });
+}
+
+// Reply to pauseForUnresolvedTrucker's "couldn't find X — correct name or
+// email?" question. Verbatim capture like the cargo-details/manual-email
+// pendings — whatever she sends is either "cancel", a real email address
+// (added as a one-off direct recipient), or a corrected/retried name,
+// re-run through the normal trucker lookup via continueQuoteFlow.
+async function resumeQuoteWithTruckerRetry(chatId, pending, text) {
+    await clearPending(chatId);
+    const clean = String(text || '').trim();
+    if (/^cancel$/i.test(clean)) {
+        await _send(chatId, 'Cancelled — quote request not sent.');
+        return { action_taken: 'quote_cancelled' };
+    }
+    const { originQuery, destinationQuery, resolvedSoFar, directEmails } = pending.state;
+    if (/^[\w.+-]+@[\w.-]+\.[a-z]{2,}$/i.test(clean)) {
+        return continueQuoteFlow(chatId, {
+            originQuery, destinationQuery, names: null, resolvedSoFar: resolvedSoFar || [],
+            directEmails: [...(directEmails || []), clean],
+        });
+    }
+    return continueQuoteFlow(chatId, {
+        originQuery, destinationQuery, names: splitQuoteNames(clean), resolvedSoFar: resolvedSoFar || [],
+        directEmails: directEmails || null,
+    });
 }
 
 // Last question before actually sending — recipients are already fully
@@ -3017,6 +3237,6 @@ showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
-checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, detectExpectedIntent,
-    startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, handleQuoteLegReply,
+checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
+    startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,
 };
