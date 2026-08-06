@@ -36,7 +36,6 @@ const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
 const cfg = require('../config');
 const { syncBookingToSheet } = require('../helpers/bookingTracker');
-const { pushAlert } = require('../alerts');
 const AGENT = 'EMAIL';
 
 let _sendToManager = async () => {};
@@ -231,39 +230,16 @@ async function _runOnce() {
                 created.push(bkg);
                 await syncBookingToSheet(bkg);
                 await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_created', resolvedBy: 'ai', confidence: null, actionTaken: 'created', subject, fields });
-                // REAL GAP (found 2026-08-06, live — Apsara: "notification bell
-                // icon in website for reply thread/new booking receibed in
-                // mail"): this whole module only ever notified via a WhatsApp
-                // text at the very end of the run (see the aggregate summary
-                // below) — nothing landed in alerts.js, so nothing ever showed
-                // in the bell. Pushed per-booking here, same granularity as
-                // the quote-request events already in the bell, rather than
-                // only the one bundled end-of-run WhatsApp message.
-                await pushAlert({
-                    type: 'booking_created_email', bkgNo: bkg,
-                    message: `New booking ${bkg} auto-created from an email — verify details on the dashboard.`,
-                    severity: 'info',
-                });
             } else {
                 if (appliedFields && Object.keys(appliedFields).length) {
                     updated.push(bkg);
                     await syncBookingToSheet(bkg);
                     await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_updated', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: appliedFields });
-                    await pushAlert({
-                        type: 'booking_updated_email', bkgNo: bkg,
-                        message: `Booking ${bkg} — filled in from email: ${Object.keys(appliedFields).join(', ')}`,
-                        severity: 'info',
-                    });
                 }
                 if (duplicateThisRun) {
                     console.warn(`[${AGENT}] ${bkg} matched a SECOND email in this run ("${subject.slice(0, 60)}") — not touching its Drive PDF, flagging for review`);
                     flagged.push(bkg);
                     await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'duplicate_flagged', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject });
-                    await pushAlert({
-                        type: 'booking_flagged_email', bkgNo: bkg,
-                        message: `Booking ${bkg} matched a second email this run — PDF not overwritten, verify manually.`,
-                        severity: 'warning',
-                    });
                 }
             }
 

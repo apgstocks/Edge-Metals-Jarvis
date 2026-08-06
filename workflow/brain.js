@@ -326,15 +326,6 @@ function policyDecide(ctx) {
         return { intent: 'quote_cargo_details_received', resolvedBy: 'policy', data: { cargo_text: ctx.text.trim() } };
     }
 
-    // ── A0f-1. Reply to "couldn't find a trucker named X — correct name or
-    // email?" (pauseForUnresolvedTrucker, 2026-08-06). Same verbatim-capture
-    // reasoning — whatever she sends next is either "cancel", a corrected
-    // name, or an email address; actions.js's resumeQuoteWithTruckerRetry
-    // sorts out which.
-    if (ctx.pendingAction?.type === 'await_quote_trucker_retry') {
-        return { intent: 'quote_trucker_retry_received', resolvedBy: 'policy', data: { retry_text: ctx.text.trim() } };
-    }
-
     // ── A0f. Multi-select reply to "who should I ask?" (quote request with
     // no trucker named — see helpers/quoteRequests.js / workflow/quoteRequests.js).
     // Unlike every other p.options pending (single-pick, handled generically
@@ -417,24 +408,6 @@ function policyDecide(ctx) {
         if (p.options) {
             const pick = resolveListSelection(ctx.text, p.options);
             if (pick) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: pick } };
-            // REAL BUG (found 2026-08-06, live): a "confirm_quote_lane"
-            // pending was active (5 numbered address options), and a reply
-            // that matched none of them ("Jose" — she meant to answer a
-            // DIFFERENT, earlier question) fell straight through this whole
-            // function with no match, past every other check below, and
-            // got picked up by an unrelated "bookings from X" pattern much
-            // further down — replying "No bookings from jose." instead of
-            // re-asking which numbered option she meant. Her own read on
-            // it: "rather than rejecting straightaway confirm whom to ask."
-            // Scoped to just the two quote-disambiguation pending types —
-            // NOT touching the shared p.options fallthrough for
-            // select_trucker/select_supplier/wizard_*/
-            // await_contact_disambiguation, whose current fallthrough
-            // behavior hasn't been audited here and may be relied on
-            // elsewhere.
-            if (p.type === 'confirm_quote_lane' || p.type === 'confirm_quote_trucker') {
-                return { intent: 'reply', resolvedBy: 'policy', data: { reply: `Didn't catch which one — reply with the number (1-${p.options.length}), or "cancel".` } };
-            }
         }
         if (p.type === 'await_bkg_no') {
             const bkgResolved = resolveBookingNumber(ctx.text);
@@ -1148,7 +1121,6 @@ async function route(decision, ctx, sendMessage) {
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
         case 'quote_cargo_details_received': return actions.resumeQuoteWithCargoDetails(chatId, ctx.pendingAction, d.cargo_text);
-        case 'quote_trucker_retry_received':  return actions.resumeQuoteWithTruckerRetry(chatId, ctx.pendingAction, d.retry_text);
         case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
@@ -1308,9 +1280,6 @@ function pendingFullReminder(p) {
     if (p.type === 'await_domain_learn_confirm') {
         return `(Still waiting: save the ${p.domain} contacts I proposed? Reply yes or no.)`;
     }
-    if (p.type === 'await_quote_trucker_retry') {
-        return `(Still waiting — couldn't find a saved trucker named "${(p.unresolvedNames || []).join(', ')}". Reply with the correct name, or their email address, or "cancel".)`;
-    }
     return null; // no type-specific text — use the generic template
 }
 
@@ -1372,17 +1341,7 @@ async function process(rawEvent, sendMessage) {
     // other pending type's reminder-tail behavior.
     if (inbound.isManagerOrTeam && pending &&
         !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled',
-          'quote_lane_ambiguous_queued', 'quote_trucker_ambiguous_queued', 'quote_awaiting_truckers_queued',
-          // Missed when the cargo-details question shipped 2026-08-06 —
-          // askForCargoDetails returns this exact action_taken when its own
-          // setPending reports queued:true, same as the three above it.
-          // Without it, the generic reminder-tail re-prints the still-active
-          // earlier pending's full question again right after
-          // askForCargoDetails already said "you have a pending X first."
-          'quote_awaiting_cargo_queued',
-          // Same pattern again for pauseForUnresolvedTrucker, added
-          // alongside it 2026-08-06.
-          'quote_trucker_unresolved_queued'].includes(result?.action_taken)) {
+          'quote_lane_ambiguous_queued', 'quote_trucker_ambiguous_queued', 'quote_awaiting_truckers_queued'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
             const fullReminder = pendingFullReminder(fresh);

@@ -133,15 +133,6 @@ const ADDRESS_BOOK_FILE     = path.join(DATA_DIR, 'address_book.json');
 // Own flat-array store, same pattern as address_book.json — one row per
 // quote request, each holding an array of per-trucker "legs".
 const QUOTE_REQUESTS_FILE = path.join(DATA_DIR, 'quote_requests.json');
-// General sent-email reply tracking — 2026-08-06, per Apsara: "notification
-// bell icon in website for reply thread". Separate from QUOTE_REQUESTS_FILE
-// on purpose: quote requests already have their own full reply-tracking
-// model (per-trucker legs, reminder schedule, price detection) that doesn't
-// apply here — this is a much simpler "did anyone reply to this one-off
-// email yet" flag for the general draftEmailForConfirm/sendDraftedEmail
-// flow, which previously tracked nothing at all after sending. See
-// helpers/emailThreads.js.
-const EMAIL_THREADS_FILE = path.join(DATA_DIR, 'email_threads.json');
 // Fixed reminder schedule (minutes since the request was sent to that
 // trucker) — per Apsara: "first reminder @30 minutes. next @60 min.
 // another. then ask manager to send reminder." Kept as an ordered array so
@@ -294,7 +285,7 @@ module.exports = {
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
-    QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
+    QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,

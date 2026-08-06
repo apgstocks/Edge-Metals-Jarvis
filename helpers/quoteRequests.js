@@ -84,25 +84,13 @@ function resolveLaneEntry(query) {
 }
 
 // ── Trucker channel resolution ──────────────────────────────────────────────
-// REAL BUG (found 2026-08-06, live — Apsara: "fix supplier/trucker mode of
-// communication is email"): `preferred_mode` is a real, first-class field —
-// set per contact via the dashboard's "Preferred" dropdown (dashboard/
-// index.html's ct_mode), saved to Supabase, shown right there in the
-// contacts table — but this function never once looked at it. It always
-// picked group_id, then whatsapp, then email, no matter what the contact's
-// own saved preference said. A trucker explicitly marked "Preferred: Email"
-// who also happens to have a WhatsApp number or group on file (common — a
-// trucker can be in a WhatsApp group for booking updates but still want
-// quote asks by email) was getting WhatsApp every time regardless.
-// Fixed: preferred_mode === 'email' (with a real email on file) now wins
-// outright. Anything else — 'whatsapp', unset, or email preferred but no
-// email actually saved — keeps the original group_id → whatsapp → email
-// fallback chain exactly as before, so this changes behavior ONLY for
-// contacts that are both (a) explicitly set to email and (b) have an email
-// address saved; every other contact resolves identically to before.
+// group_id → whatsapp_group (whole group sees the ask); else whatsapp →
+// whatsapp_individual (direct DM); else email → email (real send via
+// helpers/gmail.js's getGmailWrite — same account draft_email/reply_email
+// already send from). No channel at all → null, caller must skip this
+// trucker rather than silently drop them without saying so.
 function resolveTruckerChannel(trucker) {
     if (!trucker) return null;
-    if (trucker.preferred_mode === 'email' && trucker.email) return { channel: 'email', target: trucker.email };
     if (trucker.group_id) return { channel: 'whatsapp_group', target: trucker.group_id };
     if (trucker.whatsapp) {
         const digits = String(trucker.whatsapp).replace(/\D/g, '');
@@ -266,37 +254,6 @@ async function recordReminderSent(requestId, truckerName, stage) {
     });
 }
 
-// REAL BUG (found 2026-08-06, live — Apsara: "if request is rejected, it is
-// still in queue. only successful request should be queued"): a leg is
-// created with status 'awaiting_reply' at request-creation time (see
-// createQuoteRequest above), BEFORE anything is actually sent. When the
-// actual send then fails (dispatchLeg returns false — bad number, no
-// WhatsApp/email channel, Gmail error, etc.), the caller only tracked that
-// in a local `failed` array for the one-time confirmation message text —
-// the LEG ITSELF was never updated, so it stayed 'awaiting_reply' forever.
-// Knock-on effects, both matching what Apsara actually saw: (1) the
-// dashboard's active/awaiting-reply view keeps showing a request that never
-// went anywhere, indistinguishable from one still genuinely waiting on a
-// price: (2) scheduleFirstReminder is only ever called for legs that DID
-// send successfully, so a stuck 'awaiting_reply' leg from a failed send has
-// no reminder task behind it at all — it just sits there silently, which is
-// almost certainly also what "reminder failed" on a previous request was
-// really describing. Also means maybeCloseRequest could never close a
-// request with a permanently-stuck failed leg, since its check is "every leg
-// left awaiting_reply".
-async function markLegFailed(requestId, truckerName, reason) {
-    await mutateJson(cfg.QUOTE_REQUESTS_FILE, [], (list) => {
-        const request = list.find((r) => r.id === requestId);
-        if (!request) return list;
-        const leg = request.legs.find((l) => l.trucker_name === truckerName);
-        if (!leg) return list;
-        leg.status = 'send_failed';
-        leg.failed_reason = reason || null;
-        leg.failed_at = new Date().toISOString();
-        return list;
-    });
-}
-
 async function markLegEscalated(requestId, truckerName) {
     await mutateJson(cfg.QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
@@ -398,6 +355,6 @@ module.exports = {
     buildQuoteMessage, buildReminderMessage,
     LaneResolutionError,
     createQuoteRequest,
-    markLegSent, recordReminderSent, markLegFailed, markLegEscalated, recordLegReply,
+    markLegSent, recordReminderSent, markLegEscalated, recordLegReply,
     findActiveLegByTarget, findActiveEmailLegs, getRequestById, maybeCloseRequest,
 };
