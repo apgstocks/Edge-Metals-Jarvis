@@ -224,25 +224,6 @@ async function handleQuoteReminderTask(task, { send }) {
         await tasks.enqueue({
             type: 'quote_escalation',
             target_kind: 'manager',
-            // REAL BUG (found 2026-08-06 by cross-feature testing, PRE-EXISTING
-            // since this feature was built 2026-08-05): helpers/tasks.js's
-            // enqueue() hard-validates `target_name || target_chat` and THROWS
-            // otherwise. This was the only enqueue call site in the codebase
-            // supplying neither — target_kind:'manager' alone isn't enough for
-            // that check, even though taskRunner and handleQuoteEscalationTask
-            // both resolve the manager's chat themselves and never actually
-            // read this field.
-            //
-            // Why it stayed hidden: this line only runs after a leg has gone
-            // through ALL THREE reminders (90+ minutes) with no reply — never
-            // reached in any same-session test. When it did run, the throw
-            // propagated out of handleQuoteReminderTask into scheduler.js's
-            // catch, which archived the stage-3 task as
-            // 'runner_exception' — so the 3rd reminder was really sent, but
-            // the escalation was NEVER scheduled and the manager was never
-            // told "no price after 3 reminders." Silent death at the exact
-            // point the chain is supposed to hand back to a human.
-            target_chat: managerChatId(),
             message: `No price yet from ${leg.trucker_name} for ${request.origin_query} → ${request.destination_query} after 3 reminders — can you follow up?`,
             fire_at: new Date(sentAtMs + (lastStageMin + 30) * 60000).toISOString(),
             condition: { type: 'quote_leg_awaiting_reply', request_id: request.id, trucker_name: leg.trucker_name },
