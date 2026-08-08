@@ -1757,9 +1757,12 @@ async function processWeightImage(target, base64, mime, statusEl) {
     if (result.weight != null) {
       $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
       recomputeNet();
-      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}`;
+      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}${result.raw_text ? ` (saw: "${result.raw_text}")` : ''} — check it matches the scale before saving.`;
     } else if (statusEl) {
-      statusEl.textContent = "Couldn't read a number — photo saved, enter the weight manually.";
+      // raw_text is filled in even on a null read (see extractWeightFromImage's
+      // prompt) — showing it here means "why didn't this work" is visible right
+      // on the form instead of only in server logs.
+      statusEl.textContent = "Couldn't read a number — enter manually." + (result.raw_text ? ` (model saw: "${result.raw_text}")` : '');
     }
   } catch (err) {
     if (statusEl) statusEl.textContent = 'Read failed: ' + err.message + ' — enter manually.';
@@ -1774,7 +1777,7 @@ async function processWeightImage(target, base64, mime, statusEl) {
 // on save (two photos — gross + tare — in one request). Reading a handful of
 // digits off a scale display doesn't need full resolution, so this trades
 // nothing perceptible for a payload that's a few hundred KB instead.
-function downscaleToBase64(source, srcW, srcH, maxDim = 1280, quality = 0.82) {
+function downscaleToBase64(source, srcW, srcH, maxDim = 1600, quality = 0.9) {
   let w = srcW, h = srcH;
   if (w > maxDim || h > maxDim) {
     const scale = maxDim / Math.max(w, h);

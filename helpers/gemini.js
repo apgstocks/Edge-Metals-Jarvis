@@ -327,23 +327,43 @@ If the image is blurry, cut off, glared, or not actually a scale ticket, still r
 // with many fields; this is a live in-browser snapshot of just the number on
 // the display, so the schema is minimal and the prompt is tuned for reading a
 // single number off a 7-segment/LCD readout rather than a printed slip.
+// Deliberately a stronger/more careful model than the app's general default
+// (cfg.GEMINI_MODEL — which, note, is currently 'gemini-2.5-flash' in practice
+// because config.js defines GEMINI_MODEL twice in its exports and the second
+// one wins; a pre-existing bug, not touched here). Reading digits correctly
+// off a scale photo has real financial consequences for a scrap-metal
+// business, so this is worth the extra cost/latency over the model used for
+// routing/chat. Override with GEMINI_VISION_MODEL if needed.
+function getVisionModelName() {
+    return process.env.GEMINI_VISION_MODEL || 'gemini-2.5-pro';
+}
+
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
 
-    const prompt = `You are reading a digital scale display (7-segment or LCD readout) from a photo. Extract the weight value currently shown. Return ONLY raw JSON — no markdown, no prose.
+    const prompt = `You are an expert at reading digital scale (weighbridge) displays from photos — 7-segment LED, LCD, or similar digital readouts. Read the weight value shown as carefully as you would proofread a number you're about to bet money on.
 
+Work through this deliberately:
+1. Locate the main numeric readout on the display (ignore smaller secondary numbers like a tare-memory indicator, date/time, or button labels unless nothing else is present).
+2. Read every digit left to right, one at a time. Segmented displays commonly cause confusion between: 8 and 0, 5 and 6, 1 and 7, 3 and 9 — look at which segments are actually lit before deciding, don't guess from overall shape alone.
+3. Note the decimal point position exactly as shown, and any thousands separator.
+4. Note the unit label if printed near the number (lb, kg, kgs, ton, tonnes, etc.) — units are often small text near a corner of the display.
+5. If glare, blur, a bad angle, or partial occlusion makes any digit genuinely ambiguous, do not guess — return null for the whole weight rather than a half-confident wrong number. A missing reading that gets manually entered is far cheaper than a wrong one that goes uncaught.
+
+Return ONLY raw JSON — no markdown, no prose:
 {
-  "weight": null,      // number only, e.g. 42350 — null if not legible
-  "weight_unit": null  // e.g. "lb", "kg", "ton" — whatever unit label is visible near the number, null if not shown
+  "weight": null,      // number only, decimal point preserved, no thousands separators, e.g. 42350 or 42350.5 — null if not confidently legible
+  "weight_unit": null, // e.g. "lb", "kg", "ton" — null if no unit is visible
+  "raw_text": null     // exactly what you read off the display as plain text before parsing, e.g. "42350 lb" — helps a human verify against the photo later. Still fill this in even if weight ends up null, describing what you saw and why it wasn't confident.
 }
 
-If the display is blurry, off, or no number is legible, return { "weight": null, "weight_unit": null } — never refuse, never return prose.`;
+Never refuse, never return prose outside the JSON.`;
 
     let lastErr = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const model = getClient().getGenerativeModel({
-                model: getModelName(),
+                model: getVisionModelName(),
                 generationConfig: { temperature: 0, responseMimeType: 'application/json' },
             });
             const result = await model.generateContent([
@@ -351,7 +371,16 @@ If the display is blurry, off, or no number is legible, return { "weight": null,
                 { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
             ]);
             const fields = extractJson(result.response.text());
-            if (fields) return fields;
+            if (fields) {
+                // Be forgiving of a model that ignores the "no thousands separator"
+                // instruction — strip commas/spaces before treating it as a number.
+                if (typeof fields.weight === 'string') {
+                    const cleaned = fields.weight.replace(/[,\s]/g, '');
+                    fields.weight = cleaned && !isNaN(cleaned) ? parseFloat(cleaned) : null;
+                }
+                console.log(`[GEMINI] Weight read: ${fields.weight ?? 'null'} ${fields.weight_unit || ''} (raw: "${fields.raw_text || ''}")`);
+                return fields;
+            }
             console.warn(`[GEMINI] Weight read returned unparseable JSON (attempt ${attempt + 1})`);
         } catch (err) {
             lastErr = err;
@@ -363,7 +392,7 @@ If the display is blurry, off, or no number is legible, return { "weight": null,
         }
     }
     if (lastErr) throw lastErr;
-    return { weight: null, weight_unit: null };
+    return { weight: null, weight_unit: null, raw_text: null };
 }
 
 module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage };
