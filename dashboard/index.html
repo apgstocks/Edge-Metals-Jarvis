@@ -1335,7 +1335,17 @@ function renderSettings(s) {
       </div>
       <div id="settingsError" style="color:var(--status-danger); font-size:12.5px; margin-bottom:14px; display:none;"></div>
       <div id="settingsSaved" style="color:var(--leaf-600); font-size:12.5px; margin-bottom:14px; display:none;">Saved.</div>
-      <div style="display:flex; flex-direction:column; gap:16px;">
+
+      <!-- Two sub-tabs, per Apsara — Operations (everything that already lived
+           here: manager/team/email routing) and Yard (the new end-of-day
+           yard report recipients). Pure client-side toggle, no re-fetch —
+           both panels' fields are already in the DOM/settings payload. -->
+      <div style="display:flex; gap:8px; margin-bottom:20px; border-bottom:1px solid var(--border-subtle); padding-bottom:12px;">
+        <button id="settingsTabOps" class="chip" data-active="true">Operations</button>
+        <button id="settingsTabYard" class="chip">Yard</button>
+      </div>
+
+      <div id="settingsOpsPanel" style="display:flex; flex-direction:column; gap:16px;">
         <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Manager</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The one phone number recognised as the manager. All admin commands come from this number.</div>
@@ -1367,6 +1377,25 @@ function renderSettings(s) {
           <div class="field" style="margin-bottom:0;"><label>Bcc</label><input id="s_email_bcc" value="${esc(s.email_bcc || '')}" placeholder="e.g. bose@edgemetals.com"></div>
         </div>
       </div>
+
+      <div id="settingsYardPanel" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">End-of-day yard report — email</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Every day at 8:00 PM Eastern, Jarvis emails the priced ticket + weights PDF for every load dated that day to everyone listed here. Comma-separate multiple addresses.</div>
+          <div class="field" style="margin-bottom:0;"><label>Recipients</label><input id="s_yard_emails" value="${esc(s.yard_report_emails || '')}" placeholder="e.g. bose@edgemetals.com, apsara@edgemetals.com"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">End-of-day yard report — WhatsApp</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Same 8:00 PM Eastern run also posts a text summary (load count, totals, per-load breakdown) to this group and/or these numbers. Jarvis must already be a member of the group.</div>
+          <div class="field"><label>Yard update group ID</label><input id="s_yard_group" class="grp-id-target" value="${esc(s.yard_whatsapp_group_id || '')}" placeholder="120363123456789012@g.us"></div>
+          <div style="display:flex; gap:10px; align-items:end; margin-top:12px; margin-bottom:16px;">
+            <div class="field" style="flex:1; margin-bottom:0;"><label>Find group by name</label><input class="grp-search-input" id="yardGroupSearch" placeholder="e.g. Edge Metals Yard"></div>
+            <button class="btn btn-secondary grp-search-btn" id="btnFindYardGroup">Search</button>
+          </div>
+          <div class="grp-search-results" id="yardGroupResults" style="margin-bottom:16px; display:flex; flex-direction:column; gap:6px;"></div>
+          <div class="field" style="margin-bottom:0;"><label>Additional individual numbers</label><input id="s_yard_contacts" value="${esc(s.yard_whatsapp_contacts || '')}" placeholder="e.g. 918056944193, 917000011122"></div>
+        </div>
+      </div>
     </section>`;
 
   function refreshTeamRows() { $('teamRows').innerHTML = teamRowsHtml(); wireTeamRows(); }
@@ -1376,6 +1405,20 @@ function renderSettings(s) {
   }
   wireTeamRows();
   $('btnAddTeam').addEventListener('click', () => { team.push({ name: '', whatsapp: '', role: '', group_id: '', group_name: '' }); refreshTeamRows(); });
+
+  function showSettingsTab(tab) {
+    $('settingsOpsPanel').classList.toggle('hidden', tab !== 'ops');
+    $('settingsYardPanel').classList.toggle('hidden', tab !== 'yard');
+    $('settingsTabOps').dataset.active = String(tab === 'ops');
+    $('settingsTabYard').dataset.active = String(tab === 'yard');
+    $('settingsTabOps').style.background = tab === 'ops' ? 'var(--accent)' : '';
+    $('settingsTabOps').style.color = tab === 'ops' ? '#fff' : '';
+    $('settingsTabYard').style.background = tab === 'yard' ? 'var(--accent)' : '';
+    $('settingsTabYard').style.color = tab === 'yard' ? '#fff' : '';
+  }
+  $('settingsTabOps').addEventListener('click', () => showSettingsTab('ops'));
+  $('settingsTabYard').addEventListener('click', () => showSettingsTab('yard'));
+  showSettingsTab('ops');
 
   $('btnSaveSettings').addEventListener('click', async () => {
     $('settingsError').style.display = 'none'; $('settingsSaved').style.display = 'none';
@@ -1395,12 +1438,16 @@ function renderSettings(s) {
       await api('/api/settings', { method: 'PUT', body: JSON.stringify({
         manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group').value.trim(),
         email_cc: $('s_email_cc').value.trim(), email_bcc: $('s_email_bcc').value.trim(),
+        yard_report_emails: $('s_yard_emails').value.trim(),
+        yard_whatsapp_group_id: $('s_yard_group').value.trim(),
+        yard_whatsapp_contacts: $('s_yard_contacts').value.trim(),
       }) });
       $('settingsSaved').style.display = 'block';
     } catch (e) { $('settingsError').textContent = e.message; $('settingsError').style.display = 'block'; }
   });
 
   $('btnFindGroup').addEventListener('click', () => doGroupSearch($('groupSearch').closest('.card')));
+  $('btnFindYardGroup').addEventListener('click', () => doGroupSearch($('yardGroupSearch').closest('.card')));
 }
 
 // ── CONTACTS (price-list send-to contacts — separate from the Settings tab
@@ -1778,7 +1825,10 @@ function renderItemRows() {
       <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
       <input class="ld-item-unit" placeholder="Unit" title="Unit" value="${esc(it.unit || '')}">
       <input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}">
-      <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
+      <div class="ld-item-actions">
+        <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
+        <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
+      </div>
       <input type="file" accept="image/*" class="ld-item-gross-file hidden">
       <input type="file" accept="image/*" class="ld-item-tare-file hidden">
       <div class="ld-item-status ld-cap-status"></div>
@@ -1816,6 +1866,16 @@ function renderItemRows() {
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
     syncItemsFromDom();
     currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
+    renderItemRows();
+  }));
+  // Inserts a new blank row directly AFTER this one — per Apsara, "+ Add
+  // item" at the bottom only ever appended to the end, with no way to slot
+  // a forgotten item in between two already-entered ones without deleting
+  // and re-adding everything after it.
+  box.querySelectorAll('.btn-insert-item').forEach(btn => btn.addEventListener('click', () => {
+    syncItemsFromDom();
+    const idx = parseInt(btn.dataset.row, 10);
+    currentLoadItems.splice(idx + 1, 0, blankLoadItem());
     renderItemRows();
   }));
 }
@@ -1935,7 +1995,7 @@ function blankLoadItem() {
 function resetLoadModal() {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_seller', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
@@ -1963,9 +2023,12 @@ function openEditLoadModal(load) {
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
-  if ($('ld_date'))   $('ld_date').value   = load.date || '';
-  if ($('ld_seller')) $('ld_seller').value = load.seller || '';
-  if ($('ld_desc'))   $('ld_desc').value   = load.description || '';
+  if ($('ld_date'))           $('ld_date').value           = load.date || '';
+  if ($('ld_seller'))         $('ld_seller').value         = load.seller || '';
+  if ($('ld_seller_address')) $('ld_seller_address').value = load.seller_address || '';
+  if ($('ld_buyer'))          $('ld_buyer').value          = load.buyer || '';
+  if ($('ld_buyer_address'))  $('ld_buyer_address').value  = load.buyer_address || '';
+  if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
@@ -2106,7 +2169,7 @@ function renderLoads(loads) {
          layout — with 8 columns per row there's no good way to keep this a
          single line AND fit a phone screen, so horizontal scroll (like a
          spreadsheet) beats forcing it back into multiple lines on mobile. */
-      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 64px 56px 92px 26px; gap:6px; align-items:center; min-width:640px; }
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 64px 56px 92px 54px; gap:6px; align-items:center; min-width:660px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
@@ -2114,7 +2177,9 @@ function renderLoads(loads) {
       .ld-item-cap input { flex:1; min-width:0; }
       .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
       .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
-      .item-row .btn-remove-item { padding:4px 7px; font-size:11px; }
+      .ld-item-actions { display:flex; gap:3px; }
+      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 7px; font-size:11px; flex:none; }
+      .item-row .btn-insert-item { color:var(--leaf-600, #2e7d32); }
       .ld-item-status:empty { display:none; }
       .ld-item-status { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin:-1px 0 3px; }
       #ld_items { overflow-x:auto; padding-bottom:2px; }
@@ -2150,6 +2215,11 @@ function renderLoads(loads) {
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
             <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name"></div>
           </div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Seller address</label><input id="ld_seller_address" placeholder="e.g. 123 Yard Rd, Houston, TX"></div>
+            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name"></div>
+          </div>
+          <div class="field" style="margin-top:14px;"><label>Buyer address</label><input id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX"></div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
           <div style="margin-top:18px;">
@@ -2230,6 +2300,9 @@ function wireLoadsEvents() {
       const payload = {
         date: $('ld_date').value || null,
         seller: seller || null,
+        seller_address: $('ld_seller_address').value.trim() || null,
+        buyer: $('ld_buyer').value.trim() || null,
+        buyer_address: $('ld_buyer_address').value.trim() || null,
         description: desc,
         items,
         weight_unit: 'lb',

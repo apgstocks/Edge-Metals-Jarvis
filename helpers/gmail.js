@@ -160,11 +160,20 @@ async function getMessage(gmail, id) {
 // exists, getGmailWrite() throws "Gmail token missing" rather than silently
 // no-op-ing.
 
-function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) {
+// attachments (optional): [{ filename, mimeType, base64 }] — added for the
+// end-of-day yard report (scheduler.js's eodYardReport), which emails the
+// actual PDF files rather than just Drive links. Purely additive: when
+// `attachments` is omitted/empty, this produces the EXACT SAME plain-text
+// message as before (same header order, same body-only payload) — every
+// existing caller (draftEmailForConfirm, replies, etc.) is unaffected.
+function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) {
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    const boundary = hasAttachments ? `----jarvis-${Date.now()}-${Math.random().toString(36).slice(2)}` : null;
+
     const headers = [
         `To: ${to}`,
         `Subject: ${subject}`,
-        'Content-Type: text/plain; charset="UTF-8"',
+        hasAttachments ? `Content-Type: multipart/mixed; boundary="${boundary}"` : 'Content-Type: text/plain; charset="UTF-8"',
         'MIME-Version: 1.0',
     ];
     // Cc is a normal header — visible to every recipient. Bcc is ALSO just a
@@ -176,7 +185,28 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references })
     if (bcc) headers.push(`Bcc: ${bcc}`);
     if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
     if (references) headers.push(`References: ${references}`);
-    const raw = `${headers.join('\r\n')}\r\n\r\n${body}`;
+
+    let bodyPart = body;
+    if (hasAttachments) {
+        const parts = [`--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', '', body];
+        for (const att of attachments) {
+            parts.push(
+                `--${boundary}`,
+                `Content-Type: ${att.mimeType || 'application/octet-stream'}; name="${att.filename}"`,
+                'Content-Transfer-Encoding: base64',
+                `Content-Disposition: attachment; filename="${att.filename}"`,
+                '',
+                // Wrapped at 76 chars — standard MIME base64 line length; Gmail
+                // accepts unwrapped base64 too, but wrapping is the RFC 2045
+                // convention and avoids any risk with mail clients that assume it.
+                att.base64.replace(/(.{76})/g, '$1\r\n'),
+            );
+        }
+        parts.push(`--${boundary}--`);
+        bodyPart = parts.join('\r\n');
+    }
+
+    const raw = `${headers.join('\r\n')}\r\n\r\n${bodyPart}`;
     // base64url, no padding — same normalization Gmail's API expects on the way in.
     return Buffer.from(raw).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -198,9 +228,9 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references })
 // original thread instead of starting a new one — needed for
 // relayReplyReceivedViaEmail's acknowledgment send. Optional and additive:
 // every existing caller that doesn't pass it behaves exactly as before.
-async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references, threadId }) {
+async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references, threadId, attachments }) {
     const gmail = getGmailWrite();
-    const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references }) };
+    const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) };
     if (threadId) requestBody.threadId = threadId;
     const res = await gmail.users.messages.send({ userId: 'me', requestBody });
     return res.data; // { id, threadId, ... } — threadId here is apsara's own, unrelated to bose's copy

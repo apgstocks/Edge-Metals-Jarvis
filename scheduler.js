@@ -626,6 +626,130 @@ async function generalEmailReplyWatch() {
     }
 }
 
+// 'YYYY-MM-DD' in America/New_York — used ONLY by eodYardReport below, kept
+// separate from todayKey()/getLADate() above since every other job in this
+// file deliberately runs on LA time and this one deliberately doesn't (see
+// eodYardReport's comment). Intl.formatToParts (not toLocaleDateString's
+// plain string output) so the field order is unambiguous regardless of
+// runtime locale.
+function getEasternDateKey() {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    const get = (t) => parts.find(p => p.type === t).value;
+    return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+// ── 8PM Eastern — end-of-day yard report ────────────────────────────────────
+// Apsara asked for a daily wrap-up of that day's scrap-yard "Loads" activity
+// (dashboard/index.html's Loads tab, backed by helpers/loads.js): the priced
+// ticket + weights PDF for every load dated today, emailed to whoever's
+// configured under dashboard Settings > Yard, plus a text summary posted to
+// the yard WhatsApp group/contacts configured there too. Registered with its
+// OWN timezone option in start() below (America/New_York), not the shared
+// LA `TZ` constant every other job in this file uses.
+async function eodYardReport() {
+    const dateKey = getEasternDateKey();
+    const key = `eod_yard_report_${dateKey}`;
+    if (alreadySent(key)) return;
+
+    const { loadSettings } = require('./helpers/json');
+    const settings = loadSettings();
+    const emails = (settings.yard_report_emails || '').split(',').map(s => s.trim()).filter(Boolean);
+    const waTargets = [];
+    if (settings.yard_whatsapp_group_id) waTargets.push(settings.yard_whatsapp_group_id.trim());
+    (settings.yard_whatsapp_contacts || '').split(',').map(s => s.trim()).filter(Boolean)
+        .forEach(num => waTargets.push(num.replace(/\D/g, '') + '@c.us'));
+
+    if (!emails.length && !waTargets.length) {
+        // Nothing configured yet under Settings > Yard — log once per day
+        // rather than mark-and-skip silently forever, and deliberately do
+        // NOT markSent here: once Apsara fills in the settings, the very
+        // next 8PM run should actually send instead of staying skipped for
+        // a day it technically already "ran."
+        console.log(`[SCHED] eod-yard-report: no recipients configured (Settings > Yard) for ${dateKey} — skipping`);
+        return;
+    }
+
+    const { loadLoads } = require('./helpers/loads');
+    const todays = loadLoads().filter(l => l.date === dateKey);
+
+    // Mark BEFORE sending — see dailyTruckerCheck's comment above for why
+    // (a crash mid-send costs one skipped day, not a duplicate report).
+    await markSent(key);
+
+    const unit = todays.find(l => l.weight_unit)?.weight_unit || 'lb';
+    const totals = todays.reduce((acc, l) => ({
+        gross : acc.gross  + (l.gross_weight || 0),
+        tare  : acc.tare   + (l.tare_weight  || 0),
+        net   : acc.net    + (l.net_weight   || 0),
+        amount: acc.amount + (l.amount       || 0),
+    }), { gross: 0, tare: 0, net: 0, amount: 0 });
+
+    const lines = todays.map(l =>
+        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
+    );
+    const summaryText = todays.length
+        ? [
+            `Edge Metals — Yard Report — ${dateKey}`,
+            '',
+            `${todays.length} load${todays.length === 1 ? '' : 's'} recorded:`,
+            ...lines,
+            '',
+            `Totals: Gross ${totals.gross} ${unit} | Tare ${totals.tare} ${unit} | Net ${totals.net} ${unit} | $${totals.amount}`,
+          ].join('\n')
+        : `Edge Metals — Yard Report — ${dateKey}\n\nNo loads recorded today.`;
+
+    // Make sure every one of today's loads actually HAS its PDFs before
+    // trying to attach/link them — a load only gets PDFs once someone hits
+    // "Generate PDF" on the card, so this generates on the fly for any load
+    // still sitting at status:'open' rather than silently omitting it.
+    const { generateAndStoreLoadPdfs } = require('./helpers/loadsPdf');
+    const withPdfs = [];
+    for (const l of todays) {
+        if (l.pdf_link && l.weights_pdf_link) { withPdfs.push(l); continue; }
+        try {
+            const updated = await generateAndStoreLoadPdfs(l);
+            withPdfs.push(updated || l);
+        } catch (e) {
+            console.error(`[SCHED] eod-yard-report: PDF generation failed for ${l.id}, reporting it without a PDF:`, e.message);
+            withPdfs.push(l);
+        }
+    }
+
+    // Email gets the actual PDF files as attachments — downloaded back from
+    // Drive by ID via the same helper the rest of the app already uses to
+    // re-read stored PDF bytes.
+    if (emails.length) {
+        try {
+            const { downloadPdfById } = require('./helpers/drive');
+            const attachments = [];
+            for (const l of withPdfs) {
+                if (l.pdf_drive_id) {
+                    try { attachments.push({ filename: `${l.id}.pdf`, mimeType: 'application/pdf', base64: await downloadPdfById(l.pdf_drive_id) }); }
+                    catch (e) { console.error(`[SCHED] eod-yard-report: couldn't download ${l.id}.pdf to attach:`, e.message); }
+                }
+                if (l.weights_pdf_drive_id) {
+                    try { attachments.push({ filename: `weights_${l.id}.pdf`, mimeType: 'application/pdf', base64: await downloadPdfById(l.weights_pdf_drive_id) }); }
+                    catch (e) { console.error(`[SCHED] eod-yard-report: couldn't download weights_${l.id}.pdf to attach:`, e.message); }
+                }
+            }
+            const { sendEmail } = require('./helpers/gmail');
+            await sendEmail({ to: emails.join(', '), subject: `Edge Metals — Yard Report — ${dateKey}`, body: summaryText, attachments });
+        } catch (e) {
+            console.error('[SCHED] eod-yard-report: email send failed:', e.message);
+        }
+    }
+
+    // WhatsApp gets the text summary only — not the PDFs too (that'd be up
+    // to N x 2 file messages landing in the group every night). Email is the
+    // channel for the actual documents; WhatsApp is for a quick same-night read.
+    for (const chatId of waTargets) {
+        try { await _sendMessage(chatId, summaryText); }
+        catch (e) { console.error(`[SCHED] eod-yard-report: WhatsApp send to ${chatId} failed:`, e.message); }
+    }
+
+    console.log(`[SCHED] eod-yard-report: sent for ${dateKey} — ${todays.length} loads, ${emails.length} email recipient(s), ${waTargets.length} WhatsApp target(s)`);
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -643,7 +767,10 @@ function start() {
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
         require('./helpers/dailyLearning').run({ sendToManager: _sendToManager, setPending: actions.setPending, managerChatId }).catch(e => console.error('[SCHED] learning:', e));
     }, TZ);
-    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 15-min email watcher, minute task-runner — LA time)');
+    // Own timezone — America/New_York, not the shared LA `TZ` — see
+    // eodYardReport's comment for why.
+    cron.schedule('0 20 * * *', () => eodYardReport().catch(e => console.error('[SCHED] eod-yard-report:', e)), { timezone: 'America/New_York' });
+    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
 }
 
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback };
+module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport };

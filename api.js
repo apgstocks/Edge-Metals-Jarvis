@@ -540,6 +540,7 @@ function createApi() {
             const { addLoad, updateLoad } = require('./helpers/loads');
             const record = await addLoad({
                 date: b.date, seller: b.seller, description: b.description,
+                seller_address: b.seller_address, buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
                 created_by: b.created_by || req.role || 'unknown',
             });
@@ -590,6 +591,7 @@ function createApi() {
 
             const record = await editLoad(req.params.id, {
                 date: b.date, seller: b.seller, description: b.description,
+                seller_address: b.seller_address, buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
             });
             if (!record) return res.status(404).json({ error: 'not found' });
@@ -643,33 +645,15 @@ function createApi() {
     // uploads it to Drive, and stamps the load with the resulting link.
     app.post('/api/loads/:id/generate-pdf', async (req, res) => {
         try {
-            const { getLoad, updateLoad } = require('./helpers/loads');
+            const { getLoad } = require('./helpers/loads');
             const load = getLoad(req.params.id);
             if (!load) return res.status(404).json({ error: 'not found' });
 
-            const { generateLoadPdf, generateWeightsPdf } = require('./helpers/pdf');
-            const { uploadLoadPdf } = require('./helpers/drive');
-
-            const buf = await generateLoadPdf(load);
-            const file = await uploadLoadPdf(load.id, buf);
-
-            // Second, separate PDF — gross/tare weights + photo links only —
-            // uploaded as weights_<id>.pdf per Apsara. Best-effort: if this
-            // fails, the main priced ticket (already uploaded above) still
-            // succeeds and the load still gets marked pdf_generated; the
-            // weights PDF can be regenerated later by hitting this route
-            // again once whatever broke (usually Drive) is fixed.
-            let weightsPatch = {};
-            try {
-                const weightsBuf = await generateWeightsPdf(load);
-                const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
-                weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
-            } catch (e) {
-                console.error(`[API] weights-pdf generation failed for ${load.id}:`, e.message);
-            }
-
-            const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch });
-            res.json({ ok: true, load: loads.find(l => l.id === load.id) });
+            // Shared with scheduler.js's end-of-day yard report — see
+            // helpers/loadsPdf.js for why this isn't inlined here anymore.
+            const { generateAndStoreLoadPdfs } = require('./helpers/loadsPdf');
+            const updated = await generateAndStoreLoadPdfs(load);
+            res.json({ ok: true, load: updated });
         } catch (err) {
             console.error('[API] generate-pdf failed:', err.message);
             res.status(500).json({ error: err.message });

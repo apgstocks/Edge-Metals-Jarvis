@@ -263,6 +263,13 @@ function getSettings() {
         // How long to wait after a check-in before escalating to the manager
         // if the supplier/trucker hasn't replied.
         stall_escalation_hours: 24,
+        // End-of-day yard report recipients — kept in sync with
+        // helpers/json.js's loadSettings() defaults on purpose (see that
+        // file's comment): both read the same settings.json, from two
+        // different call sites (scheduler.js/actions.js use this one).
+        yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
+        yard_whatsapp_group_id : '',
+        yard_whatsapp_contacts : '',
     };
     try {
         if (fs.existsSync(FILES.SETTINGS_FILE)) {

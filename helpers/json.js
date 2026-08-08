@@ -193,6 +193,13 @@ function loadSettings() {
         // workflow/actions.js's draftEmailForConfirm/draftReplyForConfirm.
         email_cc       : '',
         email_bcc      : '',
+        // End-of-day yard report (scheduler.js's eodYardReport job, 8pm
+        // America/New_York) — dashboard-editable under Settings > Yard.
+        // Seeded with the two addresses Apsara asked for at launch; still
+        // fully editable afterward, this is just the starting value.
+        yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
+        yard_whatsapp_group_id : '',
+        yard_whatsapp_contacts : '',
     });
 }
 const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);
