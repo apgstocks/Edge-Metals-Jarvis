@@ -327,15 +327,22 @@ If the image is blurry, cut off, glared, or not actually a scale ticket, still r
 // with many fields; this is a live in-browser snapshot of just the number on
 // the display, so the schema is minimal and the prompt is tuned for reading a
 // single number off a 7-segment/LCD readout rather than a printed slip.
-// Deliberately a stronger/more careful model than the app's general default
-// (cfg.GEMINI_MODEL — which, note, is currently 'gemini-2.5-flash' in practice
-// because config.js defines GEMINI_MODEL twice in its exports and the second
-// one wins; a pre-existing bug, not touched here). Reading digits correctly
-// off a scale photo has real financial consequences for a scrap-metal
-// business, so this is worth the extra cost/latency over the model used for
-// routing/chat. Override with GEMINI_VISION_MODEL if needed.
+// 'gemini-2.5-pro' 404'd as "no longer available to new users" — Google
+// restricts model access per-account, confirmed via a live Google AI
+// Developers Forum thread on this exact error (the model landscape has moved
+// to a 3.x generation since; ai.google.dev's own docs now list gemini-3.6-flash
+// and gemini-3.5-flash-lite as GA). Using gemini-3.1-flash-lite per Apsara.
+// FALLBACK_VISION_MODEL is the one CONFIRMED working on this account already
+// (extractPdfFields/classifyDocument use it successfully) — used automatically
+// if the primary 404s as unavailable, so a model getting deprecated out from
+// under this account doesn't silently break weight-reading again without at
+// least degrading gracefully instead of hard-failing.
 function getVisionModelName() {
-    return process.env.GEMINI_VISION_MODEL || 'gemini-2.5-pro';
+    return process.env.GEMINI_VISION_MODEL || 'gemini-3.1-flash-lite';
+}
+const FALLBACK_VISION_MODEL = 'gemini-2.5-flash';
+function isModelUnavailableError(err) {
+    return /404|not found|no longer available|not supported/i.test(err.message || '');
 }
 
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
@@ -360,10 +367,12 @@ Return ONLY raw JSON — no markdown, no prose:
 Never refuse, never return prose outside the JSON.`;
 
     let lastErr = null;
+    let modelName = getVisionModelName();
+    let fellBack = false;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const model = getClient().getGenerativeModel({
-                model: getVisionModelName(),
+                model: modelName,
                 generationConfig: { temperature: 0, responseMimeType: 'application/json' },
             });
             const result = await model.generateContent([
@@ -378,14 +387,23 @@ Never refuse, never return prose outside the JSON.`;
                     const cleaned = fields.weight.replace(/[,\s]/g, '');
                     fields.weight = cleaned && !isNaN(cleaned) ? parseFloat(cleaned) : null;
                 }
-                console.log(`[GEMINI] Weight read: ${fields.weight ?? 'null'} ${fields.weight_unit || ''} (raw: "${fields.raw_text || ''}")`);
+                console.log(`[GEMINI] Weight read (${modelName}): ${fields.weight ?? 'null'} ${fields.weight_unit || ''} (raw: "${fields.raw_text || ''}")`);
                 return fields;
             }
-            console.warn(`[GEMINI] Weight read returned unparseable JSON (attempt ${attempt + 1})`);
+            console.warn(`[GEMINI] Weight read returned unparseable JSON (attempt ${attempt + 1}, model ${modelName})`);
         } catch (err) {
             lastErr = err;
+            // Model itself unavailable (deprecated/restricted on this account) —
+            // switch to the confirmed-working fallback and retry immediately,
+            // don't burn a transient-style backoff delay on a non-transient cause.
+            if (isModelUnavailableError(err) && !fellBack && modelName !== FALLBACK_VISION_MODEL) {
+                console.warn(`[GEMINI] ${modelName} unavailable on this account, falling back to ${FALLBACK_VISION_MODEL}:`, err.message);
+                modelName = FALLBACK_VISION_MODEL;
+                fellBack = true;
+                continue;
+            }
             const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
-            console.error(`[GEMINI] Weight read failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            console.error(`[GEMINI] Weight read failed (attempt ${attempt + 1}, model ${modelName}${transient ? ', transient' : ''}):`, err.message);
             if (attempt < retries && transient) { await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); continue; }
             if (attempt >= retries) throw err;
             if (!transient) throw err;
