@@ -426,10 +426,14 @@ function createApi() {
         }
     });
 
-    // ── Documents: PDF scan + Drive upload ────────────────────────────────────
+    // ── Documents: PDF scan + Drive upload, plus Loads' photo uploads ─────────
     // Base64-encoded PDFs inflate ~33% over binary. Booking PDFs run 200KB–2MB,
-    // so 10mb is the safe ceiling. Scoped to these two routes only.
-    const largeJson = express.json({ limit: '10mb' });
+    // so 10mb covered those two routes fine. Now also used by /api/loads and
+    // /api/vision/read-weight, which can carry TWO photos (gross + tare) in
+    // one request — bumped to 15mb as headroom. The real fix for oversized
+    // photos is client-side downscaling before upload (see dashboard/index.html's
+    // downscaleToBase64) — this limit is a safety margin, not the primary defense.
+    const largeJson = express.json({ limit: '15mb' });
 
     // Extract booking fields from an uploaded PDF (multimodal Gemini call)
     app.post('/api/documents/scan', largeJson, async (req, res) => {

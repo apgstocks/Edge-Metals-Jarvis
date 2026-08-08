@@ -1695,15 +1695,13 @@ function renderTasks(data) {
 let loadsCache = [];
 let currentLoadItems = [];
 let capturedPhotos = { gross: null, tare: null }; // { base64, mime } once captured
-let cameraStream = null;
-let cameraTarget = null; // 'gross' | 'tare' while the capture overlay is open
 
-function stopCamera() {
-  if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
-  const box = $('cameraBox');
-  if (box) box.classList.add('hidden');
-  cameraTarget = null;
-}
+// No-op kept so loadTab()'s unconditional cleanup call has something to call —
+// the getUserMedia camera overlay was removed (see the "Add photo" button's
+// comment in renderLoads: a plain file input already gives mobile users a
+// native camera-or-library choice with no HTTPS requirement, so the custom
+// in-page camera stream is no longer needed).
+function stopCamera() {}
 
 function renderItemRows() {
   const box = $('ld_items');
@@ -1768,44 +1766,48 @@ async function processWeightImage(target, base64, mime, statusEl) {
   }
 }
 
-function handleFileUpload(target, file) {
+// Downscales any drawable image source (a live <video> frame, or an <img>
+// loaded from an uploaded File) to at most maxDim on the long edge and
+// re-encodes as JPEG at the given quality. Root-fix for PayloadTooLargeError:
+// a phone camera photo picked via the Upload button is routinely 3-8MB raw
+// (base64 inflates that another ~33%), which blew past body-parser's limit
+// on save (two photos — gross + tare — in one request). Reading a handful of
+// digits off a scale display doesn't need full resolution, so this trades
+// nothing perceptible for a payload that's a few hundred KB instead.
+function downscaleToBase64(source, srcW, srcH, maxDim = 1280, quality = 0.82) {
+  let w = srcW, h = srcH;
+  if (w > maxDim || h > maxDim) {
+    const scale = maxDim / Math.max(w, h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(source, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', quality).split(',')[1];
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image file')); };
+    img.src = url;
+  });
+}
+
+async function handleFileUpload(target, file) {
   if (!file) return;
   const statusEl = $(target === 'gross' ? 'ld_gross_status' : 'ld_tare_status');
-  const reader = new FileReader();
-  reader.onload = () => {
-    const base64 = String(reader.result).split(',')[1];
-    processWeightImage(target, base64, file.type || 'image/jpeg', statusEl);
-  };
-  reader.readAsDataURL(file);
-}
-
-async function startCamera(target) {
-  cameraTarget = target;
-  $('cameraBox').classList.remove('hidden');
-  $('camStatus').textContent = '';
+  statusEl.textContent = 'Preparing photo…';
   try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    $('cameraVideo').srcObject = cameraStream;
+    const img = await loadImageFromFile(file);
+    const base64 = downscaleToBase64(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+    await processWeightImage(target, base64, 'image/jpeg', statusEl);
   } catch (err) {
-    // Most likely cause: dashboard served over plain http:// (not https:// or
-    // localhost) — getUserMedia is blocked outside a secure context. The file
-    // upload button next to this one works regardless — see HTTPS_SETUP.md.
-    $('camStatus').textContent = 'Camera unavailable: ' + err.message + '. Use Upload instead, or set up HTTPS (see HTTPS_SETUP.md).';
+    statusEl.textContent = err.message;
   }
-}
-
-async function snapAndRead() {
-  if (!cameraStream) return;
-  const video = $('cameraVideo');
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth || 640;
-  canvas.height = video.videoHeight || 480;
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-  const base64 = dataUrl.split(',')[1];
-  const target = cameraTarget;
-  await processWeightImage(target, base64, 'image/jpeg', $('camStatus'));
-  stopCamera();
 }
 
 function resetLoadModal() {
@@ -1914,8 +1916,14 @@ function renderLoads(loads) {
               <label>Gross weight</label>
               <div class="ld-weight-capture">
                 <input id="ld_gross" type="number" step="any" placeholder="0">
-                <button type="button" class="btn btn-cam" data-target="gross" title="Capture from scale (camera)">📷 Camera</button>
-                <button type="button" class="btn btn-upload" data-target="gross" title="Upload a photo">📁 Upload</button>
+                <!-- No "capture" attribute on purpose: a plain file input with
+                     accept="image/*" makes mobile browsers show their native
+                     "Take Photo / Photo Library" sheet on tap — camera AND
+                     upload from one control, no getUserMedia, no HTTPS
+                     requirement (that was the whole source of this session's
+                     tunnel/Error-1033/Error-1016 troubleshooting). Desktop
+                     just gets a normal file picker. -->
+                <button type="button" class="btn btn-photo" data-target="gross">📷 Add photo</button>
                 <input type="file" accept="image/*" id="ld_gross_file" class="hidden">
                 <div id="ld_gross_status" class="ld-cap-status"></div>
               </div>
@@ -1924,8 +1932,7 @@ function renderLoads(loads) {
               <label>Tare weight</label>
               <div class="ld-weight-capture">
                 <input id="ld_tare" type="number" step="any" placeholder="0">
-                <button type="button" class="btn btn-cam" data-target="tare" title="Capture from scale (camera)">📷 Camera</button>
-                <button type="button" class="btn btn-upload" data-target="tare" title="Upload a photo">📁 Upload</button>
+                <button type="button" class="btn btn-photo" data-target="tare">📷 Add photo</button>
                 <input type="file" accept="image/*" id="ld_tare_file" class="hidden">
                 <div id="ld_tare_status" class="ld-cap-status"></div>
               </div>
@@ -1936,15 +1943,6 @@ function renderLoads(loads) {
             </div>
           </div>
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
-
-          <div id="cameraBox" class="hidden" style="margin-top:16px; border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:12px; text-align:center;">
-            <video id="cameraVideo" autoplay playsinline style="width:100%; max-width:420px; border-radius:6px; background:#000;"></video>
-            <div style="margin-top:10px; display:flex; gap:10px; justify-content:center;">
-              <button id="btnSnap" type="button" class="btn btn-primary">Capture</button>
-              <button id="btnCancelCam" type="button" class="btn">Cancel</button>
-            </div>
-            <div id="camStatus" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:8px;"></div>
-          </div>
         </div>
         <div class="modal-foot">
           <button id="btnCancelLoad" class="btn">Cancel</button>
@@ -1974,11 +1972,9 @@ function wireLoadsEvents() {
   $('ld_gross').addEventListener('input', recomputeNet);
   $('ld_tare').addEventListener('input', recomputeNet);
 
-  document.querySelectorAll('.btn-cam').forEach(btn => btn.addEventListener('click', () => startCamera(btn.dataset.target)));
-  $('btnSnap').addEventListener('click', snapAndRead);
-  $('btnCancelCam').addEventListener('click', stopCamera);
-
-  document.querySelectorAll('.btn-upload').forEach(btn => btn.addEventListener('click', () => {
+  // Single button per field — opens the native file picker, which on mobile
+  // shows a "Take Photo / Photo Library" choice with no HTTPS requirement.
+  document.querySelectorAll('.btn-photo').forEach(btn => btn.addEventListener('click', () => {
     $(btn.dataset.target === 'gross' ? 'ld_gross_file' : 'ld_tare_file').click();
   }));
   $('ld_gross_file').addEventListener('change', (e) => handleFileUpload('gross', e.target.files[0]));
