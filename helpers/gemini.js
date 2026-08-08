@@ -350,18 +350,24 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
 
     const prompt = `You are an expert at reading digital scale (weighbridge) displays from photos — 7-segment LED, LCD, or similar digital readouts. Read the weight value shown as carefully as you would proofread a number you're about to bet money on.
 
-Work through this deliberately:
-1. Locate the main numeric readout on the display (ignore smaller secondary numbers like a tare-memory indicator, date/time, or button labels unless nothing else is present).
-2. Read every digit left to right, one at a time. Segmented displays commonly cause confusion between: 8 and 0, 5 and 6, 1 and 7, 3 and 9 — look at which segments are actually lit before deciding, don't guess from overall shape alone.
-3. Note the decimal point position exactly as shown, and any thousands separator.
-4. Note the unit label if printed near the number (lb, kg, kgs, ton, tonnes, etc.) — units are often small text near a corner of the display.
-5. If glare, blur, a bad angle, or partial occlusion makes any digit genuinely ambiguous, do not guess — return null for the whole weight rather than a half-confident wrong number. A missing reading that gets manually entered is far cheaper than a wrong one that goes uncaught.
+IMPORTANT — yard photos routinely show MORE THAN ONE digital display in frame, and they are not equally trustworthy:
+- The SCALE INDICATOR is what actually matters: a compact desk/wall-mounted box with physical buttons on it (typically labeled ZERO, TARE, GROSS/NET, PRINT, UNITS) and a brand name on the bezel (e.g. Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal). This is the scale's own live readout — always prefer it.
+- A REMOTE/OVERHEAD DISPLAY — a large signage-style board (often bigger, mounted higher for a truck driver to see from a distance, commonly red LED digits, sometimes with unit indicator lights like LB/KG/GR/NT down one side, no buttons) — this is often a repeater of the scale value, but is frequently dimmer, blurrier, shot at a steep angle, and genuinely harder to read correctly BECAUSE it's the visually larger/more prominent thing in the photo. Its size in the frame is not evidence it's the right one to read.
+- If both are visible: read the compact button-indicator display, not the large remote sign, even though the remote sign is usually the bigger/more eye-catching object in the photo. If only the remote display is visible, read that one, but hold it to a higher confidence bar given it's typically harder to read accurately.
+- If you can identify two DIFFERENT displays showing two DIFFERENT numbers, always trust the compact scale indicator's number, not the larger sign's.
+
+Once you've identified the correct display to read:
+1. Read every digit left to right, one at a time. Segmented displays commonly cause confusion between: 8 and 0, 5 and 6, 1 and 7, 3 and 9 — look at which segments are actually lit before deciding, don't guess from overall shape alone.
+2. Note the decimal point position exactly as shown, and any thousands separator.
+3. Note the unit label if printed near the number (lb, kg, kgs, ton, tonnes, etc.) — units are often small text or indicator lights near a corner of the display.
+4. If glare, blur, a bad angle, or partial occlusion makes any digit genuinely ambiguous, do not guess — return null for the whole weight rather than a half-confident wrong number. A missing reading that gets manually entered is far cheaper than a wrong one that goes uncaught.
 
 Return ONLY raw JSON — no markdown, no prose:
 {
-  "weight": null,      // number only, decimal point preserved, no thousands separators, e.g. 42350 or 42350.5 — null if not confidently legible
-  "weight_unit": null, // e.g. "lb", "kg", "ton" — null if no unit is visible
-  "raw_text": null     // exactly what you read off the display as plain text before parsing, e.g. "42350 lb" — helps a human verify against the photo later. Still fill this in even if weight ends up null, describing what you saw and why it wasn't confident.
+  "weight": null,        // number only, decimal point preserved, no thousands separators, e.g. 42350 or 42350.5 — null if not confidently legible
+  "weight_unit": null,   // e.g. "lb", "kg", "ton" — null if no unit is visible
+  "displays_seen": null, // brief note on what display(s) you found, e.g. "compact Fairbanks indicator + large overhead remote sign" or "one indicator only" — helps confirm you scanned for multiple displays
+  "raw_text": null       // exactly what you read off the display you chose, as plain text before parsing, e.g. "0 lb (Fairbanks indicator)" — helps a human verify against the photo later. Still fill this in even if weight ends up null, describing what you saw and why it wasn't confident.
 }
 
 Never refuse, never return prose outside the JSON.`;

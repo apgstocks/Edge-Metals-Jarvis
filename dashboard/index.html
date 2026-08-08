@@ -1754,15 +1754,16 @@ async function processWeightImage(target, base64, mime, statusEl) {
       method: 'POST',
       body: JSON.stringify({ image_base64: base64, mime_type: mime }),
     });
+    const seenNote = result.displays_seen ? ` [displays: ${result.displays_seen}]` : '';
     if (result.weight != null) {
       $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
       recomputeNet();
-      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}${result.raw_text ? ` (saw: "${result.raw_text}")` : ''} — check it matches the scale before saving.`;
+      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}${result.raw_text ? ` (saw: "${result.raw_text}")` : ''}${seenNote} — check it matches the scale before saving.`;
     } else if (statusEl) {
-      // raw_text is filled in even on a null read (see extractWeightFromImage's
-      // prompt) — showing it here means "why didn't this work" is visible right
-      // on the form instead of only in server logs.
-      statusEl.textContent = "Couldn't read a number — enter manually." + (result.raw_text ? ` (model saw: "${result.raw_text}")` : '');
+      // raw_text/displays_seen are filled in even on a null read (see
+      // extractWeightFromImage's prompt) — showing them here means "why didn't
+      // this work" is visible right on the form, not just in server logs.
+      statusEl.textContent = "Couldn't read a number — enter manually." + (result.raw_text ? ` (model saw: "${result.raw_text}")` : '') + seenNote;
     }
   } catch (err) {
     if (statusEl) statusEl.textContent = 'Read failed: ' + err.message + ' — enter manually.';
