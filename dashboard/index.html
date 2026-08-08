@@ -1703,6 +1703,17 @@ let capturedPhotos = { gross: null, tare: null }; // { base64, mime } once captu
 // in-page camera stream is no longer needed).
 function stopCamera() {}
 
+// Fixed catalog of common scrap-yard item descriptions, per Apsara — picking
+// from a list instead of free-typing keeps item descriptions consistent
+// across loads (same wording every time, easier to total/report on later).
+// "Others" is the escape hatch for anything not on the list, and reveals a
+// free-text box right below the dropdown when chosen.
+const ITEM_DESC_OPTIONS = [
+  'Auto cast', 'Al rims(Dirty)', 'Mixed', 'Chrome', 'Sealed units', 'Motors',
+  'Al combo', 'Steel combo', 'Alternator', 'Ac compressor', 'Starter',
+];
+const ITEM_DESC_OTHER = 'Others';
+
 function renderItemRows() {
   const box = $('ld_items');
   if (!box) return;
@@ -1712,15 +1723,40 @@ function renderItemRows() {
   // real bug that shipped: syncItemsFromDom() below was matching the button
   // too, calling .querySelector('.ld-item-desc') on it, getting null, and
   // throwing — which is why Add Item/Save Load looked completely broken).
-  box.innerHTML = currentLoadItems.map((it, i) => `
+  box.innerHTML = currentLoadItems.map((it, i) => {
+    const desc = it.description || '';
+    const isPreset = ITEM_DESC_OPTIONS.includes(desc);
+    const isOther = desc && !isPreset; // non-empty, not on the list -> came from the "Others" box
+    const selectVal = isPreset ? desc : (isOther ? ITEM_DESC_OTHER : '');
+    const optionsHtml = ['<option value="" disabled ' + (selectVal ? '' : 'selected') + '>Select item…</option>']
+      .concat(ITEM_DESC_OPTIONS.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
+      .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
+      .join('');
+    return `
     <div class="item-row" data-idx="${i}">
-      <input class="ld-item-desc" placeholder="Description" value="${esc(it.description || '')}">
+      <div class="ld-item-desc-wrap">
+        <select class="ld-item-desc-select">${optionsHtml}</select>
+        <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
+      </div>
       <input class="ld-item-qty" type="number" step="any" placeholder="Qty" value="${it.qty ?? ''}">
       <input class="ld-item-unit" placeholder="Unit" value="${esc(it.unit || '')}">
       <input class="ld-item-rate" type="number" step="any" placeholder="Rate" value="${it.rate ?? ''}">
       <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   box.querySelectorAll('.item-row input').forEach(inp => inp.addEventListener('input', syncItemsFromDom));
+  box.querySelectorAll('.ld-item-desc-select').forEach(sel => sel.addEventListener('change', () => {
+    const row = sel.closest('.item-row');
+    const otherInput = row.querySelector('.ld-item-desc-other');
+    if (sel.value === ITEM_DESC_OTHER) {
+      otherInput.classList.remove('hidden');
+      otherInput.focus();
+    } else {
+      otherInput.classList.add('hidden');
+      otherInput.value = '';
+    }
+    syncItemsFromDom();
+  }));
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
     syncItemsFromDom();
     currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
@@ -1729,12 +1765,17 @@ function renderItemRows() {
 }
 function syncItemsFromDom() {
   const rows = $('ld_items').querySelectorAll('.item-row');
-  currentLoadItems = Array.from(rows).map(row => ({
-    description: row.querySelector('.ld-item-desc').value,
-    qty : row.querySelector('.ld-item-qty').value,
-    unit: row.querySelector('.ld-item-unit').value,
-    rate: row.querySelector('.ld-item-rate').value,
-  }));
+  currentLoadItems = Array.from(rows).map(row => {
+    const sel = row.querySelector('.ld-item-desc-select');
+    const otherInput = row.querySelector('.ld-item-desc-other');
+    const description = sel.value === ITEM_DESC_OTHER ? (otherInput.value || '') : (sel.value || '');
+    return {
+      description,
+      qty : row.querySelector('.ld-item-qty').value,
+      unit: row.querySelector('.ld-item-unit').value,
+      rate: row.querySelector('.ld-item-rate').value,
+    };
+  });
 }
 
 function recomputeNet() {
@@ -1865,7 +1906,14 @@ function renderLoads(loads) {
       #loadModal .modal-shell { max-width:900px; width:100%; }
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       .ld-weight-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:20px; }
-      .ld-item-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:center; }
+      /* NOTE: this used to say ".ld-item-row" but the row markup has always
+         used class="item-row" (see renderItemRows' comment on why — a
+         data-row collision bug), so this grid layout was silently never
+         applying and rows were falling back to plain block stacking. Fixed
+         to actually match the markup while adding the item-description
+         dropdown below. */
+      .item-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:start; }
+      .ld-item-desc-wrap { display:flex; flex-direction:column; gap:4px; }
       .ld-weight-capture { display:flex; gap:6px; flex-wrap:wrap; }
       .ld-weight-capture input[type=number] { flex:1; min-width:90px; }
       .ld-cap-status { font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:4px; width:100%; }
@@ -1875,12 +1923,12 @@ function renderLoads(loads) {
         #loadModal .modal-body { max-height:none; flex:1; }
         .ld-grid-2 { grid-template-columns:1fr; }
         .ld-weight-grid { grid-template-columns:1fr; }
-        .ld-item-row { grid-template-columns:1fr 1fr; grid-template-areas:"desc desc" "qty unit" "rate remove"; }
-        .ld-item-row .ld-item-desc { grid-area:desc; }
-        .ld-item-row .ld-item-qty { grid-area:qty; }
-        .ld-item-row .ld-item-unit { grid-area:unit; }
-        .ld-item-row .ld-item-rate { grid-area:rate; }
-        .ld-item-row .btn-remove-item { grid-area:remove; justify-self:start; }
+        .item-row { grid-template-columns:1fr 1fr; grid-template-areas:"desc desc" "qty unit" "rate remove"; }
+        .item-row .ld-item-desc-wrap { grid-area:desc; }
+        .item-row .ld-item-qty { grid-area:qty; }
+        .item-row .ld-item-unit { grid-area:unit; }
+        .item-row .ld-item-rate { grid-area:rate; }
+        .item-row .btn-remove-item { grid-area:remove; justify-self:start; }
       }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">

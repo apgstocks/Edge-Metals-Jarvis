@@ -4,6 +4,8 @@
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cfg = require('../config');
+const fs = require('fs');
+const visionOcr = require('./visionOcr');
 let sharp = null;
 try { sharp = require('sharp'); } catch { /* crop-zoom step degrades to a no-op if sharp isn't installed */ }
 
@@ -417,11 +419,108 @@ Give the box some margin around the housing rather than cropping tight to the di
     }
 }
 
-// Stage 1.5 — crop to the located box (with padding) and upscale, so stage 2
-// gets a zoomed-in, higher-effective-resolution view of just the display
-// instead of it being a small part of a big yard photo. Degrades to null
-// (caller falls back to reading the original image) if sharp isn't
-// installed or the crop fails for any reason — never blocks a reading.
+// Measured directly off a real failing photo (pixel brightness, not a guess):
+// a dead/unlit LED cell showing only residual dot-matrix "ghost" glow peaked
+// at a strict-bright-red column score of 40; genuine lit digit cells in the
+// same photo peaked at 158 — 4x brighter. The model kept transcribing that
+// ghost glow as a phantom leading digit (37920/87920/371920 instead of
+// 71920) no matter how the prompt asked it to judge "is this really lit."
+// Fixed at the pixel level instead of the prompt level: scan the located
+// display crop column-by-column for genuine bright-red LED pixels, find
+// where sustained brightness first reaches a healthy fraction of this
+// image's own peak (adaptive per-photo, not a hardcoded absolute value —
+// exposure varies shot to shot), and hard-crop everything before that point
+// off so the model physically never sees the dead zone it kept
+// hallucinating a digit from. Falls back to the untrimmed crop if the signal
+// isn't clean enough to trust (never makes the crop worse than not trimming).
+async function trimDeadDigitZones(sharpImg, cropW, cropH) {
+    try {
+        const { data } = await sharpImg
+            .clone()
+            .removeAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+        const channels = 3;
+        const colScore = new Float64Array(cropW);
+        for (let x = 0; x < cropW; x++) {
+            let count = 0;
+            for (let y = 0; y < cropH; y++) {
+                const i = (y * cropW + x) * channels;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                if (r > 140 && (r - g) > 60 && (r - b) > 60) count++;
+            }
+            colScore[x] = count;
+        }
+        const peak = Math.max(...colScore);
+        if (peak < 5) return null; // too dim overall to trust this analysis at all
+
+        const threshold = peak * 0.35;
+        const win = Math.max(15, Math.round(cropW * 0.03));
+        const prefix = new Float64Array(cropW + 1);
+        for (let x = 0; x < cropW; x++) prefix[x + 1] = prefix[x] + colScore[x];
+        const rollAvg = (start) => (prefix[Math.min(cropW, start + win)] - prefix[start]) / win;
+
+        // Don't just take the FIRST column that crosses the threshold — on a
+        // real photo the unit-label text (LB/KG/GR/NT down the side) is often
+        // reddish/bright enough itself to cross a naive threshold, and it sits
+        // to the left of the actual digits. Taking the first crossing latched
+        // onto the label instead of skipping past it to the ghost cell beyond,
+        // which is exactly why an earlier version of this only trimmed part of
+        // the way and the ghost cell still made it into the model's crop.
+        // Fix: find every contiguous above-threshold run, merge runs that are
+        // close together (small gaps are just the dark space between adjacent
+        // digit cells — still one "number"), and use the LONGEST merged run.
+        // The label is narrow and isolated; the real digit run is wide and,
+        // once inter-digit gaps are merged, contiguous — it wins on width even
+        // though the label can locally be just as bright.
+        const runs = [];
+        let inRun = false, runStart = 0;
+        for (let x = 0; x <= cropW - win; x++) {
+            const above = rollAvg(x) >= threshold;
+            if (above && !inRun) { inRun = true; runStart = x; }
+            if (!above && inRun) { inRun = false; runs.push([runStart, x + win]); }
+        }
+        if (inRun) runs.push([runStart, cropW]);
+        if (runs.length === 0) return null;
+
+        const mergeGap = win * 3;
+        const merged = [runs[0].slice()];
+        for (let i = 1; i < runs.length; i++) {
+            const last = merged[merged.length - 1];
+            if (runs[i][0] - last[1] <= mergeGap) last[1] = runs[i][1];
+            else merged.push(runs[i].slice());
+        }
+        merged.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]));
+        const [runStart2, runEnd2] = merged[0];
+
+        // Generous margin back toward the edges so we don't shave a real
+        // digit's edge off. The rolling window only crosses threshold once a
+        // stroke's CORE is under it, so the run boundary sits inside the true
+        // digit shape, not at its actual edge — a small margin wasn't enough
+        // and a live test came back with the model reporting "leftmost digit
+        // is cut off by the left image border." A full window's worth of
+        // margin (not half) fixes that without reintroducing the ghost cell,
+        // which sits much further away than one window width.
+        const margin = win;
+        const trimLeft = Math.max(0, runStart2 - margin);
+        const trimRight = Math.min(cropW, runEnd2 + margin);
+        if ((trimRight - trimLeft) < cropW * 0.25) return null;
+        if (trimLeft === 0 && trimRight === cropW) return null; // nothing to trim
+
+        return { left: trimLeft, width: trimRight - trimLeft };
+    } catch (err) {
+        console.warn('[GEMINI] Dead-zone trim analysis failed, skipping:', err.message);
+        return null;
+    }
+}
+
+// Stage 1.5 — crop to the located box (with padding), trim any dead/ghost
+// LED zone off the left or right edge, and upscale, so stage 2 gets a
+// zoomed-in, higher-effective-resolution view of ONLY the genuinely lit
+// digits instead of it being a small part of a big yard photo plus a dim
+// ghost cell it kept misreading. Degrades to null (caller falls back to
+// reading the original image) if sharp isn't installed or the crop fails for
+// any reason — never blocks a reading.
 async function cropToDisplay(imageBase64, mimeType, box) {
     if (!sharp || !box) return null;
     try {
@@ -436,22 +535,31 @@ async function cropToDisplay(imageBase64, mimeType, box) {
         // a slightly-too-tight box cutting off a digit.
         const padX = (box.x_max - box.x_min) * 0.12;
         const padY = (box.y_max - box.y_min) * 0.12;
-        const left = Math.max(0, Math.round((box.x_min - padX) * w));
-        const top = Math.max(0, Math.round((box.y_min - padY) * h));
-        const right = Math.min(w, Math.round((box.x_max + padX) * w));
-        const bottom = Math.min(h, Math.round((box.y_max + padY) * h));
-        const cropW = right - left, cropH = bottom - top;
+        let left = Math.max(0, Math.round((box.x_min - padX) * w));
+        let top = Math.max(0, Math.round((box.y_min - padY) * h));
+        let right = Math.min(w, Math.round((box.x_max + padX) * w));
+        let bottom = Math.min(h, Math.round((box.y_max + padY) * h));
+        let cropW = right - left, cropH = bottom - top;
         if (cropW < 20 || cropH < 20) return null;
+
+        const boxCrop = img.clone().extract({ left, top, width: cropW, height: cropH });
+        const trim = await trimDeadDigitZones(boxCrop, cropW, cropH);
+        let finalExtract = { left, top, width: cropW, height: cropH };
+        if (trim) {
+            finalExtract = { left: left + trim.left, top, width: trim.width, height: cropH };
+            console.log(`[GEMINI] Trimmed dead/ghost LED zone off crop edge (${cropW}px -> ${trim.width}px wide)`);
+        }
 
         // Upscale so the crop has real detail to work with — target a ~1400px-wide
         // result (roughly matching what the whole-image path already sends), capped
         // at 4x to avoid manufacturing fake detail out of a tiny crop.
-        const scale = Math.min(4, Math.max(1, 1400 / cropW));
+        const scale = Math.min(4, Math.max(1, 1400 / finalExtract.width));
         const outBuf = await img
-            .extract({ left, top, width: cropW, height: cropH })
-            .resize({ width: Math.round(cropW * scale), kernel: 'lanczos3' })
+            .extract(finalExtract)
+            .resize({ width: Math.round(finalExtract.width * scale), kernel: 'lanczos3' })
             .jpeg({ quality: 92 })
             .toBuffer();
+        if (process.env.DEBUG_SAVE_CROP) fs.writeFileSync(process.env.DEBUG_SAVE_CROP, outBuf);
         return outBuf.toString('base64');
     } catch (err) {
         console.warn('[GEMINI] Crop-to-display step failed, will read whole image instead:', err.message);
@@ -544,11 +652,55 @@ Never refuse, never return prose outside the JSON.`;
     return { weight: null, weight_unit: null, raw_text: null };
 }
 
-// Public entry point. Tries locate-crop-zoom-then-read first (stage 1+1.5+2);
-// if locating/cropping doesn't happen for any reason (sharp missing, no
-// display confidently found, crop step errors), falls straight back to the
-// original single-pass whole-image read — so this can only add a chance of a
-// better reading, never remove the existing behavior.
+// Self-consistency vote: on a genuinely hard photo (dim, angled, blurry),
+// even a clean, correctly-cropped image with nothing but the right digits in
+// frame still gets misread by the model on some fraction of calls — verified
+// live on a real photo: the SAME clean crop came back correct on some calls
+// and wrong on others, not because the crop was bad (confirmed by eye each
+// time) but because the model's digit-level precision on this exact font/blur
+// isn't perfectly reliable call to call, even at temperature 0. Reading it 3x
+// and taking whatever at least 2 of 3 agree on is a standard fix for that
+// kind of independent, non-repeating error — it doesn't help at all with a
+// systematic mistake (which is why the dead-zone trim above still had to be
+// a real fix, not just more voting), but it directly helps with a call that
+// randomly flips a single digit sometimes and not other times.
+function voteOnWeightReadings(results) {
+    const valid = results.filter(r => r && r.weight != null);
+    if (valid.length === 0) return results.find(r => r) || null;
+    const counts = new Map();
+    for (const r of valid) {
+        const key = String(r.weight);
+        if (!counts.has(key)) counts.set(key, []);
+        counts.get(key).push(r);
+    }
+    let best = null;
+    for (const group of counts.values()) {
+        if (!best || group.length > best.length) best = group;
+    }
+    const winner = { ...best[0] };
+    if (best.length < valid.length) {
+        // No unanimous agreement — say so in the fields a human actually reads,
+        // since this is exactly when the "check it matches the scale before
+        // saving" UI warning matters most.
+        const otherReadings = valid.filter(r => !best.includes(r)).map(r => r.weight);
+        winner.raw_text = `${winner.raw_text || ''} [${best.length}/${valid.length} reads agreed on ${winner.weight}; other reads got: ${otherReadings.join(', ')} — double-check this one]`.trim();
+    }
+    return winner;
+}
+
+// Public entry point. Tries locate-crop-zoom first (stage 1+1.5); once
+// there's a clean crop, the DIGITS come from Cloud Vision OCR (a purpose-
+// built character-recognition model — deterministic, verified live to read
+// the exact same crop correctly on every call, unlike Gemini which flipped
+// between right and wrong on repeat calls against an identical image).
+// Gemini still runs once on the same crop, purely for metadata (unit,
+// which-display reasoning) and as the fallback path if Vision OCR isn't
+// available (API not enabled, keyfile missing, network error, etc.) — in
+// that case it degrades to the 3-way self-consistency vote from before.
+// If locating/cropping doesn't happen at all (sharp missing, no display
+// found, crop errors), falls straight back to the original single-pass
+// whole-image Gemini read — so all of this can only add a chance of a
+// better reading, never remove the pre-existing behavior.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
 
@@ -559,13 +711,44 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
         if (croppedBase64) {
             try {
-                const cropped = await readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true });
-                if (cropped && cropped.weight != null) {
-                    console.log(`[GEMINI] Weight read via crop-zoom pass (locate reason: "${box.reason || ''}")`);
-                    return cropped;
+                const [visionText, geminiMeta] = await Promise.all([
+                    visionOcr.detectText(croppedBase64),
+                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
+                        console.warn('[GEMINI] Metadata read on crop failed:', err.message);
+                        return null;
+                    }),
+                ]);
+                if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision/gemini]', JSON.stringify({ visionText, geminiWeight: geminiMeta && geminiMeta.weight }));
+
+                const visionWeight = visionOcr.extractWeightNumber(visionText);
+                if (visionWeight != null) {
+                    const disagreement = geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== visionWeight
+                        ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
+                        : '';
+                    const result = {
+                        weight: visionWeight,
+                        weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
+                        displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${box.reason || ''}")`,
+                        raw_text: `${visionText} (Cloud Vision OCR)${disagreement}`,
+                    };
+                    console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary): ${visionWeight}${disagreement ? ' — disagreed with Gemini' : ''}`);
+                    return result;
                 }
-                // Cropped pass came back with no confident weight — fall through
-                // and try the original whole image below rather than giving up.
+
+                // Vision OCR gave nothing usable (API not enabled/reachable, or
+                // genuinely no text detected) — fall back to the Gemini-only
+                // self-consistency vote. Reuse the geminiMeta call already made
+                // above as vote #1 instead of throwing it away.
+                console.warn('[GEMINI] Vision OCR unavailable or unusable, falling back to Gemini self-consistency vote');
+                const votes = [geminiMeta, ...await Promise.all([
+                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
+                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
+                ])];
+                const winner = voteOnWeightReadings(votes);
+                if (winner && winner.weight != null) {
+                    console.log(`[GEMINI] Weight read via crop-zoom + vote pass (locate reason: "${box.reason || ''}"): ${winner.weight}`);
+                    return winner;
+                }
                 console.warn('[GEMINI] Crop-zoom pass returned no confident weight, falling back to whole image');
             } catch (err) {
                 console.warn('[GEMINI] Crop-zoom read pass failed, falling back to whole image:', err.message);
