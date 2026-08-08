@@ -1693,8 +1693,11 @@ function renderTasks(data) {
 // plain file upload fallback (works over plain http:// too, and covers phones
 // where the user would rather pick an existing photo).
 let loadsCache = [];
+// Gross/tare/net/price/unit/amount live PER ITEM now (moved off the load
+// level — a load can be several items each weighed separately), so each
+// entry here also carries grossPhoto/tarePhoto ({ base64, mime } | null)
+// instead of there being one shared capturedPhotos object for the whole load.
 let currentLoadItems = [];
-let capturedPhotos = { gross: null, tare: null }; // { base64, mime } once captured
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -1714,6 +1717,23 @@ const ITEM_DESC_OPTIONS = [
 ];
 const ITEM_DESC_OTHER = 'Others';
 
+// Live-recomputes ONE row's net weight (gross - tare) and amount (net *
+// price) directly from that row's own inputs — called on every input event
+// inside the row, and after a photo read fills gross/tare. Reads/writes DOM
+// directly rather than going through currentLoadItems so it stays fast and
+// doesn't fight the user's cursor position while typing; syncItemsFromDom()
+// (called right after, on the same input event) is what actually persists
+// the values into currentLoadItems.
+function recomputeRowTotals(row) {
+  const g = parseFloat(row.querySelector('.ld-item-gross').value);
+  const t = parseFloat(row.querySelector('.ld-item-tare').value);
+  const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
+  row.querySelector('.ld-item-net').value = net != null ? net : '';
+  const price = parseFloat(row.querySelector('.ld-item-price').value);
+  const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+  row.querySelector('.ld-item-amount').value = amount != null ? amount : '';
+}
+
 function renderItemRows() {
   const box = $('ld_items');
   if (!box) return;
@@ -1732,19 +1752,60 @@ function renderItemRows() {
       .concat(ITEM_DESC_OPTIONS.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
       .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
       .join('');
+    const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
+    const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
+    const price = parseFloat(it.price);
+    const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
     return `
     <div class="item-row" data-idx="${i}">
       <div class="ld-item-desc-wrap">
         <select class="ld-item-desc-select">${optionsHtml}</select>
         <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
       </div>
-      <input class="ld-item-qty" type="number" step="any" placeholder="Qty" value="${it.qty ?? ''}">
-      <input class="ld-item-unit" placeholder="Unit" value="${esc(it.unit || '')}">
-      <input class="ld-item-rate" type="number" step="any" placeholder="Rate" value="${it.rate ?? ''}">
-      <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}">✕</button>
+      <div class="ld-item-weight-grid">
+        <div class="field">
+          <label>Gross weight</label>
+          <div class="ld-weight-capture">
+            <input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}">
+            <button type="button" class="btn btn-photo-item" data-role="gross">📷</button>
+            <input type="file" accept="image/*" class="ld-item-gross-file hidden">
+          </div>
+          <div class="ld-item-gross-status ld-cap-status"></div>
+        </div>
+        <div class="field">
+          <label>Tare weight</label>
+          <div class="ld-weight-capture">
+            <input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}">
+            <button type="button" class="btn btn-photo-item" data-role="tare">📷</button>
+            <input type="file" accept="image/*" class="ld-item-tare-file hidden">
+          </div>
+          <div class="ld-item-tare-status ld-cap-status"></div>
+        </div>
+        <div class="field">
+          <label>Net weight</label>
+          <input class="ld-item-net" type="number" step="any" disabled style="opacity:.7;" value="${net != null ? net : ''}">
+        </div>
+      </div>
+      <div class="ld-item-bottom-grid">
+        <div class="field"><label>Price</label><input class="ld-item-price" type="number" step="any" placeholder="0" value="${it.price ?? ''}"></div>
+        <div class="field"><label>Unit</label><input class="ld-item-unit" placeholder="e.g. lb" value="${esc(it.unit || '')}"></div>
+        <div class="field"><label>Amount</label><input class="ld-item-amount" type="number" step="any" disabled style="opacity:.7;" value="${amount != null ? amount : ''}"></div>
+        <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}">✕</button>
+      </div>
     </div>`;
   }).join('');
-  box.querySelectorAll('.item-row input').forEach(inp => inp.addEventListener('input', syncItemsFromDom));
+
+  box.querySelectorAll('.item-row').forEach(row => {
+    row.querySelectorAll('input:not([type=file])').forEach(inp => inp.addEventListener('input', () => {
+      recomputeRowTotals(row);
+      syncItemsFromDom();
+    }));
+    row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
+      row.querySelector(btn.dataset.role === 'gross' ? '.ld-item-gross-file' : '.ld-item-tare-file').click();
+    }));
+    row.querySelector('.ld-item-gross-file').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
+    row.querySelector('.ld-item-tare-file').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
+  });
   box.querySelectorAll('.ld-item-desc-select').forEach(sel => sel.addEventListener('change', () => {
     const row = sel.closest('.item-row');
     const otherInput = row.querySelector('.ld-item-desc-other');
@@ -1765,30 +1826,35 @@ function renderItemRows() {
 }
 function syncItemsFromDom() {
   const rows = $('ld_items').querySelectorAll('.item-row');
-  currentLoadItems = Array.from(rows).map(row => {
+  currentLoadItems = Array.from(rows).map((row, i) => {
     const sel = row.querySelector('.ld-item-desc-select');
     const otherInput = row.querySelector('.ld-item-desc-other');
     const description = sel.value === ITEM_DESC_OTHER ? (otherInput.value || '') : (sel.value || '');
+    // grossPhoto/tarePhoto aren't DOM-backed (a captured photo isn't shown as
+    // a form field) — carry them over from the previous state by row index
+    // so they survive every other field's input events re-running this sync.
+    const prev = currentLoadItems[i] || {};
     return {
       description,
-      qty : row.querySelector('.ld-item-qty').value,
-      unit: row.querySelector('.ld-item-unit').value,
-      rate: row.querySelector('.ld-item-rate').value,
+      gross_weight: row.querySelector('.ld-item-gross').value,
+      tare_weight : row.querySelector('.ld-item-tare').value,
+      price: row.querySelector('.ld-item-price').value,
+      unit : row.querySelector('.ld-item-unit').value,
+      grossPhoto: prev.grossPhoto || null,
+      tarePhoto : prev.tarePhoto  || null,
     };
   });
 }
 
-function recomputeNet() {
-  const g = parseFloat($('ld_gross').value);
-  const t = parseFloat($('ld_tare').value);
-  $('ld_net').value = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : '';
-}
-
 // Shared by both capture paths (camera snapshot and file upload) — sends the
-// image to Gemini for a weight read, fills the field, remembers the photo so
-// it gets archived to Drive on save.
-async function processWeightImage(target, base64, mime, statusEl) {
-  capturedPhotos[target] = { base64, mime };
+// image to Gemini/Vision for a weight read, fills that row's gross or tare
+// field, remembers the photo (per item now, not per load) so it gets
+// archived to Drive on save. `row` is the specific item-row DOM element the
+// photo button lives in — everything is scoped to that one row's fields.
+async function processWeightImage(row, roleKey, base64, mime, statusEl) {
+  const idx = parseInt(row.dataset.idx, 10);
+  syncItemsFromDom(); // capture whatever's already typed before we mutate a photo onto it
+  if (currentLoadItems[idx]) currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64, mime };
   if (statusEl) statusEl.textContent = 'Reading scale…';
   try {
     const result = await api('/api/vision/read-weight', {
@@ -1797,8 +1863,9 @@ async function processWeightImage(target, base64, mime, statusEl) {
     });
     const seenNote = result.displays_seen ? ` [displays: ${result.displays_seen}]` : '';
     if (result.weight != null) {
-      $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
-      recomputeNet();
+      row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare').value = result.weight;
+      recomputeRowTotals(row);
+      syncItemsFromDom();
       if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}${result.raw_text ? ` (saw: "${result.raw_text}")` : ''}${seenNote} — check it matches the scale before saving.`;
     } else if (statusEl) {
       // raw_text/displays_seen are filled in even on a null read (see
@@ -1842,24 +1909,24 @@ function loadImageFromFile(file) {
   });
 }
 
-async function handleFileUpload(target, file) {
+// `row` is the specific item-row DOM element this file input lives in —
+// scoped per item now, not per load.
+async function handleFileUpload(row, roleKey, file) {
   if (!file) return;
-  const statusEl = $(target === 'gross' ? 'ld_gross_status' : 'ld_tare_status');
+  const statusEl = row.querySelector(roleKey === 'gross' ? '.ld-item-gross-status' : '.ld-item-tare-status');
   statusEl.textContent = 'Preparing photo…';
   try {
     const img = await loadImageFromFile(file);
     const base64 = downscaleToBase64(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
-    await processWeightImage(target, base64, 'image/jpeg', statusEl);
+    await processWeightImage(row, roleKey, base64, 'image/jpeg', statusEl);
   } catch (err) {
     statusEl.textContent = err.message;
   }
 }
 
 function resetLoadModal() {
-  currentLoadItems = [{ description: '', qty: '', unit: '', rate: '' }];
-  capturedPhotos = { gross: null, tare: null };
-  ['ld_date', 'ld_seller', 'ld_desc', 'ld_gross', 'ld_tare', 'ld_net'].forEach(id => { if ($(id)) $(id).value = ''; });
-  ['ld_gross_status', 'ld_tare_status'].forEach(id => { if ($(id)) $(id).textContent = ''; });
+  currentLoadItems = [{ description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null }];
+  ['ld_date', 'ld_seller', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   $('loadModalErr').textContent = '';
   renderItemRows();
   stopCamera();
@@ -1878,10 +1945,14 @@ function loadCardHtml(l) {
         <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
       </div>
       ${l.description ? `<div style="margin-top:10px; font-size:12px; color:var(--text-body);">${esc(l.description)}</div>` : ''}
-      <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
-        <span>Gross: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
-        <span>Tare: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
-        <span style="font-weight:700; color:var(--text-strong);">Net: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+      <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:10px;">${(l.items || []).length} item${(l.items || []).length === 1 ? '' : 's'}</div>
+      <!-- Gross/tare/net are now per item (see item table in the modal / PDF)
+           — these are sums across all items, computed server-side in
+           helpers/loads.js, not a single load-level weight anymore. -->
+      <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:6px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
+        <span>Total gross: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span>Total tare: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span style="font-weight:700; color:var(--text-strong);">Total net: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
       </div>
       <div style="margin-top:12px;">
         ${l.pdf_link
@@ -1905,30 +1976,27 @@ function renderLoads(loads) {
       #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
       #loadModal .modal-shell { max-width:900px; width:100%; }
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-      .ld-weight-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:20px; }
-      /* NOTE: this used to say ".ld-item-row" but the row markup has always
-         used class="item-row" (see renderItemRows' comment on why — a
-         data-row collision bug), so this grid layout was silently never
-         applying and rows were falling back to plain block stacking. Fixed
-         to actually match the markup while adding the item-description
-         dropdown below. */
-      .item-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:start; }
+      /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
+         the load level per Apsara — a load can mix items with different
+         weights), so each item row is its own little card with 3 stacked
+         sub-rows rather than one flat grid: description; gross+tare+net
+         weight capture (reuses the same photo-or-upload pattern the old
+         load-level fields used); price+unit+amount+remove. */
+      .item-row { border:1px solid var(--border-subtle); border-radius:8px; padding:12px; margin-bottom:10px; background:var(--surface-raised, rgba(0,0,0,.015)); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:4px; }
+      .ld-item-weight-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; }
+      .ld-item-bottom-grid { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:10px; margin-top:10px; align-items:end; }
       .ld-weight-capture { display:flex; gap:6px; flex-wrap:wrap; }
-      .ld-weight-capture input[type=number] { flex:1; min-width:90px; }
+      .ld-weight-capture input[type=number] { flex:1; min-width:80px; }
       .ld-cap-status { font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:4px; width:100%; }
+      .ld-item-bottom-grid .btn-remove-item { justify-self:start; }
       @media (max-width: 860px) {
         #loadModal { padding:0; align-items:stretch; }
         #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
         #loadModal .modal-body { max-height:none; flex:1; }
         .ld-grid-2 { grid-template-columns:1fr; }
-        .ld-weight-grid { grid-template-columns:1fr; }
-        .item-row { grid-template-columns:1fr 1fr; grid-template-areas:"desc desc" "qty unit" "rate remove"; }
-        .item-row .ld-item-desc-wrap { grid-area:desc; }
-        .item-row .ld-item-qty { grid-area:qty; }
-        .item-row .ld-item-unit { grid-area:unit; }
-        .item-row .ld-item-rate { grid-area:rate; }
-        .item-row .btn-remove-item { grid-area:remove; justify-self:start; }
+        .ld-item-weight-grid { grid-template-columns:1fr; }
+        .ld-item-bottom-grid { grid-template-columns:1fr 1fr; }
       }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
@@ -1959,40 +2027,16 @@ function renderLoads(loads) {
 
           <div style="margin-top:18px;">
             <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
+            <!-- Gross/tare weight capture moved IN HERE, per item (see
+                 renderItemRows) — a load can be several items each weighed
+                 separately, so there's no single load-level weight anymore.
+                 Each row's photo button is a plain file input with
+                 accept="image/*" (no "capture" attribute) — mobile browsers
+                 show their native "Take Photo / Photo Library" sheet on tap,
+                 camera AND upload from one control, no getUserMedia, no
+                 HTTPS requirement. Desktop just gets a normal file picker. -->
             <div id="ld_items"></div>
             <button id="btnAddItemRow" type="button" class="btn" style="margin-top:4px; font-size:12px; padding:6px 12px;">+ Add item</button>
-          </div>
-
-          <div class="ld-weight-grid">
-            <div class="field">
-              <label>Gross weight</label>
-              <div class="ld-weight-capture">
-                <input id="ld_gross" type="number" step="any" placeholder="0">
-                <!-- No "capture" attribute on purpose: a plain file input with
-                     accept="image/*" makes mobile browsers show their native
-                     "Take Photo / Photo Library" sheet on tap — camera AND
-                     upload from one control, no getUserMedia, no HTTPS
-                     requirement (that was the whole source of this session's
-                     tunnel/Error-1033/Error-1016 troubleshooting). Desktop
-                     just gets a normal file picker. -->
-                <button type="button" class="btn btn-photo" data-target="gross">📷 Add photo</button>
-                <input type="file" accept="image/*" id="ld_gross_file" class="hidden">
-                <div id="ld_gross_status" class="ld-cap-status"></div>
-              </div>
-            </div>
-            <div class="field">
-              <label>Tare weight</label>
-              <div class="ld-weight-capture">
-                <input id="ld_tare" type="number" step="any" placeholder="0">
-                <button type="button" class="btn btn-photo" data-target="tare">📷 Add photo</button>
-                <input type="file" accept="image/*" id="ld_tare_file" class="hidden">
-                <div id="ld_tare_status" class="ld-cap-status"></div>
-              </div>
-            </div>
-            <div class="field">
-              <label>Net weight</label>
-              <input id="ld_net" type="number" step="any" disabled style="opacity:.7;">
-            </div>
           </div>
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
         </div>
@@ -2017,20 +2061,13 @@ function wireLoadsEvents() {
 
   $('btnAddItemRow').addEventListener('click', () => {
     syncItemsFromDom();
-    currentLoadItems.push({ description: '', qty: '', unit: '', rate: '' });
+    currentLoadItems.push({ description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null });
     renderItemRows();
   });
 
-  $('ld_gross').addEventListener('input', recomputeNet);
-  $('ld_tare').addEventListener('input', recomputeNet);
-
-  // Single button per field — opens the native file picker, which on mobile
-  // shows a "Take Photo / Photo Library" choice with no HTTPS requirement.
-  document.querySelectorAll('.btn-photo').forEach(btn => btn.addEventListener('click', () => {
-    $(btn.dataset.target === 'gross' ? 'ld_gross_file' : 'ld_tare_file').click();
-  }));
-  $('ld_gross_file').addEventListener('change', (e) => handleFileUpload('gross', e.target.files[0]));
-  $('ld_tare_file').addEventListener('change', (e) => handleFileUpload('tare', e.target.files[0]));
+  // Photo buttons, weight/price inputs, and desc dropdowns are all wired
+  // per-row inside renderItemRows() now (re-attached every render since
+  // rows come and go) — nothing load-level left to wire here for weights.
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
@@ -2041,19 +2078,26 @@ function wireLoadsEvents() {
     const btn = $('btnSaveLoad');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
+      const items = currentLoadItems
+        .filter(it => (it.description || it.gross_weight || it.tare_weight || it.price))
+        .map(it => ({
+          description: it.description,
+          gross_weight: it.gross_weight || null,
+          tare_weight : it.tare_weight  || null,
+          price: it.price || null,
+          unit : it.unit  || null,
+          gross_photo_base64: it.grossPhoto ? it.grossPhoto.base64 : null,
+          gross_photo_mime  : it.grossPhoto ? it.grossPhoto.mime   : null,
+          tare_photo_base64 : it.tarePhoto  ? it.tarePhoto.base64  : null,
+          tare_photo_mime   : it.tarePhoto  ? it.tarePhoto.mime    : null,
+        }));
       const payload = {
         date: $('ld_date').value || null,
         seller: seller || null,
         description: desc,
-        items: currentLoadItems.filter(it => (it.description || it.qty || it.rate)),
-        gross_weight: $('ld_gross').value || null,
-        tare_weight: $('ld_tare').value || null,
+        items,
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
-        gross_photo_base64: capturedPhotos.gross ? capturedPhotos.gross.base64 : null,
-        gross_photo_mime  : capturedPhotos.gross ? capturedPhotos.gross.mime   : null,
-        tare_photo_base64 : capturedPhotos.tare  ? capturedPhotos.tare.base64  : null,
-        tare_photo_mime   : capturedPhotos.tare  ? capturedPhotos.tare.mime    : null,
       };
       await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       stopCamera();

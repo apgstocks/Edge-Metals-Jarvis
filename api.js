@@ -528,35 +528,46 @@ function createApi() {
             res.json(load);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
-    // Creates the load record, then uploads gross/tare photos to Drive if
-    // provided (fails soft — a Drive outage never blocks saving the load
-    // itself; drive_link just stays null and can be retried later).
+    // Creates the load record, then uploads each ITEM's gross/tare photos to
+    // Drive if provided — photos are per item now (a load can be several
+    // items, each weighed separately), so this uploads up to 2 photos per
+    // item instead of 2 total for the whole load. Fails soft per-photo — a
+    // Drive outage on one item's photo never blocks the load itself or any
+    // other item's photo; that link just stays null and can be retried later.
     app.post('/api/loads', largeJson, async (req, res) => {
         const b = req.body || {};
         try {
             const { addLoad, updateLoad } = require('./helpers/loads');
             const record = await addLoad({
                 date: b.date, seller: b.seller, description: b.description,
-                items: b.items, gross_weight: b.gross_weight, tare_weight: b.tare_weight,
-                weight_unit: b.weight_unit,
+                items: b.items, weight_unit: b.weight_unit,
                 created_by: b.created_by || req.role || 'unknown',
             });
 
             const { uploadScaleTicketImage } = require('./helpers/drive');
-            const patch = {};
-            if (b.gross_photo_base64) {
-                try {
-                    const f = await uploadScaleTicketImage(`${record.id}-gross`, b.gross_photo_base64, b.gross_photo_mime);
-                    patch.gross_photo_drive_id = f.id; patch.gross_photo_link = f.webViewLink;
-                } catch (e) { console.error(`[API] gross photo upload failed for ${record.id}:`, e.message); }
-            }
-            if (b.tare_photo_base64) {
-                try {
-                    const f = await uploadScaleTicketImage(`${record.id}-tare`, b.tare_photo_base64, b.tare_photo_mime);
-                    patch.tare_photo_drive_id = f.id; patch.tare_photo_link = f.webViewLink;
-                } catch (e) { console.error(`[API] tare photo upload failed for ${record.id}:`, e.message); }
-            }
-            const finalLoads = Object.keys(patch).length ? await updateLoad(record.id, patch) : null;
+            const items = record.items || [];
+            const inputItems = Array.isArray(b.items) ? b.items : [];
+            let anyPhotoUploaded = false;
+            await Promise.all(items.map(async (item, i) => {
+                const input = inputItems[i] || {};
+                const tag = `${record.id}-item${i}`;
+                if (input.gross_photo_base64) {
+                    try {
+                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime);
+                        item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
+                        anyPhotoUploaded = true;
+                    } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
+                }
+                if (input.tare_photo_base64) {
+                    try {
+                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime);
+                        item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
+                        anyPhotoUploaded = true;
+                    } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }
+                }
+            }));
+
+            const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
             const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
             res.json({ ok: true, load: finalLoad });
         } catch (err) {
