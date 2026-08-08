@@ -385,14 +385,43 @@ client.on('message', async (msg) => {
         try { chat = await msg.getChat(); } catch (e) { console.warn('[WA] getChat failed, falling back:', e.message); }
         try { contact = await msg.getContact(); } catch (e) { console.warn('[WA] getContact failed, falling back:', e.message); }
 
+        const senderNumber = contact?.id?._serialized || msg.author || msg.from;
+
+        // Yard scale-ticket photos need the actual image bytes, not just the
+        // hasMedia/mediaType flags every other flow already gets. Scoped
+        // tightly to numbers on the yard_staff allowlist (settings.yard_staff)
+        // so trucker/supplier photo flows (empty-drop, load-ready) are
+        // completely untouched — they don't pay the extra downloadMedia()
+        // Puppeteer round-trip for a feature they don't use. Deliberately
+        // duplicates just the number-matching (not full brain.js normalize()
+        // logic) — small, low-drift-risk check, not a second source of truth
+        // for role resolution.
+        let mediaBase64 = null, mediaMimeType = null;
+        if (msg.hasMedia && msg.type === 'image') {
+            try {
+                const { loadSettings } = require('./helpers/json');
+                const digits = (v) => String(v || '').replace(/\D/g, '');
+                const yardNums = (loadSettings().yard_staff || [])
+                    .map(x => digits(typeof x === 'string' ? x : (x?.whatsapp || '')))
+                    .filter(Boolean);
+                if (yardNums.includes(digits(senderNumber))) {
+                    const media = await msg.downloadMedia();
+                    mediaBase64   = media?.data || null;
+                    mediaMimeType = media?.mimetype || null;
+                }
+            } catch (e) { console.warn('[WA] Yard media download failed:', e.message); }
+        }
+
         await brain.process({
             messageId   : msg.id?._serialized,
             chatId      : chat?.id?._serialized || msg.from,
-            senderNumber: contact?.id?._serialized || msg.author || msg.from,
+            senderNumber,
             senderName  : contact?.pushname || contact?.name || contact?.number || 'Unknown',
             text        : msg.body || '',
             hasMedia    : msg.hasMedia,
             mediaType   : msg.type,
+            mediaBase64,
+            mediaMimeType,
             isGroup     : chat?.isGroup ?? String(msg.from || '').endsWith('@g.us'),
         }, sendMessage);
     } catch (err) {

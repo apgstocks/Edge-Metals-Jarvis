@@ -122,6 +122,13 @@ async function normalize(raw) {
     const teamNums   = (settings.internal_team || [])
         .map(x => digits(typeof x === 'string' ? x : (x?.whatsapp || '')))
         .filter(Boolean);
+    // Yard/scale staff — separate allowlist from internal_team (settings.yard_staff),
+    // deliberately its own role so a photo from one of these numbers routes to the
+    // standalone scale-ticket pipeline (workflow/actions.js's yardScaleTicketReceived),
+    // never into the manager/team command grammar or the trucker/supplier booking flow.
+    const yardNums   = (settings.yard_staff || [])
+        .map(x => digits(typeof x === 'string' ? x : (x?.whatsapp || '')))
+        .filter(Boolean);
     const senderNum  = digits(raw.senderNumber);
 
     // Group identity resolves FIRST, unconditionally — a message sent
@@ -140,13 +147,14 @@ async function normalize(raw) {
     const isManager = !isRegisteredGroupChat && !!managerNum && senderNum === managerNum;
     const isTeam    = !isRegisteredGroupChat && (teamNums.includes(senderNum) ||
                       (!!settings.team_group_id && raw.chatId === settings.team_group_id));
+    const isYard    = !isRegisteredGroupChat && yardNums.includes(senderNum);
 
-    // Group identity wins for group chats; for personal DMs, manager/team
+    // Group identity wins for group chats; for personal DMs, manager/team/yard
     // identity still wins over a coincidental personal-number match.
-    const finalTrucker  = isRegisteredGroupChat ? trucker  : (!isManager && !isTeam ? trucker  : null);
-    const finalSupplier = isRegisteredGroupChat ? supplier : (!isManager && !isTeam ? supplier : null);
+    const finalTrucker  = isRegisteredGroupChat ? trucker  : (!isManager && !isTeam && !isYard ? trucker  : null);
+    const finalSupplier = isRegisteredGroupChat ? supplier : (!isManager && !isTeam && !isYard ? supplier : null);
 
-    const role = isManager ? 'manager' : isTeam ? 'team' : finalTrucker ? 'trucker' : finalSupplier ? 'supplier' : 'unknown';
+    const role = isManager ? 'manager' : isTeam ? 'team' : isYard ? 'yard' : finalTrucker ? 'trucker' : finalSupplier ? 'supplier' : 'unknown';
 
     return {
         ...raw,
@@ -157,6 +165,7 @@ async function normalize(raw) {
         isManagerOrTeam: isManager || isTeam,
         isTrucker      : !!finalTrucker,
         isSupplier     : !!finalSupplier,
+        isYard         : isYard,
         isAuthorized   : role !== 'unknown',
     };
 }
@@ -841,6 +850,27 @@ function policyDecide(ctx) {
         return { intent: null, resolvedBy: null, needsAI: true };
     }
 
+    // ── D2. Yard/scale staff — standalone capture channel, independent of the
+    // trucker/booking workflow above. A photo triggers Gemini extraction into
+    // its own record (helpers/scaleTickets.js); never touches bookings.json
+    // or workflow.json. Yard staff aren't expected to type commands, so any
+    // non-media text is just acknowledged, not run through AI fallback —
+    // keeps this channel narrow and cheap (no Gemini call on stray "ok"s).
+    if (ctx.isYard) {
+        if (ctx.hasMedia && ctx.mediaBase64) {
+            return { intent: 'yard_scale_ticket_received', resolvedBy: 'policy',
+                     data: { image_base64: ctx.mediaBase64, mime_type: ctx.mediaMimeType } };
+        }
+        if (ctx.hasMedia && !ctx.mediaBase64) {
+            // Media flagged but bytes weren't captured (download failed, or it
+            // wasn't an image — see index.js's message handler). Ask to resend
+            // rather than silently dropping it.
+            return { intent: 'reply', resolvedBy: 'policy',
+                     data: { reply: "Couldn't read that — please resend the scale ticket as a photo." } };
+        }
+        return { intent: 'silent', resolvedBy: 'policy', data: {} };
+    }
+
     // ── E. Trucker/supplier with multiple bookings and a booking no. in text ──
     if ((ctx.isTrucker || ctx.isSupplier) && !ctx.activeBooking && ctx.activeSlots.length > 1) {
         const bkg = resolveBookingNumber(ctx.text);
@@ -1206,6 +1236,10 @@ async function route(decision, ctx, sendMessage) {
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);
         case 'picked_up_confirmed':    return actions.pickedUpConfirmed(bkg, !!d.scale_ticket, ctx.senderName, d.container_seq);
         case 'scale_ticket_received':  return actions.scaleTicketReceived(bkg, d.container_seq);
+        // Standalone yard pipeline — deliberately NOT the same case as
+        // 'scale_ticket_received' above (that one flips a flag on a booking's
+        // container; this one is its own record, unrelated to bkg/container).
+        case 'yard_scale_ticket_received': return actions.yardScaleTicketReceived(chatId, ctx.senderName, d.image_base64, d.mime_type);
         case 'ingate_received':        return actions.ingateReceived(bkg, ctx.senderName, d.container_seq);
         case 'ask_which_container':    return actions.askWhichContainer(chatId, d);
         case 'ask_which_booking':      return actions.askWhichBooking(chatId, d, ctx.matchedTrucker?.name || ctx.matchedSupplier?.name, ctx.isSupplier ? 'supplier' : 'trucker');

@@ -66,6 +66,19 @@ const FILES = {
     // this safety net. Same root-cause pattern as PRICELIST_CONTACTS_FILE
     // above — fixed together for the same reason.
     PRICELIST_SNAPSHOT_FILE: path.join(DATA_DIR, 'price_snapshot.json'),
+    // Structured yard "load" records — date/seller/item table/gross-tare-net
+    // weight, created via the dashboard's Add New Load form (camera-captured
+    // weights, not WhatsApp). Separate from SCALE_TICKETS_FILE on purpose: that
+    // one is a quick single-photo capture from WhatsApp, this is the full
+    // structured record with line items and a generated PDF. Revisit merging
+    // them later if that turns out to be wanted — kept apart for now since the
+    // shapes and entry points are genuinely different.
+    LOADS_FILE: path.join(DATA_DIR, 'loads.json'),
+    // Yard scale-ticket photos — standalone store, deliberately separate from
+    // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
+    // feature: yard staff text a photo of the digital scale ticket, Gemini reads
+    // it, result lands here — never written onto a booking or container record.
+    SCALE_TICKETS_FILE: path.join(DATA_DIR, 'scale_tickets.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
@@ -74,6 +87,7 @@ const GEMINI_MODEL   = process.env.GEMINI_MODEL   || 'gemini-2.5-flash-lite';
 const API_PORT       = parseInt(process.env.API_PORT || '8080');
 const API_TOKEN      = process.env.API_TOKEN || '';        // simple bearer token for dashboard API
 const APP_PASSWORD   = process.env.APP_PASSWORD || '';     // password gate for the web app (browser sessions)
+const STAFF_PASSWORD = process.env.STAFF_PASSWORD || '';   // separate, LOWER-privileged tier — Loads tab only (see api.js login)
 const SUPABASE_URL   = process.env.SUPABASE_URL || '';     // semantic memory store — Project Settings > API
 const SUPABASE_KEY   = process.env.SUPABASE_KEY || '';     // service_role key (server-side only, never expose to browser)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';   // separate, stronger password — gates WhatsApp QR + Facts admin panel
@@ -108,6 +122,11 @@ const GMAIL_WRITE_TOKEN_FILE = process.env.GMAIL_WRITE_TOKEN_FILE || path.join(D
 const GMAIL_SENDER_READ_TOKEN_FILE = process.env.GMAIL_SENDER_READ_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-sender-read.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
+// Optional dedicated folder for yard scale-ticket photos — falls back to
+// GDRIVE_UPLOAD_FOLDER_ID if unset, so the yard feature works with zero new
+// Drive setup; set this later if you want ticket photos filed separately from
+// booking PDFs. See helpers/drive.js's uploadScaleTicketImage().
+const GDRIVE_SCALE_TICKETS_FOLDER_ID = process.env.GDRIVE_SCALE_TICKETS_FOLDER_ID || '';
 
 // Address book — real need found 2026-08-05: quote-request messages to
 // truckers need full pickup/delivery address blocks (yard/company name +
@@ -290,9 +309,9 @@ const BOOKINGS_MENU = [
 module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
-    API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, SESSION_PATH,
+    API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
-    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID,
+    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
     QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,

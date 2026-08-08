@@ -255,4 +255,115 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
 // already includes full chat context (session, last 5 messages, facts,
 // business context). If a lighter-weight text-only Gemini call is needed
 // again later, re-add it deliberately — don't restore this dead pair as-is.
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument };
+
+// ── Multimodal: extract fields from a yard scale-ticket photo ────────────────
+// Same pattern as extractPdfFields but for an image (JPEG/PNG) of a digital
+// truck scale / weighbridge ticket. Deliberately its own function, not a
+// branch inside extractPdfFields — different schema, different failure mode
+// (a photographed screen/printed slip is far more likely to be blurry,
+// glared, or at an angle than a clean PDF, so this always returns best-effort
+// JSON with nulls rather than throwing on partial legibility).
+async function extractScaleTicketFields(imageBase64, mimeType = 'image/jpeg', retries = 2) {
+    if (!imageBase64) throw new Error('imageBase64 required');
+
+    const prompt = `You are reading a photo of a digital truck scale (weighbridge) ticket — typically a scale readout screen or a printed slip. Extract the following fields. Return ONLY raw JSON — no markdown, no prose.
+
+Schema (every field can be null if not legible or not present):
+{
+  "ticket_number": null,     // ticket/transaction ID printed on the ticket
+  "gross_weight": null,      // number, in the unit shown (do not convert units)
+  "tare_weight": null,       // number
+  "net_weight": null,        // number — if not printed but gross and tare are both present, compute gross - tare
+  "weight_unit": null,       // e.g. "lb", "kg", "ton"
+  "date": null,               // MM/DD/YYYY as printed
+  "time": null,               // as printed, e.g. "14:32"
+  "truck_number": null,      // truck/license plate if shown
+  "container_number": null,  // if shown
+  "commodity": null,         // material description if shown, e.g. "scrap steel"
+  "scale_location": null     // yard/facility name if shown on the ticket
+}
+
+If the image is blurry, cut off, glared, or not actually a scale ticket, still return your best-effort JSON with nulls for anything unreadable — never refuse, never return prose. Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+            ]);
+            const fields = extractJson(result.response.text());
+            if (fields) {
+                console.log(`[GEMINI] Scale ticket extraction: ticket=${fields.ticket_number || '?'} net=${fields.net_weight ?? '?'}`);
+                return fields;
+            }
+            console.warn(`[GEMINI] Scale ticket extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Scale ticket extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
+
+
+// ── Multimodal: read a single weight number off a digital scale display ──────
+// Used by the dashboard's Add New Load form — the gross/tare camera capture
+// buttons snapshot the scale readout and POST here (via /api/vision/read-weight
+// in api.js) for a fast, narrow extraction. Deliberately a separate, smaller
+// prompt from extractScaleTicketFields: that one is for a full printed ticket
+// with many fields; this is a live in-browser snapshot of just the number on
+// the display, so the schema is minimal and the prompt is tuned for reading a
+// single number off a 7-segment/LCD readout rather than a printed slip.
+async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
+    if (!imageBase64) throw new Error('imageBase64 required');
+
+    const prompt = `You are reading a digital scale display (7-segment or LCD readout) from a photo. Extract the weight value currently shown. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "weight": null,      // number only, e.g. 42350 — null if not legible
+  "weight_unit": null  // e.g. "lb", "kg", "ton" — whatever unit label is visible near the number, null if not shown
+}
+
+If the display is blurry, off, or no number is legible, return { "weight": null, "weight_unit": null } — never refuse, never return prose.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+            ]);
+            const fields = extractJson(result.response.text());
+            if (fields) return fields;
+            console.warn(`[GEMINI] Weight read returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Weight read failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) { await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); continue; }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return { weight: null, weight_unit: null };
+}
+
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage };

@@ -162,6 +162,39 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     return created.data;
 }
 
+// ── Upload a yard scale-ticket photo to Shared Drive ──────────────────────────
+// Conceptually separate from booking PDFs (not tied to a booking number, no
+// overwrite-in-place semantics — every ticket is its own file, named by its
+// scale_tickets.json record id) but reuses the SAME Shared Drive + service
+// account, so this works with zero new Google Cloud setup. Uses
+// GDRIVE_SCALE_TICKETS_FOLDER_ID if set, else falls back to the existing
+// GDRIVE_UPLOAD_FOLDER_ID. Fails soft is the CALLER's responsibility here
+// (see workflow/actions.js's yardScaleTicketReceived) — the extracted fields
+// and the WhatsApp reply must never block on Drive being reachable.
+// Returns { fileId, name, webViewLink } or throws.
+async function uploadScaleTicketImage(ticketId, imageBase64, mimeType, originalFilename) {
+    if (!ticketId) throw new Error('ticketId required');
+    if (!imageBase64) throw new Error('image data required');
+
+    const drive = getDrive();
+    const { Readable } = require('stream');
+    const buffer = Buffer.from(imageBase64, 'base64');
+    const ext  = (mimeType || '').includes('png') ? 'png' : 'jpg';
+    const name = `${ticketId}.${ext}`;
+
+    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] },
+        media: { mimeType: mimeType || 'image/jpeg', body: Readable.from(buffer) },
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Uploaded scale ticket ${name} (${created.data.id})`);
+    return created.data;
+}
+
 // ── List every PDF in the upload folder (paginated) ───────────────────────
 // Read-only — never touches file content or metadata. Built for one-off
 // audits (e.g. checking which stored "booking" PDFs are actually invoices
@@ -216,7 +249,33 @@ async function exportDocAsText(docId) {
     return Buffer.from(res.data).toString('utf8');
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText };
+// ── Upload a generated load-ticket PDF to Shared Drive ────────────────────────
+// Same Shared Drive/service account as everything else here. Called by
+// helpers/pdf.js's generateLoadPdf() after rendering, never called directly
+// with a hand-built buffer from elsewhere — keeps the "how is a load PDF
+// named/filed" decision in one place.
+async function uploadLoadPdf(loadId, pdfBuffer) {
+    if (!loadId) throw new Error('loadId required');
+    if (!pdfBuffer) throw new Error('pdf buffer required');
+
+    const drive = getDrive();
+    const { Readable } = require('stream');
+    const name = `${loadId}.pdf`;
+
+    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] },
+        media: { mimeType: 'application/pdf', body: Readable.from(pdfBuffer) },
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Uploaded load PDF ${name} (${created.data.id})`);
+    return created.data;
+}
+
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

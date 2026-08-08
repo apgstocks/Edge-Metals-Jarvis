@@ -177,6 +177,11 @@ function loadSettings() {
         manager_number : process.env.MANAGER_NUMBER || '',
         manager_name   : 'Manager',
         internal_team  : [],
+        // Yard/scale staff — separate allowlist from internal_team on purpose:
+        // these numbers get a distinct 'yard' role in brain.js's normalize(), so a
+        // photo from one of them routes to the standalone scale-ticket pipeline
+        // instead of the manager/team command grammar. [{name, whatsapp}, ...]
+        yard_staff     : [],
         team_group_id  : process.env.TEAM_GROUP_ID || '',
         gemini_model   : process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
         bot_mode       : 'handholding',

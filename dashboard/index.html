@@ -354,6 +354,7 @@ const NAV_ITEMS = [
   { id: 'bot',       label: 'Bot' },
   { id: 'tasks',     label: 'Tasks' },
   { id: 'facts',     label: 'Facts', adminOnly: true },
+  { id: 'loads',     label: 'Loads' },
 ];
 
 async function api(path, opts = {}) {
@@ -366,7 +367,7 @@ async function api(path, opts = {}) {
 
 function renderNav() {
   const nav = $('sideNav');
-  nav.innerHTML = NAV_ITEMS.filter(n => !n.adminOnly || ROLE === 'admin').map(n => `
+  nav.innerHTML = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin') && (ROLE !== 'staff' || n.id === 'loads')).map(n => `
     <button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>
   `).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
@@ -405,6 +406,7 @@ function switchTab(tab) {
 
 async function loadTab(tab) {
   const root = $('viewRoot');
+  if (typeof stopCamera === 'function') stopCamera(); // navigating away must never leave the camera running
   if (tab !== 'whatsapp' && waQrRefreshTimer) { clearInterval(waQrRefreshTimer); waQrRefreshTimer = null; }
   root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
   try {
@@ -419,6 +421,7 @@ async function loadTab(tab) {
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts'));
+    if (tab === 'loads') return renderLoads(await api('/api/loads'));
   } catch (err) {
     root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`;
   }
@@ -1680,6 +1683,283 @@ function renderTasks(data) {
     loadTab('tasks');
   }));
 }
+
+// ── LOADS — Add New Load wizard with camera-captured gross/tare weight ─────
+// Card-deck listing of structured load records (date/seller/items/PDF),
+// separate from the WhatsApp scale-ticket path in Bookings' underlying data
+// (see helpers/loads.js vs helpers/scaleTickets.js on the server). The
+// camera capture below uses getUserMedia — this REQUIRES a secure context
+// (https:// or http://localhost); it will fail with a permission error on
+// plain http:// over the VM's bare IP. See deploy notes.
+let loadsCache = [];
+let currentLoadItems = [];
+let capturedPhotos = { gross: null, tare: null }; // { base64, mime } once captured
+let cameraStream = null;
+let cameraTarget = null; // 'gross' | 'tare' while the capture overlay is open
+
+function stopCamera() {
+  if (cameraStream) { cameraStream.getTracks().forEach(t => t.stop()); cameraStream = null; }
+  const box = $('cameraBox');
+  if (box) box.classList.add('hidden');
+  cameraTarget = null;
+}
+
+function renderItemRows() {
+  const box = $('ld_items');
+  if (!box) return;
+  box.innerHTML = currentLoadItems.map((it, i) => `
+    <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px;" data-row="${i}">
+      <input class="ld-item-desc" placeholder="Description" value="${esc(it.description || '')}">
+      <input class="ld-item-qty" type="number" step="any" placeholder="Qty" value="${it.qty ?? ''}">
+      <input class="ld-item-unit" placeholder="Unit" value="${esc(it.unit || '')}">
+      <input class="ld-item-rate" type="number" step="any" placeholder="Rate" value="${it.rate ?? ''}">
+      <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" style="padding:6px 10px;">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('[data-row] input').forEach(inp => inp.addEventListener('input', syncItemsFromDom));
+  box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
+    currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
+    renderItemRows();
+  }));
+}
+function syncItemsFromDom() {
+  const rows = $('ld_items').querySelectorAll('[data-row]');
+  currentLoadItems = Array.from(rows).map(row => ({
+    description: row.querySelector('.ld-item-desc').value,
+    qty : row.querySelector('.ld-item-qty').value,
+    unit: row.querySelector('.ld-item-unit').value,
+    rate: row.querySelector('.ld-item-rate').value,
+  }));
+}
+
+function recomputeNet() {
+  const g = parseFloat($('ld_gross').value);
+  const t = parseFloat($('ld_tare').value);
+  $('ld_net').value = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : '';
+}
+
+async function startCamera(target) {
+  cameraTarget = target;
+  $('cameraBox').classList.remove('hidden');
+  $('camStatus').textContent = '';
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    $('cameraVideo').srcObject = cameraStream;
+  } catch (err) {
+    // Most likely cause on this deployment: dashboard served over plain
+    // http:// on the VM's bare IP, not https:// — getUserMedia is blocked
+    // outside a secure context (https, or http://localhost). See deploy notes.
+    $('camStatus').textContent = 'Camera unavailable: ' + err.message + ' (camera capture requires https:// or localhost).';
+  }
+}
+
+async function snapAndRead() {
+  if (!cameraStream) return;
+  const video = $('cameraVideo');
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const base64 = dataUrl.split(',')[1];
+  const target = cameraTarget;
+
+  $('camStatus').textContent = 'Reading scale…';
+  try {
+    const result = await api('/api/vision/read-weight', {
+      method: 'POST',
+      body: JSON.stringify({ image_base64: base64, mime_type: 'image/jpeg' }),
+    });
+    capturedPhotos[target] = { base64, mime: 'image/jpeg' };
+    if (result.weight != null) {
+      $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
+      recomputeNet();
+      $('camStatus').textContent = `Read: ${result.weight} ${result.weight_unit || ''}`;
+    } else {
+      $('camStatus').textContent = "Couldn't read a number — photo saved, enter the weight manually.";
+    }
+  } catch (err) {
+    $('camStatus').textContent = 'Read failed: ' + err.message + ' — photo not saved, try again or enter manually.';
+  }
+  stopCamera();
+}
+
+function resetLoadModal() {
+  currentLoadItems = [{ description: '', qty: '', unit: '', rate: '' }];
+  capturedPhotos = { gross: null, tare: null };
+  ['ld_date', 'ld_seller', 'ld_desc', 'ld_gross', 'ld_tare', 'ld_net'].forEach(id => { if ($(id)) $(id).value = ''; });
+  $('loadModalErr').textContent = '';
+  renderItemRows();
+  stopCamera();
+}
+
+function renderLoads(loads) {
+  loadsCache = loads || [];
+  const cards = loadsCache.map(l => `
+    <div class="card" style="padding:16px 18px; margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div>
+          <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.seller || 'Unnamed seller')}</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(l.date || '—')} · ${esc(l.id)} · by ${esc(l.created_by || '—')}</div>
+        </div>
+        <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
+      </div>
+      ${l.description ? `<div style="margin-top:10px; font-size:12px; color:var(--text-body);">${esc(l.description)}</div>` : ''}
+      <div style="display:flex; gap:18px; margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
+        <span>Gross: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span>Tare: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span style="font-weight:700; color:var(--text-strong);">Net: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+      </div>
+      <div style="margin-top:12px;">
+        ${l.pdf_link
+          ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>`
+          : `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`}
+      </div>
+    </div>`).join('');
+
+  $('viewRoot').innerHTML = `
+    <section style="max-width:900px; margin:0 auto; padding:38px 40px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+        <div>
+          <div class="eyebrow">// Loads</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
+          <div style="font-size:13px; color:var(--text-muted);">Camera-captured gross/tare weight, computed net, generated PDF ticket.</div>
+        </div>
+        <button id="btnAddLoad" class="btn btn-primary">+ Add new load</button>
+      </div>
+      <div id="loadDeck">${cards || '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No loads yet.</div>'}</div>
+    </section>
+
+    <div id="loadModal" class="hidden modal-overlay">
+      <div class="modal-shell" style="max-width:700px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
+          <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+            <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
+            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name"></div>
+          </div>
+          <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
+
+          <div style="margin-top:18px;">
+            <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
+            <div id="ld_items"></div>
+            <button id="btnAddItemRow" type="button" class="btn" style="margin-top:4px; font-size:12px; padding:6px 12px;">+ Add item</button>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:20px;">
+            <div class="field">
+              <label>Gross weight</label>
+              <div style="display:flex; gap:6px;">
+                <input id="ld_gross" type="number" step="any" placeholder="0">
+                <button type="button" class="btn btn-cam" data-target="gross" title="Capture from scale" style="padding:6px 10px;">📷</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Tare weight</label>
+              <div style="display:flex; gap:6px;">
+                <input id="ld_tare" type="number" step="any" placeholder="0">
+                <button type="button" class="btn btn-cam" data-target="tare" title="Capture from scale" style="padding:6px 10px;">📷</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Net weight</label>
+              <input id="ld_net" type="number" step="any" disabled style="opacity:.7;">
+            </div>
+          </div>
+          <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
+
+          <div id="cameraBox" class="hidden" style="margin-top:16px; border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:12px; text-align:center;">
+            <video id="cameraVideo" autoplay playsinline style="width:100%; max-width:420px; border-radius:6px; background:#000;"></video>
+            <div style="margin-top:10px; display:flex; gap:10px; justify-content:center;">
+              <button id="btnSnap" type="button" class="btn btn-primary">Capture</button>
+              <button id="btnCancelCam" type="button" class="btn">Cancel</button>
+            </div>
+            <div id="camStatus" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:8px;"></div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="btnCancelLoad" class="btn">Cancel</button>
+          <button id="btnSaveLoad" class="btn btn-primary">Save load</button>
+        </div>
+      </div>
+    </div>`;
+
+  wireLoadsEvents();
+}
+
+function wireLoadsEvents() {
+  $('btnAddLoad').addEventListener('click', () => {
+    resetLoadModal();
+    $('loadModal').classList.remove('hidden');
+  });
+  const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+  $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
+  $('btnCancelLoad').addEventListener('click', closeLoadModal);
+
+  $('btnAddItemRow').addEventListener('click', () => {
+    syncItemsFromDom();
+    currentLoadItems.push({ description: '', qty: '', unit: '', rate: '' });
+    renderItemRows();
+  });
+
+  $('ld_gross').addEventListener('input', recomputeNet);
+  $('ld_tare').addEventListener('input', recomputeNet);
+
+  document.querySelectorAll('.btn-cam').forEach(btn => btn.addEventListener('click', () => startCamera(btn.dataset.target)));
+  $('btnSnap').addEventListener('click', snapAndRead);
+  $('btnCancelCam').addEventListener('click', stopCamera);
+
+  $('btnSaveLoad').addEventListener('click', async () => {
+    syncItemsFromDom();
+    const seller = $('ld_seller').value.trim();
+    const desc   = $('ld_desc').value.trim();
+    if (!seller && !desc) { $('loadModalErr').textContent = 'Enter at least a seller or a description.'; return; }
+    $('loadModalErr').textContent = '';
+    const btn = $('btnSaveLoad');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const payload = {
+        date: $('ld_date').value || null,
+        seller: seller || null,
+        description: desc,
+        items: currentLoadItems.filter(it => (it.description || it.qty || it.rate)),
+        gross_weight: $('ld_gross').value || null,
+        tare_weight: $('ld_tare').value || null,
+        weight_unit: 'lb',
+        created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
+        gross_photo_base64: capturedPhotos.gross ? capturedPhotos.gross.base64 : null,
+        gross_photo_mime  : capturedPhotos.gross ? capturedPhotos.gross.mime   : null,
+        tare_photo_base64 : capturedPhotos.tare  ? capturedPhotos.tare.base64  : null,
+        tare_photo_mime   : capturedPhotos.tare  ? capturedPhotos.tare.mime    : null,
+      };
+      await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+      stopCamera();
+      $('loadModal').classList.add('hidden');
+      loadTab('loads');
+    } catch (err) {
+      $('loadModalErr').textContent = err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save load';
+    }
+  });
+
+  document.querySelectorAll('.btn-gen-pdf').forEach(btn => btn.addEventListener('click', async () => {
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST' });
+      loadTab('loads');
+    } catch (err) {
+      alert('PDF generation failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Generate PDF';
+    }
+  }));
+
+  renderItemRows();
+}
+
 
 // ── FACTS (admin only) — Jarvis's learned memory, fed into every AI prompt ─
 function renderFacts(data) {

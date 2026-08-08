@@ -621,6 +621,65 @@ await require('../helpers/tasks').cancelMatching({ type: 'nudge_scale_ticket', b
 return { action_taken: 'scale_ticket' };
 }
 
+// ── Yard scale tickets — standalone capture, independent of booking/container
+// workflow. Photo comes from a yard/scale-staff WhatsApp number
+// (settings.yard_staff, matched in brain.js's normalize()), gets read by
+// Gemini vision (helpers/gemini.js's extractScaleTicketFields), archived to
+// Drive, and stored in its own record (helpers/scaleTickets.js). Deliberately
+// never touches bookings.json or workflow.json — see scaleTicketReceived()
+// above for the (unrelated) per-container flag on the booking workflow.
+async function yardScaleTicketReceived(chatId, senderName, imageBase64, mimeType) {
+    if (!imageBase64) {
+        await _send(chatId, "Couldn't read that photo — please resend the scale ticket image.");
+        return { action_taken: 'yard_scale_ticket_failed' };
+    }
+
+    const { extractScaleTicketFields } = require('../helpers/gemini');
+    const { addScaleTicket, updateScaleTicket } = require('../helpers/scaleTickets');
+
+    let fields = null;
+    try {
+        fields = await extractScaleTicketFields(imageBase64, mimeType);
+    } catch (err) {
+        console.error('[YARD] Gemini extraction failed:', err.message);
+    }
+
+    const record = await addScaleTicket({
+        submitted_by : senderName,
+        chat_id      : chatId,
+        mime_type    : mimeType || 'image/jpeg',
+        fields       : fields || {},
+        extraction_ok: !!fields,
+    });
+
+    // Archive the photo to Drive — fails soft, never blocks the WhatsApp
+    // reply or loses the extracted fields. If this fails, the ticket record
+    // still exists with drive_link: null; re-run manually later if needed.
+    try {
+        const { uploadScaleTicketImage } = require('../helpers/drive');
+        const file = await uploadScaleTicketImage(record.id, imageBase64, mimeType);
+        await updateScaleTicket(record.id, { drive_file_id: file.id, drive_link: file.webViewLink });
+    } catch (err) {
+        console.error(`[YARD] Drive archive failed for ${record.id} (ticket data still saved):`, err.message);
+    }
+
+    if (!fields) {
+        await _send(chatId, `Got the photo (${record.id}) but couldn't read the ticket clearly — saved for manual review.`);
+        return { action_taken: 'yard_scale_ticket_saved_unreadable', ticket_id: record.id };
+    }
+
+    const summary = [
+        `Scale ticket saved (${record.id}).`,
+        fields.ticket_number != null ? `Ticket #: ${fields.ticket_number}` : null,
+        fields.gross_weight  != null ? `Gross: ${fields.gross_weight} ${fields.weight_unit || ''}`.trim() : null,
+        fields.tare_weight   != null ? `Tare: ${fields.tare_weight} ${fields.weight_unit || ''}`.trim() : null,
+        fields.net_weight    != null ? `Net: ${fields.net_weight} ${fields.weight_unit || ''}`.trim() : null,
+    ].filter(Boolean).join('\n');
+    await _send(chatId, summary);
+
+    return { action_taken: 'yard_scale_ticket_received', ticket_id: record.id };
+}
+
 async function ingateReceived(bkgNo, byName, containerSeq) {
 await advanceContainer(bkgNo, containerSeq, 'ingate_received');
 const topStep = (await syncWorkflowFromContainers(bkgNo)) || 'ingate_received';
@@ -3230,7 +3289,7 @@ showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,
-emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived,
+emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, ingateReceived, yardScaleTicketReceived,
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,

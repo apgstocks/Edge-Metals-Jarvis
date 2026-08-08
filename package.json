@@ -1,7 +1,7 @@
 {
   "name": "jarvis",
   "version": "3.0.0",
-  "description": "Jarvis — Edge Metals freight operations AI. Single-process, single-VM, zero paid cloud services.",
+  "description": "Jarvis \u2014 Edge Metals freight operations AI. Single-process, single-VM, zero paid cloud services.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -21,7 +21,8 @@
     "pdf-parse": "^1.1.1",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "1.34.7"
+    "whatsapp-web.js": "1.34.7",
+    "pdfkit": "^0.15.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"

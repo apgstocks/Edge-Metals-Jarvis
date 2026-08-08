@@ -1,0 +1,29 @@
+# ── Caddyfile — HTTPS in front of Jarvis's dashboard/API ─────────────────────
+# Why this exists: the new Loads feature's camera capture uses getUserMedia(),
+# which browsers refuse to run outside a "secure context" (https://, or
+# http://localhost). Jarvis is currently reached at a bare IP over plain
+# http:// (port 8080, no TLS anywhere in the repo or deploy notes) — camera
+# buttons will fail with a permission error until this is in front of it.
+#
+# Caddy auto-provisions and auto-renews a real Let's Encrypt certificate with
+# zero manual cert management, as long as a domain name points at this VM.
+# It replaces nothing in Jarvis itself — Jarvis keeps running on :8080
+# exactly as it does today; Caddy just terminates TLS on :443 and forwards
+# to it.
+#
+# ── REQUIRED before this works: you need a domain (or subdomain) with a DNS
+# A record pointing at 35.233.131.198. Don't have one? Two options:
+#   1. Cheapest: buy/use any domain you already control, add an A record
+#      (e.g. jarvis.yourdomain.com -> 35.233.131.198), replace the line below.
+#   2. No domain at all: skip Caddy, use a Cloudflare Tunnel instead — gives
+#      you HTTPS on a *.trycloudflare.com URL with no DNS purchase. Ask if
+#      you want that path instead; it's a different (also small) setup.
+#
+# Replace the placeholder domain below, then see the install steps in
+# HTTPS_SETUP.md (also added to this repo) for the exact commands to run ON
+# THE VM. I don't have SSH access to 35.233.131.198, so I can't run these for
+# you — this file and the doc are everything needed once you SSH in.
+
+jarvis.YOURDOMAIN.com {
+	reverse_proxy localhost:8080
+}

@@ -151,6 +151,7 @@ function createApi() {
     app.post('/login', (req, res) => {
         const pw = String(req.body?.password || '');
         const userPw  = cfg.APP_PASSWORD;
+        const staffPw  = cfg.STAFF_PASSWORD; // lower-privileged tier — see requireStaffOrAbove below
         const adminPw = cfg.ADMIN_PASSWORD;
         if (!userPw) {
             return res.status(500).json({ error: 'APP_PASSWORD not configured on the server' });
@@ -159,9 +160,12 @@ function createApi() {
         // more privileged match. Same-length-mismatch short-circuits safely (no
         // length leak) — timingSafeEqual requires equal-length buffers.
         const eq = (a, b) => { const A = Buffer.from(a), B = Buffer.from(b); return A.length === B.length && crypto.timingSafeEqual(A, B); };
+        // Checked most-privileged first (admin), then user, then staff last —
+        // staff is scoped to the Loads tab only (see requireStaffOrAbove).
         let role = null;
         if (adminPw && eq(pw, adminPw))      role = 'admin';
         else if (eq(pw, userPw))             role = 'user';
+        else if (staffPw && eq(pw, staffPw)) role = 'staff';
         if (!role) return res.status(401).json({ error: 'wrong password' });
 
         const sid = issueSession(req.ip, role);
@@ -197,6 +201,25 @@ function createApi() {
             return res.status(401).json({ error: 'unauthorized' });
         }
         return res.redirect('/login');
+    });
+
+    // Staff is a deliberately narrow role — Loads tab only, nothing else on
+    // the dashboard (bookings, pricing, contacts, WhatsApp admin, etc.).
+    // Enforced as a single allowlist here rather than wrapping every
+    // existing route individually: lower risk of missing one, and any NEW
+    // /api/ route added later is deny-by-default for staff unless it's
+    // explicitly added to STAFF_ALLOWED_PATH_PREFIXES. Non-API paths (the
+    // dashboard shell HTML/JS/CSS) still load — the SPA's own nav filtering
+    // (dashboard/index.html's NAV_ITEMS) hides every tab except Loads for
+    // this role; this middleware is the actual server-side boundary, the
+    // nav filtering is just UX so staff don't see buttons that would 403.
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/me'];
+    app.use((req, res, next) => {
+        if (req.role !== 'staff') return next();
+        if (!req.path.startsWith('/api/')) return next();
+        const allowed = STAFF_ALLOWED_PATH_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
+        if (allowed) return next();
+        return res.status(403).json({ error: 'staff access is limited to Loads' });
     });
 
     // Gate for admin-only routes (WhatsApp QR/reset, Facts panel). Must run
@@ -451,6 +474,123 @@ function createApi() {
 
     // ── Workflow ──────────────────────────────────────────────────────────────
     app.get('/api/workflow', (req, res) => res.json(loadWorkflow()));
+
+    // ── Yard scale tickets (standalone — not tied to bookings/workflow) ───────
+    app.get('/api/scale-tickets', (req, res) => {
+        try {
+            const { loadScaleTickets } = require('./helpers/scaleTickets');
+            res.json(loadScaleTickets());
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/scale-tickets/:id', (req, res) => {
+        try {
+            const { loadScaleTickets } = require('./helpers/scaleTickets');
+            const ticket = loadScaleTickets().find(t => t.id === req.params.id);
+            if (!ticket) return res.status(404).json({ error: 'not found' });
+            res.json(ticket);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── Vision: read a weight number off a scale-display photo ────────────────
+    // Stateless — used by the dashboard's camera-capture buttons on the Add
+    // New Load form BEFORE a load exists yet, so it can't be scoped to a
+    // load id. largeJson (10mb) because base64 photos inflate ~33% over binary.
+    app.post('/api/vision/read-weight', largeJson, async (req, res) => {
+        const { image_base64, mime_type } = req.body || {};
+        if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
+        try {
+            const { extractWeightFromImage } = require('./helpers/gemini');
+            const result = await extractWeightFromImage(image_base64, mime_type);
+            res.json({ ok: true, ...result });
+        } catch (err) {
+            console.error('[API] read-weight failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── Loads (standalone — the dashboard's Add New Load feature) ─────────────
+    // Accessible to staff/user/admin (see the staff-allowlist middleware above).
+    app.get('/api/loads', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            res.json(loadLoads());
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/loads/:id', (req, res) => {
+        try {
+            const { getLoad } = require('./helpers/loads');
+            const load = getLoad(req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+            res.json(load);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    // Creates the load record, then uploads gross/tare photos to Drive if
+    // provided (fails soft — a Drive outage never blocks saving the load
+    // itself; drive_link just stays null and can be retried later).
+    app.post('/api/loads', largeJson, async (req, res) => {
+        const b = req.body || {};
+        try {
+            const { addLoad, updateLoad } = require('./helpers/loads');
+            const record = await addLoad({
+                date: b.date, seller: b.seller, description: b.description,
+                items: b.items, gross_weight: b.gross_weight, tare_weight: b.tare_weight,
+                weight_unit: b.weight_unit,
+                created_by: b.created_by || req.role || 'unknown',
+            });
+
+            const { uploadScaleTicketImage } = require('./helpers/drive');
+            const patch = {};
+            if (b.gross_photo_base64) {
+                try {
+                    const f = await uploadScaleTicketImage(`${record.id}-gross`, b.gross_photo_base64, b.gross_photo_mime);
+                    patch.gross_photo_drive_id = f.id; patch.gross_photo_link = f.webViewLink;
+                } catch (e) { console.error(`[API] gross photo upload failed for ${record.id}:`, e.message); }
+            }
+            if (b.tare_photo_base64) {
+                try {
+                    const f = await uploadScaleTicketImage(`${record.id}-tare`, b.tare_photo_base64, b.tare_photo_mime);
+                    patch.tare_photo_drive_id = f.id; patch.tare_photo_link = f.webViewLink;
+                } catch (e) { console.error(`[API] tare photo upload failed for ${record.id}:`, e.message); }
+            }
+            const finalLoads = Object.keys(patch).length ? await updateLoad(record.id, patch) : null;
+            const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            res.json({ ok: true, load: finalLoad });
+        } catch (err) {
+            console.error('[API] create load failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+    app.put('/api/loads/:id', largeJson, async (req, res) => {
+        try {
+            const { updateLoad } = require('./helpers/loads');
+            const loads = await updateLoad(req.params.id, req.body || {});
+            const load = loads.find(l => l.id === req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true, load });
+        } catch (err) { res.status(500).json({ error: err.message }); }
+    });
+    // Generates the PDF from the load record as saved (photos referenced as
+    // Drive links, not re-embedded — see helpers/pdf.js's comment on why),
+    // uploads it to Drive, and stamps the load with the resulting link.
+    app.post('/api/loads/:id/generate-pdf', async (req, res) => {
+        try {
+            const { getLoad, updateLoad } = require('./helpers/loads');
+            const load = getLoad(req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+
+            const { generateLoadPdf } = require('./helpers/pdf');
+            const buf = await generateLoadPdf(load);
+
+            const { uploadLoadPdf } = require('./helpers/drive');
+            const file = await uploadLoadPdf(load.id, buf);
+
+            const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated' });
+            res.json({ ok: true, load: loads.find(l => l.id === load.id) });
+        } catch (err) {
+            console.error('[API] generate-pdf failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
     app.put('/api/workflow/:bkgNo', async (req, res) => {
         const step = req.body.step;
         if (step && !cfg.WORKFLOW_STAGES.includes(step)) {
