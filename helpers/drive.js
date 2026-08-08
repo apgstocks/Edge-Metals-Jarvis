@@ -253,14 +253,17 @@ async function exportDocAsText(docId) {
 // Same Shared Drive/service account as everything else here. Called by
 // helpers/pdf.js's generateLoadPdf() after rendering, never called directly
 // with a hand-built buffer from elsewhere — keeps the "how is a load PDF
-// named/filed" decision in one place.
-async function uploadLoadPdf(loadId, pdfBuffer) {
+// named/filed" decision in one place. `filenameOverride` lets the SAME
+// upload path be reused for the separate weights_<id>.pdf (see
+// generateWeightsPdf in helpers/pdf.js + the /generate-pdf route in api.js)
+// instead of duplicating this whole function for one filename difference.
+async function uploadLoadPdf(loadId, pdfBuffer, filenameOverride) {
     if (!loadId) throw new Error('loadId required');
     if (!pdfBuffer) throw new Error('pdf buffer required');
 
     const drive = getDrive();
     const { Readable } = require('stream');
-    const name = `${loadId}.pdf`;
+    const name = filenameOverride || `${loadId}.pdf`;
 
     const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
     if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');

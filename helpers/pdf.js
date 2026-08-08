@@ -34,6 +34,8 @@ function generateLoadPdf(load) {
             const unit = load.weight_unit || 'lb';
             const items = Array.isArray(load.items) ? load.items : [];
             if (items.length) {
+                doc.font('Helvetica-Bold').fontSize(12).text('Item Detail');
+                doc.moveDown(0.4);
                 doc.font('Helvetica-Bold').fontSize(9.5);
                 const colX = { desc: 50, gross: 195, tare: 245, net: 295, price: 345, unit: 400, amount: 445 };
                 const headerY = doc.y;
@@ -106,4 +108,77 @@ function generateLoadPdf(load) {
     });
 }
 
-module.exports = { generateLoadPdf };
+// ── Separate, smaller PDF: just gross/tare weights + their photo links ───────
+// Generated alongside the main priced ticket (same /generate-pdf action in
+// api.js) but uploaded as its own file, weights_<load id>.pdf, per Apsara —
+// some downstream use (e.g. handing proof-of-weight to the scale operator
+// or a quick audit) doesn't need the priced item table, just the weights and
+// the photos backing them up. Deliberately NOT folded into generateLoadPdf
+// as a toggle — keeping them as two plain functions means either one can be
+// regenerated/reused independently later without a flag threading through.
+function generateWeightsPdf(load) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
+            const chunks = [];
+            doc.on('data', (c) => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            doc.fontSize(18).font('Helvetica-Bold').text('Edge Metals Inc. — Weight Record', { align: 'left' });
+            doc.moveDown(0.2);
+            doc.fontSize(9).font('Helvetica').fillColor('#666').text(`Load ID: ${load.id}`);
+            doc.fillColor('#000');
+            doc.moveDown(0.8);
+
+            const fieldRow = (label, value) => {
+                doc.font('Helvetica-Bold').fontSize(10).text(label, { continued: true, width: 120 });
+                doc.font('Helvetica').text(value || '—');
+            };
+            fieldRow('Date:', load.date);
+            fieldRow('Seller:', load.seller);
+            doc.moveDown(0.8);
+
+            const unit = load.weight_unit || 'lb';
+            const items = Array.isArray(load.items) ? load.items : [];
+            doc.font('Helvetica-Bold').fontSize(12).text('Item weights');
+            doc.moveDown(0.4);
+
+            if (!items.length) {
+                doc.font('Helvetica').fontSize(10).text('No items on this load.');
+            }
+            items.forEach((it, i) => {
+                doc.font('Helvetica-Bold').fontSize(10.5).fillColor('#000')
+                    .text(`${i + 1}. ${it.description || 'Item ' + (i + 1)}`);
+                doc.font('Helvetica').fontSize(9.5);
+                doc.text(`   Gross weight: ${it.gross_weight != null ? it.gross_weight + ' ' + unit : '—'}`);
+                if (it.gross_photo_link) {
+                    doc.fillColor('#1a5fb4').text('   Gross photo: ' + it.gross_photo_link, { link: it.gross_photo_link, underline: true });
+                    doc.fillColor('#000');
+                }
+                doc.text(`   Tare weight: ${it.tare_weight != null ? it.tare_weight + ' ' + unit : '—'}`);
+                if (it.tare_photo_link) {
+                    doc.fillColor('#1a5fb4').text('   Tare photo: ' + it.tare_photo_link, { link: it.tare_photo_link, underline: true });
+                    doc.fillColor('#000');
+                }
+                doc.text(`   Net weight: ${it.net_weight != null ? it.net_weight + ' ' + unit : '—'}`);
+                doc.moveDown(0.5);
+            });
+
+            doc.moveTo(50, doc.y).lineTo(562, doc.y).strokeColor('#ccc').stroke();
+            doc.moveDown(0.5);
+            fieldRow('Gross total:', load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—');
+            fieldRow('Tare total:',  load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—');
+            fieldRow('Net total:',   load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—');
+
+            doc.moveDown(1.5);
+            doc.fontSize(8).fillColor('#999').text(`Generated ${new Date().toISOString()}`, { align: 'right' });
+
+            doc.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
+module.exports = { generateLoadPdf, generateWeightsPdf };

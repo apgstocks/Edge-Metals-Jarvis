@@ -593,13 +593,28 @@ function createApi() {
             const load = getLoad(req.params.id);
             if (!load) return res.status(404).json({ error: 'not found' });
 
-            const { generateLoadPdf } = require('./helpers/pdf');
-            const buf = await generateLoadPdf(load);
-
+            const { generateLoadPdf, generateWeightsPdf } = require('./helpers/pdf');
             const { uploadLoadPdf } = require('./helpers/drive');
+
+            const buf = await generateLoadPdf(load);
             const file = await uploadLoadPdf(load.id, buf);
 
-            const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated' });
+            // Second, separate PDF — gross/tare weights + photo links only —
+            // uploaded as weights_<id>.pdf per Apsara. Best-effort: if this
+            // fails, the main priced ticket (already uploaded above) still
+            // succeeds and the load still gets marked pdf_generated; the
+            // weights PDF can be regenerated later by hitting this route
+            // again once whatever broke (usually Drive) is fixed.
+            let weightsPatch = {};
+            try {
+                const weightsBuf = await generateWeightsPdf(load);
+                const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
+                weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
+            } catch (e) {
+                console.error(`[API] weights-pdf generation failed for ${load.id}:`, e.message);
+            }
+
+            const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch });
             res.json({ ok: true, load: loads.find(l => l.id === load.id) });
         } catch (err) {
             console.error('[API] generate-pdf failed:', err.message);
