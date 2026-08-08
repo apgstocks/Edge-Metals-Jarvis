@@ -1684,13 +1684,14 @@ function renderTasks(data) {
   }));
 }
 
-// ── LOADS — Add New Load wizard with camera-captured gross/tare weight ─────
+// ── LOADS — Add New Load wizard with camera/upload-captured gross/tare weight,
+// mobile-friendly, deck-of-cards listing ────────────────────────────────────
 // Card-deck listing of structured load records (date/seller/items/PDF),
-// separate from the WhatsApp scale-ticket path in Bookings' underlying data
-// (see helpers/loads.js vs helpers/scaleTickets.js on the server). The
-// camera capture below uses getUserMedia — this REQUIRES a secure context
-// (https:// or http://localhost); it will fail with a permission error on
-// plain http:// over the VM's bare IP. See deploy notes.
+// separate from the WhatsApp scale-ticket path (see helpers/loads.js vs
+// helpers/scaleTickets.js on the server). Weight capture offers BOTH a live
+// camera snapshot (getUserMedia — needs https://, see HTTPS_SETUP.md) and a
+// plain file upload fallback (works over plain http:// too, and covers phones
+// where the user would rather pick an existing photo).
 let loadsCache = [];
 let currentLoadItems = [];
 let capturedPhotos = { gross: null, tare: null }; // { base64, mime } once captured
@@ -1707,22 +1708,29 @@ function stopCamera() {
 function renderItemRows() {
   const box = $('ld_items');
   if (!box) return;
+  // NOTE: the row wrapper uses class="item-row" (NOT a data-row attribute) —
+  // the remove button below it also needs data-row to know its own index,
+  // and querying by attribute would match BOTH the row and the button (a
+  // real bug that shipped: syncItemsFromDom() below was matching the button
+  // too, calling .querySelector('.ld-item-desc') on it, getting null, and
+  // throwing — which is why Add Item/Save Load looked completely broken).
   box.innerHTML = currentLoadItems.map((it, i) => `
-    <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px;" data-row="${i}">
+    <div class="item-row" data-idx="${i}">
       <input class="ld-item-desc" placeholder="Description" value="${esc(it.description || '')}">
       <input class="ld-item-qty" type="number" step="any" placeholder="Qty" value="${it.qty ?? ''}">
       <input class="ld-item-unit" placeholder="Unit" value="${esc(it.unit || '')}">
       <input class="ld-item-rate" type="number" step="any" placeholder="Rate" value="${it.rate ?? ''}">
-      <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" style="padding:6px 10px;">✕</button>
+      <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}">✕</button>
     </div>`).join('');
-  box.querySelectorAll('[data-row] input').forEach(inp => inp.addEventListener('input', syncItemsFromDom));
+  box.querySelectorAll('.item-row input').forEach(inp => inp.addEventListener('input', syncItemsFromDom));
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
+    syncItemsFromDom();
     currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
     renderItemRows();
   }));
 }
 function syncItemsFromDom() {
-  const rows = $('ld_items').querySelectorAll('[data-row]');
+  const rows = $('ld_items').querySelectorAll('.item-row');
   currentLoadItems = Array.from(rows).map(row => ({
     description: row.querySelector('.ld-item-desc').value,
     qty : row.querySelector('.ld-item-qty').value,
@@ -1737,6 +1745,40 @@ function recomputeNet() {
   $('ld_net').value = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : '';
 }
 
+// Shared by both capture paths (camera snapshot and file upload) — sends the
+// image to Gemini for a weight read, fills the field, remembers the photo so
+// it gets archived to Drive on save.
+async function processWeightImage(target, base64, mime, statusEl) {
+  capturedPhotos[target] = { base64, mime };
+  if (statusEl) statusEl.textContent = 'Reading scale…';
+  try {
+    const result = await api('/api/vision/read-weight', {
+      method: 'POST',
+      body: JSON.stringify({ image_base64: base64, mime_type: mime }),
+    });
+    if (result.weight != null) {
+      $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
+      recomputeNet();
+      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''}`;
+    } else if (statusEl) {
+      statusEl.textContent = "Couldn't read a number — photo saved, enter the weight manually.";
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Read failed: ' + err.message + ' — enter manually.';
+  }
+}
+
+function handleFileUpload(target, file) {
+  if (!file) return;
+  const statusEl = $(target === 'gross' ? 'ld_gross_status' : 'ld_tare_status');
+  const reader = new FileReader();
+  reader.onload = () => {
+    const base64 = String(reader.result).split(',')[1];
+    processWeightImage(target, base64, file.type || 'image/jpeg', statusEl);
+  };
+  reader.readAsDataURL(file);
+}
+
 async function startCamera(target) {
   cameraTarget = target;
   $('cameraBox').classList.remove('hidden');
@@ -1745,10 +1787,10 @@ async function startCamera(target) {
     cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
     $('cameraVideo').srcObject = cameraStream;
   } catch (err) {
-    // Most likely cause on this deployment: dashboard served over plain
-    // http:// on the VM's bare IP, not https:// — getUserMedia is blocked
-    // outside a secure context (https, or http://localhost). See deploy notes.
-    $('camStatus').textContent = 'Camera unavailable: ' + err.message + ' (camera capture requires https:// or localhost).';
+    // Most likely cause: dashboard served over plain http:// (not https:// or
+    // localhost) — getUserMedia is blocked outside a secure context. The file
+    // upload button next to this one works regardless — see HTTPS_SETUP.md.
+    $('camStatus').textContent = 'Camera unavailable: ' + err.message + '. Use Upload instead, or set up HTTPS (see HTTPS_SETUP.md).';
   }
 }
 
@@ -1762,24 +1804,7 @@ async function snapAndRead() {
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
   const base64 = dataUrl.split(',')[1];
   const target = cameraTarget;
-
-  $('camStatus').textContent = 'Reading scale…';
-  try {
-    const result = await api('/api/vision/read-weight', {
-      method: 'POST',
-      body: JSON.stringify({ image_base64: base64, mime_type: 'image/jpeg' }),
-    });
-    capturedPhotos[target] = { base64, mime: 'image/jpeg' };
-    if (result.weight != null) {
-      $(target === 'gross' ? 'ld_gross' : 'ld_tare').value = result.weight;
-      recomputeNet();
-      $('camStatus').textContent = `Read: ${result.weight} ${result.weight_unit || ''}`;
-    } else {
-      $('camStatus').textContent = "Couldn't read a number — photo saved, enter the weight manually.";
-    }
-  } catch (err) {
-    $('camStatus').textContent = 'Read failed: ' + err.message + ' — photo not saved, try again or enter manually.';
-  }
+  await processWeightImage(target, base64, 'image/jpeg', $('camStatus'));
   stopCamera();
 }
 
@@ -1787,24 +1812,26 @@ function resetLoadModal() {
   currentLoadItems = [{ description: '', qty: '', unit: '', rate: '' }];
   capturedPhotos = { gross: null, tare: null };
   ['ld_date', 'ld_seller', 'ld_desc', 'ld_gross', 'ld_tare', 'ld_net'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_gross_status', 'ld_tare_status'].forEach(id => { if ($(id)) $(id).textContent = ''; });
   $('loadModalErr').textContent = '';
   renderItemRows();
   stopCamera();
 }
 
-function renderLoads(loads) {
-  loadsCache = loads || [];
-  const cards = loadsCache.map(l => `
-    <div class="card" style="padding:16px 18px; margin-bottom:12px;">
+// Deck-of-cards visual: a responsive grid of card tiles, each with a subtle
+// depth cue (layered shadow) rather than a plain stacked list.
+function loadCardHtml(l) {
+  return `
+    <div class="card load-card" data-id="${esc(l.id)}">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
         <div>
           <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.seller || 'Unnamed seller')}</div>
-          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(l.date || '—')} · ${esc(l.id)} · by ${esc(l.created_by || '—')}</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(l.date || '—')} · ${esc(l.id)}</div>
         </div>
         <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
       </div>
       ${l.description ? `<div style="margin-top:10px; font-size:12px; color:var(--text-body);">${esc(l.description)}</div>` : ''}
-      <div style="display:flex; gap:18px; margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
+      <div style="display:flex; flex-wrap:wrap; gap:14px; margin-top:12px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
         <span>Gross: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span>Tare: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span style="font-weight:700; color:var(--text-strong);">Net: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
@@ -1814,30 +1841,63 @@ function renderLoads(loads) {
           ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>`
           : `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`}
       </div>
-    </div>`).join('');
+    </div>`;
+}
+
+function renderLoads(loads) {
+  loadsCache = loads || [];
+  const cards = loadsCache.map(loadCardHtml).join('');
 
   $('viewRoot').innerHTML = `
-    <section style="max-width:900px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+    <style>
+      /* Scoped to the Loads tab — regenerated fresh each time this tab
+         loads, so nothing accumulates or leaks into other tabs. */
+      #loadDeck { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:16px; }
+      .load-card { box-shadow:0 3px 0 -1px var(--border-subtle), 0 8px 20px -6px rgba(0,0,0,.18); transition:transform 140ms ease, box-shadow 140ms ease; }
+      .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
+      #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
+      #loadModal .modal-shell { max-width:900px; width:100%; }
+      .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      .ld-weight-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:20px; }
+      .ld-item-row { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:center; }
+      .ld-weight-capture { display:flex; gap:6px; flex-wrap:wrap; }
+      .ld-weight-capture input[type=number] { flex:1; min-width:90px; }
+      .ld-cap-status { font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:4px; width:100%; }
+      @media (max-width: 860px) {
+        #loadModal { padding:0; align-items:stretch; }
+        #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
+        #loadModal .modal-body { max-height:none; flex:1; }
+        .ld-grid-2 { grid-template-columns:1fr; }
+        .ld-weight-grid { grid-template-columns:1fr; }
+        .ld-item-row { grid-template-columns:1fr 1fr; grid-template-areas:"desc desc" "qty unit" "rate remove"; }
+        .ld-item-row .ld-item-desc { grid-area:desc; }
+        .ld-item-row .ld-item-qty { grid-area:qty; }
+        .ld-item-row .ld-item-unit { grid-area:unit; }
+        .ld-item-row .ld-item-rate { grid-area:rate; }
+        .ld-item-row .btn-remove-item { grid-area:remove; justify-self:start; }
+      }
+    </style>
+    <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
         <div>
           <div class="eyebrow">// Loads</div>
           <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
-          <div style="font-size:13px; color:var(--text-muted);">Camera-captured gross/tare weight, computed net, generated PDF ticket.</div>
+          <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
         </div>
         <button id="btnAddLoad" class="btn btn-primary">+ Add new load</button>
       </div>
-      <div id="loadDeck">${cards || '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No loads yet.</div>'}</div>
+      <div id="loadDeck">${cards || '<div style="grid-column:1/-1; padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No loads yet.</div>'}</div>
     </section>
 
     <div id="loadModal" class="hidden modal-overlay">
-      <div class="modal-shell" style="max-width:700px;">
+      <div class="modal-shell">
         <div class="modal-stripe"></div>
         <div class="modal-head">
           <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+          <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
             <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name"></div>
           </div>
@@ -1849,19 +1909,25 @@ function renderLoads(loads) {
             <button id="btnAddItemRow" type="button" class="btn" style="margin-top:4px; font-size:12px; padding:6px 12px;">+ Add item</button>
           </div>
 
-          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:20px;">
+          <div class="ld-weight-grid">
             <div class="field">
               <label>Gross weight</label>
-              <div style="display:flex; gap:6px;">
+              <div class="ld-weight-capture">
                 <input id="ld_gross" type="number" step="any" placeholder="0">
-                <button type="button" class="btn btn-cam" data-target="gross" title="Capture from scale" style="padding:6px 10px;">📷</button>
+                <button type="button" class="btn btn-cam" data-target="gross" title="Capture from scale (camera)">📷 Camera</button>
+                <button type="button" class="btn btn-upload" data-target="gross" title="Upload a photo">📁 Upload</button>
+                <input type="file" accept="image/*" id="ld_gross_file" class="hidden">
+                <div id="ld_gross_status" class="ld-cap-status"></div>
               </div>
             </div>
             <div class="field">
               <label>Tare weight</label>
-              <div style="display:flex; gap:6px;">
+              <div class="ld-weight-capture">
                 <input id="ld_tare" type="number" step="any" placeholder="0">
-                <button type="button" class="btn btn-cam" data-target="tare" title="Capture from scale" style="padding:6px 10px;">📷</button>
+                <button type="button" class="btn btn-cam" data-target="tare" title="Capture from scale (camera)">📷 Camera</button>
+                <button type="button" class="btn btn-upload" data-target="tare" title="Upload a photo">📁 Upload</button>
+                <input type="file" accept="image/*" id="ld_tare_file" class="hidden">
+                <div id="ld_tare_status" class="ld-cap-status"></div>
               </div>
             </div>
             <div class="field">
@@ -1912,6 +1978,12 @@ function wireLoadsEvents() {
   $('btnSnap').addEventListener('click', snapAndRead);
   $('btnCancelCam').addEventListener('click', stopCamera);
 
+  document.querySelectorAll('.btn-upload').forEach(btn => btn.addEventListener('click', () => {
+    $(btn.dataset.target === 'gross' ? 'ld_gross_file' : 'ld_tare_file').click();
+  }));
+  $('ld_gross_file').addEventListener('change', (e) => handleFileUpload('gross', e.target.files[0]));
+  $('ld_tare_file').addEventListener('change', (e) => handleFileUpload('tare', e.target.files[0]));
+
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
     const seller = $('ld_seller').value.trim();
@@ -1946,7 +2018,8 @@ function wireLoadsEvents() {
     }
   });
 
-  document.querySelectorAll('.btn-gen-pdf').forEach(btn => btn.addEventListener('click', async () => {
+  document.querySelectorAll('.btn-gen-pdf').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
       await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST' });
@@ -1959,7 +2032,6 @@ function wireLoadsEvents() {
 
   renderItemRows();
 }
-
 
 // ── FACTS (admin only) — Jarvis's learned memory, fed into every AI prompt ─
 function renderFacts(data) {
