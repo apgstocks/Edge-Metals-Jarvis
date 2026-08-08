@@ -4,6 +4,8 @@
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cfg = require('../config');
+let sharp = null;
+try { sharp = require('sharp'); } catch { /* crop-zoom step degrades to a no-op if sharp isn't installed */ }
 
 let genAI = null;
 function getClient() {
@@ -327,46 +329,168 @@ If the image is blurry, cut off, glared, or not actually a scale ticket, still r
 // with many fields; this is a live in-browser snapshot of just the number on
 // the display, so the schema is minimal and the prompt is tuned for reading a
 // single number off a 7-segment/LCD readout rather than a printed slip.
-// 'gemini-2.5-pro' 404'd as "no longer available to new users" — Google
-// restricts model access per-account, confirmed via a live Google AI
-// Developers Forum thread on this exact error (the model landscape has moved
-// to a 3.x generation since; ai.google.dev's own docs now list gemini-3.6-flash
-// and gemini-3.5-flash-lite as GA). Using gemini-3.1-flash-lite per Apsara.
+// Model choice for this specific digit-reading task, benchmarked live against
+// the actual yard photo with a confirmed in-person ground-truth reading
+// (71920 lb) after switching to the crop-zoom pipeline below:
+//   gemini-3.1-flash-lite : wrong every run (37920 / 87920 / 881920 variants)
+//   gemini-3.1-pro-preview: wrong (77920), and slow (~37s/request) — pro-tier
+//                            reasoning didn't help on this specific dim/blurry
+//                            digit pair, not worth the latency
+//   gemini-3.6-flash      : correct (71920) on 4 of 5 runs at temperature 0 —
+//                            clearly the best of what's available on this
+//                            account, though not perfectly deterministic even
+//                            at temp 0 on this hard a photo (~12-16s/request)
+// Not 100% reliable — this is still a genuinely dim, angled, blurry photo —
+// which is why the dashboard keeps a "check it matches the scale before
+// saving" step regardless of model. Verified live via
+// https://generativelanguage.googleapis.com/v1beta/models against this
+// account's actual key to confirm gemini-3.6-flash is really available here
+// before defaulting to it (gemini-2.5-pro showing up in that same list is why
+// its earlier 404 was account/quota related, not that the model doesn't
+// exist).
 // FALLBACK_VISION_MODEL is the one CONFIRMED working on this account already
 // (extractPdfFields/classifyDocument use it successfully) — used automatically
 // if the primary 404s as unavailable, so a model getting deprecated out from
 // under this account doesn't silently break weight-reading again without at
 // least degrading gracefully instead of hard-failing.
 function getVisionModelName() {
-    return process.env.GEMINI_VISION_MODEL || 'gemini-3.1-flash-lite';
+    return process.env.GEMINI_VISION_MODEL || 'gemini-3.6-flash';
 }
 const FALLBACK_VISION_MODEL = 'gemini-2.5-flash';
 function isModelUnavailableError(err) {
     return /404|not found|no longer available|not supported/i.test(err.message || '');
 }
 
-async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
+// Stage 1 of 2 — find WHERE the vehicle weighbridge display is in the frame,
+// before trying to read digits off it. Root cause of a real misread on a real
+// yard photo (confirmed ground-truth 71920, model read first 37920 then
+// 87920): the display occupied a small fraction of a large overhead photo, so
+// its leading digits were only a few pixels tall by the time the model saw
+// them, and a genuinely dim/blank leading cell's residual dot-matrix glow got
+// hallucinated as an extra digit, while the thin "1" digit next to it got
+// dropped. Both misreads still nailed the last 3 digits every time (9,2,0) —
+// consistent with a resolution/legibility problem concentrated exactly on the
+// smallest, dimmest part of the crop, not a random OCR failure. Cropping
+// tight to the display and upscaling before the digit-read pass gives the
+// model far more effective pixels on exactly the part that was failing.
+async function locateDisplayBox(imageBase64, mimeType) {
+    const prompt = `Find the primary VEHICLE WEIGHBRIDGE display in this yard photo — the display used to read an entire truck/vehicle's weight, not a small bench/platform scale for individual items.
+- The vehicle weighbridge display is often a large remote/overhead signage-style box (commonly red LED digits, mounted high), sometimes with unit lights (LB/KG/GR/NT) down one side, usually no physical buttons since it's just a repeater screen.
+- Ignore a compact bench/platform indicator with physical buttons (ZERO, TARE, GROSS/NET, PRINT) and a brand name (Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal) — that's almost always a separate, smaller scale for individual items, not the vehicle.
+- If both are visible, locate the large vehicle display, not the compact one.
+
+Return ONLY raw JSON, no markdown:
+{
+  "found": false,     // true only if you can confidently locate a vehicle weighbridge display
+  "x_min": null,       // left edge of a bounding box around the ENTIRE display housing (not just the digits), as a fraction 0-1 of image width
+  "y_min": null,       // top edge, fraction 0-1 of image height
+  "x_max": null,       // right edge, fraction 0-1 of image width
+  "y_max": null,       // bottom edge, fraction 0-1 of image height
+  "reason": null        // one short phrase on what you found/why
+}
+Give the box some margin around the housing rather than cropping tight to the digits themselves. If no vehicle weighbridge display is visible at all, return found:false and null for the box fields.`;
+
+    try {
+        const model = getClient().getGenerativeModel({
+            model: getVisionModelName(),
+            generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+        });
+        const result = await model.generateContent([
+            { text: prompt },
+            { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+        ]);
+        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG locate raw]', result.response.text());
+        const fields = extractJson(result.response.text());
+        if (!fields || !fields.found) return null;
+        // Be forgiving of the model returning fractions as strings ("0.155")
+        // instead of numbers — same class of issue as the weight field itself.
+        const toNum = (v) => typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' && !isNaN(v) ? parseFloat(v) : NaN);
+        const x_min = toNum(fields.x_min), y_min = toNum(fields.y_min);
+        const x_max = toNum(fields.x_max), y_max = toNum(fields.y_max);
+        const nums = [x_min, y_min, x_max, y_max];
+        if (nums.some(n => Number.isNaN(n) || n < 0 || n > 1)) return null;
+        if (x_max <= x_min || y_max <= y_min) return null;
+        return { x_min, y_min, x_max, y_max, reason: fields.reason || null };
+    } catch (err) {
+        console.warn('[GEMINI] Display locate step failed, will read whole image instead:', err.message);
+        return null;
+    }
+}
+
+// Stage 1.5 — crop to the located box (with padding) and upscale, so stage 2
+// gets a zoomed-in, higher-effective-resolution view of just the display
+// instead of it being a small part of a big yard photo. Degrades to null
+// (caller falls back to reading the original image) if sharp isn't
+// installed or the crop fails for any reason — never blocks a reading.
+async function cropToDisplay(imageBase64, mimeType, box) {
+    if (!sharp || !box) return null;
+    try {
+        const buf = Buffer.from(imageBase64, 'base64');
+        const img = sharp(buf);
+        const meta = await img.metadata();
+        const w = meta.width, h = meta.height;
+        if (!w || !h) return null;
+
+        // 12% padding around the model's box on each side, clamped to image bounds —
+        // the box is around the housing already; a bit more margin protects against
+        // a slightly-too-tight box cutting off a digit.
+        const padX = (box.x_max - box.x_min) * 0.12;
+        const padY = (box.y_max - box.y_min) * 0.12;
+        const left = Math.max(0, Math.round((box.x_min - padX) * w));
+        const top = Math.max(0, Math.round((box.y_min - padY) * h));
+        const right = Math.min(w, Math.round((box.x_max + padX) * w));
+        const bottom = Math.min(h, Math.round((box.y_max + padY) * h));
+        const cropW = right - left, cropH = bottom - top;
+        if (cropW < 20 || cropH < 20) return null;
+
+        // Upscale so the crop has real detail to work with — target a ~1400px-wide
+        // result (roughly matching what the whole-image path already sends), capped
+        // at 4x to avoid manufacturing fake detail out of a tiny crop.
+        const scale = Math.min(4, Math.max(1, 1400 / cropW));
+        const outBuf = await img
+            .extract({ left, top, width: cropW, height: cropH })
+            .resize({ width: Math.round(cropW * scale), kernel: 'lanczos3' })
+            .jpeg({ quality: 92 })
+            .toBuffer();
+        return outBuf.toString('base64');
+    } catch (err) {
+        console.warn('[GEMINI] Crop-to-display step failed, will read whole image instead:', err.message);
+        return null;
+    }
+}
+
+async function readWeightSinglePass(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     if (!imageBase64) throw new Error('imageBase64 required');
+    const isCrop = !!opts.isCrop;
 
-    const prompt = `You are an expert at reading digital scale (weighbridge) displays from photos — 7-segment LED, LCD, or similar digital readouts. Read the weight value shown as carefully as you would proofread a number you're about to bet money on.
+    const cropPreamble = isCrop ? `This image has ALREADY been cropped and zoomed tightly to a single vehicle weighbridge display — you don't need to search for it or compare it against another display, just read it. Because it's zoomed in, expect the digit cells to fill most of the frame.
 
-IMPORTANT — yard photos routinely show MORE THAN ONE digital display in frame, and they are not equally trustworthy:
-- The SCALE INDICATOR is what actually matters: a compact desk/wall-mounted box with physical buttons on it (typically labeled ZERO, TARE, GROSS/NET, PRINT, UNITS) and a brand name on the bezel (e.g. Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal). This is the scale's own live readout — always prefer it.
-- A REMOTE/OVERHEAD DISPLAY — a large signage-style board (often bigger, mounted higher for a truck driver to see from a distance, commonly red LED digits, sometimes with unit indicator lights like LB/KG/GR/NT down one side, no buttons) — this is often a repeater of the scale value, but is frequently dimmer, blurrier, shot at a steep angle, and genuinely harder to read correctly BECAUSE it's the visually larger/more prominent thing in the photo. Its size in the frame is not evidence it's the right one to read.
-- If both are visible: read the compact button-indicator display, not the large remote sign, even though the remote sign is usually the bigger/more eye-catching object in the photo. If only the remote display is visible, read that one, but hold it to a higher confidence bar given it's typically harder to read accurately.
-- If you can identify two DIFFERENT displays showing two DIFFERENT numbers, always trust the compact scale indicator's number, not the larger sign's.
+7-vs-8/9 disambiguation on a zoomed dot-matrix cell: a "7" is an OPEN shape — a top bar plus one diagonal stroke down to the bottom, with genuinely empty (dark) space on the left side of the cell below the top bar. An "8" or "9" is CLOSED or partly closed — there's a second lit stroke on the left side too (forming a loop or partial loop), not just empty dark space. Before calling a digit "8", specifically check whether the lower-left of that cell is truly dark/empty (→ it's a "7") or has its own lit stroke (→ it's an 8/9).
+
+` : '';
+
+    const prompt = `${cropPreamble}You are an expert at reading digital scale (weighbridge) displays from photos — 7-segment LED, LCD, or similar digital readouts. Read the weight value shown as carefully as you would proofread a number you're about to bet money on.
+
+IMPORTANT — this reading is for a LOAD: the weight of an entire vehicle/truck at a weighbridge, not a small item. Yard photos routinely show MORE THAN ONE digital display in frame, serving DIFFERENT purposes, and picking the wrong one is a real, common mistake:
+- The VEHICLE WEIGHBRIDGE DISPLAY is what you want for a load reading: often a large remote/overhead signage-style display (commonly red LED digits, mounted high so a truck driver can read it from the cab, sometimes with unit indicator lights like LB/KG/GR/NT down one side, typically no physical buttons on it since it's just a repeater screen). For a whole-vehicle load, THIS is normally the correct number, even though it can be dimmer, angled, or harder to read than a closer compact box — don't downgrade it just because it's harder to read; read it carefully instead.
+- A COMPACT BENCH/PLATFORM SCALE INDICATOR — a small desk/wall-mounted box with physical buttons (ZERO, TARE, GROSS/NET, PRINT, UNITS) and a brand name on the bezel (e.g. Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal) — is very often a DIFFERENT, smaller scale used for individual items (pallets, samples, small parts), not the vehicle itself. Look for context clues confirming this: a nearby posted list/sign of individual item weights (e.g. "Pallet Weight," a handwritten list of two/three-digit numbers), a small platform under the indicator rather than a vehicle-sized weighing area, or a reading far too small to plausibly be a loaded truck (a scrap-metal truck load is realistically in the thousands to tens of thousands of lb/kg, not double or triple digits).
+- If you see BOTH a large remote/overhead vehicle-style display AND a small bench indicator, and they show DIFFERENT numbers, read the large vehicle display for the load weight — the small indicator is almost always for something else entirely, not a more-trustworthy repeat of the same number.
+- If only one display is visible, read that one.
 
 Once you've identified the correct display to read:
-1. Read every digit left to right, one at a time. Segmented displays commonly cause confusion between: 8 and 0, 5 and 6, 1 and 7, 3 and 9 — look at which segments are actually lit before deciding, don't guess from overall shape alone.
-2. Note the decimal point position exactly as shown, and any thousands separator.
-3. Note the unit label if printed near the number (lb, kg, kgs, ton, tonnes, etc.) — units are often small text or indicator lights near a corner of the display.
-4. If glare, blur, a bad angle, or partial occlusion makes any digit genuinely ambiguous, do not guess — return null for the whole weight rather than a half-confident wrong number. A missing reading that gets manually entered is far cheaper than a wrong one that goes uncaught.
+1. First, count the fixed digit CELLS (character positions) in the display housing, left to right, before reading any values — most weighbridge displays have a fixed number of cells (commonly 5 or 6) even when leading cells show no number. Then assign exactly one character (a digit, or blank) to each cell. Do not merge two adjacent cells into one digit, and do not drop a cell just because its digit looks visually simple (a lone vertical stroke, i.e. "1", is a full digit occupying its own cell — never absorb it into the neighboring digit).
+2. Many of these displays are DOT-MATRIX LED (a grid of individual round LEDs per cell), not classic 7-segment bars. On a dot-matrix display, camera sensors very commonly pick up a faint residual glow from the UNLIT dots in a cell (the whole dot grid looks dimly visible even when that cell is truly off) — this is a common false-positive artifact, not a real digit. Leading cells on a weighbridge display are frequently blank (suppressed leading zeros/unused cells), showing only this faint all-dots glow. Do NOT read a dim, low-contrast, evenly-fuzzy glow as a digit shape (people mistake this ambient glow for an "8" or "3" since all dots being faintly on resembles a dense digit) — only assign a digit to a cell when its lit dots are CLEARLY, distinctly brighter than the ambient off-dot glow elsewhere in the same display and form an unambiguous number shape. If a leading cell is genuinely just dim ambient glow with no distinct bright numeral, treat that cell as blank, not as a digit.
+3. For 7-segment displays specifically, watch for confusion between: 8 and 0, 5 and 6, 1 and 7, 3 and 9 — look at which segments are actually lit before deciding, don't guess from overall shape alone.
+4. After your first pass, re-count: does the number of digits you read match the number of cells you counted in step 1 (minus any blank leading cells)? If you counted 6 cells and only produced 4 digits, you likely merged or dropped one — go back and check each cell individually, especially thin digits like "1" next to a wider neighbor like "7".
+5. Note the decimal point position exactly as shown, and any thousands separator.
+6. Note the unit label if printed near the number (lb, kg, kgs, ton, tonnes, etc.) — units are often small text or indicator lights near a corner of the display.
+7. If glare, blur, a bad angle, or partial occlusion makes any digit genuinely ambiguous, do not guess — return null for the whole weight rather than a half-confident wrong number. A missing reading that gets manually entered is far cheaper than a wrong one that goes uncaught.
 
 Return ONLY raw JSON — no markdown, no prose:
 {
   "weight": null,        // number only, decimal point preserved, no thousands separators, e.g. 42350 or 42350.5 — null if not confidently legible
   "weight_unit": null,   // e.g. "lb", "kg", "ton" — null if no unit is visible
-  "displays_seen": null, // brief note on what display(s) you found, e.g. "compact Fairbanks indicator + large overhead remote sign" or "one indicator only" — helps confirm you scanned for multiple displays
+  "displays_seen": null, // brief note on what display(s) you found and which you chose, e.g. "large overhead weighbridge display (read) + compact Fairbanks bench indicator, ignored — nearby sign lists individual pallet weights" — helps confirm you scanned for multiple displays and picked correctly
   "raw_text": null       // exactly what you read off the display you chose, as plain text before parsing, e.g. "0 lb (Fairbanks indicator)" — helps a human verify against the photo later. Still fill this in even if weight ends up null, describing what you saw and why it wasn't confident.
 }
 
@@ -385,6 +509,7 @@ Never refuse, never return prose outside the JSON.`;
                 { text: prompt },
                 { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
             ]);
+            if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG RAW]', result.response.text());
             const fields = extractJson(result.response.text());
             if (fields) {
                 // Be forgiving of a model that ignores the "no thousands separator"
@@ -417,6 +542,37 @@ Never refuse, never return prose outside the JSON.`;
     }
     if (lastErr) throw lastErr;
     return { weight: null, weight_unit: null, raw_text: null };
+}
+
+// Public entry point. Tries locate-crop-zoom-then-read first (stage 1+1.5+2);
+// if locating/cropping doesn't happen for any reason (sharp missing, no
+// display confidently found, crop step errors), falls straight back to the
+// original single-pass whole-image read — so this can only add a chance of a
+// better reading, never remove the existing behavior.
+async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
+    if (!imageBase64) throw new Error('imageBase64 required');
+
+    const box = await locateDisplayBox(imageBase64, mimeType);
+    if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
+    if (box) {
+        const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
+        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
+        if (croppedBase64) {
+            try {
+                const cropped = await readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true });
+                if (cropped && cropped.weight != null) {
+                    console.log(`[GEMINI] Weight read via crop-zoom pass (locate reason: "${box.reason || ''}")`);
+                    return cropped;
+                }
+                // Cropped pass came back with no confident weight — fall through
+                // and try the original whole image below rather than giving up.
+                console.warn('[GEMINI] Crop-zoom pass returned no confident weight, falling back to whole image');
+            } catch (err) {
+                console.warn('[GEMINI] Crop-zoom read pass failed, falling back to whole image:', err.message);
+            }
+        }
+    }
+    return readWeightSinglePass(imageBase64, mimeType, retries);
 }
 
 module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage };
