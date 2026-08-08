@@ -29,8 +29,14 @@ function computeItem(it) {
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
         price, unit: it.unit || '', amount,
-        gross_photo_drive_id: null, gross_photo_link: null,
-        tare_photo_drive_id : null, tare_photo_link : null,
+        // Carried forward from the incoming item if present — matters for
+        // EDITS, where the client sends back photo links an item already
+        // has so they aren't lost just because that item wasn't
+        // re-photographed this time. Defaults to null for a brand-new item,
+        // same as before. api.js overwrites these after upload when a NEW
+        // photo (gross_photo_base64/tare_photo_base64) came in for this item.
+        gross_photo_drive_id: it.gross_photo_drive_id || null, gross_photo_link: it.gross_photo_link || null,
+        tare_photo_drive_id : it.tare_photo_drive_id  || null, tare_photo_link : it.tare_photo_link  || null,
     };
 }
 
@@ -103,8 +109,62 @@ async function updateLoad(id, patch) {
     });
 }
 
+// Edits an EXISTING load's core fields + items — used by the dashboard's
+// Edit button, distinct from the generic patch-only updateLoad above (which
+// is for narrower things like stamping pdf_link after generation and
+// shouldn't run the full item recompute). Items go through the SAME
+// computeItem/sumItems math as addLoad so gross/tare/net/price/amount stay
+// internally consistent after an edit rather than trusting whatever the
+// client sent. Deliberately clears any previously generated PDF links and
+// resets status to 'open': a PDF generated before this edit no longer
+// reflects the edited numbers, so leaving "View PDF" showing as if it's
+// still current would be actively misleading — the card falls back to a
+// fresh "Generate PDF" button until it's regenerated.
+async function editLoad(id, entry) {
+    const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
+    const totals = sumItems(items);
+
+    const patch = {
+        date          : entry.date || null,
+        seller        : entry.seller || null,
+        description   : entry.description || '',
+        items,
+        gross_weight  : totals.gross_weight,
+        tare_weight   : totals.tare_weight,
+        net_weight    : totals.net_weight,
+        amount        : totals.amount,
+        weight_unit   : entry.weight_unit || 'lb',
+        pdf_drive_id  : null, pdf_link: null,
+        weights_pdf_drive_id: null, weights_pdf_link: null,
+        status        : 'open',
+    };
+
+    const loads = await mutateJson(cfg.LOADS_FILE, [], (loads) => {
+        const l = loads.find(x => x.id === id);
+        if (l) Object.assign(l, patch, { updated_at: new Date().toISOString() });
+        return loads;
+    });
+    return loads.find(l => l.id === id) || null;
+}
+
+// Removes a load record entirely. Deliberately does NOT touch anything in
+// Drive (item photos, previously generated PDFs) — those stay put as an
+// audit trail rather than silently vanishing just because the dashboard
+// entry was deleted; only the loads.json record itself goes away.
+async function deleteLoad(id) {
+    let found = false;
+    await mutateJson(cfg.LOADS_FILE, [], (loads) => {
+        const idx = loads.findIndex(x => x.id === id);
+        if (idx === -1) return loads;
+        found = true;
+        loads.splice(idx, 1);
+        return loads;
+    });
+    return found;
+}
+
 function getLoad(id) {
     return loadLoads().find(l => l.id === id) || null;
 }
 
-module.exports = { loadLoads, addLoad, updateLoad, getLoad };
+module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad };

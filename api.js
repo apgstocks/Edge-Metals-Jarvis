@@ -575,14 +575,68 @@ function createApi() {
             res.status(500).json({ error: err.message });
         }
     });
+    // Full edit (dashboard's Edit button — date/seller/description/items,
+    // including added/removed line items). Mirrors POST /api/loads' photo
+    // handling: each item's gross/tare photo is only re-uploaded if the
+    // client sent NEW base64 data for it (i.e. the user actually re-captured
+    // that item's photo); otherwise editLoad() already carried the item's
+    // existing photo link forward untouched, so nothing to do here for it.
     app.put('/api/loads/:id', largeJson, async (req, res) => {
+        const b = req.body || {};
         try {
-            const { updateLoad } = require('./helpers/loads');
-            const loads = await updateLoad(req.params.id, req.body || {});
-            const load = loads.find(l => l.id === req.params.id);
-            if (!load) return res.status(404).json({ error: 'not found' });
-            res.json({ ok: true, load });
-        } catch (err) { res.status(500).json({ error: err.message }); }
+            const { editLoad, getLoad, updateLoad } = require('./helpers/loads');
+            const existing = getLoad(req.params.id);
+            if (!existing) return res.status(404).json({ error: 'not found' });
+
+            const record = await editLoad(req.params.id, {
+                date: b.date, seller: b.seller, description: b.description,
+                items: b.items, weight_unit: b.weight_unit,
+            });
+            if (!record) return res.status(404).json({ error: 'not found' });
+
+            const { uploadScaleTicketImage } = require('./helpers/drive');
+            const items = record.items || [];
+            const inputItems = Array.isArray(b.items) ? b.items : [];
+            let anyPhotoUploaded = false;
+            await Promise.all(items.map(async (item, i) => {
+                const input = inputItems[i] || {};
+                const tag = `${record.id}-item${i}`;
+                if (input.gross_photo_base64) {
+                    try {
+                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime);
+                        item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
+                        anyPhotoUploaded = true;
+                    } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
+                }
+                if (input.tare_photo_base64) {
+                    try {
+                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime);
+                        item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
+                        anyPhotoUploaded = true;
+                    } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }
+                }
+            }));
+
+            const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
+            const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            res.json({ ok: true, load: finalLoad });
+        } catch (err) {
+            console.error('[API] edit load failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // Deletes the loads.json record only — see helpers/loads.js's deleteLoad
+    // for why Drive photos/PDFs are deliberately left alone.
+    app.delete('/api/loads/:id', async (req, res) => {
+        try {
+            const { deleteLoad } = require('./helpers/loads');
+            const found = await deleteLoad(req.params.id);
+            if (!found) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] delete load failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
     });
     // Generates the PDF from the load record as saved (photos referenced as
     // Drive links, not re-embedded — see helpers/pdf.js's comment on why),

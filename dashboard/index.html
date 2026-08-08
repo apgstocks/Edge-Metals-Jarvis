@@ -1698,6 +1698,10 @@ let loadsCache = [];
 // entry here also carries grossPhoto/tarePhoto ({ base64, mime } | null)
 // instead of there being one shared capturedPhotos object for the whole load.
 let currentLoadItems = [];
+// null while the modal is creating a brand-new load; set to a load's id while
+// editing an existing one (see openEditLoadModal) — Save then PUTs instead of
+// POSTing, and resetLoadModal() clears it back to null on close/new.
+let editingLoadId = null;
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -1768,8 +1772,8 @@ function renderItemRows() {
         <select class="ld-item-desc-select">${optionsHtml}</select>
         <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
       </div>
-      <div class="ld-item-cap"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="Add gross weight photo">📷</button></div>
-      <div class="ld-item-cap"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="Add tare weight photo">📷</button></div>
+      <div class="ld-item-cap"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="${it.gross_photo_link ? 'Photo on file — click to replace' : 'Add gross weight photo'}">📷${it.gross_photo_link ? '✓' : ''}</button></div>
+      <div class="ld-item-cap"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
       <input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}">
       <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
       <input class="ld-item-unit" placeholder="Unit" title="Unit" value="${esc(it.unit || '')}">
@@ -1821,9 +1825,12 @@ function syncItemsFromDom() {
     const sel = row.querySelector('.ld-item-desc-select');
     const otherInput = row.querySelector('.ld-item-desc-other');
     const description = sel.value === ITEM_DESC_OTHER ? (otherInput.value || '') : (sel.value || '');
-    // grossPhoto/tarePhoto aren't DOM-backed (a captured photo isn't shown as
-    // a form field) — carry them over from the previous state by row index
-    // so they survive every other field's input events re-running this sync.
+    // grossPhoto/tarePhoto/gross_photo_link/tare_photo_link aren't DOM-backed
+    // (a captured photo, or an existing Drive link from an edit, isn't shown
+    // as a form field) — carry them over from the previous state by row
+    // index so they survive every other field's input events re-running
+    // this sync, and so an EDIT doesn't lose an item's existing photo link
+    // just because the user only touched the price field.
     const prev = currentLoadItems[i] || {};
     return {
       description,
@@ -1833,6 +1840,10 @@ function syncItemsFromDom() {
       unit : row.querySelector('.ld-item-unit').value,
       grossPhoto: prev.grossPhoto || null,
       tarePhoto : prev.tarePhoto  || null,
+      gross_photo_link: prev.gross_photo_link || null,
+      tare_photo_link : prev.tare_photo_link  || null,
+      gross_photo_drive_id: prev.gross_photo_drive_id || null,
+      tare_photo_drive_id : prev.tare_photo_drive_id  || null,
     };
   });
 }
@@ -1917,12 +1928,50 @@ async function handleFileUpload(row, roleKey, file) {
   }
 }
 
+function blankLoadItem() {
+  return { description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+}
+
 function resetLoadModal() {
-  currentLoadItems = [{ description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null }];
+  editingLoadId = null;
+  currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   $('loadModalErr').textContent = '';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
   renderItemRows();
   stopCamera();
+}
+
+// Opens the SAME modal used for creating a load, pre-filled from an existing
+// record — per Apsara, there was no way to fix a typo or a wrong weight
+// after saving short of deleting the whole load and starting over. Existing
+// items' photo links are carried into currentLoadItems (not re-downloaded —
+// just the link/id so a save that doesn't touch that item's photo keeps it,
+// see computeItem in helpers/loads.js); grossPhoto/tarePhoto stay null
+// unless the user actually re-captures that item's photo in this session.
+function openEditLoadModal(load) {
+  editingLoadId = load.id;
+  const items = Array.isArray(load.items) && load.items.length ? load.items : [{}];
+  currentLoadItems = items.map(it => ({
+    description: it.description || '',
+    gross_weight: it.gross_weight ?? '',
+    tare_weight : it.tare_weight  ?? '',
+    price: it.price ?? '',
+    unit : it.unit || '',
+    grossPhoto: null, tarePhoto: null,
+    gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
+    tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
+  }));
+  if ($('ld_date'))   $('ld_date').value   = load.date || '';
+  if ($('ld_seller')) $('ld_seller').value = load.seller || '';
+  if ($('ld_desc'))   $('ld_desc').value   = load.description || '';
+  $('loadModalErr').textContent = '';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
+  renderItemRows();
+  stopCamera();
+  $('loadModal').classList.remove('hidden');
 }
 
 // Deck-of-cards visual: a responsive grid of card tiles, each with a subtle
@@ -1955,6 +2004,10 @@ function loadCardHtml(l) {
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
         ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
+        <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+        <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
 }
@@ -2053,7 +2106,7 @@ function renderLoads(loads) {
          layout — with 8 columns per row there's no good way to keep this a
          single line AND fit a phone screen, so horizontal scroll (like a
          spreadsheet) beats forcing it back into multiple lines on mobile. */
-      .ld-item-header, .item-row { display:grid; grid-template-columns:1.6fr 100px 100px 66px 64px 56px 66px 26px; gap:6px; align-items:center; min-width:640px; }
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 64px 56px 92px 26px; gap:6px; align-items:center; min-width:640px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
@@ -2089,7 +2142,7 @@ function renderLoads(loads) {
       <div class="modal-shell">
         <div class="modal-stripe"></div>
         <div class="modal-head">
-          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
+          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
@@ -2135,7 +2188,7 @@ function wireLoadsEvents() {
 
   $('btnAddItemRow').addEventListener('click', () => {
     syncItemsFromDom();
-    currentLoadItems.push({ description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null });
+    currentLoadItems.push(blankLoadItem());
     renderItemRows();
   });
 
@@ -2150,6 +2203,7 @@ function wireLoadsEvents() {
     if (!seller && !desc) { $('loadModalErr').textContent = 'Enter at least a seller or a description.'; return; }
     $('loadModalErr').textContent = '';
     const btn = $('btnSaveLoad');
+    const isEdit = !!editingLoadId;
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const items = currentLoadItems
@@ -2164,6 +2218,14 @@ function wireLoadsEvents() {
           gross_photo_mime  : it.grossPhoto ? it.grossPhoto.mime   : null,
           tare_photo_base64 : it.tarePhoto  ? it.tarePhoto.base64  : null,
           tare_photo_mime   : it.tarePhoto  ? it.tarePhoto.mime    : null,
+          // Existing photo links from before this edit — carried through so
+          // an item that isn't re-photographed doesn't lose its photo (see
+          // computeItem in helpers/loads.js, which preserves these when no
+          // new base64 came in for that item). No-ops on a brand-new load.
+          gross_photo_link: it.gross_photo_link || null,
+          gross_photo_drive_id: it.gross_photo_drive_id || null,
+          tare_photo_link : it.tare_photo_link  || null,
+          tare_photo_drive_id : it.tare_photo_drive_id  || null,
         }));
       const payload = {
         date: $('ld_date').value || null,
@@ -2173,14 +2235,18 @@ function wireLoadsEvents() {
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
-      await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+      if (isEdit) {
+        await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      } else {
+        await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+      }
       stopCamera();
       $('loadModal').classList.add('hidden');
       loadTab('loads');
     } catch (err) {
       $('loadModalErr').textContent = err.message;
     } finally {
-      btn.disabled = false; btn.textContent = 'Save load';
+      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Save load';
     }
   });
 
@@ -2214,6 +2280,23 @@ function wireDeckEvents() {
     } catch (err) {
       alert('PDF generation failed: ' + err.message);
       btn.disabled = false; btn.textContent = 'Generate PDF';
+    }
+  }));
+  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const load = loadsCache.find(l => l.id === btn.dataset.id);
+    if (load) openEditLoadModal(load);
+  }));
+  document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard — photos and any generated PDFs already in Drive are kept.`)) return;
+    btn.disabled = true; btn.textContent = 'Deleting…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      loadTab('loads');
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Delete';
     }
   }));
 }
