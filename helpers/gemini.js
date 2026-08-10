@@ -363,6 +363,31 @@ function isModelUnavailableError(err) {
     return /404|not found|no longer available|not supported/i.test(err.message || '');
 }
 
+// Locate-only shrink — per Apsara, the whole read was taking too long
+// (>10s). The client already downscales to 1600px before upload, but that's
+// sized for actually READING digits; locateDisplayBox only needs to find a
+// bounding box, which doesn't need anywhere near that much resolution. This
+// produces a small (~900px) copy for JUST the locate call — the box it
+// returns is fractions (0-1) of image width/height, so it applies identically
+// to the full-resolution original regardless of what size image found it,
+// meaning digit-read accuracy is completely unaffected; only the locate
+// call's upload+processing time drops. Falls back to the original image
+// (same behavior as before this existed) if sharp is missing or the resize
+// fails for any reason — can only make locate faster, never break it.
+async function shrinkForLocate(imageBase64, mimeType) {
+    if (!sharp) return imageBase64;
+    try {
+        const buf = Buffer.from(imageBase64, 'base64');
+        const meta = await sharp(buf).metadata();
+        if (!meta.width || meta.width <= 900) return imageBase64; // already small enough
+        const outBuf = await sharp(buf).resize({ width: 900 }).jpeg({ quality: 80 }).toBuffer();
+        return outBuf.toString('base64');
+    } catch (err) {
+        console.warn('[GEMINI] Locate-shrink failed, using original image for locate:', err.message);
+        return imageBase64;
+    }
+}
+
 // Stage 1 of 2 — find WHERE the vehicle weighbridge display is in the frame,
 // before trying to read digits off it. Root cause of a real misread on a real
 // yard photo (confirmed ground-truth 71920, model read first 37920 then
@@ -704,24 +729,46 @@ function voteOnWeightReadings(results) {
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
 
-    const box = await locateDisplayBox(imageBase64, mimeType);
+    const locateImg = await shrinkForLocate(imageBase64, mimeType);
+    const box = await locateDisplayBox(locateImg, mimeType);
     if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
     if (box) {
         const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
         if (croppedBase64) {
             try {
-                const [visionText, geminiMeta] = await Promise.all([
-                    visionOcr.detectText(croppedBase64),
-                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
-                        console.warn('[GEMINI] Metadata read on crop failed:', err.message);
-                        return null;
-                    }),
-                ]);
-                if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision/gemini]', JSON.stringify({ visionText, geminiWeight: geminiMeta && geminiMeta.weight }));
+                // Kicked off together but NOT awaited together — per Apsara,
+                // the read was taking too long (>10s target). Waiting on
+                // Promise.all([vision, geminiMeta]) meant a fast Vision read
+                // (Vision is the PRIMARY source of the weight number — see
+                // the module comment up top) sat idle behind a slower Gemini
+                // call that only supplies non-essential metadata (unit label,
+                // which-display reasoning, both of which already have safe
+                // defaults below). The .catch() here is attached immediately
+                // so an eventual rejection doesn't surface as an "unhandled
+                // rejection" on the happy path below, where this promise may
+                // never actually get awaited before the response returns.
+                const visionPromise = visionOcr.detectText(croppedBase64);
+                const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
+                    console.warn('[GEMINI] Metadata read on crop failed:', err.message);
+                    return null;
+                });
+
+                const visionText = await visionPromise;
+                if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
 
                 const visionWeight = visionOcr.extractWeightNumber(visionText);
                 if (visionWeight != null) {
+                    // Grab Gemini's metadata ONLY if it's already finished by
+                    // now, capped at a short wait — anything slower than this
+                    // just gets discarded (still resolves harmlessly in the
+                    // background thanks to the .catch() above) rather than
+                    // making the response wait on a call whose result isn't
+                    // needed to answer the actual question (the weight).
+                    const geminiMeta = await Promise.race([
+                        geminiMetaPromise,
+                        new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+                    ]);
                     const disagreement = geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== visionWeight
                         ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
                         : '';
@@ -738,8 +785,11 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 // Vision OCR gave nothing usable (API not enabled/reachable, or
                 // genuinely no text detected) — fall back to the Gemini-only
                 // self-consistency vote. Reuse the geminiMeta call already made
-                // above as vote #1 instead of throwing it away.
+                // above as vote #1 instead of throwing it away — fully awaited
+                // here since we now actually need its result, not just its
+                // fast-path presence.
                 console.warn('[GEMINI] Vision OCR unavailable or unusable, falling back to Gemini self-consistency vote');
+                const geminiMeta = await geminiMetaPromise;
                 const votes = [geminiMeta, ...await Promise.all([
                     readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
                     readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
