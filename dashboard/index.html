@@ -1816,13 +1816,20 @@ function renderItemRows() {
     return `
     <div class="item-row" data-idx="${i}">
       <div class="ld-item-desc-wrap">
+        <span class="ld-mobile-label">Description</span>
         <select class="ld-item-desc-select">${optionsHtml}</select>
       </div>
-      <div class="ld-item-cap"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="${it.gross_photo_link ? 'Photo on file — click to replace' : 'Add gross weight photo'}">📷${it.gross_photo_link ? '✓' : ''}</button></div>
-      <div class="ld-item-cap"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
-      <input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}">
-      <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
-      <input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}">
+      <div class="ld-item-cap ld-item-cap-gross">
+        <span class="ld-mobile-label">Gross</span>
+        <div class="ld-item-cap-inputs"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="${it.gross_photo_link ? 'Photo on file — click to replace' : 'Add gross weight photo'}">📷${it.gross_photo_link ? '✓' : ''}</button></div>
+      </div>
+      <div class="ld-item-cap ld-item-cap-tare">
+        <span class="ld-mobile-label">Tare</span>
+        <div class="ld-item-cap-inputs"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
+      </div>
+      <div class="ld-item-net-wrap"><span class="ld-mobile-label">Net</span><input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}"></div>
+      <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span><input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}"></div>
+      <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}"></div>
       <div class="ld-item-actions">
         <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
         <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
@@ -2244,7 +2251,16 @@ function renderLoads(loads) {
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
+      /* .ld-mobile-label + .ld-item-cap-inputs — added so mobile can show a
+         label above each field (see the mobile redesign below) without
+         touching the desktop layout: on desktop the label stays display:none
+         and .ld-item-cap-inputs is just an extra flex wrapper around the
+         same input+camera-button pair that used to sit directly in
+         .ld-item-cap, so desktop's grid/flex output is pixel-identical to
+         before this change. */
+      .ld-mobile-label { display:none; }
       .ld-item-cap { display:flex; gap:3px; min-width:0; }
+      .ld-item-cap-inputs { display:flex; gap:3px; flex:1; min-width:0; }
       .ld-item-cap input { flex:1; min-width:0; }
       .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
       .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
@@ -2298,27 +2314,54 @@ function renderLoads(loads) {
            around. 16px is the documented threshold that disables that. */
         #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
 
-        /* Item-row buttons (photo capture, insert, remove) were sized for
-           a mouse (4-6px padding, 11-12px text) — too small to hit
-           reliably with a thumb. Columns widened to make room, and
-           insert/remove stacked vertically instead of squeezed
-           side-by-side into a 62px-wide cell. */
-        .ld-item-header, .item-row { grid-template-columns:1fr 104px 104px 78px 60px 86px 60px; }
-        .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
-        .ld-item-actions { flex-direction:column; gap:4px; }
-        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:8px 4px; font-size:12px; }
-        .item-row { margin-bottom:10px; }
-
-        /* The item table still has to scroll sideways on a phone — 7
-           columns won't fit any phone width without shrinking numbers
-           past legibility — but losing sight of WHICH item you're
-           scrolled into while hunting for the weight fields defeats the
-           point. Sticking the description column keeps that context
-           on-screen the whole time you scroll right, like a frozen
-           spreadsheet column. */
-        .ld-item-header > span:first-child, .ld-item-desc-wrap {
-          position:sticky; left:0; z-index:1; background:var(--surface-card); padding-right:6px;
+        /* ── Item-row mobile redesign (v2) ──────────────────────────────
+           The first mobile pass kept the desktop's single-line 7-column
+           grid and just widened it, relying on horizontal scroll (like a
+           spreadsheet) to reach Net/Price/Amount/actions. In practice on
+           a real phone this looked cramped and you could only ever see
+           2-3 columns at a time — per Apsara, "clumsy," needed a
+           different design.
+           Replaced with a stacked card per item: no horizontal scroll at
+           all. Fields are grouped by relationship instead of forced into
+           uniform columns — Gross+Tare together (both need a camera
+           button, both get typed into every load), Net+Price+Amount
+           together (Net/Amount are just auto-computed readouts, Price is
+           the only one you actually type), actions on their own
+           full-width row at the bottom for an easy thumb tap. Each field
+           gets a small label above it (.ld-mobile-label, hidden on
+           desktop) since the shared header row doesn't make sense once
+           fields aren't in fixed columns — so the header itself is
+           hidden here instead. */
+        .ld-item-header { display:none; }
+        #ld_items { overflow-x:visible; }
+        .item-row {
+          grid-template-columns:1fr 1fr;
+          grid-template-areas:
+            "desc desc"
+            "gross tare"
+            "net price"
+            "amount amount"
+            "actions actions";
+          gap:10px;
+          min-width:0;
+          background:var(--surface-sunken, rgba(255,255,255,.03));
+          border:1px solid var(--border-default);
+          border-radius:var(--radius-sm);
+          padding:12px;
+          margin-bottom:12px;
         }
+        .ld-item-desc-wrap { grid-area:desc; position:static; padding-right:0; }
+        .ld-item-cap-gross { grid-area:gross; }
+        .ld-item-cap-tare { grid-area:tare; }
+        .ld-item-net-wrap { grid-area:net; }
+        .ld-item-price-wrap { grid-area:price; }
+        .ld-item-amount-wrap { grid-area:amount; }
+        .ld-item-actions { grid-area:actions; flex-direction:row; gap:8px; }
+        .ld-mobile-label { display:block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px; }
+        .ld-item-cap { flex-direction:column; align-items:stretch; }
+        .ld-item-net-wrap input, .ld-item-price-wrap input, .ld-item-amount-wrap input { width:100%; }
+        .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
+        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:10px 4px; font-size:12px; flex:1; }
 
         /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
            too-small-to-thumb-tap problem as the item-row buttons above. */
