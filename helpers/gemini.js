@@ -7,7 +7,23 @@ const cfg = require('../config');
 const fs = require('fs');
 const visionOcr = require('./visionOcr');
 let sharp = null;
-try { sharp = require('sharp'); } catch { /* crop-zoom step degrades to a no-op if sharp isn't installed */ }
+try { sharp = require('sharp'); } catch (err) {
+    // Was a silent catch with no logging — every sharp-dependent function
+    // below (locateRedDisplayByPixels, shrinkForLocate, cropToDisplay,
+    // normalizeOrientation, trimDeadDigitZones) degrades to an immediate
+    // no-op if sharp didn't load, and NONE of them logged that fact. That
+    // means a broken/missing sharp install would look EXACTLY like every
+    // symptom chased across this whole conversation: pixel locate always
+    // "finding nothing confident" (returns null before ever reaching its own
+    // diagnostic log), crop always taking ~0-1ms regardless of the box
+    // (immediate bail before touching any pixels), and the EXIF-orientation
+    // fix having zero effect (same immediate bail) -- all silently, with
+    // nothing distinguishing "sharp is broken" from "this photo is
+    // genuinely hard." This is now a loud, unmissable boot-time error
+    // instead, specifically so that possibility can be ruled in or out in
+    // seconds instead of another round of photo-by-photo guessing.
+    console.error('[GEMINI] *** sharp failed to load - EVERY locate/crop function below will silently no-op:', err.message, '***');
+}
 
 let genAI = null;
 function getClient() {
