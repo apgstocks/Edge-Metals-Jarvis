@@ -797,14 +797,21 @@ async function cropToDisplay(imageBase64, mimeType, box) {
             console.log(`[GEMINI] Trimmed dead/ghost LED zone off crop edge (${cropW}px -> ${trim.width}px wide)`);
         }
 
-        // Upscale so the crop has real detail to work with — target a ~1400px-wide
-        // result (roughly matching what the whole-image path already sends), capped
-        // at 4x to avoid manufacturing fake detail out of a tiny crop.
-        const scale = Math.min(4, Math.max(1, 1400 / finalExtract.width));
+        // Upscale so the crop has real detail to work with — target a
+        // ~2000px-wide result (raised from 1400px per Apsara: "send it in
+        // high resolution to OCR"), capped at 4x to avoid manufacturing fake
+        // detail out of a tiny crop (that cap is unchanged — this only gives
+        // MEDIUM-sized crops, roughly 500-2000px wide, more effective
+        // resolution than before; a crop already bigger than 2000px, or one
+        // small enough to already hit the 4x cap, is unaffected). Quality
+        // raised 92 -> 97 too: this crop is what Vision actually reads the
+        // digits off of, so minimizing JPEG compression artifacts on the
+        // sharp red-LED digit edges matters more here than file size.
+        const scale = Math.min(4, Math.max(1, 2000 / finalExtract.width));
         const outBuf = await img
             .extract(finalExtract)
             .resize({ width: Math.round(finalExtract.width * scale), kernel: 'lanczos3' })
-            .jpeg({ quality: 92 })
+            .jpeg({ quality: 97 })
             .toBuffer();
         if (process.env.DEBUG_SAVE_CROP) fs.writeFileSync(process.env.DEBUG_SAVE_CROP, outBuf);
         return outBuf.toString('base64');
