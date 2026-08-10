@@ -254,14 +254,18 @@ function addFooters(doc, load) {
     }
 }
 
+// Unit column removed per Apsara (the per-item Unit field is gone from the
+// dashboard entirely — see renderItemRows in dashboard/index.html). Its 40pt
+// went to Gross/Tare/Net/Amount rather than Price, matching the same
+// "shrink description, grow the weight/amount columns" request applied to
+// the on-screen item rows.
 const TICKET_COLUMNS = [
-    { key: 'description',  label: 'Description', x: 50,  width: 150, align: 'left'   },
-    { key: 'gross_weight', label: 'Gross',        x: 200, width: 60,  align: 'right'  },
-    { key: 'tare_weight',  label: 'Tare',         x: 260, width: 60,  align: 'right'  },
-    { key: 'net_weight',   label: 'Net',          x: 320, width: 60,  align: 'right'  },
-    { key: 'price',        label: 'Price',        x: 380, width: 55,  align: 'right'  },
-    { key: 'unit',         label: 'Unit',         x: 435, width: 40,  align: 'center' },
-    { key: 'amount',       label: 'Amount',       x: 475, width: 87,  align: 'right'  },
+    { key: 'description',  label: 'Description', x: 50,  width: 140, align: 'left'  },
+    { key: 'gross_weight', label: 'Gross',        x: 190, width: 68,  align: 'right' },
+    { key: 'tare_weight',  label: 'Tare',         x: 258, width: 68,  align: 'right' },
+    { key: 'net_weight',   label: 'Net',          x: 326, width: 68,  align: 'right' },
+    { key: 'price',        label: 'Price',        x: 394, width: 58,  align: 'right' },
+    { key: 'amount',       label: 'Amount',       x: 452, width: 110, align: 'right' },
 ];
 
 // "Summary by Item Type" table columns — priced version (ticket) includes
@@ -299,9 +303,8 @@ function generateLoadPdf(load) {
                 { label: 'Created by:', value: load.created_by },
                 { label: 'Status:',     value: load.status },
             ], [
-                { label: 'Description:',    value: load.description },
-                { label: 'Seller Address:', value: load.seller_address },
-                { label: 'Buyer Address:',  value: load.buyer_address },
+                { label: 'Description:',   value: load.description },
+                { label: 'Buyer Address:', value: load.buyer_address },
             ]);
 
             const unit = load.weight_unit || 'lb';

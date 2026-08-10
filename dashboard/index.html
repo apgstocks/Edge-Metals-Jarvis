@@ -1817,26 +1817,41 @@ function renderItemRows() {
     <div class="item-row" data-idx="${i}">
       <div class="ld-item-desc-wrap">
         <select class="ld-item-desc-select">${optionsHtml}</select>
-        <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
       </div>
       <div class="ld-item-cap"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="${it.gross_photo_link ? 'Photo on file — click to replace' : 'Add gross weight photo'}">📷${it.gross_photo_link ? '✓' : ''}</button></div>
       <div class="ld-item-cap"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
       <input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}">
       <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
-      <input class="ld-item-unit" placeholder="Unit" title="Unit" value="${esc(it.unit || '')}">
       <input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}">
       <div class="ld-item-actions">
         <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
         <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
       </div>
-      <input type="file" accept="image/*" class="ld-item-gross-file hidden">
-      <input type="file" accept="image/*" class="ld-item-tare-file hidden">
+      <!-- "Others" free-text box moved OUT of .ld-item-desc-wrap to be a
+           direct grid child of .item-row (grid-column:1/-1 below) — per
+           Apsara, nested inside the narrow description column it rendered
+           tiny on mobile; as its own full-width line under the row it's a
+           normal-sized text box instead. -->
+      <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
+      <!-- Two file inputs per role (camera-forced vs library/files) instead
+           of one plain accept="image/*" input — per Apsara, the single
+           generic input's OS chooser was surfacing Google Photos ahead of
+           a direct camera option. Clicking the 📷 button now shows an
+           explicit "Take Photo" / "Choose File" menu (see
+           showCaptureMenu below) that triggers whichever of these two
+           actually matches what was picked. capture="environment" is what
+           forces a mobile browser straight into the camera app instead of
+           any chooser at all. -->
+      <input type="file" accept="image/*" capture="environment" class="ld-item-gross-file-camera hidden">
+      <input type="file" accept="image/*" class="ld-item-gross-file-files hidden">
+      <input type="file" accept="image/*" capture="environment" class="ld-item-tare-file-camera hidden">
+      <input type="file" accept="image/*" class="ld-item-tare-file-files hidden">
       <div class="ld-item-status ld-cap-status"></div>
     </div>`;
   }).join('');
   box.innerHTML = `
     <div class="ld-item-header">
-      <span>Description</span><span>Gross</span><span>Tare</span><span>Net</span><span>Price</span><span>Unit</span><span>Amount</span><span></span>
+      <span>Description</span><span>Gross</span><span>Tare</span><span>Net</span><span>Price</span><span>Amount</span><span></span>
     </div>
     ${rowsHtml}`;
 
@@ -1845,11 +1860,19 @@ function renderItemRows() {
       recomputeRowTotals(row);
       syncItemsFromDom();
     }));
+    // Photo button now opens a small "Take Photo / Choose File" menu instead
+    // of clicking straight into one generic file input — see showCaptureMenu.
     row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
-      row.querySelector(btn.dataset.role === 'gross' ? '.ld-item-gross-file' : '.ld-item-tare-file').click();
+      const role = btn.dataset.role; // 'gross' | 'tare'
+      showCaptureMenu(btn, {
+        onCamera: () => row.querySelector(`.ld-item-${role}-file-camera`).click(),
+        onFiles : () => row.querySelector(`.ld-item-${role}-file-files`).click(),
+      });
     }));
-    row.querySelector('.ld-item-gross-file').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
-    row.querySelector('.ld-item-tare-file').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
+    row.querySelector('.ld-item-gross-file-camera').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
+    row.querySelector('.ld-item-gross-file-files').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
+    row.querySelector('.ld-item-tare-file-camera').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
+    row.querySelector('.ld-item-tare-file-files').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
   });
   box.querySelectorAll('.ld-item-desc-select').forEach(sel => sel.addEventListener('change', () => {
     const row = sel.closest('.item-row');
@@ -1897,7 +1920,7 @@ function syncItemsFromDom() {
       gross_weight: row.querySelector('.ld-item-gross').value,
       tare_weight : row.querySelector('.ld-item-tare').value,
       price: row.querySelector('.ld-item-price').value,
-      unit : row.querySelector('.ld-item-unit').value,
+      unit : prev.unit || '', // no per-item Unit field anymore — see renderItemRows; just carries whatever an edited old load already had
       grossPhoto: prev.grossPhoto || null,
       tarePhoto : prev.tarePhoto  || null,
       gross_photo_link: prev.gross_photo_link || null,
@@ -1988,14 +2011,63 @@ async function handleFileUpload(row, roleKey, file) {
   }
 }
 
+// Small floating "Take Photo / Choose File" menu, shown when a row's 📷
+// button is clicked — per Apsara, a single plain file input's OS chooser
+// was surfacing Google Photos ahead of an actual camera option, with no way
+// to just say "take a new photo." Appended to <body> (not inside the row)
+// so it isn't clipped by #ld_items' horizontal-scroll overflow, positioned
+// off the button's real screen position. Dismissed on choosing either
+// option or clicking anywhere else.
+function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
+  document.querySelectorAll('.capture-menu').forEach(m => m.remove());
+  const rect = anchorBtn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'capture-menu';
+  menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  menu.style.left = `${rect.left + window.scrollX}px`;
+  menu.innerHTML = `
+    <button type="button" class="capture-menu-btn" data-action="camera">📷 Take Photo</button>
+    <button type="button" class="capture-menu-btn" data-action="files">📁 Choose File</button>
+  `;
+  document.body.appendChild(menu);
+  const close = () => { menu.remove(); document.removeEventListener('click', outsideClick, true); };
+  const outsideClick = (e) => { if (!menu.contains(e.target) && e.target !== anchorBtn) close(); };
+  menu.querySelector('[data-action="camera"]').addEventListener('click', () => { close(); onCamera(); });
+  menu.querySelector('[data-action="files"]').addEventListener('click', () => { close(); onFiles(); });
+  // Deferred one tick so the SAME click that opened the menu (which is still
+  // bubbling up to document right now) doesn't immediately close it again.
+  setTimeout(() => document.addEventListener('click', outsideClick, true), 0);
+}
+
 function blankLoadItem() {
   return { description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+}
+
+// Edge Metals is always the seller on every load now, per Apsara — the
+// field stays visible (for consistency with the PDF) but is locked
+// (disabled input) rather than removed outright, so it's still obvious on
+// screen who the seller is without anyone being able to accidentally type
+// over it.
+const SELLER_FIXED_NAME = 'Edge Metals Inc.';
+
+// Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on
+// the WRONG calendar day for anyone west of Greenwich in the evening
+// (e.g. 9pm Pacific is already the next day in UTC), which is exactly the
+// kind of off-by-one that would misfile a load into tomorrow's date group.
+function todayLocalDateStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function resetLoadModal() {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  // Date defaults to TODAY instead of blank — per Apsara, having to pick it
+  // manually on every single load was pure friction for what's almost
+  // always "today." Still fully editable for a load being entered late.
+  if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
+  if ($('ld_seller')) $('ld_seller').value = SELLER_FIXED_NAME;
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
@@ -2024,8 +2096,7 @@ function openEditLoadModal(load) {
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
   if ($('ld_date'))           $('ld_date').value           = load.date || '';
-  if ($('ld_seller'))         $('ld_seller').value         = load.seller || '';
-  if ($('ld_seller_address')) $('ld_seller_address').value = load.seller_address || '';
+  if ($('ld_seller'))         $('ld_seller').value         = SELLER_FIXED_NAME;
   if ($('ld_buyer'))          $('ld_buyer').value          = load.buyer || '';
   if ($('ld_buyer_address'))  $('ld_buyer_address').value  = load.buyer_address || '';
   if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
@@ -2169,7 +2240,7 @@ function renderLoads(loads) {
          layout — with 8 columns per row there's no good way to keep this a
          single line AND fit a phone screen, so horizontal scroll (like a
          spreadsheet) beats forcing it back into multiple lines on mobile. */
-      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 64px 56px 92px 54px; gap:6px; align-items:center; min-width:660px; }
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
@@ -2177,17 +2248,89 @@ function renderLoads(loads) {
       .ld-item-cap input { flex:1; min-width:0; }
       .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
       .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
-      .ld-item-actions { display:flex; gap:3px; }
-      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 7px; font-size:11px; flex:none; }
+      .ld-item-actions { display:flex; gap:3px; min-width:0; }
+      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 6px; font-size:11px; flex:1; min-width:0; }
       .item-row .btn-insert-item { color:var(--leaf-600, #2e7d32); }
+      /* Every direct grid child of a row/header MUST be able to shrink below
+         its own natural (min-content) size — otherwise a cell with content
+         that can't wrap (e.g. two side-by-side buttons in .ld-item-actions)
+         silently pushes ITS OWN column wider than the fixed px width every
+         OTHER row (and the header, which has no such content) is using,
+         and everything to the right drifts out of alignment. This is what
+         was actually causing "headers not lining up with their columns" on
+         mobile — narrower viewports have less slack for a column to quietly
+         overflow into before it becomes visible. min-width:0 is the
+         standard fix: it lets grid/flex items shrink to fit their assigned
+         track instead of expanding it. */
+      .ld-item-header > *, .item-row > * { min-width:0; }
+      /* "Others" free-text box is a direct grid child now (moved out of
+         .ld-item-desc-wrap — see renderItemRows), spanning the full row
+         width instead of being squeezed into just the 0.9fr description
+         column, which on a phone was too narrow to type an address-length
+         description into. Sized up (bigger font/padding than the compact
+         columns) since it's now its own full-width line, not a cramped cell. */
+      .ld-item-desc-other { grid-column:1 / -1; font-size:13px; padding:8px 10px; }
+      .ld-item-desc-other.hidden { display:none; }
       .ld-item-status:empty { display:none; }
       .ld-item-status { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin:-1px 0 3px; }
       #ld_items { overflow-x:auto; padding-bottom:2px; }
+      /* Take Photo / Choose File popover — see showCaptureMenu(). */
+      .capture-menu { position:absolute; z-index:1000; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 8px 20px rgba(0,0,0,.28); padding:4px; display:flex; flex-direction:column; min-width:160px; }
+      .capture-menu-btn { display:block; width:100%; text-align:left; padding:9px 12px; font-size:13px; background:none; border:none; border-radius:var(--radius-xs); color:var(--text-strong); cursor:pointer; }
+      .capture-menu-btn:hover, .capture-menu-btn:active { background:var(--surface-hover); }
       @media (max-width: 860px) {
         #loadModal { padding:0; align-items:stretch; }
         #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
         #loadModal .modal-body { max-height:none; flex:1; }
         .ld-grid-2 { grid-template-columns:1fr; }
+
+        /* ── Mobile ergonomics pass — per Apsara, this tab's primary
+           audience is yard staff on a phone, not a desktop mouse user, and
+           several things sized fine for a pointer are genuinely hard to
+           use with a thumb. Everything below is scoped to #loadModal /
+           .load-card / .ld-item-* / #loadSearch specifically — NOT to the
+           bare .btn/.modal-foot/.field classes those elements also carry
+           — so none of it touches Bookings/Board/Settings, which share
+           those same base classes but weren't asked for here. */
+
+        /* iOS Safari auto-zooms the whole page on focus for any input
+           under 16px — every tap into a field was yanking the layout
+           around. 16px is the documented threshold that disables that. */
+        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
+
+        /* Item-row buttons (photo capture, insert, remove) were sized for
+           a mouse (4-6px padding, 11-12px text) — too small to hit
+           reliably with a thumb. Columns widened to make room, and
+           insert/remove stacked vertically instead of squeezed
+           side-by-side into a 62px-wide cell. */
+        .ld-item-header, .item-row { grid-template-columns:1fr 104px 104px 78px 60px 86px 60px; }
+        .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
+        .ld-item-actions { flex-direction:column; gap:4px; }
+        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:8px 4px; font-size:12px; }
+        .item-row { margin-bottom:10px; }
+
+        /* The item table still has to scroll sideways on a phone — 7
+           columns won't fit any phone width without shrinking numbers
+           past legibility — but losing sight of WHICH item you're
+           scrolled into while hunting for the weight fields defeats the
+           point. Sticking the description column keeps that context
+           on-screen the whole time you scroll right, like a frozen
+           spreadsheet column. */
+        .ld-item-header > span:first-child, .ld-item-desc-wrap {
+          position:sticky; left:0; z-index:1; background:var(--surface-card); padding-right:6px;
+        }
+
+        /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
+           too-small-to-thumb-tap problem as the item-row buttons above. */
+        .load-card .btn { padding:9px 14px; font-size:12.5px; }
+
+        /* Cancel/Save stack full-width instead of two small buttons
+           crammed to the right — bigger target, and Save (the action
+           people actually came here to tap) lands at the bottom,
+           thumb-reachable on a one-handed grip. */
+        #loadModal .modal-foot { flex-direction:column; }
+        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
+        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
       }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
@@ -2213,13 +2356,12 @@ function renderLoads(loads) {
         <div class="modal-body">
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
-            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name"></div>
+            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
-            <div class="field"><label>Seller address</label><input id="ld_seller_address" placeholder="e.g. 123 Yard Rd, Houston, TX"></div>
             <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name"></div>
+            <div class="field"><label>Buyer address</label><input id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX"></div>
           </div>
-          <div class="field" style="margin-top:14px;"><label>Buyer address</label><input id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX"></div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
           <div style="margin-top:18px;">
@@ -2268,9 +2410,7 @@ function wireLoadsEvents() {
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
-    const seller = $('ld_seller').value.trim();
-    const desc   = $('ld_desc').value.trim();
-    if (!seller && !desc) { $('loadModalErr').textContent = 'Enter at least a seller or a description.'; return; }
+    const desc = $('ld_desc').value.trim();
     $('loadModalErr').textContent = '';
     const btn = $('btnSaveLoad');
     const isEdit = !!editingLoadId;
@@ -2299,8 +2439,7 @@ function wireLoadsEvents() {
         }));
       const payload = {
         date: $('ld_date').value || null,
-        seller: seller || null,
-        seller_address: $('ld_seller_address').value.trim() || null,
+        seller: SELLER_FIXED_NAME,
         buyer: $('ld_buyer').value.trim() || null,
         buyer_address: $('ld_buyer_address').value.trim() || null,
         description: desc,
@@ -2496,6 +2635,12 @@ async function boot() {
   $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
   try { const me = await api('/api/me'); ROLE = me.role || 'user'; } catch {}
   $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : 'Standard access';
+  // Staff is scoped to the Loads tab only (see STAFF_ALLOWED_PATH_PREFIXES /
+  // nav filtering in api.js and renderNav above) — landing them on 'board'
+  // (the default CURRENT_TAB) would show a tab they can't use, or a nav with
+  // only one visible item that doesn't match the loaded content. Send them
+  // straight to Loads instead.
+  if (ROLE === 'staff') CURRENT_TAB = 'loads';
   renderNav();
   loadTab(CURRENT_TAB);
   if (ROLE === 'admin') {
