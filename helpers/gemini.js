@@ -420,9 +420,142 @@ async function shrinkForLocate(imageBase64, mimeType) {
     }
 }
 
-// Stage 1 of 2 — find WHERE the vehicle weighbridge display is in the frame,
-// before trying to read digits off it. Root cause of a real misread on a real
-// yard photo (confirmed ground-truth 71920, model read first 37920 then
+// Stage 1, attempt #1 — a fast, deterministic, non-AI display locator. Every
+// real yard photo seen so far (this account, this hardware) shows the
+// vehicle weighbridge display as a bright, saturated RED LED/dot-matrix
+// readout, while the compact bench/platform scale next to it is a backlit
+// grey LCD — not red. That's a real, physical, color-based difference, not a
+// guess: the exact same red threshold (r>140, r-g>60, r-b>60) is already
+// proven in trimDeadDigitZones below, measured directly off a real photo of
+// this display. A plain color-cluster search tells the two displays apart
+// without needing to understand what either one IS, runs in tens of
+// milliseconds fully locally (no network call, no model variance, no API
+// cost), and is tried BEFORE ever calling the slower, occasionally-timing-out
+// AI-based locateDisplayBox below. Returns null (caller falls back to the AI
+// locate) if there's no confidently-sized, confidently-shaped red cluster —
+// e.g. a non-red display, washed-out lighting, or a genuinely cluttered
+// frame with no dominant red region.
+// NOTE on method: an earlier version of this function found the bounding box
+// by taking the longest lit run independently on each axis (row-sum profile,
+// column-sum profile). Tested live against a real photo before shipping and
+// it FAILED — the display's 4 small LB/KG/GR/NT arrow icons sit at the far
+// left of the housing, and the independent per-axis projection let the box's
+// x-range lock onto those tiny icons while the y-range came from the actual
+// digits, producing a box that pointed at neither. Fixed by doing real
+// connected-component labeling on the red-pixel mask (with a dilation pass
+// first, since a dot-matrix digit's individual lit dots aren't literally
+// touching pixel-to-pixel) and picking the component with the most total lit
+// pixels — the digit block lights up far more pixels than the small arrow
+// icons even though both are "red". Verified against the actual photo from
+// this conversation: correctly boxes the full weighbridge housing and
+// excludes the Fairbanks bench scale below it, in ~150-180ms.
+async function locateRedDisplayByPixels(imageBase64) {
+    if (!sharp) return null;
+    try {
+        const buf = Buffer.from(imageBase64, 'base64');
+        const targetWidth = 500; // resolution is irrelevant here, only the region matters — keep this cheap
+        const { data, info } = await sharp(buf)
+            .resize({ width: targetWidth, withoutEnlargement: true })
+            .removeAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+        const { width: w, height: h, channels } = info;
+        if (!w || !h) return null;
+
+        const mask = new Uint8Array(w * h);
+        let totalLit = 0;
+        for (let y = 0; y < h; y++) {
+            const rowBase = y * w * channels;
+            for (let x = 0; x < w; x++) {
+                const i = rowBase + x * channels;
+                const r = data[i], g = data[i + 1], b = data[i + 2];
+                if (r > 140 && (r - g) > 60 && (r - b) > 60) { mask[y * w + x] = 1; totalLit++; }
+            }
+        }
+        if (totalLit < w * h * 0.003) return null; // essentially nothing red in frame at all
+
+        // Dilate by R pixels so a dot-matrix digit's individually-lit dots
+        // (and the gaps between adjacent digit cells) merge into one
+        // connected blob instead of being scattered specks. R=25 (at this
+        // 500px-wide working resolution) is wide enough to bridge inter-digit
+        // gaps and the dead/ghost-cell gap, verified against a real photo,
+        // while still leaving a real gap between the digit block and the
+        // separate LB/KG/GR/NT arrow-icon column so they don't merge into one
+        // component.
+        const R = 25;
+        const dilated = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                if (!mask[y * w + x]) continue;
+                const yStart = Math.max(0, y - R), yEnd = Math.min(h - 1, y + R);
+                const xStart = Math.max(0, x - R), xEnd = Math.min(w - 1, x + R);
+                for (let ny = yStart; ny <= yEnd; ny++) {
+                    const base = ny * w;
+                    for (let nx = xStart; nx <= xEnd; nx++) dilated[base + nx] = 1;
+                }
+            }
+        }
+
+        // Connected components (4-connectivity) over the dilated mask,
+        // iterative flood fill (no recursion) — picks the component with the
+        // most ORIGINAL (non-dilated) lit pixels, since the real digit block
+        // lights far more pixels than a small icon even after both get
+        // dilated the same amount.
+        const labels = new Int32Array(w * h).fill(-1);
+        let nextLabel = 0;
+        const comps = [];
+        const stack = [];
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = y * w + x;
+                if (!dilated[idx] || labels[idx] !== -1) continue;
+                const label = nextLabel++;
+                let minX = x, maxX = x, minY = y, maxY = y, litCount = 0;
+                stack.push(idx); labels[idx] = label;
+                while (stack.length) {
+                    const cur = stack.pop();
+                    const cy = (cur / w) | 0, cx = cur % w;
+                    if (mask[cur]) litCount++;
+                    if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+                    if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+                    if (cx > 0 && dilated[cur - 1] && labels[cur - 1] === -1) { labels[cur - 1] = label; stack.push(cur - 1); }
+                    if (cx < w - 1 && dilated[cur + 1] && labels[cur + 1] === -1) { labels[cur + 1] = label; stack.push(cur + 1); }
+                    if (cy > 0 && dilated[cur - w] && labels[cur - w] === -1) { labels[cur - w] = label; stack.push(cur - w); }
+                    if (cy < h - 1 && dilated[cur + w] && labels[cur + w] === -1) { labels[cur + w] = label; stack.push(cur + w); }
+                }
+                comps.push({ litCount, minX, maxX, minY, maxY });
+            }
+        }
+        if (!comps.length) return null;
+        comps.sort((a, b) => b.litCount - a.litCount);
+        const best = comps[0];
+
+        const boxW = (best.maxX - best.minX) / w, boxH = (best.maxY - best.minY) / h;
+        // Sanity bounds — a real display fills a meaningful chunk of frame but
+        // not almost the whole photo (which would suggest a false-positive on
+        // a rust-colored wall/roof rather than a genuine LED cluster). Too
+        // small a box is more likely noise (a reflection, a wire) than a
+        // readable display.
+        if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) return null;
+
+        const padX = boxW * 0.08, padY = boxH * 0.25;
+        return {
+            x_min: Math.max(0, best.minX / w - padX),
+            y_min: Math.max(0, best.minY / h - padY),
+            x_max: Math.min(1, best.maxX / w + padX),
+            y_max: Math.min(1, best.maxY / h + padY),
+            reason: 'red LED cluster found by pixel color analysis (no AI call)',
+        };
+    } catch (err) {
+        console.warn('[GEMINI] Pixel-based red-display locate failed, will try AI locate instead:', err.message);
+        return null;
+    }
+}
+
+// Stage 1, attempt #2 (fallback) — find WHERE the vehicle weighbridge display
+// is in the frame using Gemini, for photos the pixel-based locate above
+// couldn't confidently handle. Root cause of a real misread on a real yard
+// photo (confirmed ground-truth 71920, model read first 37920 then
 // 87920): the display occupied a small fraction of a large overhead photo, so
 // its leading digits were only a few pixels tall by the time the model saw
 // them, and a genuinely dim/blank leading cell's residual dot-matrix glow got
@@ -531,19 +664,9 @@ async function trimDeadDigitZones(sharpImg, cropW, cropH) {
         for (let x = 0; x < cropW; x++) prefix[x + 1] = prefix[x] + colScore[x];
         const rollAvg = (start) => (prefix[Math.min(cropW, start + win)] - prefix[start]) / win;
 
-        // Don't just take the FIRST column that crosses the threshold — on a
-        // real photo the unit-label text (LB/KG/GR/NT down the side) is often
-        // reddish/bright enough itself to cross a naive threshold, and it sits
-        // to the left of the actual digits. Taking the first crossing latched
-        // onto the label instead of skipping past it to the ghost cell beyond,
-        // which is exactly why an earlier version of this only trimmed part of
-        // the way and the ghost cell still made it into the model's crop.
-        // Fix: find every contiguous above-threshold run, merge runs that are
-        // close together (small gaps are just the dark space between adjacent
-        // digit cells — still one "number"), and use the LONGEST merged run.
-        // The label is narrow and isolated; the real digit run is wide and,
-        // once inter-digit gaps are merged, contiguous — it wins on width even
-        // though the label can locally be just as bright.
+        // Find every contiguous above-threshold run, merging runs that are
+        // close together (small gaps are just the dark space between
+        // adjacent digit cells — still one "number").
         const runs = [];
         let inRun = false, runStart = 0;
         for (let x = 0; x <= cropW - win; x++) {
@@ -561,8 +684,32 @@ async function trimDeadDigitZones(sharpImg, cropW, cropH) {
             if (runs[i][0] - last[1] <= mergeGap) last[1] = runs[i][1];
             else merged.push(runs[i].slice());
         }
-        merged.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]));
-        const [runStart2, runEnd2] = merged[0];
+
+        // UNION every merged run that's genuinely bright (not just the single
+        // widest one). Ghost/residual-glow cells measured on a real photo
+        // peaked at ~25% of that photo's brightest column (40 vs 158 — see
+        // the comment above this function) — clearly separable from a real
+        // lit digit, so a 50% floor safely excludes ghosts while keeping
+        // every real digit group. This replaced a "keep only the longest
+        // merged run" rule after it silently discarded an entire second
+        // digit group on a real 2026-08-10 test photo: a fully bright "8"
+        // (peak 312, 100% of that crop's max) sat far enough from the rest of
+        // the number that it fell outside the merge distance, and picking
+        // "longest" alone threw it away, cropping to a wrong-but-confident
+        // number instead of the real one. Safe to union broadly now that
+        // Cloud Vision (not Gemini) reads the crop: extractWeightNumber only
+        // pulls DIGIT characters out of whatever text Vision finds, so even
+        // if a non-digit label character (LB/KG/GR/NT) ends up inside the
+        // union, it can't pollute the weight number the way it could once
+        // confuse Gemini's visual "which digit is this" reasoning.
+        const brightEnough = merged.filter((run) => {
+            let peakInRun = 0;
+            for (let x = run[0]; x < run[1]; x++) if (colScore[x] > peakInRun) peakInRun = colScore[x];
+            return peakInRun >= peak * 0.5;
+        });
+        if (brightEnough.length === 0) return null;
+        const runStart2 = Math.min(...brightEnough.map((r) => r[0]));
+        const runEnd2 = Math.max(...brightEnough.map((r) => r[1]));
 
         // Generous margin back toward the edges so we don't shave a real
         // digit's edge off. The rolling window only crosses threshold once a
@@ -821,10 +968,19 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // Per-stage timestamps are logged so a slow real-world run tells us
     // exactly which stage to fix instead of just "it was slow somewhere."
     const accuratePathPromise = (async () => {
-        const locateImg = await shrinkForLocate(imageBase64, mimeType);
         const tLocateStart = Date.now();
-        const box = await locateDisplayBox(locateImg, mimeType);
-        console.log(`[GEMINI] Locate step took ${Date.now() - tLocateStart}ms (total ${elapsed()})`);
+        // Try the fast, deterministic, no-network pixel locate first — see
+        // locateRedDisplayByPixels above. Only fall to the slow AI-based
+        // locateDisplayBox (network call, ~seconds, the thing that's been
+        // missing budget) if the pixel approach can't confidently place a box.
+        let box = await locateRedDisplayByPixels(imageBase64);
+        let locateSource = 'pixel color analysis';
+        if (!box) {
+            const locateImg = await shrinkForLocate(imageBase64, mimeType);
+            box = await locateDisplayBox(locateImg, mimeType);
+            locateSource = 'Gemini (pixel locate found nothing confident)';
+        }
+        console.log(`[GEMINI] Locate step (${locateSource}) took ${Date.now() - tLocateStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
         if (!box) return null;
 
