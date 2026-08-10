@@ -237,6 +237,7 @@ body { overflow-y:auto; }
           grid-template-columns:1fr 1fr;
           grid-template-areas:
             "desc desc"
+            "other other"
             "gross tare"
             "net price"
             "amount amount"
@@ -250,6 +251,7 @@ body { overflow-y:auto; }
           margin-bottom:12px;
         }
         .ld-item-desc-wrap { grid-area:desc; position:static; padding-right:0; }
+        .ld-item-desc-other { grid-area:other; }
         .ld-item-cap-gross { grid-area:gross; }
         .ld-item-cap-tare { grid-area:tare; }
         .ld-item-net-wrap { grid-area:net; }
@@ -944,6 +946,7 @@ function renderLoads(loads) {
           grid-template-columns:1fr 1fr;
           grid-template-areas:
             "desc desc"
+            "other other"
             "gross tare"
             "net price"
             "amount amount"
@@ -957,6 +960,7 @@ function renderLoads(loads) {
           margin-bottom:12px;
         }
         .ld-item-desc-wrap { grid-area:desc; position:static; padding-right:0; }
+        .ld-item-desc-other { grid-area:other; }
         .ld-item-cap-gross { grid-area:gross; }
         .ld-item-cap-tare { grid-area:tare; }
         .ld-item-net-wrap { grid-area:net; }
