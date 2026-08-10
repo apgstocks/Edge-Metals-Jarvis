@@ -770,27 +770,34 @@ function voteOnWeightReadings(results) {
 // calls against an identical image) — this is business-critical (a wrong
 // weight is a wrong invoice).
 //
-// SPEED: per Apsara, this needs to finish in under 5 seconds. The single
-// biggest cost in the old pipeline was locateDisplayBox running fully
-// synchronously on gemini-3.6-flash (~12-16s/request BY ITSELF, benchmarked
-// above) before Vision ever got a crop to read — that alone made 5s, or even
-// 10s, structurally impossible no matter what ran after it. Two changes fix
-// this:
-//   1. locateDisplayBox now uses the lighter LOCATE_MODEL (see above) instead
-//      of the heavyweight digit-reading model — finding a box is a coarser
-//      task than reading exact digits.
-//   2. The whole locate->crop->Vision-on-crop "accurate path" now runs under
-//      a hard ACCURATE_PATH_BUDGET_MS timeout, racing against the whole-image
-//      Vision OCR call that's kicked off immediately at the top (a single
-//      Vision API call, no Gemini locate step first — much faster on its
-//      own). Whichever is ready first and usable wins; the accurate path is
-//      preferred when it makes the deadline since a tight, upscaled crop is a
-//      cleaner read for a small/distant display, but this function no longer
-//      waits past the budget for it.
+// PRIORITY, per Apsara explicitly: "i cant afford to have mistakes" outranks
+// the earlier "under 5 seconds" ask when the two conflict. Live evidence from
+// a real yard photo on 2026-08-10 showed why that ordering matters: the
+// cropped/accurate path missed its (then 4000ms) budget, so this fell back to
+// reading the WHOLE, uncropped photo — which in that shot also contained a
+// second display (a bench scale reading "403 lb") plus other numbers on a
+// clipboard in frame. The whole-image path correctly flagged that result
+// `ambiguous: true` instead of trusting it silently, which is exactly the
+// point of that guard — but a flagged, likely-wrong number is still worse
+// than just taking the extra second or two to get the accurate, isolated
+// crop read in the first place. ACCURATE_PATH_BUDGET_MS below has been
+// widened accordingly, and per-stage timing (locate/crop/vision-on-crop) is
+// now logged so a future timing decision is made from real numbers, not
+// another guess.
+//   1. locateDisplayBox uses the lighter LOCATE_MODEL (see above) instead of
+//      the heavyweight digit-reading model — finding a box is a coarser task
+//      than reading exact digits.
+//   2. The whole locate->crop->Vision-on-crop "accurate path" runs under an
+//      ACCURATE_PATH_BUDGET_MS timeout, racing the whole-image Vision OCR
+//      call kicked off immediately at the top. The accurate path is strongly
+//      preferred (see priority note above) and gets a generous budget; the
+//      whole-image reading is the fallback of last resort for when the
+//      accurate path genuinely can't produce anything, not a routine
+//      speed shortcut.
 // The old "Gemini self-consistency vote on the crop" fallback (3 more slow
-// Gemini calls) has been dropped from the middle of the chain for the same
-// reason — it only fired when Vision itself had nothing to read, which is
-// rare, and it could add another 12-16s+ on top of everything else. The
+// Gemini calls) has been dropped from the middle of the chain — it only
+// fired when Vision itself had nothing to read on the crop, which is rare,
+// and it could add another 12-16s+ on top of everything else. The
 // whole-image Gemini single-pass read remains as the final, rare last resort
 // if BOTH Vision attempts come back empty.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
@@ -799,9 +806,10 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     const elapsed = () => `${Date.now() - t0}ms`;
 
     // Started now, awaited later — a single Vision OCR call on the whole
-    // photo, no Gemini locate step first, so this is typically the FASTEST
-    // usable reading available and acts as both the speed fallback and the
-    // correctness fallback if locate fails outright.
+    // photo, no Gemini locate step first. Kept as the last-resort fallback
+    // for when the accurate path genuinely fails (box never found, crop
+    // fails, or Vision finds nothing on the crop) — NOT a routine speed
+    // shortcut; see the priority note above.
     const wholeImageVisionPromise = visionOcr.detectText(imageBase64).catch((err) => {
         console.warn('[GEMINI] Whole-image Vision OCR failed:', err.message);
         return null;
@@ -810,19 +818,26 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // The more ACCURATE path — isolate the display, upscale it, then read it
     // with Vision — wrapped as one promise so it can be raced against a hard
     // time budget below instead of being awaited step-by-step with no limit.
+    // Per-stage timestamps are logged so a slow real-world run tells us
+    // exactly which stage to fix instead of just "it was slow somewhere."
     const accuratePathPromise = (async () => {
         const locateImg = await shrinkForLocate(imageBase64, mimeType);
+        const tLocateStart = Date.now();
         const box = await locateDisplayBox(locateImg, mimeType);
+        console.log(`[GEMINI] Locate step took ${Date.now() - tLocateStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
         if (!box) return null;
 
+        const tCropStart = Date.now();
         const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
+        console.log(`[GEMINI] Crop step took ${Date.now() - tCropStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
         if (!croppedBase64) return null;
 
         // Kicked off together but not awaited together — the metadata call
         // (unit label / which-display reasoning) is non-essential and has
         // safe defaults below, so it shouldn't hold up the weight itself.
+        const tVisionStart = Date.now();
         const visionPromise = visionOcr.detectText(croppedBase64);
         const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
             console.warn('[GEMINI] Metadata read on crop failed:', err.message);
@@ -830,6 +845,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         });
 
         const visionText = await visionPromise;
+        console.log(`[GEMINI] Vision-on-crop step took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
         const visionWeight = visionOcr.extractWeightNumber(visionText);
         if (visionWeight == null) return null;
@@ -839,7 +855,13 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         return null;
     });
 
-    const ACCURATE_PATH_BUDGET_MS = Number(process.env.ACCURATE_PATH_BUDGET_MS) || 4000;
+    // Widened from 4000ms after the 2026-08-10 test above showed the accurate
+    // path missing that budget and falling back to an ambiguous whole-image
+    // read on a photo with two displays in frame — per Apsara, a wrong/
+    // ambiguous number is worse than the extra latency. Still capped (not
+    // unbounded) so a genuinely hung network call can't stall the response
+    // forever; env-overridable for tuning without a redeploy.
+    const ACCURATE_PATH_BUDGET_MS = Number(process.env.ACCURATE_PATH_BUDGET_MS) || 9000;
     const accurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_BUDGET_MS, 'Locate+crop accurate path');
     console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'ready' : 'not ready in time'} at ${elapsed()}`);
 
@@ -857,6 +879,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
             displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
             raw_text: `${accurate.visionText} (Cloud Vision OCR)${disagreement}`,
+            ambiguous: false,
         };
     }
 
@@ -882,6 +905,15 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             weight_unit: 'lb',
             displays_seen: `Cloud Vision OCR read of the full photo (no display could be located/cropped in time)${ambiguityNote}`,
             raw_text: `${wholeVisionText} (Cloud Vision OCR, whole image)${ambiguityNote}`,
+            // Explicit boolean, not just text buried in raw_text/displays_seen —
+            // added after discovering the caller (mobile-app + dashboard
+            // processWeightImage) only ever showed a generic "check it matches
+            // the scale" message on-screen and logged raw_text/displays_seen to
+            // the browser console only, which nobody at a yard station is going
+            // to open. The frontend now checks this field directly to show a
+            // loud, distinct on-screen warning instead of a message a busy
+            // operator can tune out.
+            ambiguous: !!wholeVisionResult.ambiguous,
         };
     }
 
