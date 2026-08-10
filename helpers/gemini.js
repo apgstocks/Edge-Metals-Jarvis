@@ -460,7 +460,7 @@ async function locateRedDisplayByPixels(imageBase64) {
             .raw()
             .toBuffer({ resolveWithObject: true });
         const { width: w, height: h, channels } = info;
-        if (!w || !h) return null;
+        if (!w || !h) { console.warn('[GEMINI] Pixel locate: image had no dimensions'); return null; }
 
         const mask = new Uint8Array(w * h);
         let totalLit = 0;
@@ -472,6 +472,11 @@ async function locateRedDisplayByPixels(imageBase64) {
                 if (r > 140 && (r - g) > 60 && (r - b) > 60) { mask[y * w + x] = 1; totalLit++; }
             }
         }
+        // Always-on (not gated behind DEBUG_WEIGHT_RAW) for the same reason
+        // the locate-step logging below is always-on: this is exactly the
+        // kind of "why did it fall back" question that was previously
+        // unanswerable from the logs. Low-volume (once per photo).
+        console.log(`[GEMINI] Pixel locate: ${totalLit} lit px of ${w * h} (${(totalLit / (w * h) * 100).toFixed(2)}%), need >=0.3%`);
         if (totalLit < w * h * 0.003) return null; // essentially nothing red in frame at all
 
         // Dilate by R pixels so a dot-matrix digit's individually-lit dots
@@ -526,17 +531,21 @@ async function locateRedDisplayByPixels(imageBase64) {
                 comps.push({ litCount, minX, maxX, minY, maxY });
             }
         }
-        if (!comps.length) return null;
+        if (!comps.length) { console.warn('[GEMINI] Pixel locate: red pixels found but no connected component formed'); return null; }
         comps.sort((a, b) => b.litCount - a.litCount);
         const best = comps[0];
 
         const boxW = (best.maxX - best.minX) / w, boxH = (best.maxY - best.minY) / h;
+        console.log(`[GEMINI] Pixel locate: best component ${best.litCount}px, box ${boxW.toFixed(3)}x${boxH.toFixed(3)} of frame`);
         // Sanity bounds — a real display fills a meaningful chunk of frame but
         // not almost the whole photo (which would suggest a false-positive on
         // a rust-colored wall/roof rather than a genuine LED cluster). Too
         // small a box is more likely noise (a reflection, a wire) than a
         // readable display.
-        if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) return null;
+        if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) {
+            console.warn(`[GEMINI] Pixel locate: best component's box (${boxW.toFixed(3)}x${boxH.toFixed(3)}) failed sanity bounds, falling back to AI locate`);
+            return null;
+        }
 
         const padX = boxW * 0.08, padY = boxH * 0.25;
         return {
@@ -614,6 +623,18 @@ Give the box some margin around the housing rather than cropping tight to the di
         }
         if (x_max <= x_min || y_max <= y_min) {
             console.warn('[GEMINI] Locate step: model returned an inverted/zero-size box, falling back to whole image:', JSON.stringify(fields));
+            return null;
+        }
+        // Added after a real production log showed "Crop step took 1ms" with
+        // no explanation — the model had returned a box that passed the
+        // checks above (in-range, non-inverted) but was so thin it produced
+        // a crop under cropToDisplay's own 20px minimum, which just returns
+        // null silently. A degenerate near-zero-size box is functionally the
+        // same failure as "no display found" and should be caught here, with
+        // a reason logged, instead of failing several steps later with
+        // nothing to explain why.
+        if ((x_max - x_min) < 0.03 || (y_max - y_min) < 0.01) {
+            console.warn(`[GEMINI] Locate step: model returned a degenerate near-zero-size box (${(x_max - x_min).toFixed(4)} x ${(y_max - y_min).toFixed(4)} of frame), falling back to whole image:`, JSON.stringify(fields));
             return null;
         }
         return { x_min, y_min, x_max, y_max, reason: fields.reason || null };
@@ -758,7 +779,15 @@ async function cropToDisplay(imageBase64, mimeType, box) {
         let right = Math.min(w, Math.round((box.x_max + padX) * w));
         let bottom = Math.min(h, Math.round((box.y_max + padY) * h));
         let cropW = right - left, cropH = bottom - top;
-        if (cropW < 20 || cropH < 20) return null;
+        // Was a silent `return null` — a real production log showed "Crop
+        // step took 1ms" with zero explanation for why the accurate path
+        // failed. Now it says exactly what box produced the too-small crop,
+        // so a degenerate box (from either locate method) is traceable
+        // instead of just vanishing into "not ready in time."
+        if (cropW < 20 || cropH < 20) {
+            console.warn(`[GEMINI] Crop-to-display: box produced a too-small crop (${cropW}x${cropH}px) from box ${JSON.stringify(box)} on a ${w}x${h} image, skipping`);
+            return null;
+        }
 
         const boxCrop = img.clone().extract({ left, top, width: cropW, height: cropH });
         const trim = await trimDeadDigitZones(boxCrop, cropW, cropH);
@@ -1019,7 +1048,13 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // forever; env-overridable for tuning without a redeploy.
     const ACCURATE_PATH_BUDGET_MS = Number(process.env.ACCURATE_PATH_BUDGET_MS) || 9000;
     const accurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_BUDGET_MS, 'Locate+crop accurate path');
-    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'ready' : 'not ready in time'} at ${elapsed()}`);
+    // Wording fixed after a real log showed this saying "not ready in time"
+    // when the path had actually FINISHED (in ~7.6s, under the then-9s
+    // budget) and legitimately failed (a degenerate box produced a too-small
+    // crop) — "not ready in time" implied a timeout that never happened and
+    // pointed the wrong direction. withTimeout() above already logs its own
+    // distinct warning on a genuine timeout; this line just reports outcome.
+    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'succeeded' : 'did not produce a usable reading'} at ${elapsed()}`);
 
     if (accurate && accurate.visionWeight != null) {
         // Grab Gemini's metadata only if it's already finished, capped short
