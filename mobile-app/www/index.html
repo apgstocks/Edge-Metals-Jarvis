@@ -583,19 +583,27 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
       recomputeRowTotals(row);
       syncItemsFromDom();
       if (statusEl) {
-        // result.ambiguous covers TWO distinct cases as of 2026-08-10, so
-        // this message stays deliberately generic rather than naming one:
+        // result.ambiguous covers TWO distinct cases as of 2026-08-10:
         // (1) no display could be isolated in time and this number came
         // from reading the WHOLE photo, which can contain more than one
-        // number (a bench-scale reading, a date, etc.), or (2) a display
-        // WAS isolated and read, but a second independent check (Gemini's
-        // own read of the same crop, and/or the whole photo's own OCR pass)
-        // disagreed with it. Either way the number on screen isn't fully
-        // trusted — the generic reminder below gets shown on every single
-        // read and is easy to tune out, so an ambiguous read needs to look
-        // and read differently or it's not really a warning at all.
+        // number (a bench-scale reading, a date, etc.) — no specific
+        // alternate number in this case, or (2) a display WAS isolated and
+        // read, but Gemini's own independent read of the SAME crop
+        // disagreed — in which case result.alternate_weight carries
+        // Gemini's actual number, so the message can show BOTH candidates
+        // directly instead of a vague "didn't agree," letting the operator
+        // resolve it with one glance instead of walking back to the scale.
+        // Confirmed live 2026-08-10 on a real photo: Vision hallucinated a
+        // blank cell into "82258," Gemini correctly read the same crop as
+        // "2251" — Vision is NOT universally more accurate than Gemini
+        // across every display type, so this shows both rather than
+        // silently trusting Vision's default.
         if (result.ambiguous) {
-          statusEl.textContent = `⚠ UNSURE — read ${result.weight} ${result.weight_unit || ''}, but a second check didn't confidently agree. Double-check against the scale before saving.`;
+          if (result.alternate_weight != null) {
+            statusEl.textContent = `⚠ TWO DIFFERENT READS — one check says ${result.weight} ${result.weight_unit || ''}, another says ${result.alternate_weight} ${result.weight_unit || ''}. Check the scale and enter the correct value.`;
+          } else {
+            statusEl.textContent = `⚠ UNSURE — read ${result.weight} ${result.weight_unit || ''}, but a second check didn't confidently agree. Double-check against the scale before saving.`;
+          }
           statusEl.style.color = 'var(--status-danger)';
           statusEl.style.fontWeight = '700';
         } else {

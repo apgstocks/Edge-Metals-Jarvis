@@ -1145,9 +1145,23 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // this flag exists to avoid. Left out; Gemini's read of the SAME
         // crop (below) doesn't have this problem since it's looking at the
         // same isolated display, not the whole yard.
+        // NOTE 2026-08-10: "Vision is more reliable than Gemini" is true for
+        // the main dot-matrix vehicle weighbridge display (extensively
+        // tested this session) but NOT universal — confirmed on a real
+        // compact 7-segment "Socome" indicator the same day: Vision
+        // hallucinated a blank, genuinely zero-signal leading cell into an
+        // "8" (raw "82258"), while Gemini's read of the EXACT SAME crop was
+        // correct ("2251"), reproduced live via a direct API call. Neither
+        // engine is universally right — which is exactly why this still
+        // returns Vision's number unchanged (minimizing risk of regressing
+        // the well-tested weighbridge case) but now hands the operator
+        // Gemini's actual alternate number too instead of a vague "didn't
+        // agree," so a real disagreement can be resolved with one glance at
+        // the two candidates instead of walking back out to re-check the
+        // scale from scratch.
         const geminiDisagrees = !!(geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight);
         const disagreement = geminiDisagrees
-            ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
+            ? ` [Gemini read this same crop as ${geminiMeta.weight} instead of ${accurate.visionWeight} — Cloud Vision is used as the default here but is not universally more accurate than Gemini across every display type, see code comment]`
             : '';
         // Flagged to the OPERATOR now (via `ambiguous`), not just buried in
         // a server log nobody at a yard station opens — the whole-image
@@ -1156,13 +1170,14 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // found, a real gap that meant a genuine disagreement between two
         // independent reads never reached the person who could catch it.
         // Fixed 2026-08-10. The dashboard/mobile-app warning text was
-        // updated at the same time — it used to specifically say "read off
-        // the full photo, not a close-up," which would be actively wrong to
-        // show here (a close-up WAS used; it just disagreed with a second
-        // check).
+        // updated at the same time to show BOTH candidate numbers directly
+        // (via the new alternate_weight/alternate_source fields below)
+        // instead of a vague "didn't confidently agree."
         console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${accurate.visionWeight}${disagreement}${geminiDisagrees ? ' — FLAGGED for review' : ''}`);
         return {
             weight: accurate.visionWeight,
+            alternate_weight: geminiDisagrees ? geminiMeta.weight : null,
+            alternate_source: geminiDisagrees ? 'Gemini' : null,
             weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
             displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
             raw_text: `${accurate.visionText} (Cloud Vision OCR)${disagreement}`,
