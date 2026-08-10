@@ -114,7 +114,20 @@ function extractWeightNumber(rawText) {
 // risk (nothing else is in frame), which is why extractWeightNumber is left
 // untouched and still used for the crop path.
 const PLAUSIBLE_LOAD_WEIGHT_MIN = 200;
-const PLAUSIBLE_LOAD_WEIGHT_MAX = 200000;
+// Tightened from 200000 -> 99999, found necessary 2026-08-10 while testing
+// extractWeightNumberFromCrop against real photos: a ghost/dead LED cell
+// misread as a leading "1" glued onto a real "71920" gives "171920", which
+// is STILL under 200,000 — so it passed the plausibility check on its own
+// and the leading-digit-strip logic (which only runs when NOTHING looks
+// plausible) never even triggered. 99999 is set just above the US federal
+// max gross vehicle weight for a standard semi (~80,000 lb) with headroom;
+// every real reading confirmed in this whole debugging session (71920,
+// 81460, 81528, 87520-ish) is comfortably under it. APSARA: if this yard
+// legitimately weighs anything heavier than ~99,999 lb/kg (permitted
+// overweight loads, multi-trailer combos, etc.), raise this — but raising
+// it re-opens the exact collision above, so it should reflect a REAL
+// ceiling for this business, not just "generous."
+const PLAUSIBLE_LOAD_WEIGHT_MAX = 99999;
 
 // Returns { weight, ambiguous, candidates } instead of a bare number so the
 // caller can decide how much to trust it. `ambiguous: true` means more than
