@@ -727,21 +727,36 @@ function voteOnWeightReadings(results) {
     return winner;
 }
 
-// Public entry point. Tries locate-crop-zoom first (stage 1+1.5); once
-// there's a clean crop, the DIGITS come from Cloud Vision OCR (a purpose-
-// built character-recognition model — deterministic, verified live to read
-// the exact same crop correctly on every call, unlike Gemini which flipped
-// between right and wrong on repeat calls against an identical image).
-// Gemini still runs once on the same crop, purely for metadata (unit,
-// which-display reasoning) and as the fallback path if Vision OCR isn't
-// available (API not enabled, keyfile missing, network error, etc.) — in
-// that case it degrades to the 3-way self-consistency vote from before.
-// If locating/cropping doesn't happen at all (sharp missing, no display
-// found, crop errors), falls straight back to the original single-pass
-// whole-image Gemini read — so all of this can only add a chance of a
-// better reading, never remove the pre-existing behavior.
+// Public entry point. Cloud Vision OCR is the PRIMARY, most trustworthy
+// source of the actual digits (a purpose-built character-recognition model —
+// deterministic, verified live to read the exact same image correctly on
+// every call, unlike Gemini which flipped between right and wrong on repeat
+// calls against an identical image) — this is business-critical (a wrong
+// weight is a wrong invoice), so Vision is kicked off on the WHOLE original
+// photo immediately, independent of everything else below, rather than
+// waiting on the locate step to succeed first. That independence matters:
+// locate is its own Gemini call trying to find a bounding box, and it can
+// fail (wrong display type, model having an off day, etc.) — when it does,
+// Vision on the whole image is still there as a real OCR reading instead of
+// silently dropping all the way down to the old, unreliable whole-image
+// Gemini guess.
+// The locate-crop-zoom path still runs in parallel: a tight, upscaled crop
+// gives Vision a cleaner shot at a small/distant display, so when locate DOES
+// succeed, that cropped Vision read is preferred as the more accurate one.
+// Only if BOTH the cropped and whole-image Vision attempts come back empty
+// (Vision API down/not enabled, or genuinely no text anywhere) does this
+// fall back to Gemini's own self-consistency vote, and finally the original
+// single-pass whole-image Gemini read as the last resort.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
+
+    // Started now, awaited later — runs the entire time the locate/crop
+    // stage below is working, so it's typically already resolved by the
+    // time it's needed and adds no extra latency in the common case.
+    const wholeImageVisionPromise = visionOcr.detectText(imageBase64).catch((err) => {
+        console.warn('[GEMINI] Whole-image Vision OCR failed:', err.message);
+        return null;
+    });
 
     const locateImg = await shrinkForLocate(imageBase64, mimeType);
     const box = await locateDisplayBox(locateImg, mimeType);
@@ -813,12 +828,42 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                     console.log(`[GEMINI] Weight read via crop-zoom + vote pass (locate reason: "${box.reason || ''}"): ${winner.weight}`);
                     return winner;
                 }
-                console.warn('[GEMINI] Crop-zoom pass returned no confident weight, falling back to whole image');
+                console.warn('[GEMINI] Crop-zoom pass returned no confident weight, falling back to whole-image Vision OCR');
             } catch (err) {
-                console.warn('[GEMINI] Crop-zoom read pass failed, falling back to whole image:', err.message);
+                console.warn('[GEMINI] Crop-zoom read pass failed, falling back to whole-image Vision OCR:', err.message);
             }
         }
     }
+
+    // Locate/crop didn't produce a Vision reading (box not found, crop
+    // failed, or the crop's Vision read came back empty) — try the
+    // whole-image Vision OCR kicked off at the top of this function before
+    // ever touching the old, less reliable whole-image Gemini read. This is
+    // the path that matters most right now: locate has been failing to find
+    // a display on real yard photos, which used to mean Vision never ran at
+    // all — this is the fix for that.
+    const wholeVisionText = await wholeImageVisionPromise;
+    // A whole, uncropped photo can legitimately contain more than one number
+    // (a bench-scale item reading, a date, a truck ID) — extractWeightNumber's
+    // "longest digit run" heuristic is only safe on an isolated crop, so the
+    // whole-image path uses extractPlausibleWeightFromFullImage instead, which
+    // constrains to a plausible truck-load range and flags ambiguity rather
+    // than silently guessing. See helpers/visionOcr.js for the full reasoning.
+    const wholeVisionResult = visionOcr.extractPlausibleWeightFromFullImage(wholeVisionText);
+    if (wholeVisionResult.weight != null) {
+        const ambiguityNote = wholeVisionResult.ambiguous
+            ? ` [more than one plausible weight-sized number was found in the full photo (${wholeVisionResult.candidates.join(', ')}) — no display could be isolated first, so this is the largest of them; PLEASE VERIFY against the actual weighbridge display before trusting it]`
+            : '';
+        console.log(`[GEMINI] Weight read via Cloud Vision OCR (whole image, no display located/cropped): ${wholeVisionResult.weight}${wholeVisionResult.ambiguous ? ' — AMBIGUOUS, multiple candidates, flagged for review' : ''}`);
+        return {
+            weight: wholeVisionResult.weight,
+            weight_unit: 'lb',
+            displays_seen: `Cloud Vision OCR read of the full photo (no display could be located/cropped first)${ambiguityNote}`,
+            raw_text: `${wholeVisionText} (Cloud Vision OCR, whole image)${ambiguityNote}`,
+        };
+    }
+
+    console.warn('[GEMINI] Vision OCR found nothing on the whole image either, falling back to Gemini single-pass read (last resort)');
     return readWeightSinglePass(imageBase64, mimeType, retries);
 }
 

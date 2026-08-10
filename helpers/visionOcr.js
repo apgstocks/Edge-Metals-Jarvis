@@ -100,4 +100,38 @@ function extractWeightNumber(rawText) {
     return Number.isFinite(n) ? n : null;
 }
 
-module.exports = { detectText, extractWeightNumber };
+// Plausible weight bounds for a scrap-metal truck LOAD (not a single item)
+// — matches the domain knowledge already baked into the Gemini weight-
+// reading prompt in helpers/gemini.js ("a scrap-metal truck load is
+// realistically in the thousands to tens of thousands of lb/kg, not double
+// or triple digits"). Used ONLY when reading a WHOLE, uncropped yard photo,
+// where the frame can legitimately contain other numbers that aren't the
+// load weight at all: a compact bench/platform scale reading for a single
+// item, a date/timestamp, a truck ID, a phone number on a sign. A naive
+// "grab the longest digit run in the whole photo" pick (extractWeightNumber
+// below) can silently latch onto one of those instead of the actual
+// weighbridge display — on a tightly cropped display image that's not a
+// risk (nothing else is in frame), which is why extractWeightNumber is left
+// untouched and still used for the crop path.
+const PLAUSIBLE_LOAD_WEIGHT_MIN = 200;
+const PLAUSIBLE_LOAD_WEIGHT_MAX = 200000;
+
+// Returns { weight, ambiguous, candidates } instead of a bare number so the
+// caller can decide how much to trust it. `ambiguous: true` means more than
+// one number in the photo fell inside the plausible load-weight range (e.g.
+// a bench-scale item reading alongside the real weighbridge reading) — in
+// that case `weight` is just the largest candidate (a full vehicle load is
+// virtually always heavier than a bench-scale item weight), and the caller
+// should surface that uncertainty to a human rather than trust it silently.
+function extractPlausibleWeightFromFullImage(rawText) {
+    if (!rawText) return { weight: null, ambiguous: false, candidates: [] };
+    const matches = rawText.match(/\d+(\.\d+)?/g) || [];
+    const numeric = matches.map((m) => parseFloat(m)).filter((n) => Number.isFinite(n));
+    const inRange = numeric.filter((n) => n >= PLAUSIBLE_LOAD_WEIGHT_MIN && n <= PLAUSIBLE_LOAD_WEIGHT_MAX);
+    if (inRange.length === 0) return { weight: null, ambiguous: false, candidates: numeric };
+    const uniqueInRange = [...new Set(inRange)];
+    if (uniqueInRange.length === 1) return { weight: uniqueInRange[0], ambiguous: false, candidates: numeric };
+    return { weight: Math.max(...uniqueInRange), ambiguous: true, candidates: numeric };
+}
+
+module.exports = { detectText, extractWeightNumber, extractPlausibleWeightFromFullImage };
