@@ -594,14 +594,14 @@ function createApi() {
                 const tag = `${record.id}-item${i}`;
                 if (input.gross_photo_base64) {
                     try {
-                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime);
+                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime, undefined, record.id);
                         item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
                     } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
                 }
                 if (input.tare_photo_base64) {
                     try {
-                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime);
+                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime, undefined, record.id);
                         item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
                     } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }
@@ -645,14 +645,14 @@ function createApi() {
                 const tag = `${record.id}-item${i}`;
                 if (input.gross_photo_base64) {
                     try {
-                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime);
+                        const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime, undefined, record.id);
                         item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
                     } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
                 }
                 if (input.tare_photo_base64) {
                     try {
-                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime);
+                        const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime, undefined, record.id);
                         item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
                     } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }

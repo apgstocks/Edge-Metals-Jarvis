@@ -162,6 +162,56 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
     return created.data;
 }
 
+// Resolved load-subfolder IDs, cached per process lifetime — a single load
+// triggers 2-3 uploads in quick succession (gross photo, tare photo, PDF),
+// and without this every one of them would re-run a Drive files.list lookup
+// for the same folder. Not persisted across restarts; worst case after a
+// restart is one extra lookup per load, never a duplicate folder (the lookup
+// itself is what prevents that).
+const loadSubfolderCache = new Map();
+
+// Finds (or creates) a subfolder named exactly `loadId` directly under
+// `parentId` — per Apsara, every load's gross/tare photos + PDF should land
+// together in their own folder inside Yard, not all loads dumped flat into
+// one folder. Idempotent: safe to call for the same load repeatedly (e.g.
+// gross photo then tare photo then PDF, all for "EDGE_05") — finds the
+// already-created subfolder on the 2nd/3rd call instead of making a
+// duplicate. Returns parentId unchanged (never throws) if the lookup/create
+// itself fails, so a Drive hiccup degrades to "flat in Yard" instead of
+// blocking the upload entirely.
+async function getOrCreateLoadSubfolder(drive, parentId, loadId) {
+    const cacheKey = `${parentId}::${loadId}`;
+    if (loadSubfolderCache.has(cacheKey)) return loadSubfolderCache.get(cacheKey);
+    try {
+        const escapedId = loadId.replace(/'/g, "\\'");
+        const list = await drive.files.list({
+            q: `'${parentId}' in parents and name = '${escapedId}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+            fields: 'files(id, name)',
+            pageSize: 1,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+            corpora: 'allDrives',
+        });
+        let folderId;
+        if (list.data.files && list.data.files.length > 0) {
+            folderId = list.data.files[0].id;
+        } else {
+            const created = await drive.files.create({
+                requestBody: { name: loadId, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+                fields: 'id',
+                supportsAllDrives: true,
+            });
+            folderId = created.data.id;
+            console.log(`[DRIVE] Created load subfolder "${loadId}" (${folderId})`);
+        }
+        loadSubfolderCache.set(cacheKey, folderId);
+        return folderId;
+    } catch (err) {
+        console.warn(`[DRIVE] Could not find/create subfolder for load "${loadId}", uploading to the parent folder instead:`, err.message);
+        return parentId;
+    }
+}
+
 // ── Upload a yard scale-ticket photo to Shared Drive ──────────────────────────
 // Conceptually separate from booking PDFs (not tied to a booking number, no
 // overwrite-in-place semantics — every ticket is its own file, named by its
@@ -171,8 +221,12 @@ async function uploadPdfToDrive(bkgNo, pdfBase64, originalFilename) {
 // GDRIVE_UPLOAD_FOLDER_ID. Fails soft is the CALLER's responsibility here
 // (see workflow/actions.js's yardScaleTicketReceived) — the extracted fields
 // and the WhatsApp reply must never block on Drive being reachable.
+// `loadId`, when passed, files this into a per-load subfolder (see
+// getOrCreateLoadSubfolder above) instead of flat in the parent folder —
+// optional so workflow/actions.js's standalone WhatsApp scale-ticket flow
+// (which has no "load" concept at all) keeps its existing flat behavior.
 // Returns { fileId, name, webViewLink } or throws.
-async function uploadScaleTicketImage(ticketId, imageBase64, mimeType, originalFilename) {
+async function uploadScaleTicketImage(ticketId, imageBase64, mimeType, originalFilename, loadId) {
     if (!ticketId) throw new Error('ticketId required');
     if (!imageBase64) throw new Error('image data required');
 
@@ -182,8 +236,9 @@ async function uploadScaleTicketImage(ticketId, imageBase64, mimeType, originalF
     const ext  = (mimeType || '').includes('png') ? 'png' : 'jpg';
     const name = `${ticketId}.${ext}`;
 
-    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    let parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
     if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+    if (loadId) parentId = await getOrCreateLoadSubfolder(drive, parentId, loadId);
 
     const created = await drive.files.create({
         requestBody: { name, parents: [parentId] },
@@ -265,8 +320,12 @@ async function uploadLoadPdf(loadId, pdfBuffer, filenameOverride) {
     const { Readable } = require('stream');
     const name = filenameOverride || `${loadId}.pdf`;
 
-    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    let parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
     if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+    // Same subfolder the gross/tare photos for this load land in (see
+    // getOrCreateLoadSubfolder above) — the PDF and its source photos end up
+    // together in one place per load instead of split across folders.
+    parentId = await getOrCreateLoadSubfolder(drive, parentId, loadId);
 
     const created = await drive.files.create({
         requestBody: { name, parents: [parentId] },
