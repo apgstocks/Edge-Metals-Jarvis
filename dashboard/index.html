@@ -2463,6 +2463,26 @@ function renderLoads(loads) {
   wireLoadsEvents();
 }
 
+// Mirrors validateLoadForSave in helpers/loads.js — per Apsara, once an item
+// row has any data in it, description + gross + tare are all mandatory
+// before Save works at all (no partial "gross now, tare later" saves). This
+// client-side copy exists purely for instant feedback (no round trip); the
+// server enforces the same rule as the real, non-bypassable gate. A row
+// with nothing filled in at all is left alone — it's an unused spare row,
+// not "an item" yet, same as the existing filter that drops it before send.
+function validateItemsBeforeSave(items) {
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const hasAnyData = it.description || it.gross_weight || it.tare_weight || it.price;
+    if (!hasAnyData) continue;
+    const label = it.description ? `"${it.description}"` : `#${i + 1}`;
+    if (!it.description || !String(it.description).trim()) return `Item ${label}: description is required.`;
+    if (it.gross_weight === null || it.gross_weight === undefined || it.gross_weight === '' || !isFinite(parseFloat(it.gross_weight))) return `Item ${label}: gross weight is required.`;
+    if (it.tare_weight === null || it.tare_weight === undefined || it.tare_weight === '' || !isFinite(parseFloat(it.tare_weight))) return `Item ${label}: tare weight is required.`;
+  }
+  return null;
+}
+
 function wireLoadsEvents() {
   $('btnAddLoad').addEventListener('click', () => {
     resetLoadModal();
@@ -2486,6 +2506,10 @@ function wireLoadsEvents() {
     syncItemsFromDom();
     const desc = $('ld_desc').value.trim();
     $('loadModalErr').textContent = '';
+
+    const validationError = validateItemsBeforeSave(currentLoadItems);
+    if (validationError) { $('loadModalErr').textContent = validationError; return; }
+
     const btn = $('btnSaveLoad');
     const isEdit = !!editingLoadId;
     btn.disabled = true; btn.textContent = 'Saving…';

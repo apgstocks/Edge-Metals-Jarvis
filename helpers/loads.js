@@ -69,7 +69,46 @@ function nextLoadId(loads) {
     return `EDGE_${String(max + 1).padStart(2, '0')}`;
 }
 
+// Enforced at save time for BOTH create and edit — per Apsara, once an item
+// row has any data in it at all, description + gross weight + tare weight
+// are all mandatory before the load can be saved. This is a hard block, not
+// a warning: she explicitly confirmed a load should NOT be saveable with an
+// item that's only gross-weighed and waiting on tare (e.g. truck hasn't
+// returned yet) — that item must be completed (or removed) before Save
+// works at all, no partial saves. Seller is always the fixed constant sent
+// by both dashboard and mobile-app clients, but is checked here too as a
+// real, non-bypassable gate rather than trusted from the request body —
+// this function is the single choke point both POST /api/loads and
+// PUT /api/loads/:id run through (via addLoad/editLoad below), so any
+// current or future client hitting the API directly is covered too, not
+// just the two UIs that already validate this client-side first.
+// A row with NOTHING filled in at all is treated as an unused spare row
+// (e.g. "+ Add item" clicked by mistake) and silently skipped, same as the
+// existing filter that drops fully-blank items before they're saved — it's
+// not "an item" yet, so it isn't held to the same completeness bar.
+function validateLoadForSave(entry) {
+    if (!entry.seller || !String(entry.seller).trim()) {
+        throw new Error('Validation: seller is required.');
+    }
+    const items = Array.isArray(entry.items) ? entry.items : [];
+    items.forEach((it, i) => {
+        const hasAnyData = it.description || it.gross_weight || it.tare_weight || it.price;
+        if (!hasAnyData) return;
+        const label = it.description ? `"${it.description}"` : `#${i + 1}`;
+        if (!it.description || !String(it.description).trim()) {
+            throw new Error(`Validation: item ${label} is missing a description.`);
+        }
+        if (it.gross_weight === null || it.gross_weight === undefined || it.gross_weight === '' || !isFinite(parseFloat(it.gross_weight))) {
+            throw new Error(`Validation: item ${label} is missing a gross weight.`);
+        }
+        if (it.tare_weight === null || it.tare_weight === undefined || it.tare_weight === '' || !isFinite(parseFloat(it.tare_weight))) {
+            throw new Error(`Validation: item ${label} is missing a tare weight.`);
+        }
+    });
+}
+
 async function addLoad(entry) {
+    validateLoadForSave(entry);
     const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
     const totals = sumItems(items);
 
@@ -124,6 +163,7 @@ async function updateLoad(id, patch) {
 // still current would be actively misleading — the card falls back to a
 // fresh "Generate PDF" button until it's regenerated.
 async function editLoad(id, entry) {
+    validateLoadForSave(entry);
     const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
     const totals = sumItems(items);
 

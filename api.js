@@ -612,8 +612,15 @@ function createApi() {
             const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
             res.json({ ok: true, load: finalLoad });
         } catch (err) {
-            console.error('[API] create load failed:', err.message);
-            res.status(500).json({ error: err.message });
+            // validateLoadForSave (helpers/loads.js) throws a plain Error
+            // prefixed "Validation:" for a missing mandatory field — that's a
+            // client mistake (400), not a server fault (500), so it's
+            // surfaced distinctly here for correct status-code semantics/
+            // monitoring, even though both paths return the same shape to
+            // the UI, which already displays err.message either way.
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] create load failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
         }
     });
     // Full edit (dashboard's Edit button — date/seller/description/items,
@@ -663,8 +670,9 @@ function createApi() {
             const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
             res.json({ ok: true, load: finalLoad });
         } catch (err) {
-            console.error('[API] edit load failed:', err.message);
-            res.status(500).json({ error: err.message });
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] edit load failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
         }
     });
     // Deletes the loads.json record only — see helpers/loads.js's deleteLoad
