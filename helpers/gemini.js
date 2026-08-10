@@ -1160,27 +1160,55 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // the two candidates instead of walking back out to re-check the
         // scale from scratch.
         const geminiDisagrees = !!(geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight);
-        const disagreement = geminiDisagrees
-            ? ` [Gemini read this same crop as ${geminiMeta.weight} instead of ${accurate.visionWeight} — Cloud Vision is used as the default here but is not universally more accurate than Gemini across every display type, see code comment]`
-            : '';
-        // Flagged to the OPERATOR now (via `ambiguous`), not just buried in
-        // a server log nobody at a yard station opens — the whole-image
-        // fallback path below already got this treatment; this branch had
-        // `ambiguous` hardcoded to false regardless of what was actually
-        // found, a real gap that meant a genuine disagreement between two
-        // independent reads never reached the person who could catch it.
-        // Fixed 2026-08-10. The dashboard/mobile-app warning text was
-        // updated at the same time to show BOTH candidate numbers directly
-        // (via the new alternate_weight/alternate_source fields below)
-        // instead of a vague "didn't confidently agree."
-        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${accurate.visionWeight}${disagreement}${geminiDisagrees ? ' — FLAGGED for review' : ''}`);
+
+        // Routing by display TYPE, added 2026-08-10 after confirming — with
+        // two independent real photos, not a guess — that which engine to
+        // trust flips depending on what kind of display is in frame:
+        //   - "large overhead dot-matrix vehicle weighbridge display" ->
+        //     Vision wins (extensively verified all session; Gemini
+        //     flip-flops on this exact display type — reconfirmed again
+        //     TODAY on a real weighbridge photo: Gemini misread it as
+        //     87460 when the true value, verified by eye, is 81460).
+        //   - "single compact weighing indicator display" (a Socome-style
+        //     7-segment unit) -> Gemini wins — Vision hallucinated a
+        //     genuinely blank, zero-signal leading cell into a phantom "8"
+        //     ("82258"/"8225") while Gemini correctly read the same crop as
+        //     "2251", reproduced live via direct API calls.
+        // The classification text comes for free: readWeightSinglePass's
+        // own prompt already asks Gemini to identify which kind of display
+        // it's looking at (weighbridge vs compact bench/platform
+        // indicator) as part of every single crop read, specifically to
+        // help IT avoid picking the wrong display in a busy photo — this
+        // just reuses that existing signal instead of building a whole new
+        // classifier. Matched conservatively (needs an explicit "compact"
+        // or "indicator" mention and NOT "weighbridge") so an ambiguous or
+        // unclear description falls through to the existing, well-tested
+        // Vision-default behavior rather than guessing.
+        const seenText = (geminiMeta && geminiMeta.displays_seen || '').toLowerCase();
+        const looksCompactIndicator = /\b(compact|indicator|bench|platform)\b/.test(seenText) && !seenText.includes('weighbridge');
+        const preferGemini = looksCompactIndicator && geminiMeta && geminiMeta.weight != null;
+
+        const primaryWeight = preferGemini ? geminiMeta.weight : accurate.visionWeight;
+        const altWeight = preferGemini ? accurate.visionWeight : (geminiDisagrees ? geminiMeta.weight : null);
+        const altSource = preferGemini ? 'Cloud Vision' : (geminiDisagrees ? 'Gemini' : null);
+        const routingNote = preferGemini
+            ? ` [display classified as a compact indicator ("${geminiMeta.displays_seen}") — Gemini used as primary here instead of Vision, which hallucinates on this display type; Vision's read was ${accurate.visionWeight}]`
+            : (geminiDisagrees ? ` [Gemini read this same crop as ${geminiMeta.weight} instead of ${accurate.visionWeight} — Cloud Vision kept as primary since this looks like the main weighbridge display, where Vision has been the reliable one all session]` : '');
+
+        // Flagged to the OPERATOR now (via `ambiguous`) whenever the two
+        // readings disagree at all, REGARDLESS of which one gets used as
+        // primary — routing by display type reduces how often the WRONG
+        // number gets shown, it doesn't guarantee correctness on its own
+        // (two data points isn't a lot), so this still surfaces both
+        // candidates rather than silently trusting the routed choice.
+        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${primaryWeight}${routingNote}${geminiDisagrees ? ' — FLAGGED for review' : ''}`);
         return {
-            weight: accurate.visionWeight,
-            alternate_weight: geminiDisagrees ? geminiMeta.weight : null,
-            alternate_source: geminiDisagrees ? 'Gemini' : null,
+            weight: primaryWeight,
+            alternate_weight: altWeight,
+            alternate_source: altSource,
             weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
             displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-            raw_text: `${accurate.visionText} (Cloud Vision OCR)${disagreement}`,
+            raw_text: `${accurate.visionText} (Cloud Vision OCR)${routingNote}`,
             ambiguous: geminiDisagrees,
         };
     }
