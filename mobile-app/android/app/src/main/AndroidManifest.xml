@@ -38,4 +38,17 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Without this, the WebView's "Take Photo" file-input path (the
+         hidden <input type="file" capture="environment"> in index.html)
+         silently fails to hand off to the camera app — it's not a JS bug,
+         Android just refuses the camera intent with no permission
+         declared. This worked fine when testing the same page in the
+         phone's regular browser (Chrome) because Chrome already carries
+         its own camera permission; this app's embedded WebView is a
+         separate sandboxed context and needs its own. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- required="false" so the app still installs on a camera-less
+         device (e.g. a tablet used only for reviewing loads) — it just
+         won't be able to use the camera capture button there. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>
