@@ -363,6 +363,38 @@ function isModelUnavailableError(err) {
     return /404|not found|no longer available|not supported/i.test(err.message || '');
 }
 
+// Locate only needs a coarse bounding box (4 fractions + a one-line reason)
+// — a categorically easier task than the precise digit-legibility reading
+// getVisionModelName() (gemini-3.6-flash) was specifically benchmarked and
+// chosen for (~12-16s/request — see the comment above readWeightSinglePass).
+// Running that same slow model for locate was the real reason "under 10s"
+// was never achievable: locate sat fully synchronous on the critical path
+// BEFORE Vision (the actual primary source of the weight number) ever got a
+// crop to read. Locate uses the lighter, already-confirmed-working
+// FALLBACK_VISION_MODEL instead — finding a large, visually distinct
+// display region doesn't need the heaviest available model; only reading
+// its exact digits does, and Cloud Vision OCR (not Gemini) does that job
+// now. Overridable via env in case live testing shows this model missing
+// boxes it used to find.
+const LOCATE_MODEL = process.env.GEMINI_LOCATE_MODEL || FALLBACK_VISION_MODEL;
+
+// Generic timeout wrapper so one slow leg of the pipeline can never hold the
+// whole response hostage. Doesn't cancel the underlying call (the Gemini/
+// Vision SDK calls here don't expose an abort signal) — it just stops US
+// waiting on it past `ms`. If it resolves late, that late result is simply
+// never used for this request; a warning is logged so a pattern of frequent
+// timeouts is visible instead of silently eating latency budget forever.
+function withTimeout(promise, ms, label) {
+    let timedOut = false;
+    const timeout = new Promise((resolve) => {
+        setTimeout(() => { timedOut = true; resolve(null); }, ms);
+    });
+    return Promise.race([promise, timeout]).then((result) => {
+        if (timedOut) console.warn(`[GEMINI] ${label} exceeded its ${ms}ms budget, moving on without it`);
+        return result;
+    });
+}
+
 // Locate-only shrink — per Apsara, the whole read was taking too long
 // (>10s). The client already downscales to 1600px before upload, but that's
 // sized for actually READING digits; locateDisplayBox only needs to find a
@@ -419,7 +451,7 @@ Give the box some margin around the housing rather than cropping tight to the di
 
     try {
         const model = getClient().getGenerativeModel({
-            model: getVisionModelName(),
+            model: LOCATE_MODEL,
             generationConfig: { temperature: 0, responseMimeType: 'application/json' },
         });
         const result = await model.generateContent([
@@ -691,6 +723,10 @@ Never refuse, never return prose outside the JSON.`;
     return { weight: null, weight_unit: null, raw_text: null };
 }
 
+// NOTE: no longer called from extractWeightFromImage's main chain (removed
+// when the fallback order was simplified for speed — see the comment above
+// extractWeightFromImage). Left in place, unexported, in case a slow-but-
+// thorough vote fallback is wanted again later; currently dead code.
 // Self-consistency vote: on a genuinely hard photo (dim, angled, blurry),
 // even a clean, correctly-cropped image with nothing but the right digits in
 // frame still gets misread by the model on some fraction of calls — verified
@@ -732,116 +768,102 @@ function voteOnWeightReadings(results) {
 // deterministic, verified live to read the exact same image correctly on
 // every call, unlike Gemini which flipped between right and wrong on repeat
 // calls against an identical image) — this is business-critical (a wrong
-// weight is a wrong invoice), so Vision is kicked off on the WHOLE original
-// photo immediately, independent of everything else below, rather than
-// waiting on the locate step to succeed first. That independence matters:
-// locate is its own Gemini call trying to find a bounding box, and it can
-// fail (wrong display type, model having an off day, etc.) — when it does,
-// Vision on the whole image is still there as a real OCR reading instead of
-// silently dropping all the way down to the old, unreliable whole-image
-// Gemini guess.
-// The locate-crop-zoom path still runs in parallel: a tight, upscaled crop
-// gives Vision a cleaner shot at a small/distant display, so when locate DOES
-// succeed, that cropped Vision read is preferred as the more accurate one.
-// Only if BOTH the cropped and whole-image Vision attempts come back empty
-// (Vision API down/not enabled, or genuinely no text anywhere) does this
-// fall back to Gemini's own self-consistency vote, and finally the original
-// single-pass whole-image Gemini read as the last resort.
+// weight is a wrong invoice).
+//
+// SPEED: per Apsara, this needs to finish in under 5 seconds. The single
+// biggest cost in the old pipeline was locateDisplayBox running fully
+// synchronously on gemini-3.6-flash (~12-16s/request BY ITSELF, benchmarked
+// above) before Vision ever got a crop to read — that alone made 5s, or even
+// 10s, structurally impossible no matter what ran after it. Two changes fix
+// this:
+//   1. locateDisplayBox now uses the lighter LOCATE_MODEL (see above) instead
+//      of the heavyweight digit-reading model — finding a box is a coarser
+//      task than reading exact digits.
+//   2. The whole locate->crop->Vision-on-crop "accurate path" now runs under
+//      a hard ACCURATE_PATH_BUDGET_MS timeout, racing against the whole-image
+//      Vision OCR call that's kicked off immediately at the top (a single
+//      Vision API call, no Gemini locate step first — much faster on its
+//      own). Whichever is ready first and usable wins; the accurate path is
+//      preferred when it makes the deadline since a tight, upscaled crop is a
+//      cleaner read for a small/distant display, but this function no longer
+//      waits past the budget for it.
+// The old "Gemini self-consistency vote on the crop" fallback (3 more slow
+// Gemini calls) has been dropped from the middle of the chain for the same
+// reason — it only fired when Vision itself had nothing to read, which is
+// rare, and it could add another 12-16s+ on top of everything else. The
+// whole-image Gemini single-pass read remains as the final, rare last resort
+// if BOTH Vision attempts come back empty.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
+    const t0 = Date.now();
+    const elapsed = () => `${Date.now() - t0}ms`;
 
-    // Started now, awaited later — runs the entire time the locate/crop
-    // stage below is working, so it's typically already resolved by the
-    // time it's needed and adds no extra latency in the common case.
+    // Started now, awaited later — a single Vision OCR call on the whole
+    // photo, no Gemini locate step first, so this is typically the FASTEST
+    // usable reading available and acts as both the speed fallback and the
+    // correctness fallback if locate fails outright.
     const wholeImageVisionPromise = visionOcr.detectText(imageBase64).catch((err) => {
         console.warn('[GEMINI] Whole-image Vision OCR failed:', err.message);
         return null;
     });
 
-    const locateImg = await shrinkForLocate(imageBase64, mimeType);
-    const box = await locateDisplayBox(locateImg, mimeType);
-    if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
-    if (box) {
+    // The more ACCURATE path — isolate the display, upscale it, then read it
+    // with Vision — wrapped as one promise so it can be raced against a hard
+    // time budget below instead of being awaited step-by-step with no limit.
+    const accuratePathPromise = (async () => {
+        const locateImg = await shrinkForLocate(imageBase64, mimeType);
+        const box = await locateDisplayBox(locateImg, mimeType);
+        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
+        if (!box) return null;
+
         const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
-        if (croppedBase64) {
-            try {
-                // Kicked off together but NOT awaited together — per Apsara,
-                // the read was taking too long (>10s target). Waiting on
-                // Promise.all([vision, geminiMeta]) meant a fast Vision read
-                // (Vision is the PRIMARY source of the weight number — see
-                // the module comment up top) sat idle behind a slower Gemini
-                // call that only supplies non-essential metadata (unit label,
-                // which-display reasoning, both of which already have safe
-                // defaults below). The .catch() here is attached immediately
-                // so an eventual rejection doesn't surface as an "unhandled
-                // rejection" on the happy path below, where this promise may
-                // never actually get awaited before the response returns.
-                const visionPromise = visionOcr.detectText(croppedBase64);
-                const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
-                    console.warn('[GEMINI] Metadata read on crop failed:', err.message);
-                    return null;
-                });
+        if (!croppedBase64) return null;
 
-                const visionText = await visionPromise;
-                if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
+        // Kicked off together but not awaited together — the metadata call
+        // (unit label / which-display reasoning) is non-essential and has
+        // safe defaults below, so it shouldn't hold up the weight itself.
+        const visionPromise = visionOcr.detectText(croppedBase64);
+        const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
+            console.warn('[GEMINI] Metadata read on crop failed:', err.message);
+            return null;
+        });
 
-                const visionWeight = visionOcr.extractWeightNumber(visionText);
-                if (visionWeight != null) {
-                    // Grab Gemini's metadata ONLY if it's already finished by
-                    // now, capped at a short wait — anything slower than this
-                    // just gets discarded (still resolves harmlessly in the
-                    // background thanks to the .catch() above) rather than
-                    // making the response wait on a call whose result isn't
-                    // needed to answer the actual question (the weight).
-                    const geminiMeta = await Promise.race([
-                        geminiMetaPromise,
-                        new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
-                    ]);
-                    const disagreement = geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== visionWeight
-                        ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
-                        : '';
-                    const result = {
-                        weight: visionWeight,
-                        weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
-                        displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${box.reason || ''}")`,
-                        raw_text: `${visionText} (Cloud Vision OCR)${disagreement}`,
-                    };
-                    console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary): ${visionWeight}${disagreement ? ' — disagreed with Gemini' : ''}`);
-                    return result;
-                }
+        const visionText = await visionPromise;
+        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
+        const visionWeight = visionOcr.extractWeightNumber(visionText);
+        if (visionWeight == null) return null;
+        return { visionWeight, visionText, box, geminiMetaPromise };
+    })().catch((err) => {
+        console.warn('[GEMINI] Crop-zoom accurate path failed:', err.message);
+        return null;
+    });
 
-                // Vision OCR gave nothing usable (API not enabled/reachable, or
-                // genuinely no text detected) — fall back to the Gemini-only
-                // self-consistency vote. Reuse the geminiMeta call already made
-                // above as vote #1 instead of throwing it away — fully awaited
-                // here since we now actually need its result, not just its
-                // fast-path presence.
-                console.warn('[GEMINI] Vision OCR unavailable or unusable, falling back to Gemini self-consistency vote');
-                const geminiMeta = await geminiMetaPromise;
-                const votes = [geminiMeta, ...await Promise.all([
-                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
-                    readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }),
-                ])];
-                const winner = voteOnWeightReadings(votes);
-                if (winner && winner.weight != null) {
-                    console.log(`[GEMINI] Weight read via crop-zoom + vote pass (locate reason: "${box.reason || ''}"): ${winner.weight}`);
-                    return winner;
-                }
-                console.warn('[GEMINI] Crop-zoom pass returned no confident weight, falling back to whole-image Vision OCR');
-            } catch (err) {
-                console.warn('[GEMINI] Crop-zoom read pass failed, falling back to whole-image Vision OCR:', err.message);
-            }
-        }
+    const ACCURATE_PATH_BUDGET_MS = Number(process.env.ACCURATE_PATH_BUDGET_MS) || 4000;
+    const accurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_BUDGET_MS, 'Locate+crop accurate path');
+    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'ready' : 'not ready in time'} at ${elapsed()}`);
+
+    if (accurate && accurate.visionWeight != null) {
+        // Grab Gemini's metadata only if it's already finished, capped short
+        // — a late result is discarded here but still resolves harmlessly in
+        // the background thanks to the .catch() above.
+        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, 800, 'Gemini crop metadata (non-essential)');
+        const disagreement = geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight
+            ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
+            : '';
+        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${accurate.visionWeight}${disagreement ? ' — disagreed with Gemini' : ''}`);
+        return {
+            weight: accurate.visionWeight,
+            weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
+            displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
+            raw_text: `${accurate.visionText} (Cloud Vision OCR)${disagreement}`,
+        };
     }
 
-    // Locate/crop didn't produce a Vision reading (box not found, crop
-    // failed, or the crop's Vision read came back empty) — try the
-    // whole-image Vision OCR kicked off at the top of this function before
-    // ever touching the old, less reliable whole-image Gemini read. This is
-    // the path that matters most right now: locate has been failing to find
-    // a display on real yard photos, which used to mean Vision never ran at
-    // all — this is the fix for that.
+    // Accurate path didn't produce a usable Vision reading within budget
+    // (locate too slow/failed, crop failed, or the crop's Vision read came
+    // back empty) — use the whole-image Vision OCR kicked off at the very
+    // top instead of waiting any further.
     const wholeVisionText = await wholeImageVisionPromise;
     // A whole, uncropped photo can legitimately contain more than one number
     // (a bench-scale item reading, a date, a truck ID) — extractWeightNumber's
@@ -854,16 +876,16 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         const ambiguityNote = wholeVisionResult.ambiguous
             ? ` [more than one plausible weight-sized number was found in the full photo (${wholeVisionResult.candidates.join(', ')}) — no display could be isolated first, so this is the largest of them; PLEASE VERIFY against the actual weighbridge display before trusting it]`
             : '';
-        console.log(`[GEMINI] Weight read via Cloud Vision OCR (whole image, no display located/cropped): ${wholeVisionResult.weight}${wholeVisionResult.ambiguous ? ' — AMBIGUOUS, multiple candidates, flagged for review' : ''}`);
+        console.log(`[GEMINI] Weight read via Cloud Vision OCR (whole image) in ${elapsed()}: ${wholeVisionResult.weight}${wholeVisionResult.ambiguous ? ' — AMBIGUOUS, multiple candidates, flagged for review' : ''}`);
         return {
             weight: wholeVisionResult.weight,
             weight_unit: 'lb',
-            displays_seen: `Cloud Vision OCR read of the full photo (no display could be located/cropped first)${ambiguityNote}`,
+            displays_seen: `Cloud Vision OCR read of the full photo (no display could be located/cropped in time)${ambiguityNote}`,
             raw_text: `${wholeVisionText} (Cloud Vision OCR, whole image)${ambiguityNote}`,
         };
     }
 
-    console.warn('[GEMINI] Vision OCR found nothing on the whole image either, falling back to Gemini single-pass read (last resort)');
+    console.warn(`[GEMINI] Vision OCR found nothing on either path by ${elapsed()}, falling back to Gemini single-pass read (last resort, will be slow)`);
     return readWeightSinglePass(imageBase64, mimeType, retries);
 }
 
