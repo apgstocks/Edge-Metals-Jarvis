@@ -428,15 +428,29 @@ Give the box some margin around the housing rather than cropping tight to the di
         ]);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG locate raw]', result.response.text());
         const fields = extractJson(result.response.text());
-        if (!fields || !fields.found) return null;
+        // Always-on (not gated behind DEBUG_WEIGHT_RAW) — per Apsara, every
+        // real read was silently skipping the Vision OCR pipeline entirely
+        // and falling back to the old whole-image Gemini single-pass read
+        // (the exact unreliable behavior Vision OCR was built to replace),
+        // and there was no way to tell WHY locate kept saying "not found"
+        // without this. This is a warning-level, low-volume line (once per
+        // photo, not per digit), worth always having visible in normal logs.
+        if (!fields) { console.warn('[GEMINI] Locate step: model response was not valid JSON, falling back to whole image'); return null; }
+        if (!fields.found) { console.warn(`[GEMINI] Locate step: model reported no display found (reason: "${fields.reason || 'none given'}"), falling back to whole image`); return null; }
         // Be forgiving of the model returning fractions as strings ("0.155")
         // instead of numbers — same class of issue as the weight field itself.
         const toNum = (v) => typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' && !isNaN(v) ? parseFloat(v) : NaN);
         const x_min = toNum(fields.x_min), y_min = toNum(fields.y_min);
         const x_max = toNum(fields.x_max), y_max = toNum(fields.y_max);
         const nums = [x_min, y_min, x_max, y_max];
-        if (nums.some(n => Number.isNaN(n) || n < 0 || n > 1)) return null;
-        if (x_max <= x_min || y_max <= y_min) return null;
+        if (nums.some(n => Number.isNaN(n) || n < 0 || n > 1)) {
+            console.warn('[GEMINI] Locate step: model returned an out-of-range box, falling back to whole image:', JSON.stringify(fields));
+            return null;
+        }
+        if (x_max <= x_min || y_max <= y_min) {
+            console.warn('[GEMINI] Locate step: model returned an inverted/zero-size box, falling back to whole image:', JSON.stringify(fields));
+            return null;
+        }
         return { x_min, y_min, x_max, y_max, reason: fields.reason || null };
     } catch (err) {
         console.warn('[GEMINI] Display locate step failed, will read whole image instead:', err.message);
