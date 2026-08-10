@@ -114,20 +114,20 @@ function extractWeightNumber(rawText) {
 // risk (nothing else is in frame), which is why extractWeightNumber is left
 // untouched and still used for the crop path.
 const PLAUSIBLE_LOAD_WEIGHT_MIN = 200;
-// Tightened from 200000 -> 99999, found necessary 2026-08-10 while testing
-// extractWeightNumberFromCrop against real photos: a ghost/dead LED cell
-// misread as a leading "1" glued onto a real "71920" gives "171920", which
-// is STILL under 200,000 — so it passed the plausibility check on its own
-// and the leading-digit-strip logic (which only runs when NOTHING looks
-// plausible) never even triggered. 99999 is set just above the US federal
-// max gross vehicle weight for a standard semi (~80,000 lb) with headroom;
-// every real reading confirmed in this whole debugging session (71920,
-// 81460, 81528, 87520-ish) is comfortably under it. APSARA: if this yard
-// legitimately weighs anything heavier than ~99,999 lb/kg (permitted
-// overweight loads, multi-trailer combos, etc.), raise this — but raising
-// it re-opens the exact collision above, so it should reflect a REAL
-// ceiling for this business, not just "generous."
-const PLAUSIBLE_LOAD_WEIGHT_MAX = 99999;
+// Confirmed directly by Apsara 2026-08-10: gross and tare can NEVER exceed
+// 90,000 lb per item at this yard — a real, hard business ceiling, not a
+// guess. This matters beyond just "tighter is safer": a ghost/dead LED cell
+// misread as a leading digit glued onto a real "71920" can produce
+// "171920", and with a too-generous ceiling (this was 200000, then loosely
+// tightened to 99999 as an interim guess) that collision number can itself
+// look "plausible" and pass through BEFORE the leading-digit-strip fallback
+// below ever gets a chance to run — confirmed live on a real photo
+// 2026-08-10. Every real reading confirmed anywhere in this whole
+// debugging session (71920, 81460, 81528, ~87520) is comfortably under
+// 90,000. If this ceiling ever needs to change, it should be because the
+// real business limit changed, not because a reading is failing to pass —
+// raising it without a real reason reopens exactly this class of bug.
+const PLAUSIBLE_LOAD_WEIGHT_MAX = 90000;
 
 // Returns { weight, ambiguous, candidates } instead of a bare number so the
 // caller can decide how much to trust it. `ambiguous: true` means more than
