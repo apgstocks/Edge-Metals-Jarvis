@@ -420,6 +420,27 @@ async function shrinkForLocate(imageBase64, mimeType) {
     }
 }
 
+// Bakes EXIF orientation into the actual pixels once, up front — see the
+// detailed comment on extractWeightFromImage's call to this for the full
+// root-cause story. Cheap no-op (one metadata() call, no re-encode) for the
+// common case where there's no orientation tag or it's already "normal"
+// (both real yard photos tested directly in this conversation came back
+// this way) — only re-encodes when there's actually something to fix.
+async function normalizeOrientation(imageBase64) {
+    if (!sharp) return imageBase64;
+    try {
+        const buf = Buffer.from(imageBase64, 'base64');
+        const meta = await sharp(buf).metadata();
+        if (!meta.orientation || meta.orientation === 1) return imageBase64;
+        const outBuf = await sharp(buf).rotate().jpeg({ quality: 95 }).toBuffer();
+        console.log(`[GEMINI] Normalized EXIF orientation ${meta.orientation} (was ${meta.width}x${meta.height} stored) before locate/crop`);
+        return outBuf.toString('base64');
+    } catch (err) {
+        console.warn('[GEMINI] EXIF orientation normalize failed, using original image as-is:', err.message);
+        return imageBase64;
+    }
+}
+
 // Stage 1, attempt #1 — a fast, deterministic, non-AI display locator. Every
 // real yard photo seen so far (this account, this hardware) shows the
 // vehicle weighbridge display as a bright, saturated RED LED/dot-matrix
@@ -985,6 +1006,23 @@ function voteOnWeightReadings(results) {
 // if BOTH Vision attempts come back empty.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
+    // Normalize EXIF orientation ONCE, up front, before anything else touches
+    // this image. Root cause found 2026-08-11: phone cameras commonly store a
+    // photo in raw sensor orientation plus an EXIF tag saying how to rotate
+    // it for correct viewing — Google's Vision/Gemini APIs handle that tag
+    // correctly, but sharp (used by every locate/crop function below) does
+    // NOT auto-apply it unless told to, which is why the whole-image Vision
+    // fallback kept producing a reading while the sharp-based locate step
+    // kept failing on the exact same photo: it was analyzing a sideways
+    // image. Fixed once here instead of patching every function
+    // individually — sharp's own .metadata() keeps reporting PRE-rotation
+    // width/height even after .rotate() is chained (verified directly, not
+    // assumed), so patching each function risked a width/height mismatch
+    // between a box's coordinates and what actually gets extracted. One
+    // normalize pass here means every downstream .metadata() call is simply
+    // correct, no special-casing needed anywhere else.
+    imageBase64 = await normalizeOrientation(imageBase64);
+    mimeType = 'image/jpeg'; // normalizeOrientation always re-encodes as JPEG
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
 
