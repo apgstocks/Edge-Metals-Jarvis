@@ -492,7 +492,7 @@ function renderItemRows() {
     row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
       const role = btn.dataset.role; // 'gross' | 'tare'
       showCaptureMenu(btn, {
-        onCamera: () => row.querySelector(`.ld-item-${role}-file-camera`).click(),
+        onCamera: () => hasNativeCamera() ? captureViaNativeCamera(row, role) : row.querySelector(`.ld-item-${role}-file-camera`).click(),
         onFiles : () => row.querySelector(`.ld-item-${role}-file-files`).click(),
       });
     }));
@@ -620,6 +620,62 @@ function loadImageFromFile(file) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image file')); };
     img.src = url;
   });
+}
+
+// Same as loadImageFromFile above, but for a base64 string (what the native
+// Camera plugin below returns) instead of a File object.
+function loadImageFromBase64(base64, mime) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not read that photo'));
+    img.src = `data:${mime};base64,${base64}`;
+  });
+}
+
+// ── Native camera capture ────────────────────────────────────────────────
+// Why this exists: the "Take Photo" button used to just .click() a hidden
+// <input type="file" capture="environment">, which works fine in a normal
+// mobile BROWSER but is unreliable inside this app's embedded WebView — per
+// Apsara, tapping it opened Google Photos instead of the camera even with
+// camera permission granted. Root cause: modern Chromium/WebView (roughly
+// Chrome 60+) stopped treating the `capture` attribute as "launch the camera
+// app directly" — it now just hints the system's file-chooser, which is
+// free to default to whatever app it wants (Photos here). This is a known,
+// widely-reported WebView limitation, not a permission bug — no manifest or
+// prompt fix changes it.
+// The reliable fix is to stop going through the file-chooser abstraction
+// for the camera path entirely and call Capacitor's own Camera plugin
+// (@capacitor/camera) instead, which talks to the native camera directly
+// via CameraSource:'CAMERA' — no chooser, no ambiguity about which app
+// opens. Falls back to the old file-input behavior if the plugin isn't
+// available for any reason (e.g. this same index.html loaded outside the
+// native shell) so nothing breaks if that ever happens.
+function hasNativeCamera() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera);
+}
+async function captureViaNativeCamera(row, roleKey) {
+  const statusEl = row.querySelector('.ld-item-status');
+  statusEl.textContent = 'Opening camera…';
+  try {
+    const photo = await window.Capacitor.Plugins.Camera.getPhoto({
+      resultType: 'base64',
+      source: 'CAMERA',        // forces the camera app directly — 'PROMPT' would show a chooser (the exact ambiguity this is meant to avoid), 'PHOTOS' would go straight to the gallery.
+      quality: 85,
+      allowEditing: false,
+      saveToGallery: false,
+    });
+    if (!photo || !photo.base64String) { statusEl.textContent = ''; return; } // user cancelled — not an error
+    const mime = `image/${photo.format || 'jpeg'}`;
+    const img = await loadImageFromBase64(photo.base64String, mime);
+    const base64 = downscaleToBase64(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+    await processWeightImage(row, roleKey, base64, 'image/jpeg', statusEl);
+  } catch (err) {
+    // err.message is often just "User cancelled photos app" when someone
+    // backs out of the camera — that's not a failure worth alarming over.
+    if (!/cancel/i.test(err.message || '')) statusEl.textContent = 'Camera failed: ' + err.message + ' — enter manually.';
+    else statusEl.textContent = '';
+  }
 }
 
 // `row` is the specific item-row DOM element this file input lives in —
