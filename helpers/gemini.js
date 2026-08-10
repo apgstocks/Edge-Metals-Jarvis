@@ -1120,20 +1120,53 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'succeeded' : 'did not produce a usable reading'} at ${elapsed()}`);
 
     if (accurate && accurate.visionWeight != null) {
-        // Grab Gemini's metadata only if it's already finished, capped short
-        // — a late result is discarded here but still resolves harmlessly in
-        // the background thanks to the .catch() above.
-        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, 800, 'Gemini crop metadata (non-essential)');
-        const disagreement = geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight
+        // Widened from a flat 800ms — confirmed live 2026-08-10 that window
+        // was so tight the metadata read almost never made it back in time
+        // to matter: Vision once read a crop as "4771920" while Gemini's
+        // independent read of the SAME crop was "77920" (wildly different),
+        // and that disagreement never surfaced anywhere because
+        // geminiMetaPromise simply hadn't resolved yet when this used to
+        // run. Per Apsara ("I want this to work properly, detect the
+        // weights no matter what"), waiting for whatever's left of the
+        // overall accurate-path budget for a real second opinion is worth
+        // it — floor of 1500ms so a fast crop read still gets a fair wait.
+        const budgetLeft = Math.max(1500, ACCURATE_PATH_BUDGET_MS - (Date.now() - t0));
+        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, budgetLeft, 'Gemini crop metadata');
+
+        // NOTE: a second cross-check against the whole-image Vision OCR pass
+        // (already running in parallel the whole time, essentially free to
+        // use) was tried here and deliberately removed after testing —
+        // nearly every yard photo also shows a compact bench-scale reading
+        // (e.g. "403 lb") in frame, which independently registers as its
+        // own "confident" plausible weight and would disagree with the real
+        // crop reading on almost every single photo. That's not a red flag,
+        // it's normal — shipping it would make this warning fire constantly
+        // and train the exact "ignore it, it always says that" behavior
+        // this flag exists to avoid. Left out; Gemini's read of the SAME
+        // crop (below) doesn't have this problem since it's looking at the
+        // same isolated display, not the whole yard.
+        const geminiDisagrees = !!(geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight);
+        const disagreement = geminiDisagrees
             ? ` [Gemini read this same crop as ${geminiMeta.weight} — Cloud Vision OCR is used as the primary source since it's read this display correctly and consistently in testing, Gemini has not]`
             : '';
-        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${accurate.visionWeight}${disagreement ? ' — disagreed with Gemini' : ''}`);
+        // Flagged to the OPERATOR now (via `ambiguous`), not just buried in
+        // a server log nobody at a yard station opens — the whole-image
+        // fallback path below already got this treatment; this branch had
+        // `ambiguous` hardcoded to false regardless of what was actually
+        // found, a real gap that meant a genuine disagreement between two
+        // independent reads never reached the person who could catch it.
+        // Fixed 2026-08-10. The dashboard/mobile-app warning text was
+        // updated at the same time — it used to specifically say "read off
+        // the full photo, not a close-up," which would be actively wrong to
+        // show here (a close-up WAS used; it just disagreed with a second
+        // check).
+        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${accurate.visionWeight}${disagreement}${geminiDisagrees ? ' — FLAGGED for review' : ''}`);
         return {
             weight: accurate.visionWeight,
             weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
             displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
             raw_text: `${accurate.visionText} (Cloud Vision OCR)${disagreement}`,
-            ambiguous: false,
+            ambiguous: geminiDisagrees,
         };
     }
 
