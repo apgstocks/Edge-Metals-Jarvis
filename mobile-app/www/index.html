@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Edge Metals — Loads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ══════════════════════════════════════════════════════════════════════
+   Base tokens + generic element/utility CSS — copied VERBATIM from
+   dashboard/index.html (the shared design system: colors, .btn, .card,
+   .field, .modal-*, etc.) so this standalone app looks identical to the
+   Loads tab inside the main dashboard, not a re-guess of the same design.
+   No sidebar/hamburger/nav CSS here — this app IS the Loads screen, there
+   is nothing else to navigate to.
+   ══════════════════════════════════════════════════════════════════════ */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7;
+  --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --warm: var(--copper-400);
+  --copper-soft: rgba(194,94,34,.15); --copper-onSoft: var(--copper-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.35);
+  --shadow-md: 0 10px 30px rgba(0,0,0,.45);
+  --shadow-lg: 0 24px 60px rgba(0,0,0,.55);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; overflow:hidden; }
+h1,h2,h3,h4 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+a:hover { color:var(--leaf-300); text-decoration:underline; text-underline-offset:3px; }
+button { font:inherit; }
+input, select { font-family:var(--font-sans); font-size:14px; }
+input::placeholder { color:var(--steel-500); }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--steel-700); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-track { background:transparent; }
+@keyframes jarvis-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@keyframes emGlow { 0%,100% { opacity:1; } 50% { opacity:.55; } }
+@keyframes emSpin { to { transform:rotate(360deg); } }
+@keyframes emSpinRev { to { transform:rotate(-360deg); } }
+@keyframes emPing { 0% { transform:scale(.6); opacity:.8; } 100% { transform:scale(2.6); opacity:0; } }
+@keyframes emOrbit { from { transform:rotateX(72deg) rotateZ(0deg); } to { transform:rotateX(72deg) rotateZ(360deg); } }
+@keyframes emOrbitRev { from { transform:rotateX(72deg) rotateZ(360deg); } to { transform:rotateX(72deg) rotateZ(0deg); } }
+@keyframes emBeam { to { background-position-x:120px; } }
+@keyframes emFloat { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-10px); } }
+@keyframes emView { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+.view-in { animation: emView .35s var(--ease-out); }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn-danger { background:var(--surface-card); color:var(--status-danger); border-color:var(--border-default); }
+.btn-danger:hover { border-color:var(--status-danger); }
+.btn-dark { background:var(--steel-800); color:#fff; border-color:var(--steel-700); }
+.btn-dark:hover { background:var(--steel-700); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
+.field input, .field select { width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
+.field input:focus, .field select:focus { border-color:var(--accent); }
+.badge { display:inline-block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); }
+.hidden { display:none !important; }
+.spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.nav-btn:hover { background:var(--steel-800); color:#fff; }
+.nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
+.row-hover:hover { background:var(--surface-hover); }
+.chip { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:8px 14px; border-radius:20px; border:1px solid var(--border-default); background:var(--surface-card); color:var(--text-muted); cursor:pointer; }
+.chip.active { background:var(--leaf-500); color:#fff; border-color:var(--leaf-500); }
+.modal-overlay { position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:44px 24px; overflow-y:auto; }
+.modal-shell { background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:760px; box-shadow:var(--shadow-lg); overflow:hidden; }
+.modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
+.modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
+.modal-body { padding:24px 26px; max-height:62vh; overflow-y:auto; }
+.modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
+
+/* App shell specific to this standalone build — a simple top bar instead
+   of the dashboard's sidebar (there's only one screen here). */
+body { overflow-y:auto; }
+#appTopBar { position:sticky; top:0; z-index:30; display:flex; align-items:center; justify-content:space-between; padding:14px 18px; background:var(--steel-950); border-bottom:1px solid var(--steel-800); }
+#appTopBar .brand { font-family:var(--font-display); font-size:15px; font-weight:900; letter-spacing:.08em; color:#fff; text-transform:uppercase; }
+#appTopBar .role { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--steel-400); margin-top:2px; }
+#loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+#loginScreen .login-card { width:100%; max-width:360px; background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:32px 26px; box-shadow:var(--shadow-lg); }
+#loginScreen input { width:100%; padding:13px 14px; margin-top:16px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); font-size:16px; }
+#loginScreen button { width:100%; margin-top:18px; padding:13px 18px; }
+#loginErr { color:var(--status-danger); font-size:12px; margin-top:10px; min-height:14px; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Loads tab CSS — copied VERBATIM from the <style> block inside
+   dashboard/index.html's renderLoads(), including tonight's full mobile
+   ergonomics pass (16px inputs to stop iOS zoom, bigger tap targets,
+   sticky description column, stacked Cancel/Save). Same file, same
+   selectors, same behavior.
+   ══════════════════════════════════════════════════════════════════════ */
+.load-date-section { margin-bottom:28px; }
+      /* .load-date-section is a <details> element now (collapsible — see
+         loadDeckSectionsHtml) and .load-date-heading is its <summary>, so the
+         default disclosure triangle is swapped for a custom one that rotates
+         open/closed, and list-style is stripped so it doesn't double up. */
+      .load-date-heading { display:flex; align-items:baseline; gap:8px; font-family:var(--font-mono); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-strong); padding-bottom:8px; margin-bottom:14px; border-bottom:1px solid var(--border-subtle); cursor:pointer; list-style:none; user-select:none; }
+      .load-date-heading::-webkit-details-marker { display:none; }
+      .load-date-heading::before { content:'▸'; font-size:10px; color:var(--text-muted); display:inline-block; transition:transform 120ms ease; }
+      .load-date-section[open] > .load-date-heading::before { transform:rotate(90deg); }
+      .load-date-count { font-weight:400; text-transform:none; letter-spacing:0; color:var(--text-muted); }
+      .load-deck-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:16px; }
+      .load-card { box-shadow:0 3px 0 -1px var(--border-subtle), 0 8px 20px -6px rgba(0,0,0,.18); transition:transform 140ms ease, box-shadow 140ms ease; }
+      .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
+      #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
+      #loadModal .modal-shell { max-width:900px; width:100%; }
+      .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
+         the load level per Apsara — a load can mix items with different
+         weights), and each item row is ONE compact single-line grid row
+         (per Apsara — the earlier 3-stacked-boxes-per-item layout took up
+         too much space) instead of a multi-line card. #ld_items scrolls
+         sideways on narrow screens rather than re-stacking into a taller
+         layout — with 8 columns per row there's no good way to keep this a
+         single line AND fit a phone screen, so horizontal scroll (like a
+         spreadsheet) beats forcing it back into multiple lines on mobile. */
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
+      .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
+      .item-row { margin-bottom:5px; }
+      .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
+      .ld-item-cap { display:flex; gap:3px; min-width:0; }
+      .ld-item-cap input { flex:1; min-width:0; }
+      .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
+      .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
+      .ld-item-actions { display:flex; gap:3px; min-width:0; }
+      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 6px; font-size:11px; flex:1; min-width:0; }
+      .item-row .btn-insert-item { color:var(--leaf-600, #2e7d32); }
+      /* Every direct grid child of a row/header MUST be able to shrink below
+         its own natural (min-content) size — otherwise a cell with content
+         that can't wrap (e.g. two side-by-side buttons in .ld-item-actions)
+         silently pushes ITS OWN column wider than the fixed px width every
+         OTHER row (and the header, which has no such content) is using,
+         and everything to the right drifts out of alignment. This is what
+         was actually causing "headers not lining up with their columns" on
+         mobile — narrower viewports have less slack for a column to quietly
+         overflow into before it becomes visible. min-width:0 is the
+         standard fix: it lets grid/flex items shrink to fit their assigned
+         track instead of expanding it. */
+      .ld-item-header > *, .item-row > * { min-width:0; }
+      /* "Others" free-text box is a direct grid child now (moved out of
+         .ld-item-desc-wrap — see renderItemRows), spanning the full row
+         width instead of being squeezed into just the 0.9fr description
+         column, which on a phone was too narrow to type an address-length
+         description into. Sized up (bigger font/padding than the compact
+         columns) since it's now its own full-width line, not a cramped cell. */
+      .ld-item-desc-other { grid-column:1 / -1; font-size:13px; padding:8px 10px; }
+      .ld-item-desc-other.hidden { display:none; }
+      .ld-item-status:empty { display:none; }
+      .ld-item-status { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin:-1px 0 3px; }
+      #ld_items { overflow-x:auto; padding-bottom:2px; }
+      /* Take Photo / Choose File popover — see showCaptureMenu(). */
+      .capture-menu { position:absolute; z-index:1000; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 8px 20px rgba(0,0,0,.28); padding:4px; display:flex; flex-direction:column; min-width:160px; }
+      .capture-menu-btn { display:block; width:100%; text-align:left; padding:9px 12px; font-size:13px; background:none; border:none; border-radius:var(--radius-xs); color:var(--text-strong); cursor:pointer; }
+      .capture-menu-btn:hover, .capture-menu-btn:active { background:var(--surface-hover); }
+      @media (max-width: 860px) {
+        #loadModal { padding:0; align-items:stretch; }
+        #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
+        #loadModal .modal-body { max-height:none; flex:1; }
+        .ld-grid-2 { grid-template-columns:1fr; }
+
+        /* ── Mobile ergonomics pass — per Apsara, this tab's primary
+           audience is yard staff on a phone, not a desktop mouse user, and
+           several things sized fine for a pointer are genuinely hard to
+           use with a thumb. Everything below is scoped to #loadModal /
+           .load-card / .ld-item-* / #loadSearch specifically — NOT to the
+           bare .btn/.modal-foot/.field classes those elements also carry
+           — so none of it touches Bookings/Board/Settings, which share
+           those same base classes but weren't asked for here. */
+
+        /* iOS Safari auto-zooms the whole page on focus for any input
+           under 16px — every tap into a field was yanking the layout
+           around. 16px is the documented threshold that disables that. */
+        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
+
+        /* Item-row buttons (photo capture, insert, remove) were sized for
+           a mouse (4-6px padding, 11-12px text) — too small to hit
+           reliably with a thumb. Columns widened to make room, and
+           insert/remove stacked vertically instead of squeezed
+           side-by-side into a 62px-wide cell. */
+        .ld-item-header, .item-row { grid-template-columns:1fr 104px 104px 78px 60px 86px 60px; }
+        .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
+        .ld-item-actions { flex-direction:column; gap:4px; }
+        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:8px 4px; font-size:12px; }
+        .item-row { margin-bottom:10px; }
+
+        /* The item table still has to scroll sideways on a phone — 7
+           columns won't fit any phone width without shrinking numbers
+           past legibility — but losing sight of WHICH item you're
+           scrolled into while hunting for the weight fields defeats the
+           point. Sticking the description column keeps that context
+           on-screen the whole time you scroll right, like a frozen
+           spreadsheet column. */
+        .ld-item-header > span:first-child, .ld-item-desc-wrap {
+          position:sticky; left:0; z-index:1; background:var(--surface-card); padding-right:6px;
+        }
+
+        /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
+           too-small-to-thumb-tap problem as the item-row buttons above. */
+        .load-card .btn { padding:9px 14px; font-size:12.5px; }
+
+        /* Cancel/Save stack full-width instead of two small buttons
+           crammed to the right — bigger target, and Save (the action
+           people actually came here to tap) lands at the bottom,
+           thumb-reachable on a one-handed grip. */
+        #loadModal .modal-foot { flex-direction:column; }
+        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
+        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
+      }
+</style>
+<!-- config.js sets window.JARVIS_CONFIG.API_BASE — the one line to edit
+     once the Jarvis backend is actually deployed (see config.js itself
+     for details). Loaded before the app script below so JARVIS_CONFIG
+     exists by the time API_BASE is read. -->
+<script src="config.js"></script>
+</head>
+<body>
+
+<div id="loginScreen" class="hidden">
+  <div class="login-card">
+    <div class="eyebrow">// Edge Metals · Loads</div>
+    <h2 style="font-size:20px; text-transform:uppercase; margin-bottom:4px;">Sign in</h2>
+    <div style="font-size:13px; color:var(--text-muted);">Staff, user, or admin password.</div>
+    <input id="loginPw" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="btnLogin" class="btn btn-primary">Sign in</button>
+    <div id="loginErr"></div>
+  </div>
+</div>
+
+<div id="appShell" class="hidden">
+  <div id="appTopBar">
+    <div>
+      <div class="brand">Jarvis — Loads</div>
+      <div class="role" id="roleLabel"></div>
+    </div>
+    <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
+  </div>
+  <div id="viewRoot"></div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════
+// Edge Metals Loads — standalone mobile app (Capacitor shell)
+//
+// This is the SAME Loads tab code that lives in dashboard/index.html,
+// extracted so yard staff get a dedicated installable app instead of the
+// full multi-tab Jarvis dashboard. Everything below marked "lifted
+// verbatim" is copy-pasted unchanged from that file — if you fix a bug in
+// one, fix it in both (or better: next refactor, share this as one file
+// both builds import).
+//
+// The one thing that's NOT the same as the dashboard: authentication.
+// The dashboard runs in the same browser tab as the API (same origin), so
+// its session cookie (SameSite=Strict) just works. This app's WebView is a
+// different origin than wherever the API is deployed, and SameSite=Strict
+// cookies are never sent cross-origin — that's what Strict means. So this
+// app logs in the same way (POST /login with a password), but instead of
+// relying on the cookie it also gets back the raw session id in the JSON
+// response body and sends that back itself as "Authorization: Bearer
+// <sid>" on every request. See api.js's /login route and session-gate
+// middleware for the server side of this — same sessions Map, same TTL,
+// same roles, just a second way to carry the same session id. Nothing
+// about the desktop dashboard's cookie auth changed.
+// ══════════════════════════════════════════════════════════════════════
+
+// ── API base URL — EDIT THIS once the backend is actually deployed (see
+// config.js in the mobile-app project root for the single source of
+// truth; this constant just reads it). Left as a placeholder because the
+// Jarvis VM deployment is still pending as of this build. ──────────────
+const API_BASE = (window.JARVIS_CONFIG && window.JARVIS_CONFIG.API_BASE) || 'http://10.0.2.2:4000';
+
+const TOKEN_KEY = 'jarvis_sid';
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t) { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
+
+let ROLE = 'user';
+
+// ── Lifted verbatim from dashboard/index.html ───────────────────────────
+const $ = (id) => document.getElementById(id);
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+
+// api() — same shape/signature as the dashboard's version (path, opts) so
+// every Loads function that calls api('/api/loads', ...) etc. works
+// completely unmodified. Two real differences from the dashboard's
+// version: (1) requests go to API_BASE + path since this app's origin
+// isn't the API's origin, not just `path`; (2) auth is the stored bearer
+// token, not an automatic cookie; a 401 shows the login screen instead of
+// navigating to a server-rendered /login page (which expects a cookie
+// flow this app doesn't use).
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const token = getToken();
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(API_BASE + path, { ...opts, headers });
+  if (res.status === 401) {
+    setToken(null);
+    showLoginScreen('Session expired — sign in again.');
+    throw new Error('unauthorized');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+// No-op kept for parity with the dashboard build's loadTab() cleanup call
+// -- there is no in-page camera stream to stop here either (see
+// dashboard/index.html's comment on this same no-op).
+function stopCamera() {}
+
+const ITEM_DESC_OPTIONS = [
+  'Auto cast', 'Al rims(Dirty)', 'Mixed', 'Chrome', 'Sealed units', 'Motors',
+  'Al combo', 'Steel combo', 'Alternator', 'Ac compressor', 'Starter',
+];
+
+const ITEM_DESC_OTHER = 'Others';
+
+const SELLER_FIXED_NAME = 'Edge Metals Inc.';
+
+
+// Live-recomputes ONE row's net weight (gross - tare) and amount (net *
+// price) directly from that row's own inputs — called on every input event
+// inside the row, and after a photo read fills gross/tare. Reads/writes DOM
+// directly rather than going through currentLoadItems so it stays fast and
+// doesn't fight the user's cursor position while typing; syncItemsFromDom()
+// (called right after, on the same input event) is what actually persists
+// the values into currentLoadItems.
+function recomputeRowTotals(row) {
+  const g = parseFloat(row.querySelector('.ld-item-gross').value);
+  const t = parseFloat(row.querySelector('.ld-item-tare').value);
+  const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
+  row.querySelector('.ld-item-net').value = net != null ? net : '';
+  const price = parseFloat(row.querySelector('.ld-item-price').value);
+  const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+  row.querySelector('.ld-item-amount').value = amount != null ? amount : '';
+}
+
+function renderItemRows() {
+  const box = $('ld_items');
+  if (!box) return;
+  // NOTE: the row wrapper uses class="item-row" (NOT a data-row attribute) —
+  // the remove button below it also needs data-row to know its own index,
+  // and querying by attribute would match BOTH the row and the button (a
+  // real bug that shipped: syncItemsFromDom() below was matching the button
+  // too, calling .querySelector('.ld-item-desc') on it, getting null, and
+  // throwing — which is why Add Item/Save Load looked completely broken).
+  const rowsHtml = currentLoadItems.map((it, i) => {
+    const desc = it.description || '';
+    const isPreset = ITEM_DESC_OPTIONS.includes(desc);
+    const isOther = desc && !isPreset; // non-empty, not on the list -> came from the "Others" box
+    const selectVal = isPreset ? desc : (isOther ? ITEM_DESC_OTHER : '');
+    const optionsHtml = ['<option value="" disabled ' + (selectVal ? '' : 'selected') + '>Select item…</option>']
+      .concat(ITEM_DESC_OPTIONS.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
+      .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
+      .join('');
+    const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
+    const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
+    const price = parseFloat(it.price);
+    const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+    // One flat row of columns (see .item-row grid below) instead of the old
+    // 3-stacked-boxes layout — per Apsara, wanted item detail condensed to a
+    // single line per item. Per-field <label>s are gone in favor of one
+    // shared column header above the list (rendered once, not per row); the
+    // "Others" free-text box is the one thing still allowed to add a second
+    // line, only when that description is actually picked.
+    return `
+    <div class="item-row" data-idx="${i}">
+      <div class="ld-item-desc-wrap">
+        <select class="ld-item-desc-select">${optionsHtml}</select>
+      </div>
+      <div class="ld-item-cap"><input class="ld-item-gross" type="number" step="any" placeholder="0" value="${it.gross_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="gross" title="${it.gross_photo_link ? 'Photo on file — click to replace' : 'Add gross weight photo'}">📷${it.gross_photo_link ? '✓' : ''}</button></div>
+      <div class="ld-item-cap"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
+      <input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}">
+      <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
+      <input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}">
+      <div class="ld-item-actions">
+        <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
+        <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
+      </div>
+      <!-- "Others" free-text box moved OUT of .ld-item-desc-wrap to be a
+           direct grid child of .item-row (grid-column:1/-1 below) — per
+           Apsara, nested inside the narrow description column it rendered
+           tiny on mobile; as its own full-width line under the row it's a
+           normal-sized text box instead. -->
+      <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
+      <!-- Two file inputs per role (camera-forced vs library/files) instead
+           of one plain accept="image/*" input — per Apsara, the single
+           generic input's OS chooser was surfacing Google Photos ahead of
+           a direct camera option. Clicking the 📷 button now shows an
+           explicit "Take Photo" / "Choose File" menu (see
+           showCaptureMenu below) that triggers whichever of these two
+           actually matches what was picked. capture="environment" is what
+           forces a mobile browser straight into the camera app instead of
+           any chooser at all. -->
+      <input type="file" accept="image/*" capture="environment" class="ld-item-gross-file-camera hidden">
+      <input type="file" accept="image/*" class="ld-item-gross-file-files hidden">
+      <input type="file" accept="image/*" capture="environment" class="ld-item-tare-file-camera hidden">
+      <input type="file" accept="image/*" class="ld-item-tare-file-files hidden">
+      <div class="ld-item-status ld-cap-status"></div>
+    </div>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="ld-item-header">
+      <span>Description</span><span>Gross</span><span>Tare</span><span>Net</span><span>Price</span><span>Amount</span><span></span>
+    </div>
+    ${rowsHtml}`;
+
+  box.querySelectorAll('.item-row').forEach(row => {
+    row.querySelectorAll('input:not([type=file])').forEach(inp => inp.addEventListener('input', () => {
+      recomputeRowTotals(row);
+      syncItemsFromDom();
+    }));
+    // Photo button now opens a small "Take Photo / Choose File" menu instead
+    // of clicking straight into one generic file input — see showCaptureMenu.
+    row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
+      const role = btn.dataset.role; // 'gross' | 'tare'
+      showCaptureMenu(btn, {
+        onCamera: () => row.querySelector(`.ld-item-${role}-file-camera`).click(),
+        onFiles : () => row.querySelector(`.ld-item-${role}-file-files`).click(),
+      });
+    }));
+    row.querySelector('.ld-item-gross-file-camera').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
+    row.querySelector('.ld-item-gross-file-files').addEventListener('change', (e) => handleFileUpload(row, 'gross', e.target.files[0]));
+    row.querySelector('.ld-item-tare-file-camera').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
+    row.querySelector('.ld-item-tare-file-files').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
+  });
+  box.querySelectorAll('.ld-item-desc-select').forEach(sel => sel.addEventListener('change', () => {
+    const row = sel.closest('.item-row');
+    const otherInput = row.querySelector('.ld-item-desc-other');
+    if (sel.value === ITEM_DESC_OTHER) {
+      otherInput.classList.remove('hidden');
+      otherInput.focus();
+    } else {
+      otherInput.classList.add('hidden');
+      otherInput.value = '';
+    }
+    syncItemsFromDom();
+  }));
+  box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
+    syncItemsFromDom();
+    currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
+    renderItemRows();
+  }));
+  // Inserts a new blank row directly AFTER this one — per Apsara, "+ Add
+  // item" at the bottom only ever appended to the end, with no way to slot
+  // a forgotten item in between two already-entered ones without deleting
+  // and re-adding everything after it.
+  box.querySelectorAll('.btn-insert-item').forEach(btn => btn.addEventListener('click', () => {
+    syncItemsFromDom();
+    const idx = parseInt(btn.dataset.row, 10);
+    currentLoadItems.splice(idx + 1, 0, blankLoadItem());
+    renderItemRows();
+  }));
+}
+
+function syncItemsFromDom() {
+  const rows = $('ld_items').querySelectorAll('.item-row');
+  currentLoadItems = Array.from(rows).map((row, i) => {
+    const sel = row.querySelector('.ld-item-desc-select');
+    const otherInput = row.querySelector('.ld-item-desc-other');
+    const description = sel.value === ITEM_DESC_OTHER ? (otherInput.value || '') : (sel.value || '');
+    // grossPhoto/tarePhoto/gross_photo_link/tare_photo_link aren't DOM-backed
+    // (a captured photo, or an existing Drive link from an edit, isn't shown
+    // as a form field) — carry them over from the previous state by row
+    // index so they survive every other field's input events re-running
+    // this sync, and so an EDIT doesn't lose an item's existing photo link
+    // just because the user only touched the price field.
+    const prev = currentLoadItems[i] || {};
+    return {
+      description,
+      gross_weight: row.querySelector('.ld-item-gross').value,
+      tare_weight : row.querySelector('.ld-item-tare').value,
+      price: row.querySelector('.ld-item-price').value,
+      unit : prev.unit || '', // no per-item Unit field anymore — see renderItemRows; just carries whatever an edited old load already had
+      grossPhoto: prev.grossPhoto || null,
+      tarePhoto : prev.tarePhoto  || null,
+      gross_photo_link: prev.gross_photo_link || null,
+      tare_photo_link : prev.tare_photo_link  || null,
+      gross_photo_drive_id: prev.gross_photo_drive_id || null,
+      tare_photo_drive_id : prev.tare_photo_drive_id  || null,
+    };
+  });
+}
+
+// Shared by both capture paths (camera snapshot and file upload) — sends the
+// image to Gemini/Vision for a weight read, fills that row's gross or tare
+// field, remembers the photo (per item now, not per load) so it gets
+// archived to Drive on save. `row` is the specific item-row DOM element the
+// photo button lives in — everything is scoped to that one row's fields.
+async function processWeightImage(row, roleKey, base64, mime, statusEl) {
+  const idx = parseInt(row.dataset.idx, 10);
+  syncItemsFromDom(); // capture whatever's already typed before we mutate a photo onto it
+  if (currentLoadItems[idx]) currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64, mime };
+  if (statusEl) statusEl.textContent = 'Reading scale…';
+  try {
+    const result = await api('/api/vision/read-weight', {
+      method: 'POST',
+      body: JSON.stringify({ image_base64: base64, mime_type: mime }),
+    });
+    // Full reasoning (raw_text/displays_seen) goes to the console instead of
+    // the on-screen status now — useful for debugging a bad read without
+    // cluttering the form with a paragraph of model commentary every time.
+    console.log('[weight-read]', roleKey, JSON.stringify(result));
+    if (result.weight != null) {
+      row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare').value = result.weight;
+      recomputeRowTotals(row);
+      syncItemsFromDom();
+      if (statusEl) statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''} — check it matches the scale before saving.`;
+    } else if (statusEl) {
+      statusEl.textContent = "Couldn't read a number — enter manually.";
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = 'Read failed: ' + err.message + ' — enter manually.';
+  }
+}
+
+// Downscales any drawable image source (a live <video> frame, or an <img>
+// loaded from an uploaded File) to at most maxDim on the long edge and
+// re-encodes as JPEG at the given quality. Root-fix for PayloadTooLargeError:
+// a phone camera photo picked via the Upload button is routinely 3-8MB raw
+// (base64 inflates that another ~33%), which blew past body-parser's limit
+// on save (two photos — gross + tare — in one request). Reading a handful of
+// digits off a scale display doesn't need full resolution, so this trades
+// nothing perceptible for a payload that's a few hundred KB instead.
+function downscaleToBase64(source, srcW, srcH, maxDim = 1600, quality = 0.9) {
+  let w = srcW, h = srcH;
+  if (w > maxDim || h > maxDim) {
+    const scale = maxDim / Math.max(w, h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(source, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', quality).split(',')[1];
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image file')); };
+    img.src = url;
+  });
+}
+
+// `row` is the specific item-row DOM element this file input lives in —
+// scoped per item now, not per load.
+async function handleFileUpload(row, roleKey, file) {
+  if (!file) return;
+  // One shared status line per row now (not per gross/tare) — keeps the row
+  // itself a single line; this line only fills in transiently during a read.
+  const statusEl = row.querySelector('.ld-item-status');
+  statusEl.textContent = 'Preparing photo…';
+  try {
+    const img = await loadImageFromFile(file);
+    const base64 = downscaleToBase64(img, img.naturalWidth || img.width, img.naturalHeight || img.height);
+    await processWeightImage(row, roleKey, base64, 'image/jpeg', statusEl);
+  } catch (err) {
+    statusEl.textContent = err.message;
+  }
+}
+
+// Small floating "Take Photo / Choose File" menu, shown when a row's 📷
+// button is clicked — per Apsara, a single plain file input's OS chooser
+// was surfacing Google Photos ahead of an actual camera option, with no way
+// to just say "take a new photo." Appended to <body> (not inside the row)
+// so it isn't clipped by #ld_items' horizontal-scroll overflow, positioned
+// off the button's real screen position. Dismissed on choosing either
+// option or clicking anywhere else.
+function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
+  document.querySelectorAll('.capture-menu').forEach(m => m.remove());
+  const rect = anchorBtn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'capture-menu';
+  menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  menu.style.left = `${rect.left + window.scrollX}px`;
+  menu.innerHTML = `
+    <button type="button" class="capture-menu-btn" data-action="camera">📷 Take Photo</button>
+    <button type="button" class="capture-menu-btn" data-action="files">📁 Choose File</button>
+  `;
+  document.body.appendChild(menu);
+  const close = () => { menu.remove(); document.removeEventListener('click', outsideClick, true); };
+  const outsideClick = (e) => { if (!menu.contains(e.target) && e.target !== anchorBtn) close(); };
+  menu.querySelector('[data-action="camera"]').addEventListener('click', () => { close(); onCamera(); });
+  menu.querySelector('[data-action="files"]').addEventListener('click', () => { close(); onFiles(); });
+  // Deferred one tick so the SAME click that opened the menu (which is still
+  // bubbling up to document right now) doesn't immediately close it again.
+  setTimeout(() => document.addEventListener('click', outsideClick, true), 0);
+}
+
+function blankLoadItem() {
+  return { description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+}
+
+// Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on
+// the WRONG calendar day for anyone west of Greenwich in the evening
+// (e.g. 9pm Pacific is already the next day in UTC), which is exactly the
+// kind of off-by-one that would misfile a load into tomorrow's date group.
+function todayLocalDateStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function resetLoadModal() {
+  editingLoadId = null;
+  currentLoadItems = [blankLoadItem()];
+  ['ld_date', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  // Date defaults to TODAY instead of blank — per Apsara, having to pick it
+  // manually on every single load was pure friction for what's almost
+  // always "today." Still fully editable for a load being entered late.
+  if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
+  if ($('ld_seller')) $('ld_seller').value = SELLER_FIXED_NAME;
+  $('loadModalErr').textContent = '';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
+  renderItemRows();
+  stopCamera();
+}
+
+// Opens the SAME modal used for creating a load, pre-filled from an existing
+// record — per Apsara, there was no way to fix a typo or a wrong weight
+// after saving short of deleting the whole load and starting over. Existing
+// items' photo links are carried into currentLoadItems (not re-downloaded —
+// just the link/id so a save that doesn't touch that item's photo keeps it,
+// see computeItem in helpers/loads.js); grossPhoto/tarePhoto stay null
+// unless the user actually re-captures that item's photo in this session.
+function openEditLoadModal(load) {
+  editingLoadId = load.id;
+  const items = Array.isArray(load.items) && load.items.length ? load.items : [{}];
+  currentLoadItems = items.map(it => ({
+    description: it.description || '',
+    gross_weight: it.gross_weight ?? '',
+    tare_weight : it.tare_weight  ?? '',
+    price: it.price ?? '',
+    unit : it.unit || '',
+    grossPhoto: null, tarePhoto: null,
+    gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
+    tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
+  }));
+  if ($('ld_date'))           $('ld_date').value           = load.date || '';
+  if ($('ld_seller'))         $('ld_seller').value         = SELLER_FIXED_NAME;
+  if ($('ld_buyer'))          $('ld_buyer').value          = load.buyer || '';
+  if ($('ld_buyer_address'))  $('ld_buyer_address').value  = load.buyer_address || '';
+  if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
+  $('loadModalErr').textContent = '';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
+  renderItemRows();
+  stopCamera();
+  $('loadModal').classList.remove('hidden');
+}
+
+// Deck-of-cards visual: a responsive grid of card tiles, each with a subtle
+// depth cue (layered shadow) rather than a plain stacked list.
+function loadCardHtml(l) {
+  return `
+    <div class="card load-card" data-id="${esc(l.id)}">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div>
+          <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.seller || 'Unnamed seller')}</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(l.date || '—')} · ${esc(l.id)}</div>
+        </div>
+        <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
+      </div>
+      ${l.description ? `<div style="margin-top:10px; font-size:12px; color:var(--text-body);">${esc(l.description)}</div>` : ''}
+      <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:10px;">${(l.items || []).length} item${(l.items || []).length === 1 ? '' : 's'}</div>
+      <!-- Gross/tare/net are now per item (see item table in the modal / PDF)
+           — these are sums across all items, computed server-side in
+           helpers/loads.js, not a single load-level weight anymore. Stacked
+           vertically (was a flex-wrap row) — on a narrower card the row wrapped
+           mid-line so "Total net" ended up crammed against "Total tare" on
+           the right instead of reading top-to-bottom; per Apsara, each on
+           its own line, no wrapping to fight. -->
+      <div style="display:flex; flex-direction:column; gap:3px; margin-top:8px; font-family:var(--font-mono); font-size:12px; color:var(--text-body);">
+        <span>Gross weight: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span>Tare weight: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+      </div>
+      <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
+        ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
+        ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
+        ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
+        <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+        <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+      </div>
+    </div>`;
+}
+
+// Groups loads by their `date` field (the date picked in the modal, not
+// created_at — a load entered today can still be dated yesterday's yard
+// activity) and sorts groups newest-first, undated loads last. Each group
+// becomes its own labeled section in the deck instead of one flat grid, per
+// Apsara — makes a specific day's loads findable without scanning the whole
+// deck once there are more than a screenful.
+function groupLoadsByDate(loads) {
+  const groups = new Map();
+  for (const l of loads) {
+    const key = l.date || 'undated';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+  const keys = Array.from(groups.keys()).sort((a, b) => {
+    if (a === 'undated') return 1;
+    if (b === 'undated') return -1;
+    return b.localeCompare(a); // ISO yyyy-mm-dd sorts correctly as a string, newest first
+  });
+  return keys.map(key => ({ key, label: formatLoadDateHeading(key), loads: groups.get(key) }));
+}
+
+function formatLoadDateHeading(key) {
+  if (key === 'undated') return 'No date set';
+  const d = new Date(key + 'T00:00:00');
+  if (isNaN(d.getTime())) return key;
+  return d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+// Free-text filter across the fields Apsara actually asked for ("it can be
+// anything like date and seller/amount") — one search box rather than
+// several per-field dropdowns, matched as a substring against a flattened
+// string of id/date/seller/description/weights/amount. Client-side against
+// loadsCache (already fetched for the deck) rather than a server round trip
+// per keystroke — the loads list is small enough that this is instant.
+function filterLoads(loads, query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return loads;
+  return loads.filter(l => {
+    const haystack = [l.id, l.date, l.seller, l.description, l.gross_weight, l.tare_weight, l.net_weight, l.amount, l.status]
+      .map(v => String(v ?? '').toLowerCase()).join(' ');
+    return haystack.includes(q);
+  });
+}
+
+// Builds just the deck markup (date sections + cards), reused by both the
+// initial render and every search-box keystroke so filtering doesn't have
+// to re-render the whole tab (modal, header, styles) each time. Each date
+// section is a native <details>/<summary> — free expand/collapse with zero
+// extra JS — with only the FIRST (most recent) group open by default once
+// there's more than one, per Apsara's "expand based on dates" once the deck
+// has more cards than fits comfortably on one screen.
+function loadDeckSectionsHtml(loads, emptyMsg) {
+  const groups = groupLoadsByDate(loads);
+  if (!groups.length) {
+    return `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
+  }
+  return groups.map((g, i) => `
+    <details class="load-date-section" ${i === 0 ? 'open' : ''}>
+      <summary class="load-date-heading">${esc(g.label)}<span class="load-date-count">${g.loads.length} load${g.loads.length === 1 ? '' : 's'}</span></summary>
+      <div class="load-deck-grid">${g.loads.map(loadCardHtml).join('')}</div>
+    </details>`).join('');
+}
+
+function renderLoads(loads) {
+  loadsCache = loads || [];
+
+  $('viewRoot').innerHTML = `
+    <style>
+      /* Scoped to the Loads tab — regenerated fresh each time this tab
+         loads, so nothing accumulates or leaks into other tabs. */
+      .load-date-section { margin-bottom:28px; }
+      /* .load-date-section is a <details> element now (collapsible — see
+         loadDeckSectionsHtml) and .load-date-heading is its <summary>, so the
+         default disclosure triangle is swapped for a custom one that rotates
+         open/closed, and list-style is stripped so it doesn't double up. */
+      .load-date-heading { display:flex; align-items:baseline; gap:8px; font-family:var(--font-mono); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-strong); padding-bottom:8px; margin-bottom:14px; border-bottom:1px solid var(--border-subtle); cursor:pointer; list-style:none; user-select:none; }
+      .load-date-heading::-webkit-details-marker { display:none; }
+      .load-date-heading::before { content:'▸'; font-size:10px; color:var(--text-muted); display:inline-block; transition:transform 120ms ease; }
+      .load-date-section[open] > .load-date-heading::before { transform:rotate(90deg); }
+      .load-date-count { font-weight:400; text-transform:none; letter-spacing:0; color:var(--text-muted); }
+      .load-deck-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:16px; }
+      .load-card { box-shadow:0 3px 0 -1px var(--border-subtle), 0 8px 20px -6px rgba(0,0,0,.18); transition:transform 140ms ease, box-shadow 140ms ease; }
+      .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
+      #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
+      #loadModal .modal-shell { max-width:900px; width:100%; }
+      .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
+         the load level per Apsara — a load can mix items with different
+         weights), and each item row is ONE compact single-line grid row
+         (per Apsara — the earlier 3-stacked-boxes-per-item layout took up
+         too much space) instead of a multi-line card. #ld_items scrolls
+         sideways on narrow screens rather than re-stacking into a taller
+         layout — with 8 columns per row there's no good way to keep this a
+         single line AND fit a phone screen, so horizontal scroll (like a
+         spreadsheet) beats forcing it back into multiple lines on mobile. */
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
+      .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
+      .item-row { margin-bottom:5px; }
+      .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
+      .ld-item-cap { display:flex; gap:3px; min-width:0; }
+      .ld-item-cap input { flex:1; min-width:0; }
+      .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
+      .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
+      .ld-item-actions { display:flex; gap:3px; min-width:0; }
+      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 6px; font-size:11px; flex:1; min-width:0; }
+      .item-row .btn-insert-item { color:var(--leaf-600, #2e7d32); }
+      /* Every direct grid child of a row/header MUST be able to shrink below
+         its own natural (min-content) size — otherwise a cell with content
+         that can't wrap (e.g. two side-by-side buttons in .ld-item-actions)
+         silently pushes ITS OWN column wider than the fixed px width every
+         OTHER row (and the header, which has no such content) is using,
+         and everything to the right drifts out of alignment. This is what
+         was actually causing "headers not lining up with their columns" on
+         mobile — narrower viewports have less slack for a column to quietly
+         overflow into before it becomes visible. min-width:0 is the
+         standard fix: it lets grid/flex items shrink to fit their assigned
+         track instead of expanding it. */
+      .ld-item-header > *, .item-row > * { min-width:0; }
+      /* "Others" free-text box is a direct grid child now (moved out of
+         .ld-item-desc-wrap — see renderItemRows), spanning the full row
+         width instead of being squeezed into just the 0.9fr description
+         column, which on a phone was too narrow to type an address-length
+         description into. Sized up (bigger font/padding than the compact
+         columns) since it's now its own full-width line, not a cramped cell. */
+      .ld-item-desc-other { grid-column:1 / -1; font-size:13px; padding:8px 10px; }
+      .ld-item-desc-other.hidden { display:none; }
+      .ld-item-status:empty { display:none; }
+      .ld-item-status { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin:-1px 0 3px; }
+      #ld_items { overflow-x:auto; padding-bottom:2px; }
+      /* Take Photo / Choose File popover — see showCaptureMenu(). */
+      .capture-menu { position:absolute; z-index:1000; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 8px 20px rgba(0,0,0,.28); padding:4px; display:flex; flex-direction:column; min-width:160px; }
+      .capture-menu-btn { display:block; width:100%; text-align:left; padding:9px 12px; font-size:13px; background:none; border:none; border-radius:var(--radius-xs); color:var(--text-strong); cursor:pointer; }
+      .capture-menu-btn:hover, .capture-menu-btn:active { background:var(--surface-hover); }
+      @media (max-width: 860px) {
+        #loadModal { padding:0; align-items:stretch; }
+        #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
+        #loadModal .modal-body { max-height:none; flex:1; }
+        .ld-grid-2 { grid-template-columns:1fr; }
+
+        /* ── Mobile ergonomics pass — per Apsara, this tab's primary
+           audience is yard staff on a phone, not a desktop mouse user, and
+           several things sized fine for a pointer are genuinely hard to
+           use with a thumb. Everything below is scoped to #loadModal /
+           .load-card / .ld-item-* / #loadSearch specifically — NOT to the
+           bare .btn/.modal-foot/.field classes those elements also carry
+           — so none of it touches Bookings/Board/Settings, which share
+           those same base classes but weren't asked for here. */
+
+        /* iOS Safari auto-zooms the whole page on focus for any input
+           under 16px — every tap into a field was yanking the layout
+           around. 16px is the documented threshold that disables that. */
+        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
+
+        /* Item-row buttons (photo capture, insert, remove) were sized for
+           a mouse (4-6px padding, 11-12px text) — too small to hit
+           reliably with a thumb. Columns widened to make room, and
+           insert/remove stacked vertically instead of squeezed
+           side-by-side into a 62px-wide cell. */
+        .ld-item-header, .item-row { grid-template-columns:1fr 104px 104px 78px 60px 86px 60px; }
+        .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
+        .ld-item-actions { flex-direction:column; gap:4px; }
+        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:8px 4px; font-size:12px; }
+        .item-row { margin-bottom:10px; }
+
+        /* The item table still has to scroll sideways on a phone — 7
+           columns won't fit any phone width without shrinking numbers
+           past legibility — but losing sight of WHICH item you're
+           scrolled into while hunting for the weight fields defeats the
+           point. Sticking the description column keeps that context
+           on-screen the whole time you scroll right, like a frozen
+           spreadsheet column. */
+        .ld-item-header > span:first-child, .ld-item-desc-wrap {
+          position:sticky; left:0; z-index:1; background:var(--surface-card); padding-right:6px;
+        }
+
+        /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
+           too-small-to-thumb-tap problem as the item-row buttons above. */
+        .load-card .btn { padding:9px 14px; font-size:12.5px; }
+
+        /* Cancel/Save stack full-width instead of two small buttons
+           crammed to the right — bigger target, and Save (the action
+           people actually came here to tap) lands at the bottom,
+           thumb-reachable on a one-handed grip. */
+        #loadModal .modal-foot { flex-direction:column; }
+        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
+        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
+      }
+    </style>
+    <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">// Loads</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
+          <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
+        </div>
+        <button id="btnAddLoad" class="btn btn-primary">+ Add new load</button>
+      </div>
+      <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
+    </section>
+
+    <div id="loadModal" class="hidden modal-overlay">
+      <div class="modal-shell">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
+          <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="ld-grid-2">
+            <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
+            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name" disabled></div>
+          </div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name"></div>
+            <div class="field"><label>Buyer address</label><input id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX"></div>
+          </div>
+          <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
+
+          <div style="margin-top:18px;">
+            <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
+            <!-- Gross/tare weight capture moved IN HERE, per item (see
+                 renderItemRows) — a load can be several items each weighed
+                 separately, so there's no single load-level weight anymore.
+                 Each row's photo button is a plain file input with
+                 accept="image/*" (no "capture" attribute) — mobile browsers
+                 show their native "Take Photo / Photo Library" sheet on tap,
+                 camera AND upload from one control, no getUserMedia, no
+                 HTTPS requirement. Desktop just gets a normal file picker. -->
+            <div id="ld_items"></div>
+            <button id="btnAddItemRow" type="button" class="btn" style="margin-top:4px; font-size:12px; padding:6px 12px;">+ Add item</button>
+          </div>
+          <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
+        </div>
+        <div class="modal-foot">
+          <button id="btnCancelLoad" class="btn">Cancel</button>
+          <button id="btnSaveLoad" class="btn btn-primary">Save load</button>
+        </div>
+      </div>
+    </div>`;
+
+  wireLoadsEvents();
+}
+
+function wireLoadsEvents() {
+  $('btnAddLoad').addEventListener('click', () => {
+    resetLoadModal();
+    $('loadModal').classList.remove('hidden');
+  });
+  const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+  $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
+  $('btnCancelLoad').addEventListener('click', closeLoadModal);
+
+  $('btnAddItemRow').addEventListener('click', () => {
+    syncItemsFromDom();
+    currentLoadItems.push(blankLoadItem());
+    renderItemRows();
+  });
+
+  // Photo buttons, weight/price inputs, and desc dropdowns are all wired
+  // per-row inside renderItemRows() now (re-attached every render since
+  // rows come and go) — nothing load-level left to wire here for weights.
+
+  $('btnSaveLoad').addEventListener('click', async () => {
+    syncItemsFromDom();
+    const desc = $('ld_desc').value.trim();
+    $('loadModalErr').textContent = '';
+    const btn = $('btnSaveLoad');
+    const isEdit = !!editingLoadId;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const items = currentLoadItems
+        .filter(it => (it.description || it.gross_weight || it.tare_weight || it.price))
+        .map(it => ({
+          description: it.description,
+          gross_weight: it.gross_weight || null,
+          tare_weight : it.tare_weight  || null,
+          price: it.price || null,
+          unit : it.unit  || null,
+          gross_photo_base64: it.grossPhoto ? it.grossPhoto.base64 : null,
+          gross_photo_mime  : it.grossPhoto ? it.grossPhoto.mime   : null,
+          tare_photo_base64 : it.tarePhoto  ? it.tarePhoto.base64  : null,
+          tare_photo_mime   : it.tarePhoto  ? it.tarePhoto.mime    : null,
+          // Existing photo links from before this edit — carried through so
+          // an item that isn't re-photographed doesn't lose its photo (see
+          // computeItem in helpers/loads.js, which preserves these when no
+          // new base64 came in for that item). No-ops on a brand-new load.
+          gross_photo_link: it.gross_photo_link || null,
+          gross_photo_drive_id: it.gross_photo_drive_id || null,
+          tare_photo_link : it.tare_photo_link  || null,
+          tare_photo_drive_id : it.tare_photo_drive_id  || null,
+        }));
+      const payload = {
+        date: $('ld_date').value || null,
+        seller: SELLER_FIXED_NAME,
+        buyer: $('ld_buyer').value.trim() || null,
+        buyer_address: $('ld_buyer_address').value.trim() || null,
+        description: desc,
+        items,
+        weight_unit: 'lb',
+        created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
+      };
+      if (isEdit) {
+        await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      } else {
+        await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      stopCamera();
+      $('loadModal').classList.add('hidden');
+      loadTab('loads');
+    } catch (err) {
+      $('loadModalErr').textContent = err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Save load';
+    }
+  });
+
+  wireDeckEvents();
+
+  // Search re-renders JUST #loadDeck (not the whole tab via loadTab/renderLoads)
+  // so it can filter loadsCache client-side on every keystroke without a
+  // server round trip and without losing focus on the search box itself.
+  const searchInput = $('loadSearch');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      const filtered = filterLoads(loadsCache, searchInput.value);
+      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.');
+      wireDeckEvents();
+    });
+  }
+
+  renderItemRows();
+}
+
+// Wires the "Generate PDF" buttons inside #loadDeck — pulled out of
+// wireLoadsEvents so it can be re-run after every search-filter re-render
+// (new button elements each time) without re-wiring the whole tab.
+function wireDeckEvents() {
+  document.querySelectorAll('.btn-gen-pdf').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    btn.disabled = true; btn.textContent = 'Generating…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST' });
+      loadTab('loads');
+    } catch (err) {
+      alert('PDF generation failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Generate PDF';
+    }
+  }));
+  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const load = loadsCache.find(l => l.id === btn.dataset.id);
+    if (load) openEditLoadModal(load);
+  }));
+  document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard — photos and any generated PDFs already in Drive are kept.`)) return;
+    btn.disabled = true; btn.textContent = 'Deleting…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      loadTab('loads');
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Delete';
+    }
+  }));
+}
+
+
+let loadsCache = [];
+let currentLoadItems = [];
+let editingLoadId = null;
+
+// ── App shell (new — replaces the dashboard's sidebar/tab system, which
+// doesn't exist here since this app has exactly one screen) ─────────────
+function showLoginScreen(err) {
+  $('loginScreen').classList.remove('hidden');
+  $('appShell').classList.add('hidden');
+  $('loginErr').textContent = err || '';
+}
+function showAppShell() {
+  $('loginScreen').classList.add('hidden');
+  $('appShell').classList.remove('hidden');
+}
+
+async function doLogin() {
+  const pw = $('loginPw').value;
+  const btn = $('btnLogin');
+  $('loginErr').textContent = '';
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const res = await fetch(API_BASE + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Sign-in failed');
+    setToken(data.sid);
+    ROLE = data.role || 'user';
+    await bootLoads();
+  } catch (err) {
+    $('loginErr').textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
+}
+
+async function bootLoads() {
+  showAppShell();
+  $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : ROLE === 'staff' ? 'Staff access' : 'Standard access';
+  try {
+    renderLoads(await api('/api/loads'));
+  } catch (err) {
+    // api() already routes a 401 to the login screen; anything else
+    // (network error, 500, etc.) surfaces here instead of a blank screen.
+    if (err.message !== 'unauthorized') {
+      $('viewRoot').innerHTML = '<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">' + esc(err.message) + '</div>';
+    }
+  }
+}
+
+// renderLoads()'s own code calls loadTab('loads') after save/delete/PDF
+// actions to refresh the deck — the dashboard build has a real tab
+// router, this app doesn't need one, so it's shimmed to just reload
+// Loads directly. Everything that calls it was lifted verbatim above and
+// is unaware this is a shim rather than a real router.
+function loadTab(tab) {
+  if (tab === 'loads') return bootLoads();
+}
+
+$('btnLogin').addEventListener('click', doLogin);
+$('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('btnSignout').addEventListener('click', () => {
+  setToken(null);
+  showLoginScreen();
+});
+
+// ── Boot ──────────────────────────────────────────────────────────────
+(async function boot() {
+  const token = getToken();
+  if (!token) { showLoginScreen(); return; }
+  try {
+    const me = await api('/api/me');
+    ROLE = me.role || 'user';
+    await bootLoads();
+  } catch (err) {
+    showLoginScreen();
+  }
+})();
+</script>
+</body>
+</html>

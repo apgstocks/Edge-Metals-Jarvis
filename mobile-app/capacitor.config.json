@@ -1,0 +1,12 @@
+{
+  "appId": "com.edgemetals.loads",
+  "appName": "Edge Metals Loads",
+  "webDir": "www",
+  "backgroundColor": "#0C0E10",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

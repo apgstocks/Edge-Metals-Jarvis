@@ -1,0 +1,20 @@
+{
+  "name": "edge-metals-loads",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Edge Metals Loads — standalone mobile app (Capacitor wrapper around the Loads tab's web code, talking to the same Jarvis backend as the dashboard).",
+  "scripts": {
+    "sync": "cap sync",
+    "android": "cap open android",
+    "ios": "cap open ios",
+    "build:android": "cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/ios": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

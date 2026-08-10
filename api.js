@@ -111,6 +111,27 @@ function createApi() {
     const app = express();
     app.use(express.json({ limit: '2mb' }));
 
+    // Minimal hand-rolled CORS (no new dependency for a few headers) — added
+    // for the Loads mobile app (Capacitor WebView), whose requests to this
+    // API are cross-origin from the browser's point of view (app origin is
+    // capacitor://localhost / https://localhost, API origin is wherever
+    // this is deployed). No Access-Control-Allow-Credentials here on
+    // purpose: the mobile app authenticates via Authorization: Bearer
+    // <sid> (see /login and the session-gate below), not cookies, so
+    // credentialed CORS was never needed and the browser cookie's
+    // SameSite=Strict is left completely untouched for the desktop
+    // dashboard. Wildcard origin is fine for the same reason — the actual
+    // access control is the password/session/token check below, not CORS
+    // (CORS only ever gates browser JS reading the response, not whether a
+    // request can be made at all).
+    app.use((req, res, next) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        if (req.method === 'OPTIONS') return res.sendStatus(204);
+        next();
+    });
+
     // ── Public routes (no auth) ───────────────────────────────────────────────
     app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
@@ -171,7 +192,17 @@ function createApi() {
         const sid = issueSession(req.ip, role);
         res.setHeader('Set-Cookie',
             `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
-        res.json({ ok: true, role });
+        // sid is ALSO returned in the JSON body now, not just the cookie —
+        // added for the Loads mobile app. Its fetch() calls to this API are
+        // cross-origin, and SameSite=Strict cookies are never attached to
+        // cross-origin requests (that's the whole point of Strict) — so the
+        // app can't rely on the cookie at all. It stores this value instead
+        // and sends it back as `Authorization: Bearer <sid>` (see the
+        // session-gate middleware below). This is NOT a second auth system —
+        // same sessions Map, same TTL, same role — just a second way to
+        // carry the same session id. Existing cookie-based browser clients
+        // simply ignore this extra field.
+        res.json({ ok: true, role, sid });
     });
 
     app.post('/logout', (req, res) => {
@@ -182,12 +213,21 @@ function createApi() {
     });
 
     // ── Session gate on everything else ───────────────────────────────────────
-    // Two ways to authenticate:
+    // Three ways to authenticate:
     //  1) sid cookie (browser session from /login)
-    //  2) API_TOKEN bearer header (machine-to-machine, unchanged from before)
+    //  2) sid as a Bearer token (the Loads mobile app — see /login's sid in
+    //     the JSON response above; same session record as #1, just carried
+    //     in a header instead of a cookie since cross-origin requests never
+    //     get the SameSite=Strict cookie attached)
+    //  3) API_TOKEN bearer header (machine-to-machine, unchanged from before)
     app.use((req, res, next) => {
-        const sid = parseCookie(req.headers.cookie, 'sid');
-        const session = getSession(sid);
+        const cookieSid = parseCookie(req.headers.cookie, 'sid');
+        let session = getSession(cookieSid);
+
+        if (!session && req.headers.authorization) {
+            const bearer = req.headers.authorization.replace('Bearer ', '');
+            session = getSession(bearer);
+        }
         if (session) { req.role = session.role; return next(); }
 
         if (cfg.API_TOKEN) {
