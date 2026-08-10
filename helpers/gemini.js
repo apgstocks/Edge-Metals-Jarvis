@@ -754,12 +754,14 @@ async function trimDeadDigitZones(sharpImg, cropW, cropH) {
         // (peak 312, 100% of that crop's max) sat far enough from the rest of
         // the number that it fell outside the merge distance, and picking
         // "longest" alone threw it away, cropping to a wrong-but-confident
-        // number instead of the real one. Safe to union broadly now that
-        // Cloud Vision (not Gemini) reads the crop: extractWeightNumber only
-        // pulls DIGIT characters out of whatever text Vision finds, so even
-        // if a non-digit label character (LB/KG/GR/NT) ends up inside the
-        // union, it can't pollute the weight number the way it could once
-        // confuse Gemini's visual "which digit is this" reasoning.
+        // number instead of the real one. Union broadly is safe on the
+        // non-digit-label front (LB/KG/GR/NT can't pollute a digit-only
+        // regex match) but NOT fully safe against a ghost cell that's
+        // bright enough to survive this 50% floor — confirmed on a
+        // different real photo the same day: extractWeightNumberFromCrop in
+        // helpers/visionOcr.js is the actual guard against that now (plain
+        // "longest digit run" alone isn't trustworthy on the crop path,
+        // exactly like it never was on the whole image).
         const brightEnough = merged.filter((run) => {
             let peakInRun = 0;
             for (let x = run[0]; x < run[1]; x++) if (colScore[x] > peakInRun) peakInRun = colScore[x];
@@ -1093,7 +1095,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         const visionText = await visionPromise;
         console.log(`[GEMINI] Vision-on-crop step took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
-        const visionWeight = visionOcr.extractWeightNumber(visionText);
+        const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
         if (visionWeight == null) return null;
         return { visionWeight, visionText, box, geminiMetaPromise };
     })().catch((err) => {

@@ -134,4 +134,69 @@ function extractPlausibleWeightFromFullImage(rawText) {
     return { weight: Math.max(...uniqueInRange), ambiguous: true, candidates: numeric };
 }
 
-module.exports = { detectText, extractWeightNumber, extractPlausibleWeightFromFullImage };
+// Root cause found 2026-08-10, confirmed by actually re-running
+// locateRedDisplayByPixels + cropToDisplay against a real production photo
+// that had just produced a wrong "4771920" read: the crop DOES sometimes
+// still contain a faint ghost/dead LED cell right next to the real digits
+// (visually confirmed — a dim, out-of-focus cell sits to the left of the
+// bright "71920" on that display). It survives trimDeadDigitZones on
+// purpose — that trim's 50%-of-peak keep threshold has to be generous or it
+// wrongly discards a real second digit group (see the comment on
+// trimDeadDigitZones in helpers/gemini.js, a real bug that threshold fixed).
+// Vision read the whole crop as ONE unbroken digit string, with no space
+// between the ghost cell's misread characters and the real number ("47" +
+// "71920" = "4771920", confirmed against the real crop) — so
+// extractWeightNumber's plain "longest digit run" can't be trusted blind on
+// the crop path either, the same way it never could on the whole image.
+//
+// The fix leans on a pattern that's held across every single misread in
+// this whole debugging session, this one included: the TRAILING digits are
+// always correct, the corruption is always extra/wrong digits on the LEFT
+// (that's consistent with the physical cause — the dead/ghost cell is
+// always the leading, leftmost cell on these displays, never a trailing
+// one). So: prefer any single already-plausible token first (the normal,
+// clean-crop case — most crops hit this and it's a no-op). Only if nothing
+// is plausible on its own, and the longest run is implausibly large, strip
+// leading digits (never trailing) one at a time until what's left falls in
+// range. Capped at 2 stripped digits — every real ghost-cell contamination
+// actually observed across this whole session has been 1 or 2 stray
+// leading digits, never more, so allowing exactly that much and no further
+// keeps this from rescuing a genuinely garbage read. Past the cap this
+// returns null (a missing reading a human re-checks) rather than keep
+// guessing into a wrong number.
+// Every trim is logged loudly so a repeat of this is visible, not silently
+// "corrected" and forgotten.
+function extractWeightNumberFromCrop(rawText) {
+    if (!rawText) return null;
+    const matches = rawText.match(/\d+(\.\d+)?/g);
+    if (!matches || matches.length === 0) return null;
+
+    const inRange = matches.filter((m) => {
+        const v = parseFloat(m);
+        return Number.isFinite(v) && v >= PLAUSIBLE_LOAD_WEIGHT_MIN && v <= PLAUSIBLE_LOAD_WEIGHT_MAX;
+    });
+    if (inRange.length === 1) return parseFloat(inRange[0]);
+
+    const longest = matches.reduce((a, b) => (b.length > a.length ? b : a));
+    const n = parseFloat(longest);
+
+    if (inRange.length === 0 && Number.isFinite(n)) {
+        for (let strip = 1; strip <= 2 && strip < longest.length; strip++) {
+            const suffix = longest.slice(strip);
+            const val = parseFloat(suffix);
+            if (Number.isFinite(val) && val >= PLAUSIBLE_LOAD_WEIGHT_MIN && val <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
+                console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight, but stripping ${strip} leading digit(s) gives "${suffix}" — using that (dead/ghost LED cell contamination has been on the left edge in every case seen so far, never the right)`);
+                return val;
+            }
+        }
+        console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight (${PLAUSIBLE_LOAD_WEIGHT_MIN}-${PLAUSIBLE_LOAD_WEIGHT_MAX}) and no leading-digit trim fixes it — returning null rather than a very likely wrong number`);
+        return null;
+    }
+
+    // Multiple in-range candidates (rare on an isolated crop), or the
+    // straightforward already-plausible single-match case — same fallback
+    // behavior extractWeightNumber always had.
+    return Number.isFinite(n) ? n : null;
+}
+
+module.exports = { detectText, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage };
