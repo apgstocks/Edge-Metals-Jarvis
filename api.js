@@ -469,11 +469,19 @@ function createApi() {
     // ── Documents: PDF scan + Drive upload, plus Loads' photo uploads ─────────
     // Base64-encoded PDFs inflate ~33% over binary. Booking PDFs run 200KB–2MB,
     // so 10mb covered those two routes fine. Now also used by /api/loads and
-    // /api/vision/read-weight, which can carry TWO photos (gross + tare) in
-    // one request — bumped to 15mb as headroom. The real fix for oversized
-    // photos is client-side downscaling before upload (see dashboard/index.html's
-    // downscaleToBase64) — this limit is a safety margin, not the primary defense.
-    const largeJson = express.json({ limit: '15mb' });
+    // /api/vision/read-weight — a real production PayloadTooLargeError on
+    // 2026-08-11 showed 15mb wasn't actually enough: a load with several
+    // items, each carrying its OWN gross + tare photo, sends ALL of those
+    // photos in one PUT/POST, not just two. Client-side downscaling (see
+    // dashboard/index.html's downscaleToBase64, max 1600px @ quality 0.9)
+    // keeps a single photo to roughly 300-800KB base64, so this scales with
+    // item count, not a fixed "two photos" — 40mb is headroom for a load
+    // with a realistic number of items, not a structural fix. If a load
+    // ever legitimately needs more than that, the real fix is uploading each
+    // item's photos through their own request instead of bundling every
+    // photo on the load into one JSON body — flagged here, not implemented,
+    // since that changes the save flow and needs sign-off first.
+    const largeJson = express.json({ limit: '40mb' });
 
     // Extract booking fields from an uploaded PDF (multimodal Gemini call)
     app.post('/api/documents/scan', largeJson, async (req, res) => {
