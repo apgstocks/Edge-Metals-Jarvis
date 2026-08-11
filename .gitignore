@@ -5,3 +5,6 @@ bookings.json
 *.log
 .DS_Store
 .wwebjs_cache/
+
+# Built APKs — 6MB binaries, rebuilt from source, do not belong in git
+*.apk
