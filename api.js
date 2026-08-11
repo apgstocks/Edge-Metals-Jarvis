@@ -472,10 +472,17 @@ function createApi() {
     // /api/vision/read-weight — a real production PayloadTooLargeError on
     // 2026-08-11 showed 15mb wasn't actually enough: a load with several
     // items, each carrying its OWN gross + tare photo, sends ALL of those
-    // photos in one PUT/POST, not just two. Client-side downscaling (see
-    // dashboard/index.html's downscaleToBase64, max 1600px @ quality 0.9)
-    // keeps a single photo to roughly 300-800KB base64, so this scales with
-    // item count, not a fixed "two photos" — 40mb is headroom for a load
+    // photos in one PUT/POST, not just two. NOTE (updated 2026-08-11): the
+    // client-side 1600px downscale this comment used to rely on is GONE —
+    // it was measured to break weight OCR (0/3 correct at 1600px vs 3/3 at
+    // original resolution) and both clients now send originals at quality
+    // 0.95 (see downscaleToBase64 in dashboard/index.html AND the separate
+    // bundled copy in mobile-app/www/index.html). So a single photo is now
+    // roughly 1.7-2.5MB base64, not 300-800KB — this limit has correspondingly
+    // less headroom per item than when it was set. If PayloadTooLargeError
+    // reappears, raise THIS limit rather than re-adding a client resolution
+    // cap; the cap is the lever proven to break accuracy. 40mb is headroom
+    // for a load
     // with a realistic number of items, not a structural fix. If a load
     // ever legitimately needs more than that, the real fix is uploading each
     // item's photos through their own request instead of bundling every
