@@ -2001,15 +2001,25 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
   }
 }
 
-// Downscales any drawable image source (a live <video> frame, or an <img>
-// loaded from an uploaded File) to at most maxDim on the long edge and
-// re-encodes as JPEG at the given quality. Root-fix for PayloadTooLargeError:
-// a phone camera photo picked via the Upload button is routinely 3-8MB raw
-// (base64 inflates that another ~33%), which blew past body-parser's limit
-// on save (two photos — gross + tare — in one request). Reading a handful of
-// digits off a scale display doesn't need full resolution, so this trades
-// nothing perceptible for a payload that's a few hundred KB instead.
-function downscaleToBase64(source, srcW, srcH, maxDim = 1600, quality = 0.9) {
+// Changed 2026-08-11: this used to cap long edge at 1600px, on the theory
+// that reading a handful of digits off a scale display doesn't need full
+// resolution. Tested directly against production traffic and that theory
+// was wrong — same 3 photos, same backend code, only this cap changed:
+// at 1600px the weight-OCR pipeline got 0/3 correct (wrong reads: 1150 vs
+// true 71920, 87528 vs true 81528, 41516 vs true 28460); at original
+// resolution it got 3/3 correct. The 1600px downscale was silently
+// corrupting the exact digits the pipeline needs, not just shrinking
+// irrelevant background. So: send original resolution now (maxDim
+// effectively unbounded), quality bumped to 0.95 to match what was tested.
+// PayloadTooLargeError (the original reason for the 1600px cap) is fixed
+// on the backend instead — api.js's PUT /api/loads/:id already uses
+// express.json({limit:'40mb'}) — and realistic full-res phone JPEGs from
+// this app's own uploads folder run ~1.7-1.9MB, comfortably under that.
+// If a specific device produces much larger originals than that and hits
+// the body-parser limit again, raise the backend limit further rather than
+// re-adding a client-side resolution cap — that's the lever that was just
+// proven to break accuracy, not payload size.
+function downscaleToBase64(source, srcW, srcH, maxDim = 1e9, quality = 0.95) {
   let w = srcW, h = srcH;
   if (w > maxDim || h > maxDim) {
     const scale = maxDim / Math.max(w, h);
