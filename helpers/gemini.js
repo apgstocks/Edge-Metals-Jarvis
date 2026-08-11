@@ -1627,14 +1627,41 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             }
         }
         if (rescueWeight != null) {
-            const note = ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
-            console.log(`[GEMINI] Weight read via Cloud Vision OCR (${rescueLabel} rescue) in ${elapsed()}: ${rescueWeight}${note}`);
+            // Added 2026-08-11, per direct instruction: this used to return
+            // the moment ANY Vision variant found ANY number, without ever
+            // consulting Gemini even though geminiMetaPromise has been
+            // running in parallel since the candidate loop started — never
+            // actually trying "another model," just retrying the same one
+            // on different crops. Real case that exposed this: Vision's
+            // rescue read "973.72" off a 768px crop (a decimal, three
+            // significant digits — nothing on this display type has ever
+            // been a decimal; every confirmed real reading is a 5-digit
+            // whole number) and it was returned as-is. Once Vision has
+            // already needed rescuing on a crop, its credibility on THAT
+            // crop is already reduced, so Gemini's independent read is
+            // worth a bounded wait and a real comparison, not a footnote.
+            const GEMINI_RESCUE_CROSSCHECK_MS = Number(process.env.GEMINI_RESCUE_CROSSCHECK_MS) || 8000;
+            const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_RESCUE_CROSSCHECK_MS, 'Gemini crop metadata (cross-check on Vision rescue)');
+            const geminiAgrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight === rescueWeight;
+            const geminiDisagrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight !== rescueWeight;
+            // Prefer Gemini's number when the two disagree: Vision already
+            // proved unreliable enough on this exact crop to need a rescue
+            // attempt at all, so its rescued answer isn't more trustworthy
+            // than a second, architecturally different model's independent
+            // read of the same image — surfaced as primary, with Vision's
+            // guess kept visible as the alternate rather than discarded.
+            const finalWeight = geminiDisagrees ? geminiRescueCheck.weight : rescueWeight;
+            const finalAlt = geminiDisagrees ? rescueWeight : null;
+            const note = geminiDisagrees
+                ? ` [Vision found no text on the plain crop; a "${rescueLabel}" rescue read ${rescueWeight}, but Gemini's independent read of the same crop said ${geminiRescueCheck.weight} instead — using Gemini's answer since Vision already needed rescuing here, but please verify against the actual display]`
+                : ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading${geminiAgrees ? ', and Gemini\'s independent read of the same crop agreed' : ' (Gemini\'s cross-check did not return a usable answer in time)'} — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
+            console.log(`[GEMINI] Weight read via ${geminiDisagrees ? 'Gemini (preferred over Vision rescue, disagreement)' : `Cloud Vision OCR (${rescueLabel} rescue)`} in ${elapsed()}: ${finalWeight}${note}`);
             return {
-                weight: rescueWeight,
-                alternate_weight: null,
-                alternate_source: null,
+                weight: finalWeight,
+                alternate_weight: finalAlt,
+                alternate_source: finalAlt != null ? 'Cloud Vision OCR (rescue)' : null,
                 weight_unit: 'lb',
-                displays_seen: `Cloud Vision OCR read of a ${rescueLabel} (locate reason: "${accurate.box.reason || ''}"), plain crop found no text`,
+                displays_seen: `${geminiDisagrees ? 'Gemini' : 'Cloud Vision OCR'} read of a ${rescueLabel} (locate reason: "${accurate.box.reason || ''}"), plain crop found no text`,
                 raw_text: `${rescueText || ''} (Cloud Vision OCR, ${rescueLabel})${note}`,
                 ambiguous: true,
             };
