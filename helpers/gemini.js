@@ -882,11 +882,23 @@ async function cropToDisplay(imageBase64, mimeType, box) {
         const w = meta.width, h = meta.height;
         if (!w || !h) return null;
 
-        // 12% padding around the model's box on each side, clamped to image bounds —
-        // the box is around the housing already; a bit more margin protects against
-        // a slightly-too-tight box cutting off a digit.
-        const padX = (box.x_max - box.x_min) * 0.12;
-        const padY = (box.y_max - box.y_min) * 0.12;
+        // Padding around the model's box on each side, clamped to image bounds —
+        // the box is around the housing already; a bit more margin protects
+        // against a slightly-too-tight box cutting off a digit. Widened
+        // specifically for AI-locate boxes 2026-08-11: reproduced live on a
+        // real photo where the AI locate path (non-deterministic — a repeat
+        // run on the identical photo produced a DIFFERENT, tighter box than
+        // the first attempt) cropped off the leading "28" of "28460",
+        // leaving just "460" — still numerically plausible on its own, so it
+        // slipped through the range check as a confident, wrong, unflagged
+        // answer. Pixel-locate boxes (red/cyan) already get their own
+        // internal 8%/25% pad before reaching here and have shown no
+        // truncation issue, so only the less-precise AI-locate path (no
+        // "pixel color analysis" in its reason string) gets the wider margin.
+        const isAiLocate = !(box.reason || '').includes('pixel color analysis');
+        const padFrac = isAiLocate ? 0.22 : 0.12;
+        const padX = (box.x_max - box.x_min) * padFrac;
+        const padY = (box.y_max - box.y_min) * padFrac;
         let left = Math.max(0, Math.round((box.x_min - padX) * w));
         let top = Math.max(0, Math.round((box.y_min - padY) * h));
         let right = Math.min(w, Math.round((box.x_max + padX) * w));
@@ -1160,6 +1172,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
         console.log(`[GEMINI] Crop step took ${Date.now() - tCropStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
+        if (process.env.DEBUG_DUMP_CROP && croppedBase64) require('fs').writeFileSync(process.env.DEBUG_DUMP_CROP, Buffer.from(croppedBase64, 'base64'));
         if (!croppedBase64) return null;
 
         // Kicked off together but not awaited together — the metadata call
@@ -1176,7 +1189,19 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         console.log(`[GEMINI] Vision-on-crop step took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
         if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
         const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
-        if (visionWeight == null) return null;
+        // Changed 2026-08-11: this used to `return null` here the instant
+        // Vision-on-crop came back empty, which threw away a perfectly good,
+        // tightly-isolated crop AND silently abandoned the geminiMetaPromise
+        // already running in parallel on that same crop — forcing a fall-back
+        // all the way to the much noisier whole-image OCR pass even when
+        // Gemini's own read of the SAME crop might still succeed. Reproduced
+        // live: a real weighbridge crop that's clearly legible to the human
+        // eye (bright, high-contrast red digits) got a genuine "no text
+        // detected" response from the Vision API itself (200 status, no
+        // error, just an empty result) — not every Vision failure is a
+        // hallucination; sometimes it just finds nothing. Now always returns
+        // the crop info so the caller can try Gemini's parallel read on it
+        // before giving up on this crop entirely.
         return { visionWeight, visionText, box, geminiMetaPromise };
     })().catch((err) => {
         console.warn('[GEMINI] Crop-zoom accurate path failed:', err.message);
@@ -1197,7 +1222,34 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // crop) — "not ready in time" implied a timeout that never happened and
     // pointed the wrong direction. withTimeout() above already logs its own
     // distinct warning on a genuine timeout; this line just reports outcome.
-    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'succeeded' : 'did not produce a usable reading'} at ${elapsed()}`);
+    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? (accurate.visionWeight != null ? 'succeeded' : 'located a crop but Vision found no text on it') : 'did not produce a usable reading'} at ${elapsed()}`);
+
+    // Added 2026-08-11: Vision-on-crop came back genuinely empty (not
+    // garbled, not hallucinated — literally no text detected) despite a
+    // valid, tightly-cropped display image existing. Rather than discard
+    // that crop and fall straight to the noisier whole-image OCR, try
+    // Gemini's already-in-flight parallel read of the SAME crop first —
+    // see the long comment at the crop-path return site above for why this
+    // case exists at all.
+    if (accurate && accurate.visionWeight == null) {
+        const GEMINI_META_TIMEOUT_MS = Number(process.env.GEMINI_META_TIMEOUT_MS) || 8000;
+        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata (Vision-on-crop found nothing)');
+        if (geminiMeta && geminiMeta.weight != null) {
+            const note = ` [Vision found no text at all on this crop; Gemini's read of the same crop is used instead, with no Vision cross-check available — flagged for review]`;
+            console.log(`[GEMINI] Weight read via Gemini (primary, cropped, Vision-found-nothing fallback) in ${elapsed()}: ${geminiMeta.weight}${note}`);
+            return {
+                weight: geminiMeta.weight,
+                alternate_weight: null,
+                alternate_source: null,
+                weight_unit: geminiMeta.weight_unit || 'lb',
+                displays_seen: geminiMeta.displays_seen || `Gemini read of located display (locate reason: "${accurate.box.reason || ''}"), Vision found no text`,
+                raw_text: `${geminiMeta.raw_text || ''} (Gemini, Vision found nothing on this crop)${note}`,
+                ambiguous: true,
+            };
+        }
+        // Neither engine got anything off this crop — genuinely fall through
+        // to the whole-image pass below, same as before.
+    }
 
     if (accurate && accurate.visionWeight != null) {
         // Rework 2026-08-11, per Apsara ("remove the timing constraint, find
@@ -1230,15 +1282,33 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // parallel above for potential future use/logging, but nothing
             // downstream blocks on it — its .catch() already prevents an
             // unhandled-rejection warning if it's simply never awaited).
-            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}`);
+            // Added 2026-08-11: cross-check the digit count before trusting
+            // this unflagged. Reproduced live: the AI-locate box (used when
+            // pixel-locate can't confidently place one) is non-deterministic
+            // — a repeat run on the IDENTICAL photo returned a tighter box
+            // than the first attempt and cropped off the leading "28" of
+            // "28460", leaving "460" — still inside the 200-90000 plausible
+            // range on its own, so it slipped through as a confident,
+            // unflagged, WRONG answer. No range check catches a truncated-
+            // but-still-plausible number. Every confirmed genuine reading on
+            // THIS path (the red/weighbridge display) has been 5 digits
+            // (20000-90000+ lb) all session — nothing shorter has ever been
+            // real. So: still return Vision's number (better than nothing,
+            // and often still right), but flag it for a human glance if it's
+            // suspiciously short for this specific display type, rather than
+            // present a possibly-truncated number with false confidence.
+            // Padding for the AI-locate path was also widened (see
+            // cropToDisplay) to make this less likely to happen at all.
+            const suspiciouslyShort = accurate.visionWeight < 10000;
+            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${suspiciouslyShort ? ' — shorter than every confirmed real reading on this display type, flagged for review in case of a truncated crop' : ''}`);
             return {
                 weight: accurate.visionWeight,
                 alternate_weight: null,
                 alternate_source: null,
                 weight_unit: 'lb',
                 displays_seen: `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)`,
-                ambiguous: false,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${suspiciouslyShort ? ' [fewer digits than every confirmed real reading on this display type — possible truncated crop, please verify against the actual display]' : ''}`,
+                ambiguous: suspiciouslyShort,
             };
         }
 
