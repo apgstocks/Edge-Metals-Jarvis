@@ -578,11 +578,29 @@ async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, col
                 if (!dilated[idx] || labels[idx] !== -1) continue;
                 const label = nextLabel++;
                 let minX = x, maxX = x, minY = y, maxY = y, litCount = 0;
+                // origMinX/etc track bounds of the ORIGINAL (undilated) lit
+                // pixels only — added 2026-08-11 alongside the edge-touch
+                // check below. minX/maxX/minY/maxY above are bounds of the
+                // DILATED component (correct for finding the crop box — the
+                // dilation is what bridges gaps between digit segments) but
+                // are NOT safe to use for "does this touch the frame edge":
+                // dilation (R=25 at this ~500px analysis width, 5% of frame)
+                // pads the box outward on every side regardless of where the
+                // real content is, so a fully-in-frame display positioned
+                // anywhere near the outer 5% would show dilated bounds
+                // touching 0/w or 0/h even with real margin around it.
+                // Verified directly: a photo that reads correctly (81528)
+                // showed dilated minX=0 while genuinely having margin.
+                let origMinX = Infinity, origMaxX = -Infinity, origMinY = Infinity, origMaxY = -Infinity;
                 stack.push(idx); labels[idx] = label;
                 while (stack.length) {
                     const cur = stack.pop();
                     const cy = (cur / w) | 0, cx = cur % w;
-                    if (mask[cur]) litCount++;
+                    if (mask[cur]) {
+                        litCount++;
+                        if (cx < origMinX) origMinX = cx; if (cx > origMaxX) origMaxX = cx;
+                        if (cy < origMinY) origMinY = cy; if (cy > origMaxY) origMaxY = cy;
+                    }
                     if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
                     if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
                     if (cx > 0 && dilated[cur - 1] && labels[cur - 1] === -1) { labels[cur - 1] = label; stack.push(cur - 1); }
@@ -590,7 +608,7 @@ async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, col
                     if (cy > 0 && dilated[cur - w] && labels[cur - w] === -1) { labels[cur - w] = label; stack.push(cur - w); }
                     if (cy < h - 1 && dilated[cur + w] && labels[cur + w] === -1) { labels[cur + w] = label; stack.push(cur + w); }
                 }
-                comps.push({ litCount, minX, maxX, minY, maxY });
+                comps.push({ litCount, minX, maxX, minY, maxY, origMinX, origMaxX, origMinY, origMaxY });
             }
         }
         if (!comps.length) { console.warn(`[GEMINI] Pixel locate (${colorLabel}): pixels found but no connected component formed`); return null; }
@@ -630,6 +648,21 @@ async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, col
             const boxW = (comp.maxX - comp.minX) / w, boxH = (comp.maxY - comp.minY) / h;
             if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) continue;
             const padX = boxW * 0.08, padY = boxH * 0.25;
+            // Added 2026-08-11, corrected same day after a measured false
+            // positive: whether the ORIGINAL (undilated) lit pixels run up
+            // to the photo's LEFT/RIGHT edge — using origMinX/origMaxX, not
+            // the dilated minX/maxX (see the connected-component loop above
+            // for why the dilated bounds can't be used here). Digits read
+            // left-to-right, so a display cut off by the frame loses digits
+            // specifically off the left or right edge — every real case
+            // this session (736 vs 73600, "truncated on right edge of image
+            // frame", "cut off by the left edge") was horizontal. TOP/BOTTOM
+            // edge-touching is deliberately NOT checked: a display sitting
+            // high or low in an otherwise normal photo is just composition,
+            // not missing data, and checking it produced false positives
+            // with no corresponding evidence of an actual truncated read.
+            const edgeMargin = w * 0.015;
+            const touchesEdge = comp.origMinX <= edgeMargin || comp.origMaxX >= (w - edgeMargin);
             candidates.push({
                 x_min: Math.max(0, comp.minX / w - padX),
                 y_min: Math.max(0, comp.minY / h - padY),
@@ -637,6 +670,7 @@ async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, col
                 y_max: Math.min(1, comp.maxY / h + padY),
                 reason: `${colorLabel} cluster found by pixel color analysis (no AI call)`,
                 litCount: comp.litCount,
+                touchesEdge,
             });
         }
         console.log(`[GEMINI] Pixel locate (${colorLabel}): ${candidates.length} candidate box(es) passed sanity bounds (${comps.map(c => c.litCount).slice(0, 5).join(', ')} px, largest first)`);
@@ -1185,6 +1219,76 @@ function voteOnWeightReadings(results) {
 // and it could add another 12-16s+ on top of everything else. The
 // whole-image Gemini single-pass read remains as the final, rare last resort
 // if BOTH Vision attempts come back empty.
+// Added 2026-08-11. Root-cause analysis this session found that the single
+// biggest driver of a wrong weight reading was never the OCR/candidate logic
+// downstream — it was bad input: a display partially outside the photo
+// frame, or dim/off-angle digits that a color-threshold locate step can't
+// see. Every backend retry, cross-check, and race-condition fix this session
+// improved the odds AFTER a bad photo was already submitted; none of them
+// can recover digits that were never in the shot. The brief was explicit:
+// this needs to run with no human checking the number afterward, so the
+// only honest way to raise reliability further is to stop bad photos from
+// ever entering the pipeline — reject them at the point of capture and have
+// the app ask for a retake automatically, the same way a barcode scanner
+// or a check-deposit camera refuses a bad frame instead of guessing at it.
+// This does NOT ask a human to read or confirm the weight — it's a binary
+// "is a full, in-frame display visible" gate, checked automatically.
+//
+// Deliberately pixel-only (no Gemini call): this needs to return in well
+// under a second so a driver retaking a bad photo doesn't feel like the app
+// hung. The full accurate path's AI-locate fallback is skipped here on
+// purpose — a slightly higher false-retake rate is the right trade against
+// a client-side check that takes 5-10s per attempt.
+async function checkPhotoQuality(imageBase64, mimeType = 'image/jpeg') {
+    if (!sharp) return { ok: true, reason: 'sharp_unavailable' }; // fail open, never block capture over a missing dependency
+    try {
+        const normalized = await normalizeOrientation(imageBase64);
+        let candidates = await locateRedDisplayByPixels(normalized);
+        let colorLabel = 'red';
+        if (!candidates || !candidates.length) {
+            candidates = await locateCyanDisplayByPixels(normalized);
+            colorLabel = 'cyan';
+        }
+        // Deliberately NOT a hard reject. Measured directly: a real photo
+        // that the fast pixel-only check finds nothing on can still be read
+        // correctly by the full backend pipeline via its Gemini AI-locate
+        // fallback (confirmed on the exact 28460 case this check was built
+        // against). "Not found" here just means the fast color-threshold
+        // heuristic came up empty at low analysis resolution — that is
+        // weaker, noisier evidence than edge_cutoff below, which is a
+        // specific positive signal. Rejecting on it would force retakes on
+        // photos that were already fine, for no measured accuracy gain.
+        if (!candidates || !candidates.length) {
+            return {
+                ok: true,
+                reason: 'not_found_but_allowed',
+                message: 'No confident display detected by the fast check — the fuller server-side pass may still recover a reading.',
+            };
+        }
+        // Check EVERY returned candidate, not just the largest. The locate
+        // step already returns up to 3 (see findDisplayBoxByColor) precisely
+        // because the single biggest lit-pixel cluster is sometimes a false
+        // positive (a reflection, a glint) that outscores the real display —
+        // documented and fixed once already for the main read path. The same
+        // trap applies here: if candidate 1 is a bright edge-touching blob
+        // but candidate 2 is the real, fully-in-frame display, this gate
+        // must not reject a genuinely good photo over the wrong candidate.
+        const clean = candidates.find(c => !c.touchesEdge);
+        if (!clean) {
+            return {
+                ok: false,
+                reason: 'edge_cutoff',
+                message: 'Part of the display looks cut off at the edge of the photo. Back up or reposition so the whole number is visible, then retake.',
+            };
+        }
+        console.log(`[GEMINI] Photo quality check (${colorLabel}): OK, ${candidates.indexOf(clean) === 0 ? 'largest' : `candidate ${candidates.indexOf(clean) + 1}`} candidate does not touch frame edge`);
+        return { ok: true, reason: 'confident_box' };
+    } catch (err) {
+        console.warn('[GEMINI] Photo quality check failed, letting it through:', err.message);
+        return { ok: true, reason: 'check_failed' }; // fail open — never let a bug in this gate block a real capture
+    }
+}
+
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
     if (!imageBase64) throw new Error('imageBase64 required');
     // Normalize EXIF orientation ONCE, up front, before anything else touches
@@ -1843,4 +1947,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     return readWeightSinglePass(imageBase64, mimeType, retries);
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality };
