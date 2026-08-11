@@ -1945,6 +1945,31 @@ function syncItemsFromDom() {
 // photo button lives in — everything is scoped to that one row's fields.
 async function processWeightImage(row, roleKey, base64, mime, statusEl) {
   const idx = parseInt(row.dataset.idx, 10);
+
+  // Added 2026-08-11 — see the identical block in mobile-app/www/index.html
+  // for the full reasoning. Capture-time quality gate, run before the photo
+  // is attached or sent for a real OCR read: rejects a photo whose display
+  // is measurably cut off at the frame edge and asks for a retake, instead
+  // of accepting it and hoping OCR recovers digits that were never in the
+  // shot. Fails open on any error — never blocks a real capture.
+  if (statusEl) { statusEl.style.color = ''; statusEl.style.fontWeight = ''; statusEl.textContent = 'Checking photo…'; }
+  try {
+    const quality = await api('/api/vision/check-photo-quality', {
+      method: 'POST',
+      body: JSON.stringify({ image_base64: base64, mime_type: mime }),
+    });
+    if (quality && quality.ok === false) {
+      if (statusEl) {
+        statusEl.textContent = `⚠ ${quality.message || 'Photo not clear enough — please retake.'}`;
+        statusEl.style.color = 'var(--status-danger)';
+        statusEl.style.fontWeight = '700';
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn('[photo-quality-check] failed, proceeding without it:', err.message);
+  }
+
   syncItemsFromDom(); // capture whatever's already typed before we mutate a photo onto it
   if (currentLoadItems[idx]) currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64, mime };
   if (statusEl) { statusEl.style.color = ''; statusEl.style.fontWeight = ''; statusEl.textContent = 'Reading scale…'; }

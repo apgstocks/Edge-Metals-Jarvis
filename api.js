@@ -274,7 +274,7 @@ function createApi() {
     // (dashboard/index.html's NAV_ITEMS) hides every tab except Loads for
     // this role; this middleware is the actual server-side boundary, the
     // nav filtering is just UX so staff don't see buttons that would 403.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/me'];
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -585,6 +585,24 @@ function createApi() {
         } catch (err) {
             console.error('[API] read-weight failed:', err.message);
             res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── Vision: fast capture-time quality gate (no OCR, no Gemini call) ───────
+    // Called by the mobile app immediately after a photo is taken, BEFORE the
+    // (slower, more expensive) read-weight call above. Pixel-only, typically
+    // under 500ms — see checkPhotoQuality's own comment in helpers/gemini.js
+    // for why this exists and how it was validated.
+    app.post('/api/vision/check-photo-quality', largeJson, async (req, res) => {
+        const { image_base64, mime_type } = req.body || {};
+        if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
+        try {
+            const { checkPhotoQuality } = require('./helpers/gemini');
+            const result = await checkPhotoQuality(image_base64, mime_type);
+            res.json({ ok: true, ...result });
+        } catch (err) {
+            console.error('[API] check-photo-quality failed:', err.message);
+            res.json({ ok: true, reason: 'check_failed' }); // fail open — never block a real capture over this endpoint erroring
         }
     });
 
