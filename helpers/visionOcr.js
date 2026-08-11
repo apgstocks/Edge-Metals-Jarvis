@@ -184,16 +184,55 @@ function extractWeightNumberFromCrop(rawText) {
     const matches = rawText.match(/\d+(\.\d+)?/g);
     if (!matches || matches.length === 0) return null;
 
-    const inRange = matches.filter((m) => {
+    // Added 2026-08-11 after a real "Fairbanks IQ plus 710" crop returned
+    // the wrong number (710, a model-number fragment) instead of the true
+    // 80720. Root cause: Vision's OCR on this display repeatedly (4+
+    // separate real crops, not a one-off) misreads the "lb" unit suffix as
+    // "1b" with no space before it — "80720 lb" comes back as "807201b",
+    // which the digit-run regex above captures whole as "807201": the real
+    // weight with a spurious extra "1" glued on from the misread unit
+    // label. That pushes it out of the plausible range and excludes it,
+    // leaving only the wrong "710" behind. This un-glues that specific,
+    // repeatable pattern into an additional candidate BEFORE range-checking
+    // (a trailing artifact — distinct from the leading ghost-cell strip
+    // below, which handles a different, unrelated contamination pattern).
+    const unglued = [];
+    const lbSuffixRe = /(\d+)1b\b/gi;
+    let lbMatch;
+    while ((lbMatch = lbSuffixRe.exec(rawText))) unglued.push(lbMatch[1]);
+    const allCandidates = unglued.length ? matches.concat(unglued) : matches;
+
+    const inRange = allCandidates.filter((m) => {
         const v = parseFloat(m);
         return Number.isFinite(v) && v >= PLAUSIBLE_LOAD_WEIGHT_MIN && v <= PLAUSIBLE_LOAD_WEIGHT_MAX;
     });
     if (inRange.length === 1) return parseFloat(inRange[0]);
 
-    const longest = matches.reduce((a, b) => (b.length > a.length ? b : a));
+    if (inRange.length > 1) {
+        // Bug found + fixed 2026-08-11 via a real live crop from a
+        // "Fairbanks IQ plus 710" indicator: this branch used to fall
+        // through to the code below, which picks the longest-STRING match
+        // across ALL digit fragments regardless of whether it was even
+        // in-range — completely bypassing the plausibility filter this
+        // function exists to enforce. Reproduced live: the crop's label
+        // text contained the scale's capacity rating "100000.1" (out of
+        // range, > 90000) right next to the true reading "80720" (in
+        // range) — "100000.1" is a longer STRING, so it silently won and
+        // was returned as a confident, unflagged primary weight. Now picks
+        // the longest among the IN-RANGE candidates only, so an
+        // implausible number can never win purely by being a longer string.
+        const longestInRange = inRange.reduce((a, b) => (b.length > a.length ? b : a));
+        return parseFloat(longestInRange);
+    }
+
+    const longest = allCandidates.reduce((a, b) => (b.length > a.length ? b : a));
     const n = parseFloat(longest);
 
-    if (inRange.length === 0 && Number.isFinite(n)) {
+    // inRange.length === 0 here — nothing at all fell in the plausible
+    // range, so try stripping leading digit(s) (dead/ghost LED
+    // contamination, seen on the left edge in every case so far) before
+    // giving up and returning null rather than guessing.
+    if (Number.isFinite(n)) {
         for (let strip = 1; strip <= 2 && strip < longest.length; strip++) {
             const suffix = longest.slice(strip);
             const val = parseFloat(suffix);
@@ -202,14 +241,9 @@ function extractWeightNumberFromCrop(rawText) {
                 return val;
             }
         }
-        console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight (${PLAUSIBLE_LOAD_WEIGHT_MIN}-${PLAUSIBLE_LOAD_WEIGHT_MAX}) and no leading-digit trim fixes it — returning null rather than a very likely wrong number`);
-        return null;
     }
-
-    // Multiple in-range candidates (rare on an isolated crop), or the
-    // straightforward already-plausible single-match case — same fallback
-    // behavior extractWeightNumber always had.
-    return Number.isFinite(n) ? n : null;
+    console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight (${PLAUSIBLE_LOAD_WEIGHT_MIN}-${PLAUSIBLE_LOAD_WEIGHT_MAX}) and no leading-digit trim fixes it — returning null rather than a very likely wrong number`);
+    return null;
 }
 
 module.exports = { detectText, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage };

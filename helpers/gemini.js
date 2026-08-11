@@ -499,7 +499,19 @@ async function normalizeOrientation(imageBase64) {
 // icons even though both are "red". Verified against the actual photo from
 // this conversation: correctly boxes the full weighbridge housing and
 // excludes the Fairbanks bench scale below it, in ~150-180ms.
-async function locateRedDisplayByPixels(imageBase64) {
+// Refactored 2026-08-11 to take a color predicate instead of hardcoding red,
+// after a real batch of 12 live photos showed a THIRD display type at this
+// yard — a "Fairbanks IQ plus 710" indicator with a cyan/teal LCD readout,
+// not red. Sampled real pixel data directly off two of those photos before
+// writing this (not guessed): the digit cluster's actual average color came
+// back RGB≈(40,165,195) — low red, high green+blue — cleanly separable from
+// background noise (~0.2-0.3% of frame, same order of magnitude as the red
+// display). All the core logic (dilation, connected-component labeling,
+// picking the largest component) is unchanged from the original red-only
+// version, which stays exactly as before via the thin wrapper below —
+// only the color test and the minimum-lit-fraction threshold are now
+// parameters, so the well-tested red path can't regress.
+async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, colorLabel) {
     if (!sharp) return null;
     try {
         const buf = Buffer.from(imageBase64, 'base64');
@@ -519,15 +531,15 @@ async function locateRedDisplayByPixels(imageBase64) {
             for (let x = 0; x < w; x++) {
                 const i = rowBase + x * channels;
                 const r = data[i], g = data[i + 1], b = data[i + 2];
-                if (r > 140 && (r - g) > 60 && (r - b) > 60) { mask[y * w + x] = 1; totalLit++; }
+                if (colorTest(r, g, b)) { mask[y * w + x] = 1; totalLit++; }
             }
         }
         // Always-on (not gated behind DEBUG_WEIGHT_RAW) for the same reason
         // the locate-step logging below is always-on: this is exactly the
         // kind of "why did it fall back" question that was previously
         // unanswerable from the logs. Low-volume (once per photo).
-        console.log(`[GEMINI] Pixel locate: ${totalLit} lit px of ${w * h} (${(totalLit / (w * h) * 100).toFixed(2)}%), need >=0.3%`);
-        if (totalLit < w * h * 0.003) return null; // essentially nothing red in frame at all
+        console.log(`[GEMINI] Pixel locate (${colorLabel}): ${totalLit} lit px of ${w * h} (${(totalLit / (w * h) * 100).toFixed(2)}%), need >=${(minLitFraction * 100).toFixed(2)}%`);
+        if (totalLit < w * h * minLitFraction) return null; // essentially nothing this color in frame at all
 
         // Dilate by R pixels so a dot-matrix digit's individually-lit dots
         // (and the gaps between adjacent digit cells) merge into one
@@ -581,19 +593,19 @@ async function locateRedDisplayByPixels(imageBase64) {
                 comps.push({ litCount, minX, maxX, minY, maxY });
             }
         }
-        if (!comps.length) { console.warn('[GEMINI] Pixel locate: red pixels found but no connected component formed'); return null; }
+        if (!comps.length) { console.warn(`[GEMINI] Pixel locate (${colorLabel}): pixels found but no connected component formed`); return null; }
         comps.sort((a, b) => b.litCount - a.litCount);
         const best = comps[0];
 
         const boxW = (best.maxX - best.minX) / w, boxH = (best.maxY - best.minY) / h;
-        console.log(`[GEMINI] Pixel locate: best component ${best.litCount}px, box ${boxW.toFixed(3)}x${boxH.toFixed(3)} of frame`);
+        console.log(`[GEMINI] Pixel locate (${colorLabel}): best component ${best.litCount}px, box ${boxW.toFixed(3)}x${boxH.toFixed(3)} of frame`);
         // Sanity bounds — a real display fills a meaningful chunk of frame but
         // not almost the whole photo (which would suggest a false-positive on
-        // a rust-colored wall/roof rather than a genuine LED cluster). Too
-        // small a box is more likely noise (a reflection, a wire) than a
-        // readable display.
+        // a rust-colored wall/roof or, for cyan, a patch of sky/blue equipment
+        // rather than a genuine display cluster). Too small a box is more
+        // likely noise (a reflection, a wire) than a readable display.
         if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) {
-            console.warn(`[GEMINI] Pixel locate: best component's box (${boxW.toFixed(3)}x${boxH.toFixed(3)}) failed sanity bounds, falling back to AI locate`);
+            console.warn(`[GEMINI] Pixel locate (${colorLabel}): best component's box (${boxW.toFixed(3)}x${boxH.toFixed(3)}) failed sanity bounds`);
             return null;
         }
 
@@ -603,12 +615,40 @@ async function locateRedDisplayByPixels(imageBase64) {
             y_min: Math.max(0, best.minY / h - padY),
             x_max: Math.min(1, best.maxX / w + padX),
             y_max: Math.min(1, best.maxY / h + padY),
-            reason: 'red LED cluster found by pixel color analysis (no AI call)',
+            reason: `${colorLabel} cluster found by pixel color analysis (no AI call)`,
         };
     } catch (err) {
-        console.warn('[GEMINI] Pixel-based red-display locate failed, will try AI locate instead:', err.message);
+        console.warn(`[GEMINI] Pixel-based ${colorLabel} locate failed:`, err.message);
         return null;
     }
+}
+
+// Thin wrapper preserving the exact original red-only behavior/thresholds —
+// nothing about the well-tested red path changed in the refactor above.
+async function locateRedDisplayByPixels(imageBase64) {
+    return findDisplayBoxByColor(
+        imageBase64,
+        (r, g, b) => r > 140 && (r - g) > 60 && (r - b) > 60,
+        0.003,
+        'red',
+    );
+}
+
+// Added 2026-08-11 for the "Fairbanks IQ plus 710" cyan/teal LCD indicator
+// (see the long comment above findDisplayBoxByColor for how this threshold
+// was derived from real sampled pixel data, not guessed). Tried as a second
+// fast attempt, after red and before the slow AI locate call — AI locate
+// alone was measured taking 5.6-9.9s on these specific photos, which by
+// itself ate the entire 9000ms accurate-path budget and threw away an
+// otherwise-correct crop+read that finished just after the deadline. This
+// avoids that slow call entirely for the common case.
+async function locateCyanDisplayByPixels(imageBase64) {
+    return findDisplayBoxByColor(
+        imageBase64,
+        (r, g, b) => g > 120 && b > 120 && (g - r) > 40 && (b - r) > 30,
+        0.0015,
+        'cyan',
+    );
 }
 
 // Stage 1, attempt #2 (fallback) — find WHERE the vehicle weighbridge display
@@ -625,21 +665,42 @@ async function locateRedDisplayByPixels(imageBase64) {
 // tight to the display and upscaling before the digit-read pass gives the
 // model far more effective pixels on exactly the part that was failing.
 async function locateDisplayBox(imageBase64, mimeType) {
-    const prompt = `Find the primary VEHICLE WEIGHBRIDGE display in this yard photo — the display used to read an entire truck/vehicle's weight, not a small bench/platform scale for individual items.
-- The vehicle weighbridge display is often a large remote/overhead signage-style box (commonly red LED digits, mounted high), sometimes with unit lights (LB/KG/GR/NT) down one side, usually no physical buttons since it's just a repeater screen.
-- Ignore a compact bench/platform indicator with physical buttons (ZERO, TARE, GROSS/NET, PRINT) and a brand name (Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal) — that's almost always a separate, smaller scale for individual items, not the vehicle.
-- If both are visible, locate the large vehicle display, not the compact one.
+    // Prompt fixed 2026-08-11 after a real batch of 12 live photos showed
+    // this rejecting an entire real display type outright. The OLD version
+    // told the model to ignore "a compact bench/platform indicator with
+    // physical buttons... and a brand name (Fairbanks...)" as "almost
+    // always a separate, smaller scale for individual items" — that rule
+    // was reverse-engineered from ONE yard's small companion Fairbanks
+    // FB1150 platform scale (real readings: 312/352 lb, clearly individual
+    // items) and wrongly generalized. This same yard also has a SEPARATE,
+    // legitimate vehicle-weight indicator — a "Fairbanks IQ plus 710" — which
+    // has physical buttons, a brand name, AND displays real truck-scale
+    // gross weights (confirmed live: 28500, 80720, 28180, 79080 lb, all with
+    // an explicit "Gross" mode label on screen). The old prompt rejected
+    // every single one of these ("not a large remote vehicle weighbridge
+    // display... a compact indicator with numerous physical buttons"),
+    // forcing all of them down the much less reliable whole-image fallback,
+    // which then picked garbage (the "710" model number, the "100000 lb"
+    // capacity rating, digits merged with a nearby "lb" into "790801").
+    // Form factor (buttons vs no buttons, branded vs unbranded) is NOT a
+    // reliable signal for which display is the real vehicle weight — an
+    // explicit Gross/Net/Tare mode label and a truck-scale magnitude are.
+    const prompt = `Find the display in this yard photo that shows the WEIGHT OF THE ENTIRE VEHICLE/TRUCK (a load's gross or tare weight), not a small bench/platform scale weighing an individual item.
+- Judge by what's actually shown, not the display's physical form factor. A vehicle-weight display can be a large remote/overhead red LED repeater OR a compact indicator unit with physical buttons and a brand name (Fairbanks, Rice Lake, Avery Weigh-Tronix, Mettler Toledo, Cardinal, etc) mounted near the scale — both are legitimate vehicle-weight displays if the number shown is truck-scale.
+- Strong signals this IS the vehicle display: an explicit "Gross", "Net", or "Tare" mode label on screen, or a large number (thousands to tens of thousands, e.g. 20000-90000) consistent with a loaded truck.
+- Strong signals this is NOT the vehicle display (a small companion item scale instead): a small number (tens to low hundreds, e.g. under 1000) with no Gross/Net/Tare mode label, or a list of several small per-item weights together.
+- If more than one display is visible, pick the one whose displayed number and/or mode label indicates a full vehicle/load weight, regardless of which one looks more "official."
 
 Return ONLY raw JSON, no markdown:
 {
-  "found": false,     // true only if you can confidently locate a vehicle weighbridge display
+  "found": false,     // true only if you can confidently locate a vehicle/load weight display
   "x_min": null,       // left edge of a bounding box around the ENTIRE display housing (not just the digits), as a fraction 0-1 of image width
   "y_min": null,       // top edge, fraction 0-1 of image height
   "x_max": null,       // right edge, fraction 0-1 of image width
   "y_max": null,       // bottom edge, fraction 0-1 of image height
   "reason": null        // one short phrase on what you found/why
 }
-Give the box some margin around the housing rather than cropping tight to the digits themselves. If no vehicle weighbridge display is visible at all, return found:false and null for the box fields.`;
+Give the box some margin around the housing rather than cropping tight to the digits themselves. If no vehicle/load weight display is visible at all, return found:false and null for the box fields.`;
 
     try {
         const model = getClient().getGenerativeModel({
@@ -1074,12 +1135,18 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // exactly which stage to fix instead of just "it was slow somewhere."
     const accuratePathPromise = (async () => {
         const tLocateStart = Date.now();
-        // Try the fast, deterministic, no-network pixel locate first — see
-        // locateRedDisplayByPixels above. Only fall to the slow AI-based
-        // locateDisplayBox (network call, ~seconds, the thing that's been
-        // missing budget) if the pixel approach can't confidently place a box.
+        // Try the fast, deterministic, no-network pixel locates first — red
+        // (the overhead weighbridge repeater), then cyan (the "IQ plus 710"
+        // indicator, added 2026-08-11). Only fall to the slow AI-based
+        // locateDisplayBox (network call, measured 5.6-9.9s on real IQ710
+        // photos — enough by itself to blow the whole accurate-path budget)
+        // if NEITHER pixel approach can confidently place a box.
         let box = await locateRedDisplayByPixels(imageBase64);
-        let locateSource = 'pixel color analysis';
+        let locateSource = 'red pixel color analysis';
+        if (!box) {
+            box = await locateCyanDisplayByPixels(imageBase64);
+            locateSource = 'cyan pixel color analysis';
+        }
         if (!box) {
             const locateImg = await shrinkForLocate(imageBase64, mimeType);
             box = await locateDisplayBox(locateImg, mimeType);
