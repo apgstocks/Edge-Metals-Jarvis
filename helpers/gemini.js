@@ -745,7 +745,28 @@ Give the box some margin around the housing rather than cropping tight to the di
         // without this. This is a warning-level, low-volume line (once per
         // photo, not per digit), worth always having visible in normal logs.
         if (!fields) { console.warn('[GEMINI] Locate step: model response was not valid JSON, falling back to whole image'); return null; }
-        if (!fields.found) { console.warn(`[GEMINI] Locate step: model reported no display found (reason: "${fields.reason || 'none given'}"), falling back to whole image`); return null; }
+        if (!fields.found) {
+            // Added 2026-08-11 after a real batch-test image turned out to be
+            // a screenshot of the dashboard's own "Add New Load" form (not a
+            // yard photo at all) — locate correctly said found:false with
+            // reason "not a photo of a physical yard or scale display," but
+            // the caller still fell through to the whole-image Vision OCR
+            // fallback, which grabbed "456" out of unrelated placeholder
+            // text ("e.g. 456 Scrap Ave, Dallas, TX") and returned it as a
+            // confident, unambiguous weight. Distinguish "this genuinely
+            // isn't a scale photo at all" from "it's a real photo but I
+            // couldn't confidently place a box" — only the latter should
+            // fall through to the noisier whole-image guess; the former
+            // should return no reading rather than mine irrelevant text for
+            // a plausible-looking number. Deliberately conservative keyword
+            // match (screenshot/app/form/UI/not a photo) — a false negative
+            // here just falls through to the existing whole-image behavior
+            // (no worse than today), a false positive would wrongly refuse a
+            // real hard photo, which this narrow phrase set is built to avoid.
+            const notAPhoto = /screenshot|not a photo|mobile app|application form|user interface|\bUI\b/i.test(fields.reason || '');
+            console.warn(`[GEMINI] Locate step: model reported no display found (reason: "${fields.reason || 'none given'}"), ${notAPhoto ? 'and this does not look like a real yard photo at all — will not guess from whole-image text' : 'falling back to whole image'}`);
+            return notAPhoto ? { found: false, notAPhoto: true, reason: fields.reason } : null;
+        }
         // Be forgiving of the model returning fractions as strings ("0.155")
         // instead of numbers — same class of issue as the weight field itself.
         const toNum = (v) => typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' && !isNaN(v) ? parseFloat(v) : NaN);
@@ -1218,6 +1239,15 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         if (!candidates || !candidates.length) {
             const locateImg = await shrinkForLocate(imageBase64, mimeType);
             const aiBox = await locateDisplayBox(locateImg, mimeType);
+            // aiBox can now be a { notAPhoto: true } sentinel (see
+            // locateDisplayBox) instead of a real box or null — a real box
+            // always has x_min etc, so check specifically rather than just
+            // truthiness, which would otherwise treat the sentinel as a
+            // (broken) candidate.
+            if (aiBox && aiBox.notAPhoto) {
+                console.log(`[GEMINI] Locate step (Gemini) took ${Date.now() - tLocateStart}ms (total ${elapsed()}) — not a scale photo at all, skipping the rest of the accurate path`);
+                return { notAPhoto: true };
+            }
             candidates = aiBox ? [aiBox] : null;
             locateSource = 'Gemini (pixel locate found nothing confident)';
         }
@@ -1265,9 +1295,17 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             const visionText = await visionPromise;
             console.log(`[GEMINI] Vision-on-crop step${tag} took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
             if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
-            const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
+            // extractWeightNumberFromCrop returns { weight, viaLeadingStrip }
+            // (changed 2026-08-11) or null — visionWeight stays a plain
+            // number everywhere below for backward compat with the many
+            // existing usages; viaLeadingStrip is carried separately and
+            // only consulted where it matters (the ambiguous-flagging
+            // decision on the fast path below).
+            const visionResult = visionOcr.extractWeightNumberFromCrop(visionText);
+            const visionWeight = visionResult ? visionResult.weight : null;
+            const visionWeightViaLeadingStrip = !!(visionResult && visionResult.viaLeadingStrip);
 
-            const attempt = { visionWeight, visionText, box, geminiMetaPromise, croppedBase64 };
+            const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64 };
             lastAttempt = attempt;
             if (visionWeight != null) {
                 // Added 2026-08-11 after a real production log: two candidate
@@ -1339,7 +1377,29 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // crop) — "not ready in time" implied a timeout that never happened and
     // pointed the wrong direction. withTimeout() above already logs its own
     // distinct warning on a genuine timeout; this line just reports outcome.
-    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? (accurate.visionWeight != null ? 'succeeded' : 'located a crop but Vision found no text on it') : 'did not produce a usable reading'} at ${elapsed()}`);
+    console.log(`[GEMINI] Accurate (cropped) path ${accurate ? (accurate.notAPhoto ? 'determined this is not a scale photo at all' : (accurate.visionWeight != null ? 'succeeded' : 'located a crop but Vision found no text on it')) : 'did not produce a usable reading'} at ${elapsed()}`);
+
+    // Added 2026-08-11 after a real batch-test image (a screenshot of the
+    // dashboard's own "Add New Load" form) got mined by the whole-image
+    // Vision fallback for a plausible-looking number ("456," pulled straight
+    // out of unrelated placeholder text "e.g. 456 Scrap Ave, Dallas, TX")
+    // and returned as a confident, unflagged weight. Gemini's locate step
+    // already correctly recognized this wasn't a yard photo at all — that
+    // signal is honored here by skipping every fallback (including the
+    // final single-pass Gemini read) and returning no reading, rather than
+    // continuing to guess from a photo that was never going to contain a
+    // real weight in the first place.
+    if (accurate && accurate.notAPhoto) {
+        console.warn(`[GEMINI] Not a scale photo (per locate step) — returning no reading rather than guessing from irrelevant text`);
+        return {
+            weight: null,
+            weight_unit: null,
+            displays_seen: 'This does not appear to be a photo of a scale display',
+            raw_text: null,
+            ambiguous: false,
+            not_a_scale_photo: true,
+        };
+    }
 
     // Added 2026-08-11: Vision-on-crop came back genuinely empty (not
     // garbled, not hallucinated — literally no text detected) despite a
@@ -1383,7 +1443,12 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                     const rescueCrop = await cropToDisplay(imageBase64, mimeType, accurate.box, attempt.opts);
                     if (!rescueCrop) continue;
                     const text = await visionOcr.detectText(rescueCrop);
-                    const weight = visionOcr.extractWeightNumberFromCrop(text);
+                    // extractWeightNumberFromCrop returns { weight, viaLeadingStrip }
+                    // or null (changed 2026-08-11) — viaLeadingStrip isn't
+                    // consulted here since this whole rescue path already
+                    // unconditionally flags ambiguous:true regardless.
+                    const weightResult = visionOcr.extractWeightNumberFromCrop(text);
+                    const weight = weightResult ? weightResult.weight : null;
                     console.log(`[GEMINI] Rescue attempt "${attempt.label}" (Vision-on-crop found nothing on plain crop): ${weight ?? 'still nothing'} (raw: "${text || ''}")`);
                     if (weight != null) { rescueWeight = weight; rescueText = text; rescueLabel = attempt.label; break; }
                 } catch (err) {
@@ -1519,15 +1584,49 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // Padding for the AI-locate path was also widened (see
             // cropToDisplay) to make this less likely to happen at all.
             const suspiciouslyShort = accurate.visionWeight < 10000;
-            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${suspiciouslyShort ? ' — shorter than every confirmed real reading on this display type, flagged for review in case of a truncated crop' : ''}`);
+            // Added 2026-08-11 after a real photo showed Vision reading a
+            // crop as "817520" — the leading-digit-strip fallback in
+            // extractWeightNumberFromCrop stripped the "8" to get the
+            // in-range "17520" and this fast path returned it completely
+            // unflagged, while Gemini's own parallel (unused-on-this-path)
+            // read said "87520" instead. That fallback assumes contamination
+            // is always a prepended ghost digit on the far left — true in
+            // every case seen before, but not guaranteed, and it has no way
+            // to tell the difference. So: whenever the strip fallback fired,
+            // treat this exactly like the suspicious-short case (flag it),
+            // regardless of the resulting digit count, instead of trusting a
+            // rescued number as fully as a clean single in-range match.
+            const viaStrip = accurate.visionWeightViaLeadingStrip;
+            const flagForReview = suspiciouslyShort || viaStrip;
+            const reviewReason = suspiciouslyShort
+                ? ' — shorter than every confirmed real reading on this display type, flagged for review in case of a truncated crop'
+                : (viaStrip ? ' — Vision\'s raw read needed a leading-digit correction to become plausible, flagged for review since that correction isn\'t guaranteed correct' : '');
+
+            // When the strip fallback fired, Gemini's already-in-flight
+            // parallel read of the SAME crop is worth a bounded wait here —
+            // matching the same "surface both candidates" pattern already
+            // used on the slow/compact-indicator path below, rather than
+            // silently discarding it. Real case this was built for: Vision
+            // said 17520 (post-strip), Gemini said 87520 on the same crop —
+            // showing both lets a human resolve it in one glance instead of
+            // walking back to the scale with only one (possibly wrong)
+            // number to check against.
+            let strippedAlt = null;
+            if (viaStrip) {
+                const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 3000;
+                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, 'Gemini crop metadata (cross-check after leading-digit strip)');
+                if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
+            }
+
+            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${reviewReason}${strippedAlt != null ? ` (Gemini's own read of the same crop disagreed: ${strippedAlt})` : ''}`);
             return {
                 weight: accurate.visionWeight,
-                alternate_weight: null,
-                alternate_source: null,
+                alternate_weight: strippedAlt,
+                alternate_source: strippedAlt != null ? 'Gemini' : null,
                 weight_unit: 'lb',
                 displays_seen: `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${suspiciouslyShort ? ' [fewer digits than every confirmed real reading on this display type — possible truncated crop, please verify against the actual display]' : ''}`,
-                ambiguous: suspiciouslyShort,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Gemini's own read of the same crop said ${strippedAlt} instead` : ''} — please verify against the actual display]` : ''}`,
+                ambiguous: flagForReview,
             };
         }
 

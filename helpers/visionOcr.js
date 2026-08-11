@@ -179,6 +179,14 @@ function extractPlausibleWeightFromFullImage(rawText) {
 // guessing into a wrong number.
 // Every trim is logged loudly so a repeat of this is visible, not silently
 // "corrected" and forgotten.
+// Return shape changed 2026-08-11 from a bare number to { weight,
+// viaLeadingStrip } — see the long comment at the leading-digit-strip
+// fallback below for the real-photo bug this was added to catch. A caller
+// that only needs the number can still do `extractWeightNumberFromCrop(t)
+// ?.weight`; callers that care whether this required the strip fallback
+// (a materially less certain path than a clean single in-range match) can
+// check `.viaLeadingStrip` and flag the result for review instead of
+// treating it as equal-confidence to a direct read.
 function extractWeightNumberFromCrop(rawText) {
     if (!rawText) return null;
     const matches = rawText.match(/\d+(\.\d+)?/g);
@@ -232,7 +240,7 @@ function extractWeightNumberFromCrop(rawText) {
         const v = parseFloat(m);
         return Number.isFinite(v) && v >= PLAUSIBLE_LOAD_WEIGHT_MIN && v <= PLAUSIBLE_LOAD_WEIGHT_MAX;
     });
-    if (inRange.length === 1) return parseFloat(inRange[0]);
+    if (inRange.length === 1) return { weight: parseFloat(inRange[0]), viaLeadingStrip: false };
 
     if (inRange.length > 1) {
         // Bug found + fixed 2026-08-11 via a real live crop from a
@@ -248,7 +256,7 @@ function extractWeightNumberFromCrop(rawText) {
         // the longest among the IN-RANGE candidates only, so an
         // implausible number can never win purely by being a longer string.
         const longestInRange = inRange.reduce((a, b) => (b.length > a.length ? b : a));
-        return parseFloat(longestInRange);
+        return { weight: parseFloat(longestInRange), viaLeadingStrip: false };
     }
 
     const longest = allCandidates.reduce((a, b) => (b.length > a.length ? b : a));
@@ -258,13 +266,31 @@ function extractWeightNumberFromCrop(rawText) {
     // range, so try stripping leading digit(s) (dead/ghost LED
     // contamination, seen on the left edge in every case so far) before
     // giving up and returning null rather than guessing.
+    //
+    // CAVEAT found live 2026-08-11 (a fresh photo of what looks like the
+    // same physical reading confirmed elsewhere in this session as 81528):
+    // Vision read this crop as "817520" — six digits. Stripping the leading
+    // "8" gives "17520", which IS in the plausible range and is what this
+    // function used to return, silently, as if it were a clean match. But
+    // Gemini's independent parallel read of the SAME crop said "87520", and
+    // the actual display (checked directly, zoomed in) shows a pattern
+    // consistent with 8-?-5-2-0, not 1-7-5-2-0 at all — the spurious digit
+    // here was NOT a prepended ghost cell on the far left like every prior
+    // case, it was inserted in the MIDDLE (or the "8"/"1" boundary is
+    // genuinely ambiguous), and blindly stripping the first character
+    // produced a wrong, confident, unflagged number that happens to still
+    // pass the range check. This function still doesn't know which case
+    // it's in (a real fix would need to disambiguate 8-vs-1 at the pixel
+    // level, out of scope here), so it now marks this path viaLeadingStrip
+    // so the caller can flag it for review instead of trusting it as fully
+    // as a clean single in-range match.
     if (Number.isFinite(n)) {
         for (let strip = 1; strip <= 2 && strip < longest.length; strip++) {
             const suffix = longest.slice(strip);
             const val = parseFloat(suffix);
             if (Number.isFinite(val) && val >= PLAUSIBLE_LOAD_WEIGHT_MIN && val <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
-                console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight, but stripping ${strip} leading digit(s) gives "${suffix}" — using that (dead/ghost LED cell contamination has been on the left edge in every case seen so far, never the right)`);
-                return val;
+                console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight, but stripping ${strip} leading digit(s) gives "${suffix}" — using that, flagged as lower-confidence (dead/ghost LED cell contamination has been on the left edge in every case seen so far, but is not guaranteed to be — see caveat above)`);
+                return { weight: val, viaLeadingStrip: true };
             }
         }
     }
