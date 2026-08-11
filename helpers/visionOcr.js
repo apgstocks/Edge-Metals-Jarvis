@@ -200,7 +200,33 @@ function extractWeightNumberFromCrop(rawText) {
     const lbSuffixRe = /(\d+)1b\b/gi;
     let lbMatch;
     while ((lbMatch = lbSuffixRe.exec(rawText))) unglued.push(lbMatch[1]);
-    const allCandidates = unglued.length ? matches.concat(unglued) : matches;
+
+    // Added 2026-08-11 after a real "ZOSI" weighbridge crop (a photo already
+    // documented above as a genuinely hard, dim/angled case) came back from
+    // Vision as "8 1960" — a SPACE between the leading digit and the rest of
+    // the number, splitting one true 5-digit reading (81960) into two
+    // separate regex matches ("8" and "1960"). "8" alone fails the
+    // plausible-range filter (too small) and "1960" alone PASSES it (it's a
+    // real 4-digit number in range) — so without this, the split silently
+    // wins as a single valid in-range candidate and returns the wrong,
+    // truncated 1960 instead of ever being flagged as wrong. This is the
+    // opposite failure of the "lb"->"1b" glue case above (there, Vision
+    // wrongly JOINS two things; here it wrongly SPLITS one number) — same
+    // root cause class (OCR whitespace handling on a dot-matrix display,
+    // not a systematic error), opposite direction, so it needs its own
+    // targeted un-split alongside the existing un-glue. Deliberately narrow:
+    // only a 1-2 digit token immediately followed by a single space/tab and
+    // a 3-6 digit token, matching the exact shape seen live (a lone leading
+    // digit separated from the rest) — not a general "remove all spaces
+    // from numbers" rule, which would risk merging unrelated numbers
+    // elsewhere in the crop text (e.g. two different labels' worth of
+    // digits that happen to sit near each other).
+    const splitMerged = [];
+    const splitRe = /\b(\d{1,2})[ \t]+(\d{3,6})\b/g;
+    let splitMatch;
+    while ((splitMatch = splitRe.exec(rawText))) splitMerged.push(splitMatch[1] + splitMatch[2]);
+
+    const allCandidates = matches.concat(unglued, splitMerged);
 
     const inRange = allCandidates.filter((m) => {
         const v = parseFloat(m);

@@ -897,7 +897,16 @@ async function trimDeadDigitZones(sharpImg, cropW, cropH) {
 // ghost cell it kept misreading. Degrades to null (caller falls back to
 // reading the original image) if sharp isn't installed or the crop fails for
 // any reason — never blocks a reading.
-async function cropToDisplay(imageBase64, mimeType, box) {
+// opts.boost added 2026-08-11 — see the long comment at its call site in
+// extractWeightFromImage for the real-photo evidence behind this. Applies a
+// linear contrast stretch + sharpen AFTER the exact same crop/pad/trim
+// geometry as the normal path, so it's strictly an additional rescue
+// attempt on the identical pixels, never a different crop region — verified
+// live against a real hard photo (47.jpeg) where Vision found NOTHING on
+// the plain crop but returned a legible (if not perfect) reading on the
+// boosted one, three separate contrast strengths tested directly against
+// the raw Vision API before this was wired in.
+async function cropToDisplay(imageBase64, mimeType, box, opts = {}) {
     if (!sharp || !box) return null;
     try {
         const buf = Buffer.from(imageBase64, 'base64');
@@ -938,12 +947,26 @@ async function cropToDisplay(imageBase64, mimeType, box) {
             return null;
         }
 
-        const boxCrop = img.clone().extract({ left, top, width: cropW, height: cropH });
-        const trim = await trimDeadDigitZones(boxCrop, cropW, cropH);
         let finalExtract = { left, top, width: cropW, height: cropH };
-        if (trim) {
-            finalExtract = { left: left + trim.left, top, width: trim.width, height: cropH };
-            console.log(`[GEMINI] Trimmed dead/ghost LED zone off crop edge (${cropW}px -> ${trim.width}px wide)`);
+        // opts.skipTrim added 2026-08-11 — see the long comment at its call
+        // site in extractWeightFromImage for the real-photo evidence. Root
+        // cause found by directly comparing the trimmed vs. untrimmed crop
+        // bytes on a real hard photo (47.jpeg): the UNTRIMMED crop (2619px)
+        // read fine on Vision ("81960"); the SAME crop after
+        // trimDeadDigitZones cut it to 1585px and Vision then found ZERO
+        // text on it, repeatably, at multiple resolutions/contrast levels.
+        // trimDeadDigitZones is real and necessary for the bug it was built
+        // for (a dim ghost cell hallucinated as a phantom leading digit —
+        // see that function's own comments), so it stays on by default; this
+        // is only an opt-out for the specific rescue path that already knows
+        // the default crop failed Vision entirely.
+        if (!opts.skipTrim) {
+            const boxCrop = img.clone().extract({ left, top, width: cropW, height: cropH });
+            const trim = await trimDeadDigitZones(boxCrop, cropW, cropH);
+            if (trim) {
+                finalExtract = { left: left + trim.left, top, width: trim.width, height: cropH };
+                console.log(`[GEMINI] Trimmed dead/ghost LED zone off crop edge (${cropW}px -> ${trim.width}px wide)`);
+            }
         }
 
         // Upscale so the crop has real detail to work with — target a
@@ -957,11 +980,20 @@ async function cropToDisplay(imageBase64, mimeType, box) {
         // digits off of, so minimizing JPEG compression artifacts on the
         // sharp red-LED digit edges matters more here than file size.
         const scale = Math.min(4, Math.max(1, 2000 / finalExtract.width));
-        const outBuf = await img
+        let pipeline = img
             .extract(finalExtract)
-            .resize({ width: Math.round(finalExtract.width * scale), kernel: 'lanczos3' })
-            .jpeg({ quality: 97 })
-            .toBuffer();
+            .resize({ width: Math.round(finalExtract.width * scale), kernel: 'lanczos3' });
+        if (opts.boost) {
+            // Values verified live (2026-08-11) against the raw Vision API on
+            // a real crop that otherwise returned zero text: linear(1.6,-40)
+            // + a light sharpen pulled Vision from "no text detected" to a
+            // legible (if imperfect) digit string. Kept moderate rather than
+            // the even-stronger (2.0,-60) variant also tested — that one
+            // pushed the dim ghost/leading-zero cell bright enough to read as
+            // a spurious extra "8", trading one error for another.
+            pipeline = pipeline.linear(1.6, -40).sharpen({ sigma: 1.2 });
+        }
+        const outBuf = await pipeline.jpeg({ quality: 97 }).toBuffer();
         if (process.env.DEBUG_SAVE_CROP) fs.writeFileSync(process.env.DEBUG_SAVE_CROP, outBuf);
         return outBuf.toString('base64');
     } catch (err) {
@@ -1287,6 +1319,62 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // see the long comment at the crop-path return site above for why this
     // case exists at all.
     if (accurate && accurate.visionWeight == null) {
+        // Added 2026-08-11, per Apsara ("find a way to fix this 1" — the
+        // last unresolved hard photo in the 12-photo batch, 47.jpeg).
+        // Root-caused by directly comparing crop bytes on the real photo
+        // (not guessing): trimDeadDigitZones (built for a real, different
+        // bug — a dim ghost cell hallucinated as a phantom leading digit)
+        // was cutting THIS photo's crop from 2619px down to 1585px wide, and
+        // that trimmed crop is what Vision found zero text on, repeatably,
+        // at several resolutions/contrast levels. The UNTRIMMED crop at the
+        // exact same box/padding read cleanly on Vision ("81960") on the
+        // first try. So: retry Vision on the untrimmed crop before assuming
+        // the display itself is unreadable. If that still finds nothing,
+        // layer a contrast-stretch + sharpen on top of the untrimmed crop as
+        // a second attempt (verified live to pull a different hard crop from
+        // "no text" to legible). Both are local image-processing passes with
+        // no extra API cost, tried BEFORE the slower Gemini-retry loop below
+        // — if either recovers a real answer, Gemini retries never need to
+        // run at all. NOTE: even the untrimmed crop reads this specific
+        // photo's second digit inconsistently (Vision, Gemini, and my own
+        // eye all had to work to disambiguate 8 vs 1 vs 7 on that one cell)
+        // — this is a real display-legibility limit on a dim, angled photo,
+        // not a pipeline bug, which is exactly why this whole rescue path
+        // always returns ambiguous:true rather than silently trusting
+        // whichever variant happens to answer.
+        let rescueWeight = null, rescueText = null, rescueLabel = null;
+        if (accurate.box) {
+            const attempts = [
+                { label: 'untrimmed crop', opts: { skipTrim: true } },
+                { label: 'untrimmed + contrast-boosted crop', opts: { skipTrim: true, boost: true } },
+            ];
+            for (const attempt of attempts) {
+                try {
+                    const rescueCrop = await cropToDisplay(imageBase64, mimeType, accurate.box, attempt.opts);
+                    if (!rescueCrop) continue;
+                    const text = await visionOcr.detectText(rescueCrop);
+                    const weight = visionOcr.extractWeightNumberFromCrop(text);
+                    console.log(`[GEMINI] Rescue attempt "${attempt.label}" (Vision-on-crop found nothing on plain crop): ${weight ?? 'still nothing'} (raw: "${text || ''}")`);
+                    if (weight != null) { rescueWeight = weight; rescueText = text; rescueLabel = attempt.label; break; }
+                } catch (err) {
+                    console.warn(`[GEMINI] Rescue attempt "${attempt.label}" failed:`, err.message);
+                }
+            }
+        }
+        if (rescueWeight != null) {
+            const note = ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
+            console.log(`[GEMINI] Weight read via Cloud Vision OCR (${rescueLabel} rescue) in ${elapsed()}: ${rescueWeight}${note}`);
+            return {
+                weight: rescueWeight,
+                alternate_weight: null,
+                alternate_source: null,
+                weight_unit: 'lb',
+                displays_seen: `Cloud Vision OCR read of a ${rescueLabel} (locate reason: "${accurate.box.reason || ''}"), plain crop found no text`,
+                raw_text: `${rescueText || ''} (Cloud Vision OCR, ${rescueLabel})${note}`,
+                ambiguous: true,
+            };
+        }
+
         const GEMINI_META_TIMEOUT_MS = Number(process.env.GEMINI_META_TIMEOUT_MS) || 8000;
         let geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata (Vision-on-crop found nothing)');
 
