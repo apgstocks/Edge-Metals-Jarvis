@@ -713,7 +713,17 @@ async function captureViaNativeCamera(row, roleKey) {
     const photo = await window.Capacitor.Plugins.Camera.getPhoto({
       resultType: 'base64',
       source: 'CAMERA',        // forces the camera app directly — 'PROMPT' would show a chooser (the exact ambiguity this is meant to avoid), 'PHOTOS' would go straight to the gallery.
-      quality: 85,
+      // Raised 85 -> 95 on 2026-08-11. This is the NATIVE camera plugin's own
+      // JPEG compression, applied before any JS in this file ever sees the
+      // photo, so downscaleToBase64's quality setting cannot undo it. Measured
+      // on 6 photos with confirmed weights, full sensor resolution both times:
+      // quality 85 read 5/6 correctly, quality 95 read 6/6 — the one failure
+      // at 85 (true 71920, read as 4000) passed cleanly at 95. Seven-segment
+      // LED digits are exactly the high-contrast thin-edge content JPEG
+      // artifacts damage most, and the OCR then reads those artifacts as
+      // different digits. The file-size cost is paid once per photo over the
+      // yard's own connection; a misread weight is paid on the ticket.
+      quality: 95,
       allowEditing: false,
       saveToGallery: false,
     });
