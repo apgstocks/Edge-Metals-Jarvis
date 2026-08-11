@@ -622,15 +622,36 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
   }
 }
 
-// Downscales any drawable image source (a live <video> frame, or an <img>
-// loaded from an uploaded File) to at most maxDim on the long edge and
-// re-encodes as JPEG at the given quality. Root-fix for PayloadTooLargeError:
-// a phone camera photo picked via the Upload button is routinely 3-8MB raw
-// (base64 inflates that another ~33%), which blew past body-parser's limit
-// on save (two photos — gross + tare — in one request). Reading a handful of
-// digits off a scale display doesn't need full resolution, so this trades
-// nothing perceptible for a payload that's a few hundred KB instead.
-function downscaleToBase64(source, srcW, srcH, maxDim = 1600, quality = 0.9) {
+// Changed 2026-08-11: this used to cap long edge at 1600px, on the theory
+// that reading a handful of digits off a scale display doesn't need full
+// resolution. Tested directly and that theory was wrong — same 3 photos,
+// same backend code, only this cap changed: at 1600px the weight-OCR
+// pipeline got 0/3 correct (wrong reads: 1150 vs true 71920, 87528 vs true
+// 81528, 41516 vs true 28460); at original resolution it got 3/3 correct.
+// The 1600px downscale was silently corrupting the exact digits the
+// pipeline needs, not just shrinking irrelevant background. So: send
+// original resolution now (maxDim effectively unbounded), quality 0.95.
+//
+// NOTE FOR WHOEVER TOUCHES THIS NEXT: this function is DUPLICATED between
+// dashboard/index.html (the browser dashboard, served by express) and this
+// file (the Capacitor mobile app, whose HTML is BUNDLED INTO THE APK —
+// capacitor.config.json sets webDir "www" with no server.url, so this app
+// does NOT load its HTML from the VM). Changing one does nothing to the
+// other, and changing this one does nothing on a phone until the APK is
+// rebuilt and reinstalled — `git pull` + `pm2 restart` on the VM has zero
+// effect on an already-installed app. That exact gap cost hours of
+// debugging on 2026-08-11: the dashboard copy was fixed and deployed while
+// every mobile test kept running the old 1600px code inside the installed
+// APK, producing byte-identical wrong results that looked like the fix had
+// failed. Fix BOTH copies, then rebuild the APK.
+//
+// PayloadTooLargeError (the original reason for the 1600px cap) is handled
+// on the backend instead — api.js's PUT /api/loads/:id uses
+// express.json({limit:'40mb'}), and realistic full-res phone JPEGs run
+// ~1.7-1.9MB. If some device produces originals large enough to hit that
+// limit again, raise the backend limit rather than re-adding a client-side
+// resolution cap — the cap is the lever that was proven to break accuracy.
+function downscaleToBase64(source, srcW, srcH, maxDim = 1e9, quality = 0.95) {
   let w = srcW, h = srcH;
   if (w > maxDim || h > maxDim) {
     const scale = maxDim / Math.max(w, h);
