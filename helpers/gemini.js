@@ -1234,7 +1234,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
             const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
 
-            lastAttempt = { visionWeight, visionText, box, geminiMetaPromise };
+            lastAttempt = { visionWeight, visionText, box, geminiMetaPromise, croppedBase64 };
             if (visionWeight != null) {
                 if (i > 0) console.log(`[GEMINI] Candidate ${i + 1} produced a readable result after candidate(s) 1-${i} found nothing`);
                 return lastAttempt;
@@ -1288,7 +1288,52 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // case exists at all.
     if (accurate && accurate.visionWeight == null) {
         const GEMINI_META_TIMEOUT_MS = Number(process.env.GEMINI_META_TIMEOUT_MS) || 8000;
-        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata (Vision-on-crop found nothing)');
+        let geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata (Vision-on-crop found nothing)');
+
+        // Added 2026-08-11, per Apsara ("I want 100% accuracy, find some way
+        // to fix"): confirmed live that Vision genuinely, deterministically
+        // finds nothing on some crops (tested 4x identical + both
+        // TEXT_DETECTION and DOCUMENT_TEXT_DETECTION directly against the
+        // raw API — not a retry-able flake), but Gemini's own read of the
+        // SAME crop, while inconsistent call-to-call, is not random noise —
+        // repeated testing showed it converging on the same answer more
+        // often than not (2 of 4 attempts matched exactly, a 3rd landed one
+        // digit off on the specific cell that's genuinely hard to read even
+        // by eye). A single Gemini attempt is therefore leaving real signal
+        // on the table when it happens to land on a null/uncertain read.
+        // Retries up to 2 more times and prefers a value that AGREES across
+        // attempts (real corroboration) over just taking whichever came
+        // first. Still always flagged ambiguous — there's no independent
+        // Vision cross-check in this branch regardless of how many Gemini
+        // attempts agree.
+        //
+        // Timeout capped tighter for retries specifically, per Apsara's
+        // call after seeing the real tradeoff live: an 8000ms budget per
+        // attempt meant a run where every attempt failed cost 28s total
+        // before falling back to the (wrong, but at least fast) whole-image
+        // read — worse than the old single-attempt behavior on the failure
+        // case, for an occasional win on the success case. 4000ms per retry
+        // bounds the worst case to roughly half that while still giving
+        // each attempt a real shot (successful reads in testing landed
+        // between 1.5-5s).
+        const GEMINI_RETRY_TIMEOUT_MS = Number(process.env.GEMINI_RETRY_TIMEOUT_MS) || 4000;
+        if (!geminiMeta || geminiMeta.weight == null) {
+            const seen = new Map(); // weight -> count
+            if (geminiMeta && geminiMeta.weight != null) seen.set(geminiMeta.weight, 1);
+            for (let attempt = 0; attempt < 2 && accurate.croppedBase64; attempt++) {
+                const retryMeta = await withTimeout(
+                    readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch(() => null),
+                    GEMINI_RETRY_TIMEOUT_MS,
+                    `Gemini crop metadata retry ${attempt + 1} (Vision-on-crop found nothing)`
+                );
+                if (retryMeta && retryMeta.weight != null) {
+                    seen.set(retryMeta.weight, (seen.get(retryMeta.weight) || 0) + 1);
+                    if (!geminiMeta) geminiMeta = retryMeta; // keep first successful as fallback shape
+                    if (seen.get(retryMeta.weight) >= 2) { geminiMeta = retryMeta; break; } // two attempts agreed — stop early
+                }
+            }
+        }
+
         if (geminiMeta && geminiMeta.weight != null) {
             const note = ` [Vision found no text at all on this crop; Gemini's read of the same crop is used instead, with no Vision cross-check available — flagged for review]`;
             console.log(`[GEMINI] Weight read via Gemini (primary, cropped, Vision-found-nothing fallback) in ${elapsed()}: ${geminiMeta.weight}${note}`);
@@ -1302,8 +1347,9 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 ambiguous: true,
             };
         }
-        // Neither engine got anything off this crop — genuinely fall through
-        // to the whole-image pass below, same as before.
+        // Neither engine got anything off this crop after retries —
+        // genuinely fall through to the whole-image pass below, same as
+        // before.
     }
 
     if (accurate && accurate.visionWeight != null) {
