@@ -109,7 +109,28 @@ function decorateBooking(b, wf) {
 // ── App ───────────────────────────────────────────────────────────────────────
 function createApi() {
     const app = express();
-    app.use(express.json({ limit: '2mb' }));
+    // Changed 2026-08-11: this GLOBAL parser used to cap every request body
+    // at 2mb, registered before any route runs. Several routes below
+    // (largeJson, defined at line ~491) were built to override that with a
+    // 40mb limit for photo uploads — but Express body-parsers consume the
+    // request stream on first match and skip re-parsing once req.body is
+    // set, so THIS global 2mb parser was always the one that actually ran
+    // first and either succeeded or threw PayloadTooLargeError. The
+    // route-specific 40mb middleware never got a chance to apply on any
+    // request over 2mb; it silently did nothing on every request under 2mb
+    // (already parsed). Verified directly with a minimal Express repro
+    // reproducing this exact stacking pattern: a 5mb body against this
+    // setup returned 413 even though the route's own middleware said 40mb.
+    // So the "40mb fix" referenced throughout this codebase's history was
+    // never actually in effect — this was dormant/invisible while client
+    // photos stayed under 2mb (the old 1600px downscale kept them there),
+    // and started throwing again the moment full-resolution photos shipped.
+    // Fix: the global limit now matches what every route-specific override
+    // already assumed was true. The per-route largeJson middleware further
+    // down is now redundant (harmless — it just never fires) but left in
+    // place rather than removed under time pressure; a future cleanup could
+    // delete it without changing behavior.
+    app.use(express.json({ limit: '40mb' }));
 
     // Minimal hand-rolled CORS (no new dependency for a few headers) — added
     // for the Loads mobile app (Capacitor WebView), whose requests to this
