@@ -1613,7 +1613,34 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // number to check against.
             let strippedAlt = null;
             if (viaStrip) {
-                const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 3000;
+                // Widened 3000 -> 8000ms after a real miss: a live photo
+                // where Vision's strip-corrected read (73500) was actually
+                // wrong (confirmed true value 73600, one digit off — a
+                // genuine Vision misread of 5-vs-6, not just the spurious
+                // leading digit), and Gemini's parallel read HAD the correct
+                // 73600 the whole time but got cut off by this timeout
+                // before it could be surfaced as alternate_weight. Gemini
+                // benchmarked at ~12-16s/request on this exact digit-reading
+                // task (see readWeightSinglePass's model-choice comment) —
+                // geminiMetaPromise is kicked off well before this point
+                // (in parallel with Vision-on-crop, which itself typically
+                // takes several seconds), so it already has a head start,
+                // but 3000ms of ADDITIONAL wait after that head start was
+                // measured too tight to catch a real, useful disagreement
+                // that was already in flight. This only fires on the
+                // less-common viaLeadingStrip path, so the extra worst-case
+                // latency here is not paid on ordinary clean reads.
+                // Widened again 8000 -> 15000ms: live-tested and STILL missed
+                // a real, correct 73600 answer that came back at ~12.7s
+                // total (Vision-on-crop's own ~6s head start plus Gemini's
+                // full ~12-16s benchmark time barely fits in an 8000ms
+                // ADDITIONAL wait). This path already only runs when Vision's
+                // own read needed a correction (rare, already flagged
+                // low-confidence), so paying up to ~20s total here to
+                // reliably catch the cross-check is the right trade given
+                // Apsara's explicit priority ("i cant afford to have
+                // mistakes" outranks speed when the two conflict).
+                const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 15000;
                 const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, 'Gemini crop metadata (cross-check after leading-digit strip)');
                 if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
             }
