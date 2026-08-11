@@ -1499,20 +1499,35 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // bounds the worst case to roughly half that while still giving
         // each attempt a real shot (successful reads in testing landed
         // between 1.5-5s).
+        // Changed 2026-08-11, per Apsara asking why this was taking so long:
+        // these 2 retries used to run ONE AT A TIME, each awaited fully
+        // before the next started — worst case 8000 (first attempt, above)
+        // + 4000 + 4000 = 16000ms, entirely sequential, even though the two
+        // retries don't depend on each other at all. Same 2 API calls, same
+        // "prefer two attempts that agree" logic, just fired concurrently
+        // instead of queued — cuts the worst case to 8000 + 4000 = 12000ms.
+        // Not made fully eager (started before the first attempt is even
+        // known to have failed) on purpose: that would spend 2 extra Gemini
+        // calls even on the common case where the first attempt succeeds
+        // quickly, trading API cost for a latency win that isn't needed
+        // there.
         const GEMINI_RETRY_TIMEOUT_MS = Number(process.env.GEMINI_RETRY_TIMEOUT_MS) || 4000;
         if (!geminiMeta || geminiMeta.weight == null) {
             const seen = new Map(); // weight -> count
             if (geminiMeta && geminiMeta.weight != null) seen.set(geminiMeta.weight, 1);
-            for (let attempt = 0; attempt < 2 && accurate.croppedBase64; attempt++) {
-                const retryMeta = await withTimeout(
-                    readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch(() => null),
-                    GEMINI_RETRY_TIMEOUT_MS,
-                    `Gemini crop metadata retry ${attempt + 1} (Vision-on-crop found nothing)`
-                );
+            const retryPromises = accurate.croppedBase64
+                ? [0, 1].map((attempt) => withTimeout(
+                      readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch(() => null),
+                      GEMINI_RETRY_TIMEOUT_MS,
+                      `Gemini crop metadata retry ${attempt + 1} (Vision-on-crop found nothing)`
+                  ))
+                : [];
+            const retryResults = await Promise.all(retryPromises);
+            for (const retryMeta of retryResults) {
                 if (retryMeta && retryMeta.weight != null) {
                     seen.set(retryMeta.weight, (seen.get(retryMeta.weight) || 0) + 1);
                     if (!geminiMeta) geminiMeta = retryMeta; // keep first successful as fallback shape
-                    if (seen.get(retryMeta.weight) >= 2) { geminiMeta = retryMeta; break; } // two attempts agreed — stop early
+                    if (seen.get(retryMeta.weight) >= 2) { geminiMeta = retryMeta; break; } // two attempts agreed — use that
                 }
             }
         }
