@@ -1640,7 +1640,18 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // already needed rescuing on a crop, its credibility on THAT
             // crop is already reduced, so Gemini's independent read is
             // worth a bounded wait and a real comparison, not a footnote.
-            const GEMINI_RESCUE_CROSSCHECK_MS = Number(process.env.GEMINI_RESCUE_CROSSCHECK_MS) || 8000;
+            // Widened 8000 -> 15000ms same night, after direct evidence: a
+            // real case timed out at 8000ms using Vision's rescue answer
+            // "973.72" (a decimal, no confirmed real reading on this display
+            // has ever had one), and Gemini's actual read -- "73720", a
+            // normal 5-digit whole number matching every real reading's
+            // format -- arrived immediately after, too late to be used. This
+            // is the exact same latency this file already measured and
+            // documented for the OTHER Gemini crop cross-check earlier
+            // tonight (GEMINI_CROSSCHECK_TIMEOUT_MS, ~12-16s/request) -- that
+            // number should have been reused here from the start instead of
+            // guessing a fresh, untested 8000ms.
+            const GEMINI_RESCUE_CROSSCHECK_MS = Number(process.env.GEMINI_RESCUE_CROSSCHECK_MS) || 15000;
             const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_RESCUE_CROSSCHECK_MS, 'Gemini crop metadata (cross-check on Vision rescue)');
             const geminiAgrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight === rescueWeight;
             const geminiDisagrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight !== rescueWeight;
