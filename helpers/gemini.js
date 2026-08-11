@@ -1754,6 +1754,69 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // constrains to a plausible truck-load range and flags ambiguity rather
     // than silently guessing. See helpers/visionOcr.js for the full reasoning.
     const wholeVisionResult = visionOcr.extractPlausibleWeightFromFullImage(wholeVisionText);
+
+    // Added 2026-08-11 after a measured, reproducible miss on a
+    // WhatsApp-compressed photo (true weight 28460): the accurate path's
+    // crop read came back empty, this whole-image fallback mined "41516"
+    // out of unrelated full-photo text and returned it — while Gemini's
+    // read of the actual CROP, already in flight, resolved moments later
+    // with the correct 28460 and was thrown away unused. Reading the whole
+    // photo is the weakest source we have (it is explicitly a "largest
+    // plausible number in the frame" guess, not a display read), so it must
+    // not win a race against a real read of the isolated display that is
+    // already running. Wait for it here, bounded, and prefer it. This only
+    // costs latency on a path that has ALREADY failed to read the crop —
+    // never on a normal successful read.
+    //
+    // Second half of the same finding: on that photo the accurate path had
+    // not merely failed, it had TIMED OUT — the red pixel locate found
+    // nothing usable, so it fell through to Gemini's AI locate, which alone
+    // took 9848ms and blew the 9000ms ACCURATE_PATH_BUDGET_MS. The budget
+    // returns null and moves on, but the path keeps running: it produced a
+    // correct crop and Gemini's "28460" at ~11.8s, about 2.7s after this
+    // fallback had already committed to the wrong 41516. So before settling
+    // for whole-image mining, give the still-running accurate path a bounded
+    // second chance to land. Same trade as above: extra latency only on a
+    // path that was about to return the weakest answer we produce.
+    let lateAccurate = accurate;
+    if (!lateAccurate) {
+        const ACCURATE_PATH_GRACE_MS = Number(process.env.ACCURATE_PATH_GRACE_MS) || 8000;
+        lateAccurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_GRACE_MS, 'Locate+crop accurate path (grace period before whole-image fallback)');
+        if (lateAccurate && lateAccurate.visionWeight != null) {
+            console.log(`[GEMINI] Accurate path landed during the grace period in ${elapsed()}: ${lateAccurate.visionWeight} — using it instead of whole-image OCR${wholeVisionResult.weight != null ? ` (${wholeVisionResult.weight})` : ''}`);
+            return {
+                weight: lateAccurate.visionWeight,
+                alternate_weight: wholeVisionResult.weight != null && wholeVisionResult.weight !== lateAccurate.visionWeight ? wholeVisionResult.weight : null,
+                alternate_source: wholeVisionResult.weight != null && wholeVisionResult.weight !== lateAccurate.visionWeight ? 'Cloud Vision OCR (whole image)' : null,
+                weight_unit: 'lb',
+                displays_seen: `Cloud Vision OCR read of located display, landed after the accurate-path budget (locate reason: "${(lateAccurate.box && lateAccurate.box.reason) || ''}")`,
+                raw_text: `${lateAccurate.visionText} (Cloud Vision OCR on the display crop, after grace period)`,
+                ambiguous: true,
+            };
+        }
+    }
+
+    if (lateAccurate && lateAccurate.geminiMetaPromise) {
+        const GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS = Number(process.env.GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS) || 12000;
+        const cropRead = await withTimeout(
+            lateAccurate.geminiMetaPromise,
+            GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS,
+            'Gemini crop metadata (rescue before falling back to whole-image OCR)',
+        );
+        if (cropRead && cropRead.weight != null) {
+            console.log(`[GEMINI] Weight read via Gemini's crop read in ${elapsed()}: ${cropRead.weight} — preferred over the whole-image OCR guess${wholeVisionResult.weight != null ? ` (${wholeVisionResult.weight})` : ''}, since a read of the isolated display beats mining the largest plausible number out of the full photo`);
+            return {
+                weight: cropRead.weight,
+                alternate_weight: wholeVisionResult.weight != null && wholeVisionResult.weight !== cropRead.weight ? wholeVisionResult.weight : null,
+                alternate_source: wholeVisionResult.weight != null && wholeVisionResult.weight !== cropRead.weight ? 'Cloud Vision OCR (whole image)' : null,
+                weight_unit: cropRead.weight_unit || 'lb',
+                displays_seen: cropRead.displays_seen || 'Gemini read of the located display crop (Vision found nothing on that crop)',
+                raw_text: `${cropRead.raw_text || ''} (Gemini read of the display crop — used instead of whole-image OCR, which found ${wholeVisionResult.weight != null ? wholeVisionResult.weight : 'nothing usable'})`,
+                ambiguous: true,
+            };
+        }
+    }
+
     if (wholeVisionResult.weight != null) {
         const ambiguityNote = wholeVisionResult.ambiguous
             ? ` [more than one plausible weight-sized number was found in the full photo (${wholeVisionResult.candidates.join(', ')}) — no display could be isolated first, so this is the largest of them; PLEASE VERIFY against the actual weighbridge display before trusting it]`
