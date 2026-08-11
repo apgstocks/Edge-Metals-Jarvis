@@ -1235,6 +1235,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // use whichever one produces a real result, rather than guessing in
         // advance which one is "real."
         let lastAttempt = null;
+        let weakAttempt = null; // a candidate that read SOMETHING but looked truncated — see below
         for (let i = 0; i < candidates.length; i++) {
             const box = candidates[i];
             const tag = candidates.length > 1 ? ` (candidate ${i + 1}/${candidates.length})` : '';
@@ -1266,10 +1267,36 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
             const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
 
-            lastAttempt = { visionWeight, visionText, box, geminiMetaPromise, croppedBase64 };
+            const attempt = { visionWeight, visionText, box, geminiMetaPromise, croppedBase64 };
+            lastAttempt = attempt;
             if (visionWeight != null) {
-                if (i > 0) console.log(`[GEMINI] Candidate ${i + 1} produced a readable result after candidate(s) 1-${i} found nothing`);
-                return lastAttempt;
+                // Added 2026-08-11 after a real production log: two candidate
+                // boxes were found (1258px vs 679px lit pixels), the LARGER
+                // one was tried first per the existing "biggest first" sort,
+                // and it produced a plausible-looking but truncated "9373"
+                // (correctly caught by the existing <10000 suspicious-short
+                // flag below, but the SECOND candidate — quite possibly the
+                // real display — was never even tried, since candidate 1
+                // already "succeeded"). A bigger lit-pixel count does not
+                // mean a candidate is more likely to be the real display —
+                // that was already the whole reason multiple candidates get
+                // tried at all (see the false-positive-reflection case
+                // above) — so a candidate whose result already looks
+                // truncated on ITS OWN terms shouldn't get to end the search
+                // early either. Only applies to the weighbridge/default
+                // classification (matching the real <10000 flag below) —
+                // compact indicators legitimately read short (e.g. 2251) and
+                // must not be held back waiting for a longer number that
+                // will never come.
+                const isCompactIndicator = looksLikeCompactIndicatorFromVisionText(visionText);
+                const looksTruncated = !isCompactIndicator && visionWeight < 10000;
+                if (!looksTruncated) {
+                    if (i > 0) console.log(`[GEMINI] Candidate ${i + 1} produced a readable result after candidate(s) 1-${i} found nothing`);
+                    return attempt;
+                }
+                if (!weakAttempt) weakAttempt = attempt;
+                console.log(`[GEMINI] Candidate ${i + 1} read ${visionWeight} — shorter than a real weighbridge reading, holding it as a fallback and trying the next candidate first`);
+                continue;
             }
             // Vision found nothing on this candidate — loop tries the next
             // one, if any. Extra cost is rare (usually only 1 candidate
@@ -1288,8 +1315,11 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // error, just an empty result) — not every Vision failure is a
         // hallucination; sometimes it just finds nothing. Now always returns
         // the last candidate's crop info so the caller can try Gemini's
-        // parallel read on it before giving up entirely.
-        return lastAttempt;
+        // parallel read on it before giving up entirely. Prefer a held-back
+        // truncated-but-real reading (weakAttempt) over the literal last
+        // candidate tried, which may have found nothing at all — a
+        // suspicious-but-real number beats nothing.
+        return weakAttempt || lastAttempt;
     })().catch((err) => {
         console.warn('[GEMINI] Crop-zoom accurate path failed:', err.message);
         return null;
