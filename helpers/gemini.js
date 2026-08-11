@@ -1207,6 +1207,28 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
 
+    // Added 2026-08-11 to end a genuinely expensive class of confusion: the
+    // client (dashboard AND the separately-bundled mobile APK) decides what
+    // resolution to send, and NOTHING in these logs ever showed what
+    // actually arrived. That cost hours — a client-side resolution fix was
+    // shipped, deployed, and re-tested three times while it was impossible
+    // to tell from the logs whether the photo being read was the new
+    // full-resolution one or the old 1600px-capped one, because every other
+    // number in the log (locate is done on a shrunk copy; crop widths are
+    // easy to misread) looks similar either way. One line, printed before
+    // anything else runs, makes "is the client fix actually live on this
+    // device" a fact instead of an argument. Failures here are swallowed —
+    // this is diagnostics, it must never break a real read.
+    try {
+        if (sharp) {
+            const inMeta = await sharp(Buffer.from(imageBase64, 'base64')).metadata();
+            const kb = Math.round((imageBase64.length * 3) / 4 / 1024);
+            console.log(`[GEMINI] Received image: ${inMeta.width}x${inMeta.height}px, ~${kb}KB base64 — if width is ~1600 the client is still applying the OLD downscale cap (expect full sensor resolution, typically 3000-4000px, from an up-to-date client)`);
+        }
+    } catch (err) {
+        console.warn('[GEMINI] Could not read incoming image dimensions:', err.message);
+    }
+
     // Started now, awaited later — a single Vision OCR call on the whole
     // photo, no Gemini locate step first. Kept as the last-resort fallback
     // for when the accurate path genuinely fails (box never found, crop
