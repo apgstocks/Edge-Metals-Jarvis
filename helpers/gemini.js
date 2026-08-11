@@ -1349,11 +1349,25 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // anything else runs, makes "is the client fix actually live on this
     // device" a fact instead of an argument. Failures here are swallowed —
     // this is diagnostics, it must never break a real read.
+    // lowResInput drives a real behavior change below (see the primary crop
+    // call), not just logging — added 2026-08-11 after a live case (a photo
+    // that arrived at 768x1024, source unknown — could be camera or
+    // gallery, and per direct instruction that distinction shouldn't matter)
+    // measured a wrong read (89520 vs true 81528) that a full-resolution
+    // version of the same photo read correctly. Since the client's chosen
+    // resolution can't always be controlled or even diagnosed from here, the
+    // backend now adapts instead of just logging the problem: any input
+    // under LOWRES_THRESHOLD gets the same contrast-boost+sharpen treatment
+    // already proven to rescue marginal crops (previously rescue-path-only),
+    // applied on the FIRST attempt instead of only after a failure.
+    const LOWRES_THRESHOLD = 1400;
+    let lowResInput = false;
     try {
         if (sharp) {
             const inMeta = await sharp(Buffer.from(imageBase64, 'base64')).metadata();
             const kb = Math.round((imageBase64.length * 3) / 4 / 1024);
-            console.log(`[GEMINI] Received image: ${inMeta.width}x${inMeta.height}px, ~${kb}KB base64 — if width is ~1600 the client is still applying the OLD downscale cap (expect full sensor resolution, typically 3000-4000px, from an up-to-date client)`);
+            lowResInput = Math.max(inMeta.width || 0, inMeta.height || 0) < LOWRES_THRESHOLD;
+            console.log(`[GEMINI] Received image: ${inMeta.width}x${inMeta.height}px, ~${kb}KB base64${lowResInput ? ` — below ${LOWRES_THRESHOLD}px, applying contrast-boost on the primary read` : ''} — if width is ~1600 the client is still applying the OLD downscale cap (expect full sensor resolution, typically 3000-4000px, from an up-to-date client)`);
         }
     } catch (err) {
         console.warn('[GEMINI] Could not read incoming image dimensions:', err.message);
@@ -1424,8 +1438,12 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             if (process.env.DEBUG_WEIGHT_RAW) console.log(`[DEBUG box${tag}]`, JSON.stringify(box));
 
             const tCropStart = Date.now();
-            const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
-            console.log(`[GEMINI] Crop step${tag} took ${Date.now() - tCropStart}ms (total ${elapsed()})`);
+            // lowResInput -> boost: true (see the "Received image" block
+            // above) applies the same contrast-stretch+sharpen used in the
+            // rescue path on the FIRST attempt when the source photo itself
+            // is small, instead of only after Vision already failed once.
+            const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box, { boost: lowResInput });
+            console.log(`[GEMINI] Crop step${tag} took ${Date.now() - tCropStart}ms (total ${elapsed()})${lowResInput ? ' [contrast-boosted: low-res source]' : ''}`);
             if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
             if (process.env.DEBUG_DUMP_CROP && croppedBase64) {
                 const dumpPath = candidates.length > 1 ? `${process.env.DEBUG_DUMP_CROP}.cand${i + 1}` : process.env.DEBUG_DUMP_CROP;
@@ -1764,10 +1782,25 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // regardless of the resulting digit count, instead of trusting a
             // rescued number as fully as a clean single in-range match.
             const viaStrip = accurate.visionWeightViaLeadingStrip;
-            const flagForReview = suspiciouslyShort || viaStrip;
+            // Added 2026-08-11: lowResInput as a third flag trigger, after
+            // directly measuring the gap it closes. A 768px source photo
+            // (resolution unknown to be camera or gallery — that distinction
+            // doesn't matter to the fix) produced "87588" for a true 81528 —
+            // normal digit count, no strip needed, so neither check above
+            // would have caught it; it would have returned fully confident
+            // and wrong. Contrast-boosting the crop (see the primary crop
+            // call above) helps but doesn't guarantee correctness at this
+            // resolution — 1-vs-7 and 2-vs-8 on a 7-segment display can
+            // become genuinely ambiguous once enough source detail is gone.
+            // Since accuracy alone can't be fully restored after the fact,
+            // visibility into the uncertainty is the honest fallback: always
+            // get Gemini's second opinion on the same crop when the source
+            // was low-res, regardless of how plausible Vision's number looks.
+            const flagForReview = suspiciouslyShort || viaStrip || lowResInput;
             const reviewReason = suspiciouslyShort
                 ? ' — shorter than every confirmed real reading on this display type, flagged for review in case of a truncated crop'
-                : (viaStrip ? ' — Vision\'s raw read needed a leading-digit correction to become plausible, flagged for review since that correction isn\'t guaranteed correct' : '');
+                : (viaStrip ? ' — Vision\'s raw read needed a leading-digit correction to become plausible, flagged for review since that correction isn\'t guaranteed correct'
+                : (lowResInput ? ' — source photo was below the resolution this pipeline was validated at, flagged for review since digit accuracy can\'t be guaranteed' : ''));
 
             // When the strip fallback fired, Gemini's already-in-flight
             // parallel read of the SAME crop is worth a bounded wait here —
