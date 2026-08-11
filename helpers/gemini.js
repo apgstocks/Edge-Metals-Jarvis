@@ -595,28 +595,52 @@ async function findDisplayBoxByColor(imageBase64, colorTest, minLitFraction, col
         }
         if (!comps.length) { console.warn(`[GEMINI] Pixel locate (${colorLabel}): pixels found but no connected component formed`); return null; }
         comps.sort((a, b) => b.litCount - a.litCount);
-        const best = comps[0];
 
-        const boxW = (best.maxX - best.minX) / w, boxH = (best.maxY - best.minY) / h;
-        console.log(`[GEMINI] Pixel locate (${colorLabel}): best component ${best.litCount}px, box ${boxW.toFixed(3)}x${boxH.toFixed(3)} of frame`);
-        // Sanity bounds — a real display fills a meaningful chunk of frame but
-        // not almost the whole photo (which would suggest a false-positive on
-        // a rust-colored wall/roof or, for cyan, a patch of sky/blue equipment
-        // rather than a genuine display cluster). Too small a box is more
-        // likely noise (a reflection, a wire) than a readable display.
-        if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) {
-            console.warn(`[GEMINI] Pixel locate (${colorLabel}): best component's box (${boxW.toFixed(3)}x${boxH.toFixed(3)}) failed sanity bounds`);
-            return null;
+        // Changed 2026-08-11: this used to commit to ONLY the single
+        // largest component and either use it or give up. A real false
+        // positive proved that's not safe — on one photo, a blurry window
+        // reflection (323px) narrowly out-scored the actual display digits
+        // (298px) and was the only candidate ever tried. A saturation-based
+        // filter to reject the reflection was tried and reverted (too thin
+        // a margin against a different genuine case at 0.40 vs the false
+        // positive's 0.34 — see git history). This is the safer fix: return
+        // the top few candidates (still each passing the same sanity-bounds
+        // check as before) so the caller can actually TRY reading each one
+        // and use whichever produces a real result, instead of a threshold
+        // pre-judging which one is "real" before ever attempting to read it.
+        //
+        // Bug found in the SAME live test 2026-08-11: an unrestricted top-3
+        // list let genuinely tiny, unrelated red specks (a wire glint, a
+        // tail-light — a few dozen pixels) qualify as "candidates" just for
+        // individually passing the same absolute sanity-bounds check the
+        // single dominant component used to need. On one photo this caused
+        // a 232px noise blob to get tried and accepted (a wrong, if flagged,
+        // answer) INSTEAD of ever falling through to cyan, where the real
+        // 11026px display cluster was waiting. Fix: only include a
+        // secondary component if it's within 50% of the TOP component's
+        // pixel count — close enough to plausibly be a genuine alternate
+        // (like the 323-vs-298 reflection/display case this was built for),
+        // not noise that merely cleared an absolute floor built for judging
+        // a single dominant cluster.
+        const candidates = [];
+        const topLitCount = comps[0].litCount;
+        for (const comp of comps) {
+            if (candidates.length >= 3) break;
+            if (comp.litCount < topLitCount * 0.5) break; // comps is sorted descending, so nothing after this qualifies either
+            const boxW = (comp.maxX - comp.minX) / w, boxH = (comp.maxY - comp.minY) / h;
+            if (boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6) continue;
+            const padX = boxW * 0.08, padY = boxH * 0.25;
+            candidates.push({
+                x_min: Math.max(0, comp.minX / w - padX),
+                y_min: Math.max(0, comp.minY / h - padY),
+                x_max: Math.min(1, comp.maxX / w + padX),
+                y_max: Math.min(1, comp.maxY / h + padY),
+                reason: `${colorLabel} cluster found by pixel color analysis (no AI call)`,
+                litCount: comp.litCount,
+            });
         }
-
-        const padX = boxW * 0.08, padY = boxH * 0.25;
-        return {
-            x_min: Math.max(0, best.minX / w - padX),
-            y_min: Math.max(0, best.minY / h - padY),
-            x_max: Math.min(1, best.maxX / w + padX),
-            y_max: Math.min(1, best.maxY / h + padY),
-            reason: `${colorLabel} cluster found by pixel color analysis (no AI call)`,
-        };
+        console.log(`[GEMINI] Pixel locate (${colorLabel}): ${candidates.length} candidate box(es) passed sanity bounds (${comps.map(c => c.litCount).slice(0, 5).join(', ')} px, largest first)`);
+        return candidates.length ? candidates : null;
     } catch (err) {
         console.warn(`[GEMINI] Pixel-based ${colorLabel} locate failed:`, err.message);
         return null;
@@ -1153,43 +1177,74 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // locateDisplayBox (network call, measured 5.6-9.9s on real IQ710
         // photos — enough by itself to blow the whole accurate-path budget)
         // if NEITHER pixel approach can confidently place a box.
-        let box = await locateRedDisplayByPixels(imageBase64);
+        let candidates = await locateRedDisplayByPixels(imageBase64);
         let locateSource = 'red pixel color analysis';
-        if (!box) {
-            box = await locateCyanDisplayByPixels(imageBase64);
+        if (!candidates || !candidates.length) {
+            candidates = await locateCyanDisplayByPixels(imageBase64);
             locateSource = 'cyan pixel color analysis';
         }
-        if (!box) {
+        if (!candidates || !candidates.length) {
             const locateImg = await shrinkForLocate(imageBase64, mimeType);
-            box = await locateDisplayBox(locateImg, mimeType);
+            const aiBox = await locateDisplayBox(locateImg, mimeType);
+            candidates = aiBox ? [aiBox] : null;
             locateSource = 'Gemini (pixel locate found nothing confident)';
         }
-        console.log(`[GEMINI] Locate step (${locateSource}) took ${Date.now() - tLocateStart}ms (total ${elapsed()})`);
-        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG box]', JSON.stringify(box));
-        if (!box) return null;
+        console.log(`[GEMINI] Locate step (${locateSource}) took ${Date.now() - tLocateStart}ms (total ${elapsed()}), ${candidates ? candidates.length : 0} candidate box(es)`);
+        if (!candidates || !candidates.length) return null;
 
-        const tCropStart = Date.now();
-        const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
-        console.log(`[GEMINI] Crop step took ${Date.now() - tCropStart}ms (total ${elapsed()})`);
-        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
-        if (process.env.DEBUG_DUMP_CROP && croppedBase64) require('fs').writeFileSync(process.env.DEBUG_DUMP_CROP, Buffer.from(croppedBase64, 'base64'));
-        if (!croppedBase64) return null;
+        // Changed 2026-08-11 to try each candidate box in turn instead of
+        // committing to only the first one — reproduced live on a real
+        // photo where the top-scoring color cluster was actually a blurry
+        // window reflection, not the display, and the genuine digit cluster
+        // was the SECOND-largest component (298px vs the false positive's
+        // 323px — a threshold-based rejection was tried and reverted, too
+        // fragile a margin; see findDisplayBoxByColor). This is the safer
+        // version of that fix: actually attempt to read each candidate and
+        // use whichever one produces a real result, rather than guessing in
+        // advance which one is "real."
+        let lastAttempt = null;
+        for (let i = 0; i < candidates.length; i++) {
+            const box = candidates[i];
+            const tag = candidates.length > 1 ? ` (candidate ${i + 1}/${candidates.length})` : '';
+            if (process.env.DEBUG_WEIGHT_RAW) console.log(`[DEBUG box${tag}]`, JSON.stringify(box));
 
-        // Kicked off together but not awaited together — the metadata call
-        // (unit label / which-display reasoning) is non-essential and has
-        // safe defaults below, so it shouldn't hold up the weight itself.
-        const tVisionStart = Date.now();
-        const visionPromise = visionOcr.detectText(croppedBase64);
-        const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
-            console.warn('[GEMINI] Metadata read on crop failed:', err.message);
-            return null;
-        });
+            const tCropStart = Date.now();
+            const croppedBase64 = await cropToDisplay(imageBase64, mimeType, box);
+            console.log(`[GEMINI] Crop step${tag} took ${Date.now() - tCropStart}ms (total ${elapsed()})`);
+            if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG cropped len]', croppedBase64 && croppedBase64.length);
+            if (process.env.DEBUG_DUMP_CROP && croppedBase64) {
+                const dumpPath = candidates.length > 1 ? `${process.env.DEBUG_DUMP_CROP}.cand${i + 1}` : process.env.DEBUG_DUMP_CROP;
+                require('fs').writeFileSync(dumpPath, Buffer.from(croppedBase64, 'base64'));
+            }
+            if (!croppedBase64) continue;
 
-        const visionText = await visionPromise;
-        console.log(`[GEMINI] Vision-on-crop step took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
-        if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
-        const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
-        // Changed 2026-08-11: this used to `return null` here the instant
+            // Kicked off together but not awaited together — the metadata
+            // call (unit label / which-display reasoning) is non-essential
+            // and has safe defaults below, so it shouldn't hold up the
+            // weight itself.
+            const tVisionStart = Date.now();
+            const visionPromise = visionOcr.detectText(croppedBase64);
+            const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
+                console.warn('[GEMINI] Metadata read on crop failed:', err.message);
+                return null;
+            });
+
+            const visionText = await visionPromise;
+            console.log(`[GEMINI] Vision-on-crop step${tag} took ${Date.now() - tVisionStart}ms (total ${elapsed()})`);
+            if (process.env.DEBUG_WEIGHT_RAW) console.log('[DEBUG vision]', JSON.stringify({ visionText }));
+            const visionWeight = visionOcr.extractWeightNumberFromCrop(visionText);
+
+            lastAttempt = { visionWeight, visionText, box, geminiMetaPromise };
+            if (visionWeight != null) {
+                if (i > 0) console.log(`[GEMINI] Candidate ${i + 1} produced a readable result after candidate(s) 1-${i} found nothing`);
+                return lastAttempt;
+            }
+            // Vision found nothing on this candidate — loop tries the next
+            // one, if any. Extra cost is rare (usually only 1 candidate
+            // exists at all) and only paid when the top candidate fails,
+            // which is exactly the case worth spending more on.
+        }
+        // Changed 2026-08-11: this used to `return null` the instant
         // Vision-on-crop came back empty, which threw away a perfectly good,
         // tightly-isolated crop AND silently abandoned the geminiMetaPromise
         // already running in parallel on that same crop — forcing a fall-back
@@ -1200,9 +1255,9 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // detected" response from the Vision API itself (200 status, no
         // error, just an empty result) — not every Vision failure is a
         // hallucination; sometimes it just finds nothing. Now always returns
-        // the crop info so the caller can try Gemini's parallel read on it
-        // before giving up on this crop entirely.
-        return { visionWeight, visionText, box, geminiMetaPromise };
+        // the last candidate's crop info so the caller can try Gemini's
+        // parallel read on it before giving up entirely.
+        return lastAttempt;
     })().catch((err) => {
         console.warn('[GEMINI] Crop-zoom accurate path failed:', err.message);
         return null;
