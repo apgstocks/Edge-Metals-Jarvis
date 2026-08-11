@@ -1655,6 +1655,26 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_RESCUE_CROSSCHECK_MS, 'Gemini crop metadata (cross-check on Vision rescue)');
             const geminiAgrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight === rescueWeight;
             const geminiDisagrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight !== rescueWeight;
+            // Added 2026-08-11: geminiRescueCheck being null means the wait
+            // genuinely timed out (withTimeout resolves null on timeout —
+            // see its own definition). But Gemini can also respond WITHIN
+            // budget and still explicitly decline a confident number
+            // (weight: null) while its raw_text carries real, specific
+            // information — a live case saw Gemini return raw_text
+            // "??3720 lb (leading digits unreadable/fading due to LED
+            // multiplex refresh rate)": a genuine physical explanation (LED
+            // displays that multiplex/scan their digits can have one appear
+            // dim or unlit in a single photo frame regardless of resolution
+            // or which model reads it), not a vague failure. That was
+            // previously discarded and reported as "did not return an
+            // answer in time," which is both inaccurate (it DID answer,
+            // just not with a number) and throws away a partial digit
+            // pattern a human reviewer could actually use — e.g. this raw
+            // text's trailing "3720" matches an earlier attempt's full,
+            // confident "73720" read on a retry of the same case.
+            const geminiTimedOut = geminiRescueCheck === null;
+            const geminiDeclinedWithNote = !geminiTimedOut && geminiRescueCheck && geminiRescueCheck.weight == null
+                && geminiRescueCheck.raw_text && !/^n\/?a\b/i.test(geminiRescueCheck.raw_text.trim());
             // Prefer Gemini's number when the two disagree: Vision already
             // proved unreliable enough on this exact crop to need a rescue
             // attempt at all, so its rescued answer isn't more trustworthy
@@ -1665,7 +1685,12 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             const finalAlt = geminiDisagrees ? rescueWeight : null;
             const note = geminiDisagrees
                 ? ` [Vision found no text on the plain crop; a "${rescueLabel}" rescue read ${rescueWeight}, but Gemini's independent read of the same crop said ${geminiRescueCheck.weight} instead — using Gemini's answer since Vision already needed rescuing here, but please verify against the actual display]`
-                : ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading${geminiAgrees ? ', and Gemini\'s independent read of the same crop agreed' : ' (Gemini\'s cross-check did not return a usable answer in time)'} — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
+                : ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading${
+                    geminiAgrees ? ', and Gemini\'s independent read of the same crop agreed'
+                    : geminiDeclinedWithNote ? `. Gemini could not confidently read a full number but noted: "${geminiRescueCheck.raw_text}" — compare against Vision's ${rescueWeight} before trusting either`
+                    : geminiTimedOut ? ' (Gemini\'s cross-check did not return within the wait budget)'
+                    : ' (Gemini\'s cross-check did not return a usable answer)'
+                  } — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
             console.log(`[GEMINI] Weight read via ${geminiDisagrees ? 'Gemini (preferred over Vision rescue, disagreement)' : `Cloud Vision OCR (${rescueLabel} rescue)`} in ${elapsed()}: ${finalWeight}${note}`);
             return {
                 weight: finalWeight,
