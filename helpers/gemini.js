@@ -1626,8 +1626,19 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // showing both lets a human resolve it in one glance instead of
             // walking back to the scale with only one (possibly wrong)
             // number to check against.
+            // Changed 2026-08-11: this cross-check used to only fire for
+            // viaStrip. Real production case: Vision cleanly read "736" (no
+            // strip needed — suspiciouslyShort alone tripped flagForReview)
+            // and this branch never ran, so the driver was left with a bare
+            // unverified "736" and no second opinion, even though Gemini's
+            // parallel read of the SAME crop was already in flight the whole
+            // time. Widening the condition from viaStrip to flagForReview
+            // means BOTH flagged cases now get Gemini's second opinion
+            // surfaced as alternate_weight before returning, not just the
+            // strip sub-case. Only affects already-flagged (rare, already
+            // slow-tolerant) reads — clean in-range results never touch this.
             let strippedAlt = null;
-            if (viaStrip) {
+            if (flagForReview) {
                 // Widened 3000 -> 8000ms after a real miss: a live photo
                 // where Vision's strip-corrected read (73500) was actually
                 // wrong (confirmed true value 73600, one digit off — a
@@ -1656,7 +1667,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 // Apsara's explicit priority ("i cant afford to have
                 // mistakes" outranks speed when the two conflict).
                 const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 15000;
-                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, 'Gemini crop metadata (cross-check after leading-digit strip)');
+                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`);
                 if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
             }
 
