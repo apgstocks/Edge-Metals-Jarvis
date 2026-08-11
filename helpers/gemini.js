@@ -411,6 +411,19 @@ function withTimeout(promise, ms, label) {
     });
 }
 
+// Added 2026-08-11 — classifies display type from Vision's own crop OCR
+// text instead of a second Gemini call, so routing costs zero extra
+// latency (see full reasoning at the call site in extractWeightFromImage).
+// Deliberately keyword-based rather than fuzzy: false negatives just fall
+// through to the existing, well-tested Vision-default path, so being
+// conservative here is safe; false positives would wrongly route a real
+// weighbridge photo to Gemini, which is the failure mode to avoid.
+function looksLikeCompactIndicatorFromVisionText(visionText) {
+    const t = (visionText || '').toLowerCase();
+    return /\bindicat/.test(t) || /\bon\/?off\b/.test(t) || /\bfunc\b/.test(t)
+        || (/\bstable\b/.test(t) && /\btare\b/.test(t));
+}
+
 // Locate-only shrink — per Apsara, the whole read was taking too long
 // (>10s). The client already downscales to 1600px before upload, but that's
 // sized for actually READING digits; locateDisplayBox only needs to find a
@@ -1120,96 +1133,82 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     console.log(`[GEMINI] Accurate (cropped) path ${accurate ? 'succeeded' : 'did not produce a usable reading'} at ${elapsed()}`);
 
     if (accurate && accurate.visionWeight != null) {
-        // Widened from a flat 800ms — confirmed live 2026-08-10 that window
-        // was so tight the metadata read almost never made it back in time
-        // to matter: Vision once read a crop as "4771920" while Gemini's
-        // independent read of the SAME crop was "77920" (wildly different),
-        // and that disagreement never surfaced anywhere because
-        // geminiMetaPromise simply hadn't resolved yet when this used to
-        // run. Per Apsara ("I want this to work properly, detect the
-        // weights no matter what"), waiting for whatever's left of the
-        // overall accurate-path budget for a real second opinion is worth
-        // it — floor of 1500ms so a fast crop read still gets a fair wait.
-        const budgetLeft = Math.max(1500, ACCURATE_PATH_BUDGET_MS - (Date.now() - t0));
-        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, budgetLeft, 'Gemini crop metadata');
+        // Rework 2026-08-11, per Apsara ("remove the timing constraint, find
+        // some other way to do it very fast"): the previous version always
+        // synchronously waited on a second full Gemini call (readWeightSinglePass
+        // again, ~3.5-8s+, sometimes 8s+ and timing out) before responding,
+        // on EVERY read, just to get a `displays_seen` classification string.
+        // Live testing showed that wait alone pushed total latency to
+        // 11-12s on ordinary weighbridge reads that didn't need Gemini's
+        // opinion at all (Vision has been extensively proven reliable on
+        // that display type all session).
+        //
+        // Fix: classify display type from Vision's OWN crop OCR text
+        // (`accurate.visionText`), which we already have for free — no
+        // extra API call, no extra wait, zero added latency. This works
+        // because compact 7-segment bench/platform indicators (Socome-style)
+        // print their own control-panel labels right on the fascia, which
+        // Vision's OCR already picks up on the SAME crop it's reading
+        // digits from (confirmed live: the Socome crop's Vision text
+        // included "Weighing Indicato[r]", "STABLE", "COUNT", "TARE",
+        // "ON/OFF FUNC UNITS" every single time across 3 repeated runs).
+        // Weighbridge crops never contain that vocabulary — usually just
+        // bare digits plus a unit label (e.g. "ZOSI...81460").
+        const looksCompactIndicator = looksLikeCompactIndicatorFromVisionText(accurate.visionText);
 
-        // NOTE: a second cross-check against the whole-image Vision OCR pass
-        // (already running in parallel the whole time, essentially free to
-        // use) was tried here and deliberately removed after testing —
-        // nearly every yard photo also shows a compact bench-scale reading
-        // (e.g. "403 lb") in frame, which independently registers as its
-        // own "confident" plausible weight and would disagree with the real
-        // crop reading on almost every single photo. That's not a red flag,
-        // it's normal — shipping it would make this warning fire constantly
-        // and train the exact "ignore it, it always says that" behavior
-        // this flag exists to avoid. Left out; Gemini's read of the SAME
-        // crop (below) doesn't have this problem since it's looking at the
-        // same isolated display, not the whole yard.
-        // NOTE 2026-08-10: "Vision is more reliable than Gemini" is true for
-        // the main dot-matrix vehicle weighbridge display (extensively
-        // tested this session) but NOT universal — confirmed on a real
-        // compact 7-segment "Socome" indicator the same day: Vision
-        // hallucinated a blank, genuinely zero-signal leading cell into an
-        // "8" (raw "82258"), while Gemini's read of the EXACT SAME crop was
-        // correct ("2251"), reproduced live via a direct API call. Neither
-        // engine is universally right — which is exactly why this still
-        // returns Vision's number unchanged (minimizing risk of regressing
-        // the well-tested weighbridge case) but now hands the operator
-        // Gemini's actual alternate number too instead of a vague "didn't
-        // agree," so a real disagreement can be resolved with one glance at
-        // the two candidates instead of walking back out to re-check the
-        // scale from scratch.
-        const geminiDisagrees = !!(geminiMeta && geminiMeta.weight != null && geminiMeta.weight !== accurate.visionWeight);
+        if (!looksCompactIndicator) {
+            // FAST PATH — the common case. Vision is the proven-reliable
+            // engine here, so respond immediately without waiting on
+            // Gemini's metadata call at all (it's still kicked off in
+            // parallel above for potential future use/logging, but nothing
+            // downstream blocks on it — its .catch() already prevents an
+            // unhandled-rejection warning if it's simply never awaited).
+            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}`);
+            return {
+                weight: accurate.visionWeight,
+                alternate_weight: null,
+                alternate_source: null,
+                weight_unit: 'lb',
+                displays_seen: `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)`,
+                ambiguous: false,
+            };
+        }
 
-        // Routing by display TYPE, added 2026-08-10 after confirming — with
-        // two independent real photos, not a guess — that which engine to
-        // trust flips depending on what kind of display is in frame:
-        //   - "large overhead dot-matrix vehicle weighbridge display" ->
-        //     Vision wins (extensively verified all session; Gemini
-        //     flip-flops on this exact display type — reconfirmed again
-        //     TODAY on a real weighbridge photo: Gemini misread it as
-        //     87460 when the true value, verified by eye, is 81460).
-        //   - "single compact weighing indicator display" (a Socome-style
-        //     7-segment unit) -> Gemini wins — Vision hallucinated a
-        //     genuinely blank, zero-signal leading cell into a phantom "8"
-        //     ("82258"/"8225") while Gemini correctly read the same crop as
-        //     "2251", reproduced live via direct API calls.
-        // The classification text comes for free: readWeightSinglePass's
-        // own prompt already asks Gemini to identify which kind of display
-        // it's looking at (weighbridge vs compact bench/platform
-        // indicator) as part of every single crop read, specifically to
-        // help IT avoid picking the wrong display in a busy photo — this
-        // just reuses that existing signal instead of building a whole new
-        // classifier. Matched conservatively (needs an explicit "compact"
-        // or "indicator" mention and NOT "weighbridge") so an ambiguous or
-        // unclear description falls through to the existing, well-tested
-        // Vision-default behavior rather than guessing.
-        const seenText = (geminiMeta && geminiMeta.displays_seen || '').toLowerCase();
-        const looksCompactIndicator = /\b(compact|indicator|bench|platform)\b/.test(seenText) && !seenText.includes('weighbridge');
-        const preferGemini = looksCompactIndicator && geminiMeta && geminiMeta.weight != null;
+        // SLOW PATH — only compact indicators pay this cost, since Vision
+        // is proven UNRELIABLE on this display type (hallucinated a blank
+        // leading cell into "8" — "82258" instead of "2251" — reproduced
+        // live 3x). We genuinely need Gemini's actual digit value here,
+        // there's no way around waiting for it on this branch. It was
+        // kicked off in parallel back when the crop was first ready, so
+        // most of its latency is already absorbed by the time Vision's OCR
+        // + this text classification finished (~1.3-4.6s head start
+        // observed live) — the timeout below is a safety cap, not the
+        // expected wait.
+        const GEMINI_META_TIMEOUT_MS = Number(process.env.GEMINI_META_TIMEOUT_MS) || 8000;
+        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata');
+        const preferGemini = !!(geminiMeta && geminiMeta.weight != null);
 
         const primaryWeight = preferGemini ? geminiMeta.weight : accurate.visionWeight;
-        const altWeight = preferGemini ? accurate.visionWeight : (geminiDisagrees ? geminiMeta.weight : null);
-        const altSource = preferGemini ? 'Cloud Vision' : (geminiDisagrees ? 'Gemini' : null);
-        const routingNote = preferGemini
-            ? ` [display classified as a compact indicator ("${geminiMeta.displays_seen}") — Gemini used as primary here instead of Vision, which hallucinates on this display type; Vision's read was ${accurate.visionWeight}]`
-            : (geminiDisagrees ? ` [Gemini read this same crop as ${geminiMeta.weight} instead of ${accurate.visionWeight} — Cloud Vision kept as primary since this looks like the main weighbridge display, where Vision has been the reliable one all session]` : '');
+        const altWeight = preferGemini ? accurate.visionWeight : null;
+        const altSource = preferGemini ? 'Cloud Vision' : null;
 
-        // Flagged to the OPERATOR now (via `ambiguous`) whenever the two
-        // readings disagree at all, REGARDLESS of which one gets used as
-        // primary — routing by display type reduces how often the WRONG
-        // number gets shown, it doesn't guarantee correctness on its own
-        // (two data points isn't a lot), so this still surfaces both
-        // candidates rather than silently trusting the routed choice.
-        console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped) in ${elapsed()}: ${primaryWeight}${routingNote}${geminiDisagrees ? ' — FLAGGED for review' : ''}`);
+        // If Gemini's call also failed/timed out here, we have NO trustworthy
+        // reading at all for a display type Vision is proven wrong on — must
+        // flag rather than silently hand back Vision's likely-wrong number.
+        const ambiguous = !preferGemini;
+        const note = preferGemini
+            ? ` [display classified as a compact indicator from Vision's own OCR text — Gemini used as primary here instead of Vision, which hallucinates on this display type; Vision's read was ${accurate.visionWeight}]`
+            : ` [display classified as a compact indicator, where Vision is known-unreliable, but Gemini's second-opinion read did not return in time — Vision's read (${accurate.visionWeight}) returned anyway as a best-effort fallback, flagged for review]`;
+        console.log(`[GEMINI] Weight read via ${preferGemini ? 'Gemini' : 'Cloud Vision OCR (fallback)'} (primary, cropped, slow path) in ${elapsed()}: ${primaryWeight}${note}`);
         return {
             weight: primaryWeight,
             alternate_weight: altWeight,
             alternate_source: altSource,
             weight_unit: (geminiMeta && geminiMeta.weight_unit) || 'lb',
             displays_seen: (geminiMeta && geminiMeta.displays_seen) || `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-            raw_text: `${accurate.visionText} (Cloud Vision OCR)${routingNote}`,
-            ambiguous: geminiDisagrees,
+            raw_text: `${accurate.visionText} (Cloud Vision OCR)${note}`,
+            ambiguous,
         };
     }
 
