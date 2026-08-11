@@ -1273,7 +1273,33 @@ async function checkPhotoQuality(imageBase64, mimeType = 'image/jpeg') {
         // trap applies here: if candidate 1 is a bright edge-touching blob
         // but candidate 2 is the real, fully-in-frame display, this gate
         // must not reject a genuinely good photo over the wrong candidate.
-        const clean = candidates.find(c => !c.touchesEdge);
+        //
+        // Added same day, after a real false positive: a candidate can also
+        // be a MERGED blob rather than a genuinely edge-touching one — the
+        // dilation pass (R=25, meant to bridge gaps between digit segments)
+        // can bridge two SEPARATE red objects into one connected component
+        // if they're close enough at the ~500px analysis resolution (e.g.
+        // the display plus an unrelated red LED elsewhere in the photo,
+        // such as a security camera's indicator). That merge drags the
+        // component's bounds far past the real display's actual extent,
+        // making a fully-in-frame photo look edge-touching. Verified
+        // directly on the false positive: every legitimate single-display
+        // candidate measured this session has boxH under ~0.32 of frame
+        // height; the merged blob measured 0.594 — nearly double. A
+        // suspiciously tall box is treated as corrupted evidence, not
+        // trusted either way, same as "not found": it's excluded from the
+        // edge-touch search entirely rather than allowed to fail the photo.
+        const PLAUSIBLE_MAX_BOX_HEIGHT = 0.35;
+        const trustworthy = candidates.filter(c => (c.y_max - c.y_min) <= PLAUSIBLE_MAX_BOX_HEIGHT);
+        if (candidates.length && !trustworthy.length) {
+            console.log(`[GEMINI] Photo quality check (${colorLabel}): only implausibly tall candidate(s) found (likely two red objects merged by dilation) — treating as inconclusive, not a failure`);
+            return {
+                ok: true,
+                reason: 'not_found_but_allowed',
+                message: 'No confident display detected by the fast check — the fuller server-side pass may still recover a reading.',
+            };
+        }
+        const clean = trustworthy.find(c => !c.touchesEdge);
         if (!clean) {
             return {
                 ok: false,
