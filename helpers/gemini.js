@@ -1679,8 +1679,77 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // call (unit label / which-display reasoning) is non-essential
             // and has safe defaults below, so it shouldn't hold up the
             // weight itself.
+            // Added 2026-08-12 — replaces guess-then-retry with measure-then-
+            // decide, so the common case is ONE Vision call and the retries
+            // below become a rarely-used safety net rather than the path.
+            //
+            // Vision detects text on LUMINANCE, not colour. A red LED display
+            // that looks vivid to the eye can be nearly flat to Vision: pure
+            // red is only ~54/255 luminance, and if the housing is dark and
+            // the photo underexposed, lit digits and background end up almost
+            // the same brightness. Measured on the real crops from this
+            // pipeline (mean luminance of lit digit pixels minus mean
+            // background luminance):
+            //     28500    101  -> plain read works, 0.95 confidence
+            //     80720     72  -> plain read works
+            //     71920     30  -> plain read works
+            //     hardcase  20  -> plain read returns NOTHING AT ALL
+            //     design-6  10  -> plain read picks up a dim ghost cell
+            //                      ("573500" -> strip-guessed to a wrong 73500)
+            // The split is clean and the mechanism is physical, not
+            // coincidental: below roughly 25 points of separation Vision
+            // either finds no text or starts reading ambient dot-glow as
+            // digits. A binary threshold rebuilds that separation — it maps
+            // genuinely-lit dots to white and everything dimmer (ambient
+            // glow, dead/ghost cells, dark housing) to black. Verified on
+            // both low-contrast crops: threshold-120 reads 73600 correctly on
+            // each, the hardcase WITHOUT needing the greyscale retry and
+            // design-6 WITHOUT needing the leading-digit strip guess.
+            //
+            // Deliberately NOT applied above the cutoff: thresholding is
+            // actively destructive on high-contrast crops (measured: it turns
+            // 80720 into 10000 by wiping the LCD digits and leaving the
+            // printed capacity label, and truncates 71920 to 1920). This is
+            // the same lesson as the greyscale work — no single rendering
+            // suits every display, so the rendering is chosen from the
+            // image's own measured properties instead of applied blanket or
+            // discovered by retrying.
+            //
+            // Only what is sent to VISION changes. Gemini keeps receiving the
+            // original unmodified crop, since it reasons about the image
+            // rather than thresholding it, and hasn't shown this failure.
+            let visionInputBase64 = croppedBase64;
+            try {
+                if (sharp) {
+                    const { data: px, info: pxInfo } = await sharp(Buffer.from(croppedBase64, 'base64'))
+                        .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+                    const chans = pxInfo.channels;
+                    let litSum = 0, litN = 0, allSum = 0;
+                    const total = pxInfo.width * pxInfo.height;
+                    for (let i = 0; i < total; i++) {
+                        const r = px[i * chans], g = px[i * chans + 1], b = px[i * chans + 2];
+                        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                        allSum += lum;
+                        const isRed = r > 140 && (r - g) > 60 && (r - b) > 60;
+                        const isCyan = g > 120 && b > 120 && (g - r) > 40 && (b - r) > 30;
+                        if (isRed || isCyan) { litSum += lum; litN++; }
+                    }
+                    if (litN > 0 && total > 0) {
+                        const contrast = (litSum / litN) - (allSum / total);
+                        const LOW_CONTRAST_CUTOFF = Number(process.env.VISION_LOW_CONTRAST_CUTOFF) || 25;
+                        if (contrast < LOW_CONTRAST_CUTOFF) {
+                            visionInputBase64 = (await sharp(Buffer.from(croppedBase64, 'base64'))
+                                .greyscale().threshold(120).jpeg({ quality: 97 }).toBuffer()).toString('base64');
+                            console.log(`[GEMINI] Crop${tag} lit-vs-background luminance contrast is ${contrast.toFixed(1)} (below ${LOW_CONTRAST_CUTOFF}) — sending Vision a thresholded rendering instead of the raw crop`);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[GEMINI] Contrast measurement failed, sending the raw crop to Vision:', err.message);
+            }
+
             const tVisionStart = Date.now();
-            const visionPromise = visionOcr.detectText(croppedBase64);
+            const visionPromise = visionOcr.detectText(visionInputBase64);
             const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
                 console.warn('[GEMINI] Metadata read on crop failed:', err.message);
                 return null;
