@@ -2139,8 +2139,17 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // tonight (GEMINI_CROSSCHECK_TIMEOUT_MS, ~12-16s/request) -- that
             // number should have been reused here from the start instead of
             // guessing a fresh, untested 8000ms.
-            const GEMINI_RESCUE_CROSSCHECK_MS = Number(process.env.GEMINI_RESCUE_CROSSCHECK_MS) || 15000;
-            const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_RESCUE_CROSSCHECK_MS, 'Gemini crop metadata (cross-check on Vision rescue)');
+            // Time bound removed 2026-08-12 for the same reason as the
+            // fast-path cross-check below (see the long note there). This
+            // path is reached only when Vision found NO text on the plain
+            // crop and a rescue variant had to be used — by definition
+            // already a low-confidence read — so timing out and publishing
+            // the rescue number is strictly worse than waiting for Gemini's
+            // independent read. Unbounded await is safe here for the same
+            // reason: geminiMetaPromise has its own .catch() and resolves to
+            // null on any API error rather than hanging.
+            const geminiRescueCheck = await accurate.geminiMetaPromise;
+            console.log(`[GEMINI] Rescue cross-check resolved at ${elapsed()}: ${geminiRescueCheck && geminiRescueCheck.weight != null ? geminiRescueCheck.weight : 'no committed number'}`);
             // Vetted through the same plausibility bounds + ghost-cell strip
             // as everywhere else Gemini's number can become primary (see the
             // fast-path cross-check below) — this path also PREFERS Gemini on
@@ -2171,8 +2180,14 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // pattern a human reviewer could actually use — e.g. this raw
             // text's trailing "3720" matches an earlier attempt's full,
             // confident "73720" read on a retry of the same case.
-            const geminiTimedOut = geminiRescueCheck === null;
-            const geminiDeclinedWithNote = !geminiTimedOut && geminiRescueCheck && geminiRescueCheck.weight == null
+            // Renamed-in-meaning 2026-08-12: with the wait budget removed
+            // above, a null here no longer means "ran out of time" — the
+            // await now always runs to completion, so null can only mean the
+            // Gemini call itself failed and its own .catch() resolved to
+            // null. The note text below was updated to say that, rather than
+            // continuing to blame a timeout that no longer exists.
+            const geminiCallFailed = geminiRescueCheck === null;
+            const geminiDeclinedWithNote = !geminiCallFailed && geminiRescueCheck && geminiRescueCheck.weight == null
                 && geminiRescueCheck.raw_text && !/^n\/?a\b/i.test(geminiRescueCheck.raw_text.trim());
             // Prefer Gemini's number when the two disagree: Vision already
             // proved unreliable enough on this exact crop to need a rescue
@@ -2187,7 +2202,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 : ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading${
                     geminiAgrees ? ', and Gemini\'s independent read of the same crop agreed'
                     : geminiDeclinedWithNote ? `. Gemini could not confidently read a full number but noted: "${geminiRescueCheck.raw_text}" — compare against Vision's ${rescueWeight} before trusting either`
-                    : geminiTimedOut ? ' (Gemini\'s cross-check did not return within the wait budget)'
+                    : geminiCallFailed ? ' (Gemini\'s cross-check call itself failed, so no second opinion was available)'
                     : ' (Gemini\'s cross-check did not return a usable answer)'
                   } — flagged for review since a display that needed this rescue path has already shown it's harder than usual to read]`;
             console.log(`[GEMINI] Weight read via ${geminiDisagrees ? 'Gemini (preferred over Vision rescue, disagreement)' : `Cloud Vision OCR (${rescueLabel} rescue)`} in ${elapsed()}: ${finalWeight}${note}`);
@@ -2475,11 +2490,68 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 // photos) — the full ~15-16s is only paid when Gemini
                 // genuinely takes that long, which is also exactly the case
                 // most worth waiting for.
-                const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 15000;
+                // Changed 2026-08-12 after losing this race by ~2ms in
+                // production. Vision read a truncated "720" at 2101ms; the
+                // cross-check waited its full 15000ms and gave up at
+                // 17103ms; Gemini's read of the same crop — the CORRECT
+                // 73720, already in range and needing no strip — landed
+                // immediately after and was discarded. The pipeline then
+                // published 720 as the weight: a number its own log line
+                // simultaneously described as "shorter than every confirmed
+                // real reading on this display type".
+                //
+                // Raising the fixed budget again (3000 -> 8000 -> 15000 ->
+                // ...) is the wrong instinct; it taxes every flagged read to
+                // chase a tail that keeps moving. The real asymmetry is that
+                // when Vision's own number is one we ALREADY disbelieve
+                // (suspiciouslyShort — a 3-digit reading on a weighbridge
+                // that cannot physically be a truck load), the cross-check
+                // is not a second opinion, it is the ONLY credible source we
+                // have. Returning 720 has negative value: it is worse than
+                // waiting, and worse than admitting we don't know.
+                //
+                // So that case gets a DEADLINE rather than an increment:
+                // keep waiting until a total elapsed budget, not a fixed
+                // additional one. Promise.race still resolves the instant
+                // Gemini lands (measured 12-17s), so this costs nothing in
+                // the normal case — it only stops us from timing out 2ms
+                // before the answer we were waiting for. Ordinary flagged
+                // reads, where Vision produced a plausible number and Gemini
+                // is genuinely just a second opinion, keep the existing
+                // bounded wait.
+                // TIME BOUND REMOVED 2026-08-12, per Apsara's direct
+                // instruction. The production log that prompted it makes the
+                // case better than any argument: Vision read a truncated
+                // "720" at 2101ms, this cross-check gave up at exactly
+                // 17103ms after its 15000ms budget, and Gemini's read of the
+                // same crop — the CORRECT 73720, in range, needing no strip —
+                // arrived immediately after and was thrown away. The pipeline
+                // then published 720, a number its own log line
+                // simultaneously called shorter than any real reading on this
+                // display type.
+                //
+                // The budget had already been raised 3000 -> 8000 -> 15000
+                // chasing exactly this, losing each time to a tail that moved
+                // again. That is the wrong shape of fix. Every read reaching
+                // this branch is ALREADY FLAGGED — Vision is itself saying its
+                // answer isn't trustworthy — so there is no version of
+                // "give up early" that beats waiting: the fallback is
+                // publishing a number we already disbelieve.
+                //
+                // Safe to await unbounded: geminiMetaPromise is created with
+                // its own .catch() at the call site (resolves to null on any
+                // API error) and readWeightSinglePass carries its own
+                // retry/backoff, so a failure surfaces as null rather than
+                // hanging forever. It costs nothing in the normal case
+                // either — the await resolves the moment Gemini answers
+                // (measured 12-17s); it simply no longer races a stopwatch it
+                // was never guaranteed to beat.
                 const crossCheckLabel = wasOriginallyFlagged
                     ? `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`
                     : 'Gemini crop metadata (cross-check on an otherwise-clean read)';
-                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, crossCheckLabel);
+                console.log(`[GEMINI] Waiting for Gemini's independent read of the same crop with no time limit — Vision's ${accurate.visionWeight} is already flagged, so a late correct answer beats a fast unreliable one (total ${elapsed()})`);
+                const crossCheck = await accurate.geminiMetaPromise;
+                console.log(`[GEMINI] Cross-check resolved at ${elapsed()}: ${crossCheck && crossCheck.weight != null ? crossCheck.weight : 'no committed number'} [${crossCheckLabel}]`);
                 // Added 2026-08-12 — Gemini's number now goes through the
                 // SAME plausibility bounds and ghost-cell leading-digit strip
                 // that every Vision read goes through. Real production miss
