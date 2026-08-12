@@ -2213,31 +2213,106 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // checkable one — accuracy-over-speed without trading one
             // silent failure mode for a new one.
             const geminiDisagreed = strippedAlt != null;
-            const preferGemini = wasOriginallyFlagged && geminiDisagreed;
-            const finalWeight = preferGemini ? strippedAlt : accurate.visionWeight;
-            const finalAlt = geminiDisagreed ? (preferGemini ? accurate.visionWeight : strippedAlt) : null;
-            const finalAltSource = geminiDisagreed ? (preferGemini ? 'Cloud Vision OCR' : 'Gemini') : null;
-            const finalAmbiguous = flagForReview || geminiDisagreed;
+
+            // Added 2026-08-12 — real disagreement resolution instead of a
+            // coin-flip pick between two single, individually-unreliable
+            // reads. Confirmed live: on the same crop, across different
+            // calls, Vision said 73500 and Gemini said 73600 on one run, 79500
+            // on another — neither side is trustworthy enough on its own to
+            // just prefer blindly, including the "prefer Gemini when Vision
+            // was already weak" rule two commits ago, which only works when
+            // Gemini's single answer happens to be the correct one. Reuses
+            // voteOnWeightReadings (previously dead code, built for exactly
+            // this "a model's digit-level precision isn't perfectly reliable
+            // call to call" problem) as a real tie-breaker: get a THIRD
+            // independent read of the same crop and take a majority vote,
+            // rather than trusting whichever of two disagreeing answers
+            // happened to be tried first. Only paid when there's already a
+            // disagreement worth resolving (rare) — never on an agreeing or
+            // single-source read.
+            let voteWinner = null;
+            let voteReadings = null;
+            if (geminiDisagreed) {
+                const TIEBREAK_TIMEOUT_MS = Number(process.env.GEMINI_TIEBREAK_TIMEOUT_MS) || 15000;
+                const tieBreakPromise = readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', 1, { isCrop: true }).catch((err) => {
+                    console.warn('[GEMINI] Tie-breaker read failed:', err.message);
+                    return null;
+                });
+                const tieBreak = await withTimeout(tieBreakPromise, TIEBREAK_TIMEOUT_MS, 'Gemini tie-breaker read (3rd opinion on disagreement)');
+                voteReadings = [
+                    { weight: accurate.visionWeight, raw_text: 'Vision' },
+                    { weight: strippedAlt, raw_text: 'Gemini (1st read)' },
+                    (tieBreak && tieBreak.weight != null) ? { weight: tieBreak.weight, raw_text: 'Gemini (2nd/tie-break read)' } : null,
+                ].filter(Boolean);
+                voteWinner = voteOnWeightReadings(voteReadings);
+            }
+            // A real majority (more than half of however many readings we
+            // actually got — 2 of 2 if the tie-break call failed/timed out,
+            // 2 of 3 or 3 of 3 if it landed) counts as resolved: treat the
+            // extra verification work as real evidence, not just another
+            // guess, and stop flagging for human review. A genuine 3-way
+            // split (no majority at all) is the one case nothing here can
+            // resolve — stays ambiguous, all three readings surfaced so a
+            // human isn't left guessing which of three numbers is real.
+            const voteMajorityCount = voteWinner && voteReadings
+                ? voteReadings.filter((r) => String(r.weight) === String(voteWinner.weight)).length
+                : 0;
+            // Changed 2026-08-12, same real test run that justified building
+            // this in the first place: a simple >50% majority is NOT safe
+            // enough to clear the ambiguous flag on its own. Observed live:
+            // 2 of 3 independent reads (Vision + 2 separate Gemini calls)
+            // converged on the SAME WRONG digit (79600, true value 73600) —
+            // a systematic misread this specific crop's rendering provokes
+            // in multiple models, not the independent random-flip error this
+            // vote was originally built to catch. A 2/3 majority in that
+            // case would have marked a wrong answer as resolved/unambiguous
+            // — worse than doing no voting at all, since it INCREASES false
+            // confidence instead of reducing it. Requiring full unanimity
+            // (every reading that came back agrees) before ever clearing the
+            // flag keeps the safety property intact: voting can still pick
+            // which number to report as the best guess among disagreeing
+            // reads, but never gets to claim certainty it doesn't actually
+            // have.
+            const voteResolved = voteWinner && voteReadings && voteMajorityCount === voteReadings.length;
+            const voteLosers = voteWinner && voteReadings
+                ? [...new Set(voteReadings.filter((r) => String(r.weight) !== String(voteWinner.weight)).map((r) => r.weight))]
+                : [];
+
+            const finalWeight = voteWinner ? voteWinner.weight : accurate.visionWeight;
+            const finalAlt = voteWinner ? (voteLosers.length ? voteLosers[0] : null) : null;
+            const finalAltSource = voteWinner ? (voteLosers.length ? 'disagreeing read' : null) : null;
+            // Only the unresolved (no-majority) case keeps forcing ambiguous
+            // from the vote itself; a resolved vote clears it even if the
+            // ORIGINAL Vision read had needed a strip/was short/was low-res —
+            // that original weakness is exactly what the extra verification
+            // work was for. If no disagreement was ever found at all, fall
+            // back to the original flagForReview reasons untouched.
+            const finalAmbiguous = geminiDisagreed ? !voteResolved : flagForReview;
             const cleanDisagreeNote = (!wasOriginallyFlagged && geminiDisagreed)
                 ? ` — Gemini's independent read of the same crop disagreed with Vision's otherwise-clean reading`
                 : '';
+            const voteNote = voteWinner && voteReadings
+                ? (voteResolved
+                    ? ` [${voteMajorityCount}/${voteReadings.length} independent reads agreed on ${voteWinner.weight}${voteLosers.length ? ` (other read: ${voteLosers.join(', ')})` : ''}]`
+                    : ` [no majority across ${voteReadings.length} independent reads: ${voteReadings.map((r) => r.weight).join(', ')} — genuinely unresolved, please verify against the actual display]`)
+                : '';
 
-            console.log(`[GEMINI] Weight read via ${preferGemini ? 'Gemini (preferred over Vision, disagreement on already-lower-confidence read)' : 'Cloud Vision OCR (primary, cropped, fast path)'} in ${elapsed()}: ${finalWeight}${reviewReason}${cleanDisagreeNote}${geminiDisagreed ? ` (${preferGemini ? "Vision's own read was" : "Gemini's own read disagreed:"} ${preferGemini ? accurate.visionWeight : strippedAlt})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
+            console.log(`[GEMINI] Weight read via ${voteWinner ? `majority vote (${voteMajorityCount}/${voteReadings.length})` : 'Cloud Vision OCR (primary, cropped, fast path)'} in ${elapsed()}: ${finalWeight}${reviewReason}${cleanDisagreeNote}${voteNote}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
             // Bracketed note must fire whenever there's ANYTHING to flag —
             // the original reviewReason (suspiciouslyShort/viaStrip/
-            // lowResInput) OR the new clean-disagree case, which has no
-            // reviewReason of its own (that variable is only ever built from
-            // the three original triggers). Using reviewReason alone here
-            // would silently drop the clean-disagree note entirely — the
-            // exact kind of gap this whole round of fixes exists to close.
-            const anyNoteToShow = !!reviewReason || !!cleanDisagreeNote || !!strippedNote;
+            // lowResInput) OR the new clean-disagree/vote notes, which have
+            // no reviewReason of their own (that variable is only ever built
+            // from the three original triggers). Using reviewReason alone
+            // here would silently drop those notes entirely — the exact kind
+            // of gap this whole round of fixes exists to close.
+            const anyNoteToShow = !!reviewReason || !!cleanDisagreeNote || !!voteNote || !!strippedNote;
             return {
                 weight: finalWeight,
                 alternate_weight: finalAlt,
                 alternate_source: finalAltSource,
                 weight_unit: 'lb',
-                displays_seen: `${preferGemini ? 'Gemini' : 'Cloud Vision OCR'} read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${anyNoteToShow ? ` [${(reviewReason || cleanDisagreeNote).replace(/^ — /, '')}${geminiDisagreed ? (preferGemini ? `; Vision's own read was ${accurate.visionWeight}, but Gemini's independent read of the same crop disagreed with ${strippedAlt} and is being used instead` : `; Gemini's independent read of the same crop said ${strippedAlt} instead`) : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
+                displays_seen: `${voteWinner ? 'majority vote across Vision + Gemini' : 'Cloud Vision OCR'} read of located display (locate reason: "${accurate.box.reason || ''}")`,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${anyNoteToShow ? ` [${(reviewReason || cleanDisagreeNote).replace(/^ — /, '')}${voteNote}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
                 ambiguous: finalAmbiguous,
             };
         }
