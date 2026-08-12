@@ -2062,6 +2062,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // strip sub-case. Only affects already-flagged (rare, already
             // slow-tolerant) reads — clean in-range results never touch this.
             let strippedAlt = null;
+            let strippedNote = null;
             if (flagForReview) {
                 // Widened 3000 -> 8000ms after a real miss: a live photo
                 // where Vision's strip-corrected read (73500) was actually
@@ -2093,16 +2094,46 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 15000;
                 const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`);
                 if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
+                // Added 2026-08-12 — root cause found on a real photo (true
+                // value confirmed 73600): Vision's leading-digit-stripped read
+                // was wrong in a way that ISN'T a spurious leading digit (a
+                // genuine 5-vs-6 misread on the hundreds digit), and Gemini's
+                // parallel read of the same crop, when it landed in time,
+                // plainly said "73600 lb" in raw_text — but its structured
+                // `weight` came back null, because Gemini's own prompt tells
+                // it to return null rather than guess when ANY digit looks
+                // ambiguous (here: whether there's an extra leading cell, a
+                // different question from the hundreds-digit value it was
+                // actually confident about). The check above only looks at
+                // `.weight`, so a correct answer sitting in `.raw_text` was
+                // being silently thrown away — same bug class already fixed
+                // on the separate "Vision found nothing" rescue path
+                // (geminiDeclinedWithNote there); this cross-check needed the
+                // same treatment, since it's a different code path that
+                // shares the same gap. Deliberately NOT auto-parsed into a
+                // number and substituted as alternate_weight — Gemini's own
+                // free text can mention other numbers (capacity ratings,
+                // model numbers) that would be unsafe to regex-extract blind
+                // (see the "100000.1 vs 80720" bug this exact file already
+                // hit once). Surfaced verbatim instead, same as the rescue
+                // path, so a human sees both numbers and Gemini's own caveat
+                // rather than either a silently-discarded correct answer or
+                // an unsafely auto-extracted one.
+                const declinedNote = crossCheck && crossCheck.weight == null && crossCheck.raw_text
+                    && !/^n\/?a\b/i.test(crossCheck.raw_text.trim())
+                    ? crossCheck.raw_text
+                    : null;
+                if (declinedNote) strippedNote = declinedNote;
             }
 
-            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${reviewReason}${strippedAlt != null ? ` (Gemini's own read of the same crop disagreed: ${strippedAlt})` : ''}`);
+            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${reviewReason}${strippedAlt != null ? ` (Gemini's own read of the same crop disagreed: ${strippedAlt})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
             return {
                 weight: accurate.visionWeight,
                 alternate_weight: strippedAlt,
                 alternate_source: strippedAlt != null ? 'Gemini' : null,
                 weight_unit: 'lb',
                 displays_seen: `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Gemini's own read of the same crop said ${strippedAlt} instead` : ''} — please verify against the actual display]` : ''}`,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Gemini's own read of the same crop said ${strippedAlt} instead` : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
                 ambiguous: flagForReview,
             };
         }
