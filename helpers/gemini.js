@@ -1747,6 +1747,54 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 }
             }
 
+            // Added 2026-08-12 — targeted at the one remaining known-wrong
+            // photo (design-6, true 73600). There, Vision's raw read of the
+            // plain crop is "573500": a ghost leading cell AND a wrong
+            // hundreds digit. The leading-strip fallback turns that into a
+            // plausible-looking 73500 and the pipeline returns a wrong number
+            // (flagged, but wrong). Gemini sometimes catches it and sometimes
+            // returns nothing at all, so leaning on the cross-check alone
+            // makes this photo unstable run to run — which is exactly the
+            // instability being complained about.
+            //
+            // Measured alternative, on the real crop against the real API:
+            // a simple binary threshold of the SAME crop reads "73600"
+            // CLEANLY — in range on its own, needing no strip at all
+            // (threshold 120: 73600 @ 0.85 mean symbol confidence). A read
+            // that lands in range with no correction is materially stronger
+            // evidence than one that only becomes plausible after guessing
+            // which leading digit was contamination — so when the strip
+            // fallback fired, it's worth spending one or two extra Vision
+            // calls to see if a different rendering of the same pixels
+            // avoids the guess entirely.
+            //
+            // Scoped to viaLeadingStrip reads ONLY, which are rare and
+            // already flagged low-confidence, so no currently-clean photo
+            // pays for this or can be changed by it (verified: 71920, 80720
+            // and 28500 all read clean on the plain crop and never enter
+            // this branch). Thresholds tried in the order measured to work
+            // best, and a variant is only adopted if it needs NO strip —
+            // swapping one stripped guess for another would prove nothing.
+            if (visionWeight != null && visionWeightViaLeadingStrip && sharp && croppedBase64) {
+                for (const th of [120, 90]) {
+                    try {
+                        const thBuf = await sharp(Buffer.from(croppedBase64, 'base64'))
+                            .greyscale().threshold(th).jpeg({ quality: 97 }).toBuffer();
+                        const thText = await visionOcr.detectText(thBuf.toString('base64'));
+                        const thRes = visionOcr.extractWeightNumberFromCrop(thText);
+                        if (thRes && thRes.weight != null && !thRes.viaLeadingStrip && thRes.weight !== visionWeight) {
+                            console.log(`[GEMINI] Vision's plain read needed a leading-digit strip (${visionWeight}), but a threshold-${th} rendering of the same crop read ${thRes.weight} cleanly with no strip — preferring the uncorrected read (total ${elapsed()})`);
+                            visionResult = thRes;
+                            visionWeight = thRes.weight;
+                            visionWeightViaLeadingStrip = false;
+                            break;
+                        }
+                    } catch (err) {
+                        console.warn(`[GEMINI] Threshold-${th} retry failed, continuing:`, err.message);
+                    }
+                }
+            }
+
             const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64, usedGrayRetry };
             lastAttempt = attempt;
             if (visionWeight != null) {
@@ -2326,9 +2374,31 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // happened to be tried first. Only paid when there's already a
             // disagreement worth resolving (rare) — never on an agreeing or
             // single-source read.
+            //
+            // Narrowed 2026-08-12, same day, after this vote was measured to
+            // REGRESS a real case it had no business touching. On design-6
+            // (true 73600) Vision's raw read was "573500" — a ghost leading
+            // cell AND a wrong hundreds digit — which the leading-strip
+            // fallback turned into 73500. Gemini read the same crop as 73600
+            // (correct). The commit before this one preferred Gemini there
+            // and got it RIGHT; adding the vote made it WRONG, because a
+            // second Gemini call happened to side with Vision's 73500 and
+            // outvoted the correct answer 2-1.
+            //
+            // The flaw is treating all three readings as equal witnesses.
+            // When Vision's own raw text already showed corruption (it needed
+            // a leading-digit strip to become plausible at all), Vision is
+            // demonstrably compromised ON THIS SPECIFIC CROP — it is not an
+            // independent peer, and letting it win a majority is unsound.
+            // So the vote is now restricted to CLEAN disagreements only
+            // (Vision produced a normal, unflagged read and Gemini still
+            // disagreed) — the case where the two really are peers and a
+            // third opinion is the honest arbiter. When Vision was already
+            // flagged, fall back to the live-validated prefer-Gemini rule
+            // from the previous commit instead of voting.
             let voteWinner = null;
             let voteReadings = null;
-            if (geminiDisagreed) {
+            if (geminiDisagreed && !wasOriginallyFlagged) {
                 const TIEBREAK_TIMEOUT_MS = Number(process.env.GEMINI_TIEBREAK_TIMEOUT_MS) || 15000;
                 const tieBreakPromise = readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', 1, { isCrop: true }).catch((err) => {
                     console.warn('[GEMINI] Tie-breaker read failed:', err.message);
@@ -2374,15 +2444,24 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 ? [...new Set(voteReadings.filter((r) => String(r.weight) !== String(voteWinner.weight)).map((r) => r.weight))]
                 : [];
 
-            const finalWeight = voteWinner ? voteWinner.weight : accurate.visionWeight;
-            const finalAlt = voteWinner ? (voteLosers.length ? voteLosers[0] : null) : null;
-            const finalAltSource = voteWinner ? (voteLosers.length ? 'disagreeing read' : null) : null;
-            // Only the unresolved (no-majority) case keeps forcing ambiguous
-            // from the vote itself; a resolved vote clears it even if the
-            // ORIGINAL Vision read had needed a strip/was short/was low-res —
-            // that original weakness is exactly what the extra verification
-            // work was for. If no disagreement was ever found at all, fall
-            // back to the original flagForReview reasons untouched.
+            // Three-way selection, in order of how much evidence backs it:
+            //   1. A clean-disagreement vote actually ran -> use its winner.
+            //   2. No vote ran because Vision was ALREADY flagged as weak and
+            //      Gemini disagreed -> prefer Gemini (the live-validated rule
+            //      from the previous commit; this is the design-6 case, where
+            //      Vision's raw text openly showed ghost-cell corruption).
+            //   3. Otherwise -> Vision's own read, unchanged.
+            const preferGeminiOnFlagged = !voteWinner && wasOriginallyFlagged && geminiDisagreed;
+            const finalWeight = voteWinner ? voteWinner.weight
+                : (preferGeminiOnFlagged ? strippedAlt : accurate.visionWeight);
+            const finalAlt = voteWinner ? (voteLosers.length ? voteLosers[0] : null)
+                : (geminiDisagreed ? (preferGeminiOnFlagged ? accurate.visionWeight : strippedAlt) : null);
+            const finalAltSource = voteWinner ? (voteLosers.length ? 'disagreeing read' : null)
+                : (geminiDisagreed ? (preferGeminiOnFlagged ? 'Cloud Vision OCR' : 'Gemini') : null);
+            // Only a resolved (unanimous) vote can clear the flag. Everything
+            // else that involved a disagreement stays ambiguous — including
+            // the prefer-Gemini case, where we're picking the more likely of
+            // two numbers but have no independent confirmation of it.
             const finalAmbiguous = geminiDisagreed ? !voteResolved : flagForReview;
             const cleanDisagreeNote = (!wasOriginallyFlagged && geminiDisagreed)
                 ? ` — Gemini's independent read of the same crop disagreed with Vision's otherwise-clean reading`
