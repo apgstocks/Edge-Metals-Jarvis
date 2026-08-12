@@ -87,6 +87,111 @@ async function detectText(imageBase64) {
     }
 }
 
+// Added 2026-08-12 — same request as detectText but asking for
+// DOCUMENT_TEXT_DETECTION, whose response carries a per-symbol confidence
+// score that TEXT_DETECTION omits. Those scores were being thrown away
+// entirely, and they are the only signal we have that tells us Vision itself
+// is unsure BEFORE any second model is consulted — which is what lets the
+// caller skip a slow cross-check when the read is demonstrably solid, rather
+// than waiting on a clock.
+//
+// Kept as a SEPARATE function rather than changing detectText: four other
+// call sites depend on detectText's existing behaviour, and while both
+// feature types were measured to return identical text on these crops, there
+// is no reason to put that to the test on paths this change does not need to
+// touch.
+//
+// Confidence is reported over DIGIT symbols only. The crops routinely contain
+// fixed panel text ("ZOSI", "LB", "KG", "GR", "NT") whose recognition
+// confidence says nothing about whether the weight was read correctly, and
+// averaging it in would dilute exactly the signal we want.
+async function detectTextWithConfidence(imageBase64) {
+    try {
+        const client = await getAuthClient();
+        const { token } = await client.getAccessToken();
+        const body = JSON.stringify({
+            requests: [{ image: { content: imageBase64 }, features: [{ type: 'DOCUMENT_TEXT_DETECTION' }] }],
+        });
+        const { status, json } = await postJson('vision.googleapis.com', '/v1/images:annotate', body, {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+        });
+        if (status !== 200) {
+            console.warn('[VISION-OCR] Non-200 response (with-confidence):', status, JSON.stringify(json).slice(0, 300));
+            return null;
+        }
+        const resp = json.responses && json.responses[0];
+        if (!resp || resp.error) {
+            if (resp && resp.error) console.warn('[VISION-OCR] API error (with-confidence):', resp.error.message);
+            return null;
+        }
+        const text = resp.textAnnotations && resp.textAnnotations[0] && resp.textAnnotations[0].description;
+        // Confidence is tracked PER CONTIGUOUS DIGIT RUN, not pooled across
+        // the whole crop. Corrected 2026-08-12 after the pooled version was
+        // measured useless: these crops contain printed panel text with its
+        // own digits — a model number "710", a capacity rating "100000.1",
+        // "FB1150", "EST 1830" — which Vision reads at confidences as low as
+        // 0.31. Taking a minimum across all of them reported 0.32 for a crop
+        // whose actual weight digits ("80720") were read cleanly, making the
+        // number meaningless for judging the reading we care about. Grouping
+        // into runs lets the caller ask specifically about the run it chose
+        // as the weight.
+        const runs = [];
+        let current = null;
+        const fta = resp.fullTextAnnotation;
+        if (fta && fta.pages) {
+            for (const page of fta.pages) for (const block of (page.blocks || [])) for (const para of (block.paragraphs || [])) for (const word of (para.words || [])) for (const sym of (word.symbols || [])) {
+                const t = sym.text || '';
+                if (/^\d$/.test(t)) {
+                    if (!current) current = { text: '', confs: [] };
+                    current.text += t;
+                    current.confs.push(sym.confidence != null ? sym.confidence : 1);
+                } else if (current) {
+                    runs.push(current);
+                    current = null;
+                }
+            }
+        }
+        if (current) runs.push(current);
+        return {
+            text: text ? text.trim() : null,
+            runs,
+            // Confidence of a specific number, by value — the caller passes
+            // the weight it settled on and gets back how sure Vision was
+            // about those exact digits.
+            //
+            // Prefix matching matters as much as exact matching, and was
+            // added after the exact-only version was measured to return null
+            // on the ordinary case: Vision reliably misreads the "lb" unit
+            // suffix on these indicators as "1b" and glues it to the number,
+            // so the true 80720 arrives as a single run "807201" and is
+            // recovered by the un-glue repair further down this file. The
+            // weight's own digits were read confidently; only the phantom
+            // trailing "1" is junk. Scoring the first N symbols of a run that
+            // STARTS with the number answers the question actually being
+            // asked -- how sure was Vision about these digits -- instead of
+            // discarding the evidence because a unit label got attached.
+            //
+            // Still null when the number cannot be traced to a contiguous run
+            // at all, which correctly reads as "no confidence evidence"
+            // rather than a falsely reassuring score.
+            confidenceFor(value) {
+                if (value == null) return null;
+                const wanted = String(value);
+                for (const r of runs) {
+                    if (r.text === wanted) return Math.min(...r.confs);
+                    if (r.text.startsWith(wanted)) return Math.min(...r.confs.slice(0, wanted.length));
+                }
+                return null;
+            },
+        };
+    } catch (err) {
+        console.warn('[VISION-OCR] detectTextWithConfidence failed, caller will fall back:', err.message);
+        return null;
+    }
+}
+
 // Pulls the longest run of digits (with an optional single decimal point)
 // out of whatever Vision returned — on a crop that's already been tightly
 // trimmed to just the lit digits this should just be the whole string, but
@@ -335,4 +440,4 @@ function plausibleWeightOrStripped(weight) {
     return null;
 }
 
-module.exports = { detectText, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage, plausibleWeightOrStripped };
+module.exports = { detectText, detectTextWithConfidence, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage, plausibleWeightOrStripped };

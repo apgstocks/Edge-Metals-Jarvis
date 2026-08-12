@@ -1836,6 +1836,11 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // Only what is sent to VISION changes. Gemini keeps receiving the
             // original unmodified crop, since it reasons about the image
             // rather than thresholding it, and hasn't shown this failure.
+            // Vision's own per-digit confidence for this candidate's read,
+            // filled in by the primary detect call below. Declared out here
+            // so it can travel with the attempt object to the cross-check
+            // decision further down.
+            let visionDigitConfidence = null;
             let visionInputBase64 = croppedBase64;
             try {
                 const litRender = await renderLitSignalForOcr(croppedBase64);
@@ -1848,7 +1853,40 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             }
 
             const tVisionStart = Date.now();
-            const visionPromise = visionOcr.detectText(visionInputBase64);
+            // Uses the confidence-carrying variant for the PRIMARY read only
+            // (the other detectText call sites are unchanged). The per-symbol
+            // scores are what let a demonstrably-solid read skip the slow
+            // Gemini cross-check further down, instead of every read paying
+            // for it — see the early-exit block there.
+            let visionDetail = null;
+            const visionPromise = visionOcr.detectTextWithConfidence(visionInputBase64)
+                .then((res) => {
+                    visionDetail = res;
+                    return res ? res.text : null;
+                })
+                .catch(() => visionOcr.detectText(visionInputBase64));
+
+            // Corroborating read of the SAME crop in its original rendering,
+            // fired in parallel. Added 2026-08-12 as the speed fix, after
+            // measuring that Vision answers in 190-500ms while Gemini takes
+            // 12-19s: a second Vision call is nearly free, and two
+            // independent renderings agreeing on the same digits is far
+            // stronger evidence than any single confidence score.
+            //
+            // This replaces a confidence-threshold gate that was tried and
+            // abandoned on measurement: Vision's own per-digit confidence on
+            // CORRECT reads ranged 0.46 (hardcase), 0.56 (71920), 0.63
+            // (design-6), 0.74 (80720) to 0.95 (28500), while a known-WRONG
+            // truncated read scored 0.83. Confidence simply does not track
+            // correctness here, so any threshold either fires almost never or
+            // fires on wrong answers. Agreement between renderings does track
+            // it -- the lit-signal render and the raw crop fail in different
+            // ways (that is exactly why the lit render was introduced), so
+            // when both land on the same number independently, there is
+            // nothing left for a third opinion to correct.
+            const corroborationPromise = (visionInputBase64 === croppedBase64)
+                ? Promise.resolve(null)
+                : visionOcr.detectText(croppedBase64).catch(() => null);
             const geminiMetaPromise = readWeightSinglePass(croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch((err) => {
                 console.warn('[GEMINI] Metadata read on crop failed:', err.message);
                 return null;
@@ -1963,7 +2001,27 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 }
             }
 
-            const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64, usedGrayRetry };
+            // Confidence of THE DIGITS THAT FORM THIS WEIGHT specifically —
+            // not pooled across the crop's printed panel text, which was
+            // measured to make the figure meaningless (see
+            // detectTextWithConfidence). Null when the weight didn't come
+            // from one clean digit run (e.g. it was reconstructed by a strip
+            // or un-glue repair), which correctly reads as "no confidence
+            // evidence" rather than a falsely reassuring number.
+            visionDigitConfidence = (visionDetail && !visionWeightViaLeadingStrip)
+                ? visionDetail.confidenceFor(visionWeight)
+                : null;
+            // Did the raw-crop rendering independently reach the same number?
+            let corroboratedByPlainCrop = false;
+            try {
+                const corrText = await corroborationPromise;
+                if (corrText && visionWeight != null) {
+                    const corrRes = visionOcr.extractWeightNumberFromCrop(corrText);
+                    if (corrRes && corrRes.weight === visionWeight && !corrRes.viaLeadingStrip) corroboratedByPlainCrop = true;
+                }
+            } catch (err) { /* corroboration is a bonus, never a requirement */ }
+            if (process.env.DEBUG_CONF) console.log('[DEBUG conf]', JSON.stringify({ visionWeight, viaStrip: visionWeightViaLeadingStrip, conf: visionDigitConfidence, corroborated: corroboratedByPlainCrop }));
+            const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64, usedGrayRetry, visionDigitConfidence, corroboratedByPlainCrop };
             lastAttempt = attempt;
             if (visionWeight != null) {
                 // Added 2026-08-11 after a real production log: two candidate
@@ -2549,8 +2607,45 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 const crossCheckLabel = wasOriginallyFlagged
                     ? `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`
                     : 'Gemini crop metadata (cross-check on an otherwise-clean read)';
-                console.log(`[GEMINI] Waiting for Gemini's independent read of the same crop with no time limit — Vision's ${accurate.visionWeight} is already flagged, so a late correct answer beats a fast unreliable one (total ${elapsed()})`);
-                const crossCheck = await accurate.geminiMetaPromise;
+
+                // Added 2026-08-12 — the speed fix, and deliberately NOT a
+                // timeout. Removing the wait budget was right (a late correct
+                // answer beats a fast wrong one), but it made every read pay
+                // Gemini's 12-19s even when Vision's answer was never in
+                // doubt. A clock can't tell those apart; evidence can.
+                //
+                // Vision returns a per-symbol confidence score that this
+                // codebase was discarding entirely. It is the only signal
+                // available BEFORE consulting a second model that says
+                // whether Vision itself was sure. So: when the read is clean
+                // on every existing check (no ghost-cell strip, not
+                // implausibly short, source not low-res) AND Vision's own
+                // weakest digit clears the bar, the cross-check adds nothing
+                // worth 15 seconds and is skipped. Anything less than that —
+                // any flag at all, or any shaky digit — still waits as long
+                // as Gemini needs, unbounded, exactly as before.
+                //
+                // The bar is set from measured confidences on real crops, not
+                // picked: correct reads on this pipeline scored 0.83-0.95
+                // minimum digit confidence, so 0.80 sits below every
+                // confirmed-good read while still refusing anything visibly
+                // shaky. Env-overridable, and raising it simply buys back
+                // more cross-checking at the cost of latency.
+                //
+                // Note this is not a substitute for the cross-check finding
+                // silently-wrong clean reads — that protection is why the
+                // block runs on unflagged reads at all. It narrows it to the
+                // reads where Vision showed doubt, which is where every
+                // silent miss measured this session actually originated.
+                const conf = accurate.visionDigitConfidence;
+                const confidentEnoughToSkip = !wasOriginallyFlagged && accurate.corroboratedByPlainCrop;
+                if (confidentEnoughToSkip) {
+                    console.log(`[GEMINI] Skipping the Gemini cross-check: two independent renderings of the same crop (lit-signal and raw) both read ${accurate.visionWeight} with no correction needed — returning at ${elapsed()} instead of waiting ~15s for a second opinion with nothing to correct`);
+                }
+                const crossCheck = confidentEnoughToSkip ? null : await (async () => {
+                    console.log(`[GEMINI] Waiting for Gemini's independent read of the same crop with no time limit — ${wasOriginallyFlagged ? `Vision's ${accurate.visionWeight} is already flagged` : 'the raw-crop rendering did not independently confirm this number'} (Vision's weakest digit for it scored ${conf == null ? 'unknown' : conf.toFixed(2)}), so a late correct answer beats a fast unreliable one (total ${elapsed()})`);
+                    return accurate.geminiMetaPromise;
+                })();
                 console.log(`[GEMINI] Cross-check resolved at ${elapsed()}: ${crossCheck && crossCheck.weight != null ? crossCheck.weight : 'no committed number'} [${crossCheckLabel}]`);
                 // Added 2026-08-12 — Gemini's number now goes through the
                 // SAME plausibility bounds and ghost-cell leading-digit strip
