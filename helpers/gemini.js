@@ -1695,11 +1695,59 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // existing usages; viaLeadingStrip is carried separately and
             // only consulted where it matters (the ambiguous-flagging
             // decision on the fast path below).
-            const visionResult = visionOcr.extractWeightNumberFromCrop(visionText);
-            const visionWeight = visionResult ? visionResult.weight : null;
-            const visionWeightViaLeadingStrip = !!(visionResult && visionResult.viaLeadingStrip);
+            let visionResult = visionOcr.extractWeightNumberFromCrop(visionText);
+            let visionWeight = visionResult ? visionResult.weight : null;
+            let visionWeightViaLeadingStrip = !!(visionResult && visionResult.viaLeadingStrip);
+            let usedGrayRetry = false;
 
-            const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64 };
+            // Added 2026-08-12 — measured directly against the real Vision
+            // API on real crops from this pipeline, not assumed. On the
+            // hardest photo (true 73600), the correctly-located, visually
+            // clean crop returned a completely EMPTY result from Vision
+            // (both TEXT_DETECTION and DOCUMENT_TEXT_DETECTION, repeatably)
+            // — so the loop moved on and eventually accepted a worse
+            // candidate's misread. The SAME crop, greyscaled and
+            // contrast-normalised, returned "73600" with high per-symbol
+            // confidence (0.72/0.95/0.83/0.99/0.99).
+            //
+            // Crucially this is a FALLBACK, not a replacement, because the
+            // same experiment showed greyscale is NOT universally better and
+            // would have caused a regression if applied by default: on the
+            // 71920 crop, the plain colour crop reads "71920" correctly
+            // while the greyscaled version collapses to garbage ("CO"). Red
+            // LED digits on a dark housing carry real signal in the colour
+            // channels that greyscaling can destroy. Only reaching for it
+            // when the normal path produced NOTHING usable keeps every
+            // currently-working photo on exactly its current code path
+            // (measured: 80720 and 28500 unaffected either way), while
+            // recovering the specific "Vision saw nothing at all" case.
+            //
+            // Deliberately NOT triggered when Vision returned a plausible
+            // number, even a flagged/strip-corrected one: on the design-6
+            // crop the plain read needs a strip ("573500" -> 73500, wrong)
+            // but the greyscale read is messier still ("1973 600", which
+            // parses to a confident, in-range, MORE wrong 1973). Falling
+            // back on anything short of total failure would trade one wrong
+            // answer for a worse one.
+            if (visionWeight == null && sharp && croppedBase64) {
+                try {
+                    const grayBuf = await sharp(Buffer.from(croppedBase64, 'base64'))
+                        .greyscale().normalise().jpeg({ quality: 97 }).toBuffer();
+                    const grayText = await visionOcr.detectText(grayBuf.toString('base64'));
+                    const grayResult = visionOcr.extractWeightNumberFromCrop(grayText);
+                    if (grayResult && grayResult.weight != null) {
+                        console.log(`[GEMINI] Vision found nothing on the plain crop${tag}, but a greyscale+normalised retry of the same crop read ${grayResult.weight} (total ${elapsed()})`);
+                        visionResult = grayResult;
+                        visionWeight = grayResult.weight;
+                        visionWeightViaLeadingStrip = !!grayResult.viaLeadingStrip;
+                        usedGrayRetry = true;
+                    }
+                } catch (err) {
+                    console.warn('[GEMINI] Greyscale retry failed, continuing without it:', err.message);
+                }
+            }
+
+            const attempt = { visionWeight, visionWeightViaLeadingStrip, visionText, box, geminiMetaPromise, croppedBase64, usedGrayRetry };
             lastAttempt = attempt;
             if (visionWeight != null) {
                 // Added 2026-08-11 after a real production log: two candidate
