@@ -2061,9 +2061,52 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // surfaced as alternate_weight before returning, not just the
             // strip sub-case. Only affects already-flagged (rare, already
             // slow-tolerant) reads — clean in-range results never touch this.
+            // Added 2026-08-12 — root cause of a real, confirmed miss:
+            // Vision cleanly read "73500" for a photo whose true value was
+            // 73600 — no strip needed, normal digit count, high-res source —
+            // so flagForReview was FALSE and this whole cross-check block
+            // used to be skipped entirely. Gemini's parallel read of the
+            // SAME crop was already running in the background the whole
+            // time (kicked off back when the crop was first ready) and was
+            // simply thrown away unused, because nothing ever looked at it
+            // on this path. That's the actual gap behind why the two fixes
+            // above (widen the timeout, prefer Gemini on disagreement)
+            // didn't catch every run of the same photo: those only fire once
+            // Vision has ALREADY self-flagged uncertainty, and Vision does
+            // not always do that when it's wrong.
+            //
+            // Fix: always check geminiMetaPromise now, not just when
+            // flagForReview is already true — but with an important
+            // difference in how much we're willing to WAIT for it. A
+            // genuinely clean-looking Vision read has no a-priori reason to
+            // be distrusted, so this must not cost real latency on the
+            // common case (most reads are clean) — budget 0ms, which (via
+            // withTimeout/Promise.race) only picks up Gemini's answer if it
+            // HAPPENED to already resolve by this point (its own head start
+            // sometimes covers it, per real timing observed: 4.4-6s for
+            // Vision-on-crop vs Gemini's benchmarked 12-16s, so this is a
+            // minority of calls, not most — deliberately not blocking
+            // everyone else to catch that minority). An already-flagged read
+            // keeps paying the full, patient GEMINI_CROSSCHECK_TIMEOUT_MS
+            // wait exactly as before, since that path already accepted the
+            // latency cost as worth it.
+            //
+            // On disagreement, the two cases are handled differently on
+            // purpose: when Vision's original read was ALREADY weak
+            // (viaStrip/suspiciouslyShort/lowResInput), prefer Gemini as
+            // primary (existing, live-validated behavior — Vision was the
+            // weaker signal from the start). When Vision's read was clean,
+            // do NOT blindly swap to Gemini — Gemini is independently known
+            // non-deterministic (see visionOcr.js header) and could just as
+            // easily be the wrong one here; instead, elevate this read to
+            // ambiguous/flagged-for-review and surface Gemini's number as
+            // alternate_weight, turning a previously-invisible silent miss
+            // into a visible, checkable one without risking a new class of
+            // wrong "corrections" on reads that were actually fine.
+            const wasOriginallyFlagged = flagForReview;
             let strippedAlt = null;
             let strippedNote = null;
-            if (flagForReview) {
+            {
                 // Widened 3000 -> 8000ms after a real miss: a live photo
                 // where Vision's strip-corrected read (73500) was actually
                 // wrong (confirmed true value 73600, one digit off — a
@@ -2091,8 +2134,29 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 // reliably catch the cross-check is the right trade given
                 // Apsara's explicit priority ("i cant afford to have
                 // mistakes" outranks speed when the two conflict).
+                // Changed 2026-08-12 — this used to be 0ms (free/best-effort
+                // only) on a clean-looking Vision read, to avoid taxing the
+                // common case. Live-tested directly: on the real photo this
+                // whole investigation is about, 0ms NEVER caught anything —
+                // Gemini's read on this crop consistently needs longer than
+                // the ~7-8s the clean path takes end-to-end on its own, so
+                // there was never a window where it would "happen to already
+                // be done." A real, non-zero wait is required to get any
+                // benefit at all here, not a nicety — so given Apsara's
+                // explicit, repeated priority (accuracy over speed when they
+                // conflict), clean reads now pay the same bounded wait as
+                // already-flagged ones. Measured cost in practice is lower
+                // than the worst case suggests: when Gemini agrees quickly
+                // Promise.race resolves as soon as IT settles, not the full
+                // budget (observed 5.0-5.2s total on two clean, correct
+                // photos) — the full ~15-16s is only paid when Gemini
+                // genuinely takes that long, which is also exactly the case
+                // most worth waiting for.
                 const GEMINI_CROSSCHECK_TIMEOUT_MS = Number(process.env.GEMINI_CROSSCHECK_TIMEOUT_MS) || 15000;
-                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`);
+                const crossCheckLabel = wasOriginallyFlagged
+                    ? `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`
+                    : 'Gemini crop metadata (cross-check on an otherwise-clean read)';
+                const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, crossCheckLabel);
                 if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
                 // Added 2026-08-12 — root cause found on a real photo (true
                 // value confirmed 73600): Vision's leading-digit-stripped read
@@ -2132,33 +2196,49 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // alternate_weight for a human to notice. Confirmed on the real
             // 73600-vs-73500 case: that left the AUTOMATICALLY-returned
             // number wrong even though the correct one was sitting right
-            // there in alternate_weight, unused. This branch only runs when
-            // Vision's own read already needed a correction (viaStrip or a
-            // suspiciously-short digit count) — i.e. Vision's answer here was
-            // already the weaker of the two before Gemini was even
-            // consulted. When Gemini disagrees with a real, committed number,
-            // prefer IT as primary instead — the exact same precedence
-            // already used (and live-validated) on the separate "Vision
-            // found nothing" rescue path a few hundred lines above
-            // (geminiDisagrees there). Still marked ambiguous either way —
-            // two independent reads disagreeing is inherently uncertain, and
-            // Gemini is independently known to be non-deterministic call to
-            // call (see visionOcr.js's header comment) — so this is "prefer
-            // the more-likely-correct answer automatically" without ever
-            // pretending the disagreement didn't happen.
-            const finalWeight = strippedAlt != null ? strippedAlt : accurate.visionWeight;
-            const finalAlt = strippedAlt != null ? accurate.visionWeight : null;
-            const finalAltSource = strippedAlt != null ? 'Cloud Vision OCR' : null;
+            // there in alternate_weight, unused.
+            //
+            // preferGemini only applies when Vision's own read was ALREADY
+            // the weaker signal (wasOriginallyFlagged) before Gemini was
+            // even consulted — the exact same precedence already used (and
+            // live-validated) on the separate "Vision found nothing" rescue
+            // path a few hundred lines above (geminiDisagrees there). When
+            // Vision's read was clean (not wasOriginallyFlagged) and Gemini
+            // disagrees anyway, do NOT swap primary — Gemini is
+            // independently non-deterministic (see visionOcr.js header) and
+            // a clean Vision read has no a-priori reason to be distrusted
+            // more than a fresh, possibly-hallucinated Gemini disagreement.
+            // Instead this case only ELEVATES to ambiguous/flagged, turning
+            // a previously totally-invisible potential miss into a visible,
+            // checkable one — accuracy-over-speed without trading one
+            // silent failure mode for a new one.
+            const geminiDisagreed = strippedAlt != null;
+            const preferGemini = wasOriginallyFlagged && geminiDisagreed;
+            const finalWeight = preferGemini ? strippedAlt : accurate.visionWeight;
+            const finalAlt = geminiDisagreed ? (preferGemini ? accurate.visionWeight : strippedAlt) : null;
+            const finalAltSource = geminiDisagreed ? (preferGemini ? 'Cloud Vision OCR' : 'Gemini') : null;
+            const finalAmbiguous = flagForReview || geminiDisagreed;
+            const cleanDisagreeNote = (!wasOriginallyFlagged && geminiDisagreed)
+                ? ` — Gemini's independent read of the same crop disagreed with Vision's otherwise-clean reading`
+                : '';
 
-            console.log(`[GEMINI] Weight read via ${strippedAlt != null ? 'Gemini (preferred over Vision, disagreement on already-lower-confidence read)' : 'Cloud Vision OCR (primary, cropped, fast path)'} in ${elapsed()}: ${finalWeight}${reviewReason}${strippedAlt != null ? ` (Vision's own read was ${accurate.visionWeight})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
+            console.log(`[GEMINI] Weight read via ${preferGemini ? 'Gemini (preferred over Vision, disagreement on already-lower-confidence read)' : 'Cloud Vision OCR (primary, cropped, fast path)'} in ${elapsed()}: ${finalWeight}${reviewReason}${cleanDisagreeNote}${geminiDisagreed ? ` (${preferGemini ? "Vision's own read was" : "Gemini's own read disagreed:"} ${preferGemini ? accurate.visionWeight : strippedAlt})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
+            // Bracketed note must fire whenever there's ANYTHING to flag —
+            // the original reviewReason (suspiciouslyShort/viaStrip/
+            // lowResInput) OR the new clean-disagree case, which has no
+            // reviewReason of its own (that variable is only ever built from
+            // the three original triggers). Using reviewReason alone here
+            // would silently drop the clean-disagree note entirely — the
+            // exact kind of gap this whole round of fixes exists to close.
+            const anyNoteToShow = !!reviewReason || !!cleanDisagreeNote || !!strippedNote;
             return {
                 weight: finalWeight,
                 alternate_weight: finalAlt,
                 alternate_source: finalAltSource,
                 weight_unit: 'lb',
-                displays_seen: `${strippedAlt != null ? 'Gemini' : 'Cloud Vision OCR'} read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Vision's own read was ${accurate.visionWeight}, but Gemini's independent read of the same crop disagreed with ${strippedAlt} and is being used instead` : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
-                ambiguous: flagForReview,
+                displays_seen: `${preferGemini ? 'Gemini' : 'Cloud Vision OCR'} read of located display (locate reason: "${accurate.box.reason || ''}")`,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${anyNoteToShow ? ` [${(reviewReason || cleanDisagreeNote).replace(/^ — /, '')}${geminiDisagreed ? (preferGemini ? `; Vision's own read was ${accurate.visionWeight}, but Gemini's independent read of the same crop disagreed with ${strippedAlt} and is being used instead` : `; Gemini's independent read of the same crop said ${strippedAlt} instead`) : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
+                ambiguous: finalAmbiguous,
             };
         }
 
