@@ -1593,6 +1593,54 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             candidates = aiBox ? [aiBox] : null;
             locateSource = 'Gemini (pixel locate found nothing confident)';
         }
+        // Added 2026-08-12 — found by actually LOOKING at the crop being fed
+        // to OCR on the hardest remaining photo (true value 73600, misread as
+        // 73500/79600 by BOTH Vision and Gemini across many runs). The crop
+        // turned out not to be a display crop at all: it was a tall vertical
+        // slice containing the real red weighbridge display CLIPPED THROUGH
+        // THE DIGITS at its top edge, plus a Fairbanks bench indicator
+        // reading 363, plus a printed pallet-weight sheet listing 312Lb /
+        // 352Lb. That explains the whole "both models independently agree on
+        // the same wrong number" mystery that defeated the cross-check and
+        // voting work: they weren't failing to read digits, they were
+        // faithfully reading digits whose tops had been sliced off (a "3"
+        // with its top bar cut looks exactly like a 9 or 5).
+        //
+        // The bad box came from the CYAN locate matching the large bluish
+        // window glass behind the equipment — 11026 "cyan" pixels, a box
+        // 0.49 wide x 0.51 tall (nearly square, half the frame). A real
+        // single-row weighbridge display is nothing like that shape; the red
+        // split-recovery on the same photo produced [0.29,0.34-0.66,0.43],
+        // a ~4:1 wide-and-short box sitting exactly on the real display. Both
+        // were already in the candidate list — the correct one was simply
+        // never reached, because the per-candidate loop below stops at the
+        // first box that yields a plausible-looking number, and cyan was
+        // ordered first.
+        //
+        // So this sorts by display-likeness rather than by which color
+        // channel found it. Deliberately a SORT, not a filter: an earlier
+        // attempt this session to REJECT candidates on aspect ratio was
+        // tested and reverted because it discarded genuinely correct boxes
+        // (real displays measured anywhere from ~1:1 on tight close-ups to
+        // ~9:1 on wide shots, so no safe cutoff exists). Ordering is safe
+        // where filtering wasn't — nothing is ever discarded, every
+        // candidate is still tried in turn exactly as before, and a
+        // single-candidate photo (the common case) is completely unaffected.
+        // Ties broken by lit-pixel count, preserving the previous
+        // biggest-first behavior among equally display-shaped boxes.
+        if (candidates && candidates.length > 1) {
+            const displayLikeness = (c) => {
+                const bw = (c.x_max - c.x_min), bh = (c.y_max - c.y_min);
+                if (!(bw > 0) || !(bh > 0)) return 0;
+                return bw / bh;
+            };
+            candidates = [...candidates].sort((a, b) => {
+                const d = displayLikeness(b) - displayLikeness(a);
+                if (Math.abs(d) > 0.01) return d;
+                return (b.litCount || 0) - (a.litCount || 0);
+            });
+            console.log(`[GEMINI] Candidate order (most display-shaped first): ${candidates.map(c => `${((c.x_max - c.x_min) / (c.y_max - c.y_min)).toFixed(1)}:1`).join(', ')}`);
+        }
         console.log(`[GEMINI] Locate step (${locateSource}) took ${Date.now() - tLocateStart}ms (total ${elapsed()}), ${candidates ? candidates.length : 0} candidate box(es)`);
         if (!candidates || !candidates.length) return null;
 
