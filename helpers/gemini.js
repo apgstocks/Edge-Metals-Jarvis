@@ -2126,14 +2126,38 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 if (declinedNote) strippedNote = declinedNote;
             }
 
-            console.log(`[GEMINI] Weight read via Cloud Vision OCR (primary, cropped, fast path) in ${elapsed()}: ${accurate.visionWeight}${reviewReason}${strippedAlt != null ? ` (Gemini's own read of the same crop disagreed: ${strippedAlt})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
+            // Added 2026-08-12 — this used to always keep Vision's read as
+            // `weight` even when strippedAlt shows Gemini flatly disagreed,
+            // only ever surfacing Gemini's number as a secondary
+            // alternate_weight for a human to notice. Confirmed on the real
+            // 73600-vs-73500 case: that left the AUTOMATICALLY-returned
+            // number wrong even though the correct one was sitting right
+            // there in alternate_weight, unused. This branch only runs when
+            // Vision's own read already needed a correction (viaStrip or a
+            // suspiciously-short digit count) — i.e. Vision's answer here was
+            // already the weaker of the two before Gemini was even
+            // consulted. When Gemini disagrees with a real, committed number,
+            // prefer IT as primary instead — the exact same precedence
+            // already used (and live-validated) on the separate "Vision
+            // found nothing" rescue path a few hundred lines above
+            // (geminiDisagrees there). Still marked ambiguous either way —
+            // two independent reads disagreeing is inherently uncertain, and
+            // Gemini is independently known to be non-deterministic call to
+            // call (see visionOcr.js's header comment) — so this is "prefer
+            // the more-likely-correct answer automatically" without ever
+            // pretending the disagreement didn't happen.
+            const finalWeight = strippedAlt != null ? strippedAlt : accurate.visionWeight;
+            const finalAlt = strippedAlt != null ? accurate.visionWeight : null;
+            const finalAltSource = strippedAlt != null ? 'Cloud Vision OCR' : null;
+
+            console.log(`[GEMINI] Weight read via ${strippedAlt != null ? 'Gemini (preferred over Vision, disagreement on already-lower-confidence read)' : 'Cloud Vision OCR (primary, cropped, fast path)'} in ${elapsed()}: ${finalWeight}${reviewReason}${strippedAlt != null ? ` (Vision's own read was ${accurate.visionWeight})` : ''}${strippedNote ? ` (Gemini could not fully commit but noted: "${strippedNote}")` : ''}`);
             return {
-                weight: accurate.visionWeight,
-                alternate_weight: strippedAlt,
-                alternate_source: strippedAlt != null ? 'Gemini' : null,
+                weight: finalWeight,
+                alternate_weight: finalAlt,
+                alternate_source: finalAltSource,
                 weight_unit: 'lb',
-                displays_seen: `Cloud Vision OCR read of located display (locate reason: "${accurate.box.reason || ''}")`,
-                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Gemini's own read of the same crop said ${strippedAlt} instead` : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
+                displays_seen: `${strippedAlt != null ? 'Gemini' : 'Cloud Vision OCR'} read of located display (locate reason: "${accurate.box.reason || ''}")`,
+                raw_text: `${accurate.visionText} (Cloud Vision OCR, fast path — classified as weighbridge/default from Vision's own crop text, no Gemini wait)${reviewReason ? ` [${reviewReason.replace(/^ — /, '')}${strippedAlt != null ? `; Vision's own read was ${accurate.visionWeight}, but Gemini's independent read of the same crop disagreed with ${strippedAlt} and is being used instead` : ''}${strippedNote ? `; Gemini's own read of the same crop noted: "${strippedNote}" — compare against Vision's ${accurate.visionWeight} before trusting either` : ''} — please verify against the actual display]` : ''}`,
                 ambiguous: flagForReview,
             };
         }
