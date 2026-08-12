@@ -2141,8 +2141,19 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // guessing a fresh, untested 8000ms.
             const GEMINI_RESCUE_CROSSCHECK_MS = Number(process.env.GEMINI_RESCUE_CROSSCHECK_MS) || 15000;
             const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_RESCUE_CROSSCHECK_MS, 'Gemini crop metadata (cross-check on Vision rescue)');
-            const geminiAgrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight === rescueWeight;
-            const geminiDisagrees = geminiRescueCheck && geminiRescueCheck.weight != null && geminiRescueCheck.weight !== rescueWeight;
+            // Vetted through the same plausibility bounds + ghost-cell strip
+            // as everywhere else Gemini's number can become primary (see the
+            // fast-path cross-check below) — this path also PREFERS Gemini on
+            // disagreement, so it had the identical hole: an impossible
+            // number (over the hard 90,000 lb ceiling) could be published as
+            // the final weight. Vetting collapses "173720" to the real 73720
+            // and discards anything that can't be brought into range at all.
+            const geminiRescueVetted = geminiRescueCheck && geminiRescueCheck.weight != null
+                ? visionOcr.plausibleWeightOrStripped(geminiRescueCheck.weight)
+                : null;
+            const geminiRescueWeight = geminiRescueVetted ? geminiRescueVetted.weight : null;
+            const geminiAgrees = geminiRescueWeight != null && geminiRescueWeight === rescueWeight;
+            const geminiDisagrees = geminiRescueWeight != null && geminiRescueWeight !== rescueWeight;
             // Added 2026-08-11: geminiRescueCheck being null means the wait
             // genuinely timed out (withTimeout resolves null on timeout —
             // see its own definition). But Gemini can also respond WITHIN
@@ -2169,10 +2180,10 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // than a second, architecturally different model's independent
             // read of the same image — surfaced as primary, with Vision's
             // guess kept visible as the alternate rather than discarded.
-            const finalWeight = geminiDisagrees ? geminiRescueCheck.weight : rescueWeight;
+            const finalWeight = geminiDisagrees ? geminiRescueWeight : rescueWeight;
             const finalAlt = geminiDisagrees ? rescueWeight : null;
             const note = geminiDisagrees
-                ? ` [Vision found no text on the plain crop; a "${rescueLabel}" rescue read ${rescueWeight}, but Gemini's independent read of the same crop said ${geminiRescueCheck.weight} instead — using Gemini's answer since Vision already needed rescuing here, but please verify against the actual display]`
+                ? ` [Vision found no text on the plain crop; a "${rescueLabel}" rescue read ${rescueWeight}, but Gemini's independent read of the same crop said ${geminiRescueWeight} instead — using Gemini's answer since Vision already needed rescuing here, but please verify against the actual display]`
                 : ` [Vision found no text on the plain (trimmed) crop; retrying on a "${rescueLabel}" of the same box recovered a reading${
                     geminiAgrees ? ', and Gemini\'s independent read of the same crop agreed'
                     : geminiDeclinedWithNote ? `. Gemini could not confidently read a full number but noted: "${geminiRescueCheck.raw_text}" — compare against Vision's ${rescueWeight} before trusting either`
@@ -2469,7 +2480,24 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                     ? `Gemini crop metadata (cross-check — ${viaStrip ? 'leading-digit strip' : 'suspiciously short read'})`
                     : 'Gemini crop metadata (cross-check on an otherwise-clean read)';
                 const crossCheck = await withTimeout(accurate.geminiMetaPromise, GEMINI_CROSSCHECK_TIMEOUT_MS, crossCheckLabel);
-                if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) strippedAlt = crossCheck.weight;
+                // Added 2026-08-12 — Gemini's number now goes through the
+                // SAME plausibility bounds and ghost-cell leading-digit strip
+                // that every Vision read goes through. Real production miss
+                // this fixes: Vision managed only a truncated "720" on the
+                // crop, so this branch correctly preferred Gemini — but
+                // Gemini had read "173720", including the dim leading ghost
+                // cell as a "1", and that was published as the final weight
+                // despite being above the hard 90,000 lb ceiling and
+                // therefore impossible. Stripping the ghost digit gives
+                // 73720, which matches the display in the photo. If nothing
+                // in range can be recovered, plausibleWeightOrStripped
+                // returns null and we simply don't adopt Gemini's number,
+                // rather than replacing one wrong answer with an impossible
+                // one.
+                if (crossCheck && crossCheck.weight != null && crossCheck.weight !== accurate.visionWeight) {
+                    const vetted = visionOcr.plausibleWeightOrStripped(crossCheck.weight);
+                    if (vetted && vetted.weight !== accurate.visionWeight) strippedAlt = vetted.weight;
+                }
                 // Added 2026-08-12 — root cause found on a real photo (true
                 // value confirmed 73600): Vision's leading-digit-stripped read
                 // was wrong in a way that ISN'T a spurious leading digit (a

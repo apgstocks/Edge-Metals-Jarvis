@@ -298,4 +298,41 @@ function extractWeightNumberFromCrop(rawText) {
     return null;
 }
 
-module.exports = { detectText, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage };
+// Added 2026-08-12 after a real production miss: the pipeline returned
+// 173720 as a final, primary weight — above the hard 90,000 lb business
+// ceiling this file has enforced on Vision's own reads since 2026-08-10, and
+// therefore a number that cannot be a real load here. Root cause: that value
+// came from GEMINI (adopted because Vision had only managed a truncated
+// "720" on the same crop), and Gemini's answers were being taken at face
+// value, never passed through the plausibility bounds or the ghost-cell
+// leading-digit strip that every Vision read goes through. The display in
+// that photo actually read 73720 — Gemini had simply included the dim
+// leading ghost cell as a "1", exactly the contamination pattern
+// extractWeightNumberFromCrop already knows how to undo.
+//
+// Exported so the Gemini side can apply the SAME rules to its own numbers
+// instead of each caller reinventing them. Same 1-2 digit strip cap and same
+// leading-only direction as the crop parser above, for the same reason: the
+// corruption on these displays is always extra leading cells, never trailing
+// ones. Returns null rather than guessing when nothing in range can be
+// recovered, so a caller can fall back instead of publishing a number that
+// is definitionally impossible.
+function plausibleWeightOrStripped(weight) {
+    if (weight == null || !Number.isFinite(weight)) return null;
+    if (weight >= PLAUSIBLE_LOAD_WEIGHT_MIN && weight <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
+        return { weight, viaLeadingStrip: false };
+    }
+    const asText = String(weight);
+    const digitsOnly = /^\d+$/.test(asText) ? asText : (asText.match(/\d+/) || [''])[0];
+    for (let strip = 1; strip <= 2 && strip < digitsOnly.length; strip++) {
+        const candidate = parseFloat(digitsOnly.slice(strip));
+        if (Number.isFinite(candidate) && candidate >= PLAUSIBLE_LOAD_WEIGHT_MIN && candidate <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
+            console.warn(`[VISION-OCR] A cross-check reading of ${weight} isn't a plausible load weight, but stripping ${strip} leading digit(s) gives ${candidate} — using that, flagged as lower-confidence`);
+            return { weight: candidate, viaLeadingStrip: true };
+        }
+    }
+    console.warn(`[VISION-OCR] A cross-check reading of ${weight} isn't a plausible load weight (${PLAUSIBLE_LOAD_WEIGHT_MIN}-${PLAUSIBLE_LOAD_WEIGHT_MAX}) and no leading-digit trim fixes it — discarding it rather than returning an impossible number`);
+    return null;
+}
+
+module.exports = { detectText, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage, plausibleWeightOrStripped };
