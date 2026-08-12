@@ -709,6 +709,165 @@ async function locateCyanDisplayByPixels(imageBase64) {
     );
 }
 
+// Added 2026-08-12 — root cause found on a real photo (ground-truth 71920):
+// the display's red digit pixels and unrelated red content elsewhere in
+// frame (rust staining on nearby metalwork, in the case actually measured)
+// sit close enough together that R=25 dilation (see findDisplayBoxByColor)
+// fuses them into ONE oversized connected component. That merged blob
+// correctly fails the sanity-bounds check (too tall to plausibly be a single
+// display) and is correctly never offered as a candidate — but it was also
+// the ONLY component anywhere near the top of the litCount ranking, so
+// nothing else in the list was close enough to qualify either. Net effect:
+// red locate returns zero usable candidates even though the real display's
+// pixels are sitting right there, just fused into unusable company.
+//
+// Fix: when — and ONLY when — normal red locate found nothing, re-run
+// connected components restricted to JUST that oversized component's own
+// bounding box, at a smaller dilation radius (R=12 instead of 25). This is
+// small enough to let the merged blob split back apart into its constituent
+// pieces (verified on the real photo: splits into a wide-short piece near
+// the top of the region — the actual digit strip — and a tall-narrow piece
+// below it — the rust-stained frame) while still bridging the gaps within a
+// single dot-matrix digit cluster.
+//
+// This is deliberately NOT folded into findDisplayBoxByColor's normal
+// candidate list or its topLitCount-based ranking. Tested directly against
+// a currently-CORRECT case (a different real photo where the same "oversized
+// top component" signature occurs, but the true display is a cyan/teal
+// indicator picked up by locateCyanDisplayByPixels instead): the recovery
+// split on THAT photo also produces a plausible-looking, wide-short
+// candidate, purely from red-tinted clutter — so if this were returned as
+// red's answer with equal standing to a normal candidate, it would win
+// before cyan is ever tried (the call site stops at the first non-empty
+// candidate list) and silently replace a correct cyan read with a wrong red
+// guess. Instead, the caller only reaches for this AFTER cyan has already
+// been tried and failed to produce a plausible reading — see the locate
+// step below. That ordering is what makes this safe to ship: it can only
+// ever get tried in cases that are already failing today (empty red, empty
+// or unusable cyan), so it cannot regress a photo that currently works.
+async function getRedSplitRecoveryCandidates(imageBase64) {
+    if (!sharp) return null;
+    try {
+        const buf = Buffer.from(imageBase64, 'base64');
+        const targetWidth = 500;
+        const { data, info } = await sharp(buf)
+            .resize({ width: targetWidth, withoutEnlargement: true })
+            .removeAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true });
+        const { width: w, height: h, channels } = info;
+        if (!w || !h) return null;
+
+        const colorTest = (r, g, b) => r > 140 && (r - g) > 60 && (r - b) > 60;
+        const mask = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) {
+            const rowBase = y * w * channels;
+            for (let x = 0; x < w; x++) {
+                const i = rowBase + x * channels;
+                if (colorTest(data[i], data[i + 1], data[i + 2])) mask[y * w + x] = 1;
+            }
+        }
+
+        const dilate = (srcMask, R) => {
+            const out = new Uint8Array(w * h);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    if (!srcMask[y * w + x]) continue;
+                    const yStart = Math.max(0, y - R), yEnd = Math.min(h - 1, y + R);
+                    const xStart = Math.max(0, x - R), xEnd = Math.min(w - 1, x + R);
+                    for (let ny = yStart; ny <= yEnd; ny++) {
+                        const base = ny * w;
+                        for (let nx = xStart; nx <= xEnd; nx++) out[base + nx] = 1;
+                    }
+                }
+            }
+            return out;
+        };
+        const connectedComponents = (srcMask, dilated) => {
+            const labels = new Int32Array(w * h).fill(-1);
+            let nextLabel = 0;
+            const comps = [];
+            const stack = [];
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = y * w + x;
+                    if (!dilated[idx] || labels[idx] !== -1) continue;
+                    const label = nextLabel++;
+                    let minX = x, maxX = x, minY = y, maxY = y, litCount = 0;
+                    stack.push(idx); labels[idx] = label;
+                    while (stack.length) {
+                        const cur = stack.pop();
+                        const cy = (cur / w) | 0, cx = cur % w;
+                        if (srcMask[cur]) litCount++;
+                        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+                        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+                        if (cx > 0 && dilated[cur - 1] && labels[cur - 1] === -1) { labels[cur - 1] = label; stack.push(cur - 1); }
+                        if (cx < w - 1 && dilated[cur + 1] && labels[cur + 1] === -1) { labels[cur + 1] = label; stack.push(cur + 1); }
+                        if (cy > 0 && dilated[cur - w] && labels[cur - w] === -1) { labels[cur - w] = label; stack.push(cur - w); }
+                        if (cy < h - 1 && dilated[cur + w] && labels[cur + w] === -1) { labels[cur + w] = label; stack.push(cur + w); }
+                    }
+                    comps.push({ litCount, minX, maxX, minY, maxY });
+                }
+            }
+            comps.sort((a, b) => b.litCount - a.litCount);
+            return comps;
+        };
+
+        const dilated25 = dilate(mask, 25);
+        const comps25 = connectedComponents(mask, dilated25);
+        if (!comps25.length) return null;
+        const top = comps25[0];
+        const topBoxW = (top.maxX - top.minX) / w, topBoxH = (top.maxY - top.minY) / h;
+        const topFailsSanity = topBoxW < 0.06 || topBoxH < 0.02 || topBoxW > 0.9 || topBoxH > 0.6;
+        if (!topFailsSanity) return null; // not the merged-blob case this exists for — nothing to recover
+
+        const restricted = new Uint8Array(w * h);
+        for (let y = top.minY; y <= top.maxY; y++) {
+            for (let x = top.minX; x <= top.maxX; x++) {
+                const idx = y * w + x;
+                if (mask[idx]) restricted[idx] = 1;
+            }
+        }
+        const dilated12 = dilate(restricted, 12);
+        const subComps = connectedComponents(restricted, dilated12);
+        const sane = subComps.filter((c) => {
+            const boxW = (c.maxX - c.minX) / w, boxH = (c.maxY - c.minY) / h;
+            return !(boxW < 0.06 || boxH < 0.02 || boxW > 0.9 || boxH > 0.6);
+        });
+        if (!sane.length) return null;
+
+        // Prefer wide-short pieces (a real single-row digit display) over
+        // tall-narrow ones (window frames, rust streaks, cabling) — measured
+        // on the real recovery case: true display ~3.5:1 W/H, the frame
+        // fragment it was fused with ~0.5:1. This ordering only affects
+        // which recovery candidate gets TRIED FIRST among themselves; it
+        // does not affect whether cyan gets tried first overall (it always
+        // does — see call site).
+        sane.sort((a, b) => {
+            const aw = (a.maxX - a.minX) / w, ah = (a.maxY - a.minY) / h;
+            const bw = (b.maxX - b.minX) / w, bh = (b.maxY - b.minY) / h;
+            return (bw / bh) - (aw / ah);
+        });
+
+        return sane.slice(0, 3).map((c) => {
+            const boxW = (c.maxX - c.minX) / w, boxH = (c.maxY - c.minY) / h;
+            const padX = boxW * 0.08, padY = boxH * 0.25;
+            return {
+                x_min: Math.max(0, c.minX / w - padX),
+                y_min: Math.max(0, c.minY / h - padY),
+                x_max: Math.min(1, c.maxX / w + padX),
+                y_max: Math.min(1, c.maxY / h + padY),
+                reason: 'red split-recovery (oversized merged blob split apart at smaller dilation)',
+                litCount: c.litCount,
+                touchesEdge: false,
+            };
+        });
+    } catch (err) {
+        console.warn('[GEMINI] Red split-recovery failed:', err.message);
+        return null;
+    }
+}
+
 // Stage 1, attempt #2 (fallback) — find WHERE the vehicle weighbridge display
 // is in the frame using Gemini, for photos the pixel-based locate above
 // couldn't confidently handle. Root cause of a real misread on a real yard
@@ -1399,8 +1558,25 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         let candidates = await locateRedDisplayByPixels(imageBase64);
         let locateSource = 'red pixel color analysis';
         if (!candidates || !candidates.length) {
-            candidates = await locateCyanDisplayByPixels(imageBase64);
-            locateSource = 'cyan pixel color analysis';
+            // Cyan is tried FIRST, exactly as before this change — that
+            // ordering is load-bearing (see getRedSplitRecoveryCandidates'
+            // comment): a real photo exists where red's merged-blob signature
+            // looks identical whether the true display is red or cyan, and
+            // only trying cyan first (and accepting its answer immediately
+            // if it reads a plausible weight, via the existing per-candidate
+            // loop below) keeps that case correct. Red split-recovery is
+            // appended AFTER cyan's candidates, not instead of them, so it only
+            // ever gets a turn once cyan has already been tried and failed —
+            // it cannot preempt a working cyan read.
+            const cyanCandidates = await locateCyanDisplayByPixels(imageBase64);
+            const redRecoveryCandidates = await getRedSplitRecoveryCandidates(imageBase64);
+            const merged = [...(cyanCandidates || []), ...(redRecoveryCandidates || [])];
+            if (merged.length) {
+                candidates = merged;
+                locateSource = cyanCandidates && cyanCandidates.length
+                    ? (redRecoveryCandidates && redRecoveryCandidates.length ? 'cyan pixel color analysis + red split-recovery fallback' : 'cyan pixel color analysis')
+                    : 'red split-recovery (oversized merged blob split apart)';
+            }
         }
         if (!candidates || !candidates.length) {
             const locateImg = await shrinkForLocate(imageBase64, mimeType);
