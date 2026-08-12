@@ -1120,6 +1120,124 @@ async function trimDeadDigitZones(sharpImg, cropW, cropH) {
 // the plain crop but returned a legible (if not perfect) reading on the
 // boosted one, three separate contrast strengths tested directly against
 // the raw Vision API before this was wired in.
+// Added 2026-08-12 — builds Vision's input FROM THE LIT SIGNAL rather than
+// from the photo's luminance, and derives its one parameter from the signal's
+// own geometry so there is no exposure assumption and no tuned cutoff.
+//
+// Why this exists. Vision detects text on LUMINANCE, and pure red is only
+// ~54/255 luminance, so a red LED display that looks vivid to the eye can be
+// nearly flat to Vision on a dark housing or an underexposed shot. Measured on
+// real crops from this pipeline, the lit-minus-background luminance gap ran
+// from 101 (read perfectly) down to 20 (Vision returned NOTHING AT ALL) and 10
+// (Vision read a dim ghost cell as a real digit). An earlier version of this
+// code measured that gap and switched renderings below a cutoff of 25 — it
+// worked on all five known photos, but the cutoff sat between a measured 20
+// and 30, i.e. it was a line drawn through five points, and it would need
+// re-tuning the moment a photo landed in between.
+//
+// The colour test that identifies lit pixels does not have that problem: it is
+// relative (r-g, r-b), it is the same test the locate step already relies on to
+// find displays at all, and a dim red dot still satisfies it. So rather than
+// asking "is this image bright enough for Vision", synthesise an image Vision
+// cannot fail on: lit pixels black, everything else white, full contrast by
+// construction, whatever the exposure.
+//
+// The one remaining parameter is how much to close the mask, and that is
+// measured, not guessed. A dot-matrix display's mask is hundreds of small
+// blobs (individual LEDs) separated by gaps that must be bridged or OCR sees
+// speckle; a large or solid-stroke display's mask is a few big blobs that must
+// NOT be touched or adjacent strokes merge. The median blob area distinguishes
+// them directly, and its own radius (sqrt(area/pi)) is exactly the distance
+// needed to bridge to a neighbouring dot. Measured on the real crops:
+//     design-6   575 blobs, median    5px -> R=1 -> 73600 clean
+//     71920      162 blobs, median   18px -> R=2 -> 71920 clean
+//     hardcase   228 blobs, median   24px -> R=3 -> 73600 clean
+//     28500       42 blobs, median  336px -> R=8 -> 28500 clean
+//     80720       25 blobs, median  499px -> R=8 -> 80720 clean
+// All five read correctly, none needing a leading-digit strip, on a single
+// Vision call — including the two that previously failed outright.
+//
+// Closing (dilate then erode) rather than plain dilation: dilation alone was
+// measured to fatten dot-matrix digits into unreadable blobs (71920 -> 261,
+// hardcase -> 8880). Closing fuses the gaps within a stroke and then returns
+// strokes to their original thickness.
+async function renderLitSignalForOcr(croppedBase64) {
+    if (!sharp || !croppedBase64) return null;
+    const { data, info } = await sharp(Buffer.from(croppedBase64, 'base64'))
+        .removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { width: w, height: h, channels: c } = info;
+    if (!w || !h) return null;
+
+    const mask = new Uint8Array(w * h);
+    let litCount = 0;
+    for (let i = 0; i < w * h; i++) {
+        const r = data[i * c], g = data[i * c + 1], b = data[i * c + 2];
+        const isRed = r > 140 && (r - g) > 60 && (r - b) > 60;
+        const isCyan = g > 120 && b > 120 && (g - r) > 40 && (b - r) > 30;
+        if (isRed || isCyan) { mask[i] = 1; litCount++; }
+    }
+    // No lit signal at all means this crop isn't a lit display (or the colour
+    // test doesn't cover it) — hand back null so the caller sends the original
+    // crop and every existing fallback still applies unchanged.
+    if (!litCount) return null;
+
+    // Median blob size — the measurement that sets the radius.
+    const seen = new Uint8Array(w * h);
+    const sizes = [];
+    const stack = [];
+    for (let i = 0; i < w * h; i++) {
+        if (!mask[i] || seen[i]) continue;
+        let n = 0; stack.push(i); seen[i] = 1;
+        while (stack.length) {
+            const cur = stack.pop(); n++;
+            const cy = (cur / w) | 0, cx = cur % w;
+            if (cx > 0 && mask[cur - 1] && !seen[cur - 1]) { seen[cur - 1] = 1; stack.push(cur - 1); }
+            if (cx < w - 1 && mask[cur + 1] && !seen[cur + 1]) { seen[cur + 1] = 1; stack.push(cur + 1); }
+            if (cy > 0 && mask[cur - w] && !seen[cur - w]) { seen[cur - w] = 1; stack.push(cur - w); }
+            if (cy < h - 1 && mask[cur + w] && !seen[cur + w]) { seen[cur + w] = 1; stack.push(cur + w); }
+        }
+        sizes.push(n);
+    }
+    if (!sizes.length) return null;
+    sizes.sort((a, b) => a - b);
+    const medianBlob = sizes[Math.floor(sizes.length / 2)];
+    // Above this the strokes are already solid (measured: 336-499px on the
+    // LCD indicators vs 5-24px on dot-matrix), so closing is capped rather
+    // than scaled up indefinitely — the cap is what keeps a big solid display
+    // from having its adjacent strokes welded together.
+    const radius = Math.max(0, Math.min(8, Math.round(Math.sqrt(medianBlob / Math.PI))));
+
+    const dilateMask = (src, R) => {
+        if (R <= 0) return src;
+        const out = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            if (!src[y * w + x]) continue;
+            const y0 = Math.max(0, y - R), y1 = Math.min(h - 1, y + R);
+            const x0 = Math.max(0, x - R), x1 = Math.min(w - 1, x + R);
+            for (let ny = y0; ny <= y1; ny++) { const base = ny * w; for (let nx = x0; nx <= x1; nx++) out[base + nx] = 1; }
+        }
+        return out;
+    };
+    const erodeMask = (src, R) => {
+        if (R <= 0) return src;
+        const out = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            let keep = 1;
+            const y0 = Math.max(0, y - R), y1 = Math.min(h - 1, y + R);
+            const x0 = Math.max(0, x - R), x1 = Math.min(w - 1, x + R);
+            for (let ny = y0; ny <= y1 && keep; ny++) { const base = ny * w; for (let nx = x0; nx <= x1; nx++) if (!src[base + nx]) { keep = 0; break; } }
+            out[y * w + x] = keep;
+        }
+        return out;
+    };
+
+    const closed = radius > 0 ? erodeMask(dilateMask(mask, radius), radius) : mask;
+    const grey = Buffer.alloc(w * h);
+    for (let i = 0; i < w * h; i++) grey[i] = closed[i] ? 0 : 255; // black digits on white
+    const out = await sharp(grey, { raw: { width: w, height: h, channels: 1 } }).jpeg({ quality: 97 }).toBuffer();
+    return { base64: out.toString('base64'), radius, medianBlob, blobs: sizes.length };
+}
+
 async function cropToDisplay(imageBase64, mimeType, box, opts = {}) {
     if (!sharp || !box) return null;
     try {
@@ -1720,32 +1838,13 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // rather than thresholding it, and hasn't shown this failure.
             let visionInputBase64 = croppedBase64;
             try {
-                if (sharp) {
-                    const { data: px, info: pxInfo } = await sharp(Buffer.from(croppedBase64, 'base64'))
-                        .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-                    const chans = pxInfo.channels;
-                    let litSum = 0, litN = 0, allSum = 0;
-                    const total = pxInfo.width * pxInfo.height;
-                    for (let i = 0; i < total; i++) {
-                        const r = px[i * chans], g = px[i * chans + 1], b = px[i * chans + 2];
-                        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-                        allSum += lum;
-                        const isRed = r > 140 && (r - g) > 60 && (r - b) > 60;
-                        const isCyan = g > 120 && b > 120 && (g - r) > 40 && (b - r) > 30;
-                        if (isRed || isCyan) { litSum += lum; litN++; }
-                    }
-                    if (litN > 0 && total > 0) {
-                        const contrast = (litSum / litN) - (allSum / total);
-                        const LOW_CONTRAST_CUTOFF = Number(process.env.VISION_LOW_CONTRAST_CUTOFF) || 25;
-                        if (contrast < LOW_CONTRAST_CUTOFF) {
-                            visionInputBase64 = (await sharp(Buffer.from(croppedBase64, 'base64'))
-                                .greyscale().threshold(120).jpeg({ quality: 97 }).toBuffer()).toString('base64');
-                            console.log(`[GEMINI] Crop${tag} lit-vs-background luminance contrast is ${contrast.toFixed(1)} (below ${LOW_CONTRAST_CUTOFF}) — sending Vision a thresholded rendering instead of the raw crop`);
-                        }
-                    }
+                const litRender = await renderLitSignalForOcr(croppedBase64);
+                if (litRender) {
+                    visionInputBase64 = litRender.base64;
+                    console.log(`[GEMINI] Crop${tag} lit-signal render: ${litRender.blobs} lit blobs, median ${litRender.medianBlob}px -> closing radius ${litRender.radius} (total ${elapsed()})`);
                 }
             } catch (err) {
-                console.warn('[GEMINI] Contrast measurement failed, sending the raw crop to Vision:', err.message);
+                console.warn('[GEMINI] Lit-signal render failed, sending the raw crop to Vision:', err.message);
             }
 
             const tVisionStart = Date.now();
