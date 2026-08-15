@@ -79,6 +79,14 @@ const FILES = {
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads
     // it, result lands here — never written onto a booking or container record.
     SCALE_TICKETS_FILE: path.join(DATA_DIR, 'scale_tickets.json'),
+    // Custom item-type descriptions typed via the load form's "Others…"
+    // free-text box — per Apsara 2026-08-15 ("when something gets added in
+    // others, it should get added to existing list of description"). Starts
+    // empty; helpers/itemTypes.js merges this with the hardcoded
+    // ITEM_DESC_OPTIONS base list on the client so a custom description
+    // typed once becomes a normal selectable option afterward instead of
+    // requiring "Others…" every time.
+    ITEM_TYPES_FILE: path.join(DATA_DIR, 'item_types.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────

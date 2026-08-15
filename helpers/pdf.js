@@ -383,26 +383,25 @@ function generateLoadPdf(load, opts = {}) {
             // internal workflow state, not part of the document the
             // counterparty receives.
             //
-            // "Buyer"/"Buyer Address" relabeled to "Seller"/"Seller Address"
-            // 2026-08-15 per Apsara: Edge Trading is the buyer in these
-            // transactions, so the counterparty on the document is the
-            // seller. Only the PRINTED label changed here — load.buyer /
-            // load.buyer_address remain the underlying field names (dashboard
-            // inputs, API body, helpers/loads.js) untouched, so this stays
-            // contained to the document text rather than rippling into the
-            // dashboard form, the mobile app, or the data model.
-            // Order matters here: drawFieldBox lays two-col fields out
-            // left-to-right, top-to-bottom (index 0/1 = row 1, index 2 = row
-            // 2 col 1) — so [Date, Created, Seller] puts Created directly
-            // beside Date on row 1, and Seller directly beneath Date on
-            // row 2, per Apsara 2026-08-15.
+            // load.seller/load.seller_address hold the counterparty (the
+            // company Edge Trading is buying scrap FROM) — per Apsara
+            // 2026-08-15 ("no. buyer should be edge trading"), correcting an
+            // earlier backwards mapping where this data lived under
+            // load.buyer and just got RELABELED "Seller:" on the printed
+            // page. Field names and printed labels now agree, so no
+            // relabeling trick is needed here anymore. Order matters:
+            // drawFieldBox lays two-col fields out left-to-right, top-to-
+            // bottom (index 0/1 = row 1, index 2 = row 2 col 1) — so [Date,
+            // Created, Seller] puts Created directly beside Date on row 1,
+            // and Seller directly beneath Date on row 2, per Apsara
+            // 2026-08-15's earlier layout request.
             drawLetterhead(doc, 'Load Ticket', load);
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
-                { label: 'Seller:',  value: load.buyer },
+                { label: 'Seller:',  value: load.seller },
             ], [
-                { label: 'Seller Address:', value: load.buyer_address },
+                { label: 'Seller Address:', value: load.seller_address },
                 { label: 'Description:',    value: load.description },
             ]);
 
@@ -488,8 +487,7 @@ function generateWeightsPdf(load, opts = {}) {
             // Same field reduction as the main ticket — Edge Trading's own
             // info lives in the letterhead now, so repeating it here would be
             // redundant. Labels/Created field match generateLoadPdf — see
-            // its comments for why "Buyer" became "Seller" and where
-            // Created: comes from.
+            // its comments for where load.seller/Created: come from.
             // Same [Date, Created, Seller] ordering as generateLoadPdf — see
             // its comment for why that puts Created beside Date and Seller
             // beneath Date.
@@ -497,9 +495,9 @@ function generateWeightsPdf(load, opts = {}) {
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
-                { label: 'Seller:',  value: load.buyer },
+                { label: 'Seller:',  value: load.seller },
             ], [
-                { label: 'Seller Address:', value: load.buyer_address },
+                { label: 'Seller Address:', value: load.seller_address },
                 { label: 'Description:',    value: load.description },
             ]);
 
@@ -627,8 +625,67 @@ function generateInventoryReportPdf(dateKey, todayReport, overallReport) {
     });
 }
 
+// ── On-demand inventory export PDF — Inventory tab's "⋮" export menu ──────
+// Per Apsara 2026-08-15 ("export as excel/pdf"). Unlike
+// generateInventoryReportPdf above (a fixed "today + all-time" nightly
+// report), this reflects exactly whatever date range is currently applied
+// on screen — `rangeLabel` is a human-readable description of that range
+// (e.g. "All time" or "2026-08-01 to 2026-08-15"), `report` is a single
+// getInventoryReport() result for that range.
+function generateInventoryExportPdf(rangeLabel, report) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ size: 'LETTER', margin: 50, bufferPages: true });
+            const chunks = [];
+            doc.on('data', (c) => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            const pseudoLoad = { id: rangeLabel };
+            drawLetterhead(doc, 'Inventory Export', pseudoLoad);
+
+            const net = round2(report.byType.reduce((s, g) => s + (g.net || 0), 0));
+            const amount = round2(report.byType.reduce((s, g) => s + (g.amount || 0), 0));
+
+            drawSectionHeading(doc, `${rangeLabel} — ${report.loadCount} load${report.loadCount === 1 ? '' : 's'}`);
+            if (report.byType.length) {
+                drawItemTable(doc, report.byType, GROUP_COLUMNS);
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No loads in this range.');
+                doc.moveDown(0.6);
+            }
+            drawSummaryBox(doc, [
+                { label: 'Loads',        value: String(report.loadCount) },
+                { label: 'Net total',    value: `${net} ${report.unit}`, emphasize: true },
+                { label: 'Amount total', value: `$${amount}`, emphasize: true },
+            ]);
+
+            drawSectionHeading(doc, 'By seller');
+            if (report.bySeller.length) {
+                drawItemTable(doc, report.bySeller.map(s => ({ description: s.seller, count: s.loadCount, gross: '—', tare: '—', net: s.net, amount: s.amount })), SELLER_COLUMNS);
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No sellers in this range.');
+                doc.moveDown(0.6);
+            }
+
+            drawSectionHeading(doc, 'Per day');
+            if (report.byDay.length) {
+                drawItemTable(doc, report.byDay.map(d => ({ description: d.date, count: d.loadCount, gross: '—', tare: '—', net: d.net, amount: d.amount })), SELLER_COLUMNS.map(c => c.key === 'description' ? { ...c, label: 'Date' } : (c.key === 'count' ? { ...c, label: 'Loads' } : c)));
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No loads in this range.');
+                doc.moveDown(0.6);
+            }
+
+            addFooters(doc, pseudoLoad);
+            doc.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
 // Exported 2026-08-15 so scheduler.js's eodYardReport can reuse the exact
 // same item-type grouping logic for its new inventory sections instead of
 // duplicating this reduce elsewhere — one definition of "how items roll up
 // by type" for both the PDF and the report.
-module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription, generateInventoryReportPdf };
+module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf };

@@ -667,14 +667,15 @@ function buildYardReportText(dateKey, todays, allLoads) {
         amount: acc.amount + (l.amount       || 0),
     }), { gross: 0, tare: 0, net: 0, amount: 0 });
 
-    // REAL BUG, found 2026-08-15 while building the new daily inventory PDF
-    // report right next to this: this used `l.seller`, which is the FIXED
-    // constant "Edge Metals Inc." on every single load (see helpers/loads.js
-    // and pdf.js's comments — the actual counterparty name lives in
-    // `l.buyer`). Every load line in this report has been printing "Edge
-    // Metals Inc." instead of the real seller since the report shipped.
+    // Uses l.seller — the outside counterparty's name. (Briefly used
+    // l.buyer earlier today after finding this WAS reading the wrong field —
+    // that diagnosis was correct at the time, but Apsara then corrected the
+    // field mapping itself: seller/seller_address are now the free-text
+    // counterparty fields and buyer is the fixed "Edge Trading" constant —
+    // see helpers/loads.js's validateLoadForSave comment. l.seller is right
+    // again under the new mapping.)
     const lines = todays.map(l =>
-        `• ${l.id} — ${l.buyer || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
+        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
     );
 
     const todayItems  = todays.flatMap(l => Array.isArray(l.items) ? l.items : []);

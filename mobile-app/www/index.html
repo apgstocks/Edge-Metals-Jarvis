@@ -92,7 +92,7 @@ input::placeholder { color:var(--steel-500); }
 .field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
 .field input, .field select { width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
 .field input:focus, .field select:focus { border-color:var(--accent); }
-.ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:180px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
+.ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
 .ac-dropdown.hidden { display:none; }
 .ac-item { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border-subtle); white-space:pre-line; }
 .ac-item:last-child { border-bottom:none; }
@@ -454,17 +454,32 @@ async function api(path, opts = {}) {
 // dashboard/index.html's comment on this same no-op).
 function stopCamera() {}
 
-const ITEM_DESC_OPTIONS = [
+const ITEM_DESC_OPTIONS_BASE = [
   'Auto cast', 'Al rims(Dirty)', 'Mixed', 'Chrome', 'Sealed units', 'Motors',
   'Al combo', 'Steel combo', 'Alternator', 'Ac compressor', 'Starter',
 ];
 
 const ITEM_DESC_OTHER = 'Others';
 
-const SELLER_FIXED_NAME = 'Edge Metals Inc.';
+// Custom descriptions typed via "Others…" on a previous load — mirrors
+// dashboard/index.html, see its comment (Apsara 2026-08-15).
+let customItemTypes = [];
+async function refreshCustomItemTypes() {
+  try { customItemTypes = await api('/api/item-types'); }
+  catch (err) { customItemTypes = []; }
+}
+function itemDescOptions() {
+  const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
+  return ITEM_DESC_OPTIONS_BASE.concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())));
+}
 
-// ── Address Book integration on the Buyer (= "Seller" on the document,
-// see pdf.js's relabeling comment) name field — mirrors dashboard/index.html.
+// Edge Trading is always the BUYER on every load — per Apsara 2026-08-15
+// ("no. buyer should be edge trading"). See dashboard/index.html's comment
+// for the full reasoning.
+const BUYER_FIXED_NAME = 'Edge Trading';
+
+// ── Address Book integration on the Seller name field — mirrors
+// dashboard/index.html.
 let addressBookCache = [];
 async function refreshAddressBookCache() {
   try { addressBookCache = await api('/api/address-book'); }
@@ -505,11 +520,12 @@ function renderItemRows() {
   // throwing — which is why Add Item/Save Load looked completely broken).
   const rowsHtml = currentLoadItems.map((it, i) => {
     const desc = it.description || '';
-    const isPreset = ITEM_DESC_OPTIONS.includes(desc);
-    const isOther = desc && !isPreset; // non-empty, not on the list -> came from the "Others" box
+    const descOptions = itemDescOptions();
+    const isPreset = descOptions.includes(desc);
+    const isOther = desc && !isPreset; // non-empty, not on the (base + custom) list -> came from the "Others" box
     const selectVal = isPreset ? desc : (isOther ? ITEM_DESC_OTHER : '');
     const optionsHtml = ['<option value="" disabled ' + (selectVal ? '' : 'selected') + '>Select item…</option>']
-      .concat(ITEM_DESC_OPTIONS.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
+      .concat(descOptions.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
       .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
       .join('');
     const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
@@ -907,8 +923,10 @@ function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
   setTimeout(() => document.addEventListener('click', outsideClick, true), 0);
 }
 
+// tare_weight defaults to "0" now — mirrors dashboard/index.html, see its
+// comment for why (Apsara 2026-08-15).
 function blankLoadItem() {
-  return { description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
 }
 
 // Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on
@@ -923,18 +941,19 @@ function todayLocalDateStr() {
 function resetLoadModal() {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
-  if ($('ld_seller')) $('ld_seller').value = SELLER_FIXED_NAME;
+  if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
+  refreshCustomItemTypes().then(renderItemRows);
 }
 
 // Opens the SAME modal used for creating a load, pre-filled from an existing
@@ -957,10 +976,10 @@ function openEditLoadModal(load) {
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
-  if ($('ld_date'))           $('ld_date').value           = load.date || '';
-  if ($('ld_seller'))         $('ld_seller').value         = SELLER_FIXED_NAME;
-  if ($('ld_buyer'))          $('ld_buyer').value          = load.buyer || '';
-  if ($('ld_buyer_address'))  $('ld_buyer_address').value  = load.buyer_address || '';
+  if ($('ld_date'))            $('ld_date').value            = load.date || '';
+  if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
+  if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
+  if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
   if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
@@ -968,6 +987,7 @@ function openEditLoadModal(load) {
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
+  refreshCustomItemTypes().then(renderItemRows);
   $('loadModal').classList.remove('hidden');
 }
 
@@ -1253,15 +1273,15 @@ function renderLoads(loads) {
         <div class="modal-body">
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
-            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name" disabled></div>
+            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field" style="position:relative;">
-              <label>Buyer</label>
-              <input id="ld_buyer" placeholder="Buyer name" autocomplete="off">
-              <div id="ld_buyer_ac" class="ac-dropdown hidden"></div>
+              <label>Seller</label>
+              <input id="ld_seller" placeholder="Seller name" autocomplete="off">
+              <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label>Buyer address</label><textarea id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
@@ -1300,7 +1320,9 @@ function renderLoads(loads) {
 function validateItemsBeforeSave(items) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const hasAnyData = it.description || it.gross_weight || it.tare_weight || it.price;
+    // Tare excluded here — see blankLoadItem's comment (defaults to "0" now,
+    // which would otherwise make an untouched spare row look "filled in").
+    const hasAnyData = it.description || it.gross_weight || it.price;
     if (!hasAnyData) continue;
     const label = it.description ? `"${it.description}"` : `#${i + 1}`;
     if (!it.description || !String(it.description).trim()) return `Item ${label}: description is required.`;
@@ -1329,13 +1351,15 @@ function wireLoadsEvents() {
   // per-row inside renderItemRows() now (re-attached every render since
   // rows come and go) — nothing load-level left to wire here for weights.
 
-  // ── Address Book autocomplete on Buyer name ────────────────────────────
-  const acBox = $('ld_buyer_ac');
+  // ── Address Book autocomplete on Seller name ───────────────────────────
+  const acBox = $('ld_seller_ac');
   const closeAc = () => { acBox.classList.add('hidden'); acBox.innerHTML = ''; };
-  $('ld_buyer').addEventListener('input', () => {
-    const q = $('ld_buyer').value.trim().toLowerCase();
+  $('ld_seller').addEventListener('input', () => {
+    const q = $('ld_seller').value.trim().toLowerCase();
     if (!q) { closeAc(); return; }
-    const matches = addressBookCache.filter(e => (e.aliases || []).some(a => a.toLowerCase().includes(q))).slice(0, 8);
+    // Cap raised 8->40 — mirrors dashboard/index.html, see its comment
+    // (Apsara 2026-08-15: "not showing all matching hits").
+    const matches = addressBookCache.filter(e => (e.aliases || []).some(a => a.toLowerCase().includes(q))).slice(0, 40);
     if (!matches.length) { closeAc(); return; }
     acBox.innerHTML = matches.map((e, i) => `<div class="ac-item" data-idx="${i}">${esc(e.aliases.join(' / '))}</div>`).join('');
     acBox.classList.remove('hidden');
@@ -1343,13 +1367,13 @@ function wireLoadsEvents() {
       el.addEventListener('mousedown', (ev) => {
         ev.preventDefault();
         const entry = matches[i];
-        $('ld_buyer').value = entry.aliases[0];
-        $('ld_buyer_address').value = entry.raw;
+        $('ld_seller').value = entry.aliases[0];
+        $('ld_seller_address').value = entry.raw;
         closeAc();
       });
     });
   });
-  $('ld_buyer').addEventListener('blur', () => setTimeout(closeAc, 150));
+  $('ld_seller').addEventListener('blur', () => setTimeout(closeAc, 150));
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
@@ -1364,7 +1388,7 @@ function wireLoadsEvents() {
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const items = currentLoadItems
-        .filter(it => (it.description || it.gross_weight || it.tare_weight || it.price))
+        .filter(it => (it.description || it.gross_weight || it.price))
         .map(it => ({
           description: it.description,
           gross_weight: it.gross_weight || null,
@@ -1384,11 +1408,21 @@ function wireLoadsEvents() {
           tare_photo_link : it.tare_photo_link  || null,
           tare_photo_drive_id : it.tare_photo_drive_id  || null,
         }));
+      // Auto-grow the item-type list — mirrors dashboard/index.html, see
+      // its comment (Apsara 2026-08-15).
+      const knownDescs = itemDescOptions().map(d => d.toLowerCase());
+      const newDescs = [...new Set(items.map(it => it.description).filter(Boolean))]
+        .filter(d => !knownDescs.includes(d.toLowerCase()));
+      newDescs.forEach(d => {
+        api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: d }) })
+          .then(() => { customItemTypes.push(d); })
+          .catch(() => {});
+      });
       const payload = {
         date: $('ld_date').value || null,
-        seller: SELLER_FIXED_NAME,
-        buyer: $('ld_buyer').value.trim() || null,
-        buyer_address: $('ld_buyer_address').value.trim() || null,
+        buyer: BUYER_FIXED_NAME,
+        seller: $('ld_seller').value.trim() || null,
+        seller_address: $('ld_seller_address').value.trim() || null,
         description: desc,
         items,
         weight_unit: 'lb',
@@ -1401,9 +1435,9 @@ function wireLoadsEvents() {
       }
       // Auto-grow the Address Book for a genuinely new seller — mirrors
       // dashboard/index.html. Fire-and-forget, never blocks/fails the save.
-      if (payload.buyer && payload.buyer_address && !addressBookExactMatch(payload.buyer)) {
-        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.buyer], raw: payload.buyer_address }) })
-          .then(() => { addressBookCache.push({ aliases: [payload.buyer], raw: payload.buyer_address }); })
+      if (payload.seller && payload.seller_address && !addressBookExactMatch(payload.seller)) {
+        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address }) })
+          .then(() => { addressBookCache.push({ aliases: [payload.seller], raw: payload.seller_address }); })
           .catch(() => {});
       }
       stopCamera();
@@ -1561,7 +1595,68 @@ async function renderCurrentMobileTab() {
   }
 }
 
-let mobInvFrom = '', mobInvTo = '';
+// Sub-tabs — mirrors dashboard/index.html, see its comment (Apsara
+// 2026-08-15: "small tabs like load summary, per day, per seller. by
+// default by item type should appear").
+const INV_SUBTABS = [
+  { id: 'byType',  label: 'Item type' },
+  { id: 'summary', label: 'Summary' },
+  { id: 'byDay',   label: 'Per day' },
+  { id: 'bySeller', label: 'Per seller' },
+];
+let mobInvFrom = '', mobInvTo = '', mobInvSubTab = 'byType';
+
+function mobInvSummaryTotals(data) {
+  const sum = (key) => data.byType.reduce((acc, g) => acc + (g[key] || 0), 0);
+  return { gross: Math.round(sum('gross') * 100) / 100, tare: Math.round(sum('tare') * 100) / 100, net: Math.round(sum('net') * 100) / 100, amount: Math.round(sum('amount') * 100) / 100 };
+}
+function mobInvByTypeHtml(data) {
+  return data.byType.length ? data.byType.map(g => `
+    <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
+      <span style="color:var(--text-strong);">${esc(g.description)}</span>
+      <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${g.count} item${g.count === 1 ? '' : 's'} · ${g.net} ${esc(data.unit)}</span>
+    </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
+}
+function mobInvSummaryHtml(data) {
+  const t = mobInvSummaryTotals(data);
+  const row = (label, value) => `
+    <div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border-subtle); font-size:14px;">
+      <span style="color:var(--text-muted);">${esc(label)}</span>
+      <span style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${esc(value)}</span>
+    </div>`;
+  return `<div style="background:var(--surface-sunken); border-radius:8px; padding:4px 14px;">
+    ${row('Loads', String(data.loadCount) + (mobInvFrom || mobInvTo ? ' in range' : ' total'))}
+    ${row('Gross total', `${t.gross} ${data.unit}`)}
+    ${row('Tare total', `${t.tare} ${data.unit}`)}
+    ${row('Net total', `${t.net} ${data.unit}`)}
+    ${row('Amount total', `$${t.amount}`)}
+  </div>`;
+}
+function mobInvByDayHtml(data) {
+  return data.byDay.length ? data.byDay.map(d => `
+    <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
+      <span style="color:var(--text-strong);">${esc(d.date)}</span>
+      <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${d.loadCount} load${d.loadCount === 1 ? '' : 's'} · $${d.amount}</span>
+    </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`;
+}
+function mobInvBySellerHtml(data) {
+  return data.bySeller.length ? data.bySeller.map(s => `
+    <details style="border-bottom:1px solid var(--border-subtle); padding:9px 0;">
+      <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; font-size:13px;">
+        <span style="color:var(--text-strong);">${esc(s.seller)}</span>
+        <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)}</span>
+      </summary>
+      <div style="padding:8px 0 0 8px;">
+        ${s.byType.map(g => `
+          <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:12px;">
+            <span style="color:var(--text-muted);">${esc(g.description)}</span>
+            <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? '$' + g.amount : '—'}</span>
+          </div>`).join('')}
+      </div>
+    </details>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
+}
+const MOB_INV_SUBTAB_RENDER = { byType: mobInvByTypeHtml, summary: mobInvSummaryHtml, byDay: mobInvByDayHtml, bySeller: mobInvBySellerHtml };
+
 async function renderInventoryTab() {
   const params = new URLSearchParams();
   if (mobInvFrom) params.set('from', mobInvFrom);
@@ -1570,6 +1665,16 @@ async function renderInventoryTab() {
   const data = await api('/api/loads/inventory' + qs);
   $('viewRoot').innerHTML = `
     <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
+      <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:10px;">
+        <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Inventory</div>
+        <div style="position:relative;">
+          <button id="btnInvExportMenu" class="btn" style="padding:4px 9px; font-size:16px; line-height:1;">⋮</button>
+          <div id="invExportMenu" class="ac-dropdown hidden" style="left:auto; right:0; width:170px; max-height:none;">
+            <div class="ac-item" data-export="xlsx">Export as Excel</div>
+            <div class="ac-item" data-export="pdf">Export as PDF</div>
+          </div>
+        </div>
+      </div>
       <div style="display:flex; gap:8px; margin-bottom:14px;">
         <div class="field" style="flex:1; margin-bottom:0;"><label>From</label><input id="inv_from" type="date" value="${esc(mobInvFrom)}"></div>
         <div class="field" style="flex:1; margin-bottom:0;"><label>To</label><input id="inv_to" type="date" value="${esc(mobInvTo)}"></div>
@@ -1578,40 +1683,40 @@ async function renderInventoryTab() {
         <button id="btnInvApply" class="btn btn-primary" style="flex:1;">Apply</button>
         <button id="btnInvClear" class="btn" style="flex:1;">Clear</button>
       </div>
-      <div style="background:var(--surface-sunken); border-radius:8px; padding:14px; margin-bottom:18px;">
-        <div style="font-size:26px; font-weight:600; color:var(--text-strong);">${data.loadCount}</div>
-        <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-top:4px;">load${data.loadCount === 1 ? '' : 's'} ${(mobInvFrom || mobInvTo) ? 'in range' : 'total'}</div>
+      <div style="display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border-subtle); overflow-x:auto;">
+        ${INV_SUBTABS.map(t => `
+          <button class="btn inv-subtab-btn" data-subtab="${t.id}" style="flex:none; border:none; border-radius:0; border-bottom:2px solid ${mobInvSubTab === t.id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:8px 10px; font-size:12px; font-weight:${mobInvSubTab === t.id ? '700' : '500'}; color:${mobInvSubTab === t.id ? 'var(--text-strong)' : 'var(--text-muted)'}; white-space:nowrap;">${esc(t.label)}</button>
+        `).join('')}
       </div>
-      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">By item type</div>
-      ${data.byType.length ? data.byType.map(g => `
-        <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
-          <span style="color:var(--text-strong);">${esc(g.description)}</span>
-          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${g.count} item${g.count === 1 ? '' : 's'} · ${g.net} ${esc(data.unit)}</span>
-        </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`}
-      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">By seller</div>
-      ${data.bySeller.length ? data.bySeller.map(s => `
-        <details style="border-bottom:1px solid var(--border-subtle); padding:9px 0;">
-          <summary style="cursor:pointer; list-style:none; display:flex; justify-content:space-between; font-size:13px;">
-            <span style="color:var(--text-strong);">${esc(s.seller)}</span>
-            <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)}</span>
-          </summary>
-          <div style="padding:8px 0 0 8px;">
-            ${s.byType.map(g => `
-              <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:12px;">
-                <span style="color:var(--text-muted);">${esc(g.description)}</span>
-                <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? '$' + g.amount : '—'}</span>
-              </div>`).join('')}
-          </div>
-        </details>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`}
-      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Loads per day</div>
-      ${data.byDay.length ? data.byDay.map(d => `
-        <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
-          <span style="color:var(--text-strong);">${esc(d.date)}</span>
-          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${d.loadCount} load${d.loadCount === 1 ? '' : 's'} · $${d.amount}</span>
-        </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`}
+      <div id="invSubtabBody">${MOB_INV_SUBTAB_RENDER[mobInvSubTab](data)}</div>
     </section>`;
   $('btnInvApply').addEventListener('click', () => { mobInvFrom = $('inv_from').value; mobInvTo = $('inv_to').value; renderInventoryTab(); });
   $('btnInvClear').addEventListener('click', () => { mobInvFrom = ''; mobInvTo = ''; renderInventoryTab(); });
+  $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => { mobInvSubTab = btn.dataset.subtab; renderInventoryTab(); }));
+
+  // Export — mobile auth is a bearer token (see api()'s comment), not a
+  // cookie, so a plain link/navigation wouldn't carry it. Fetch the file as
+  // a blob through the same authed api() path instead, then trigger a
+  // download via a temporary object URL.
+  const exportMenu = $('invExportMenu');
+  $('btnInvExportMenu').addEventListener('click', (ev) => { ev.stopPropagation(); exportMenu.classList.toggle('hidden'); });
+  document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+  exportMenu.querySelectorAll('.ac-item').forEach(item => item.addEventListener('click', async () => {
+    exportMenu.classList.add('hidden');
+    const ext = item.dataset.export;
+    try {
+      const res = await fetch(API_BASE + `/api/loads/inventory/export.${ext}${qs}`, { headers: { Authorization: 'Bearer ' + getToken() } });
+      if (!res.ok) throw new Error('export failed (' + res.status + ')');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `inventory.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    }
+  }));
 }
 
 async function bootLoads() {

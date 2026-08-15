@@ -136,4 +136,33 @@ async function inventoryWorkbookBuffer(allLoads) {
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer };
+// ── On-demand export — dashboard/mobile Inventory tab's "⋮" export menu ────
+// Per Apsara 2026-08-15: "there should be an export option on the top with
+// three dotted emoji. when i click that export as excel/pdf." Distinct from
+// buildInventoryWorkbook above (the FIXED nightly "last 5 days + Overall"
+// backup) — this reflects exactly whatever date range is currently applied
+// on screen, computed with the SAME getInventoryReport() call the Inventory
+// tab itself uses, so the download can never disagree with what's visible.
+// One sheet, three stacked tables (item type / seller / per-day), matching
+// the three sub-tabs that have a table shape (the fourth, "Load summary",
+// is a handful of totals already implied by the item-type table's own
+// column sums, so it isn't a separate section here).
+function buildFilteredInventoryWorkbook(report, rangeLabel) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jarvis — Edge Yard';
+  wb.created = new Date();
+  const sheet = wb.addWorksheet(safeSheetName(rangeLabel));
+  setColumnWidths(sheet);
+  let next = writeItemTypeTable(sheet, 1, `${rangeLabel} — ${report.loadCount} load${report.loadCount === 1 ? '' : 's'}`, report.byType, report.unit);
+  next = writeSellerTable(sheet, next, report.bySeller, report.unit);
+  next += 1;
+  writeDailyRollupTable(sheet, next, report.byDay, report.unit);
+  return wb;
+}
+
+async function filteredInventoryWorkbookBuffer(report, rangeLabel) {
+  const wb = buildFilteredInventoryWorkbook(report, rangeLabel);
+  return wb.xlsx.writeBuffer();
+}
+
+module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer, buildFilteredInventoryWorkbook, filteredInventoryWorkbookBuffer };

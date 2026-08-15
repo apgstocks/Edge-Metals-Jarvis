@@ -627,6 +627,42 @@ function createApi() {
             res.json(getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+
+    // On-demand Inventory tab export — Apsara 2026-08-15 ("export as
+    // excel/pdf" via a "⋮" menu). Same optional from/to as the JSON route
+    // above, so the download always matches exactly whatever's on screen.
+    // Registered before /api/loads/:id for the same route-ordering reason
+    // as /api/loads/inventory itself, even though :id only ever matches a
+    // single path segment so "inventory" here couldn't collide anyway.
+    function inventoryRangeLabel(from, to) {
+        if (from && to) return `${from} to ${to}`;
+        if (from) return `From ${from}`;
+        if (to) return `Through ${to}`;
+        return 'All time';
+    }
+    app.get('/api/loads/inventory/export.xlsx', async (req, res) => {
+        try {
+            const { loadLoads, getInventoryReport } = require('./helpers/loads');
+            const { filteredInventoryWorkbookBuffer } = require('./helpers/inventoryExcel');
+            const report = getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to });
+            const buf = await filteredInventoryWorkbookBuffer(report, inventoryRangeLabel(req.query.from, req.query.to));
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', 'attachment; filename="inventory.xlsx"');
+            res.send(Buffer.from(buf));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/loads/inventory/export.pdf', async (req, res) => {
+        try {
+            const { loadLoads, getInventoryReport } = require('./helpers/loads');
+            const { generateInventoryExportPdf } = require('./helpers/pdf');
+            const report = getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to });
+            const buf = await generateInventoryExportPdf(inventoryRangeLabel(req.query.from, req.query.to), report);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', 'attachment; filename="inventory.pdf"');
+            res.send(buf);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/loads/:id', (req, res) => {
         try {
             const { getLoad } = require('./helpers/loads');
@@ -938,6 +974,20 @@ function createApi() {
             if (!existed) return res.status(404).json({ error: 'no address-book entry with that id' });
             res.json({ ok: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── Custom item-type descriptions (self-growing "Others…" list) ─────────
+    // Per Apsara 2026-08-15. GET returns the flat array of custom entries;
+    // the client merges it with its own hardcoded ITEM_DESC_OPTIONS. No
+    // staff gate — same "everyone doing loads should see the full list"
+    // reasoning as /api/loads/* itself.
+    app.get('/api/item-types', (req, res) => {
+        try { res.json(require('./helpers/itemTypes').loadCustomItemTypes()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/item-types', async (req, res) => {
+        try { res.json(await require('./helpers/itemTypes').addCustomItemType(req.body.description)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────

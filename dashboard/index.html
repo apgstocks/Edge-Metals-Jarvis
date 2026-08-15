@@ -111,7 +111,7 @@ input::placeholder { color:var(--steel-500); }
 /* Address Book autocomplete dropdown under the Buyer/Seller name field —
    per Apsara 2026-08-15 ("as soon as user starts typing seller name, it
    should get matched and show all possible matches"). */
-.ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:180px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
+.ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
 .ac-dropdown.hidden { display:none; }
 .ac-item { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border-subtle); white-space:pre-line; }
 .ac-item:last-child { border-bottom:none; }
@@ -472,7 +472,110 @@ async function loadTab(tab) {
 // filter changes — never a running counter, so a deleted load's items just
 // stop appearing on the very next fetch with zero extra bookkeeping. Per
 // Apsara 2026-08-15.
-let invFrom = '', invTo = '';
+//
+// Split into small sub-tabs 2026-08-15 per Apsara ("small tabs like load
+// summary, per day, per seller. by default by item type should appear") —
+// previously all four views (count card, item-type table, seller list,
+// per-day table) were stacked and always visible together; this switches
+// between them instead, same underlying `data` object, no extra fetch.
+const INV_SUBTABS = [
+  { id: 'byType',  label: 'By item type' },
+  { id: 'summary', label: 'Load summary' },
+  { id: 'byDay',   label: 'Per day' },
+  { id: 'bySeller', label: 'Per seller' },
+];
+let invFrom = '', invTo = '', invSubTab = 'byType';
+
+function invSummaryTotals(data) {
+  const sum = (key) => data.byType.reduce((acc, g) => acc + (g[key] || 0), 0);
+  return { gross: Math.round(sum('gross') * 100) / 100, tare: Math.round(sum('tare') * 100) / 100, net: Math.round(sum('net') * 100) / 100, amount: Math.round(sum('amount') * 100) / 100 };
+}
+
+function invByTypeHtml(data) {
+  return data.byType.length ? `
+    <table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net</th><th style="padding:8px 6px;">Amount</th>
+      </tr></thead>
+      <tbody>
+        ${data.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
+          <td style="padding:8px 6px;">${esc(g.description)}</td>
+          <td style="padding:8px 6px;">${g.count}</td>
+          <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
+}
+
+function invSummaryHtml(data) {
+  const t = invSummaryTotals(data);
+  const row = (label, value) => `
+    <div style="display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border-subtle); font-size:14px;">
+      <span style="color:var(--text-muted);">${esc(label)}</span>
+      <span style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${esc(value)}</span>
+    </div>`;
+  return `
+    <div class="card" style="padding:20px 24px; max-width:420px;">
+      ${row('Loads', String(data.loadCount) + (invFrom || invTo ? ' in range' : ' total'))}
+      ${row('Gross total', `${t.gross} ${data.unit}`)}
+      ${row('Tare total', `${t.tare} ${data.unit}`)}
+      ${row('Net total', `${t.net} ${data.unit}`)}
+      ${row('Amount total', `$${t.amount}`)}
+    </div>`;
+}
+
+function invByDayHtml(data) {
+  return data.byDay.length ? `
+    <table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+        <th style="padding:8px 6px;">Date</th><th style="padding:8px 6px;">Loads</th><th style="padding:8px 6px;">Net total</th><th style="padding:8px 6px;">Amount total</th>
+      </tr></thead>
+      <tbody>
+        ${data.byDay.map(d => `<tr style="border-bottom:1px solid var(--border-subtle);">
+          <td style="padding:8px 6px;">${esc(d.date)}</td>
+          <td style="padding:8px 6px;">${d.loadCount}</td>
+          <td style="padding:8px 6px;">${d.net} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px;">$${d.amount}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`;
+}
+
+function invBySellerHtml(data) {
+  return data.bySeller.length ? data.bySeller.map(s => `
+    <details class="card" style="margin-bottom:8px; padding:0;">
+      <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
+        <span style="font-weight:600;">${esc(s.seller)}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + s.amount : '—'}</span>
+      </summary>
+      <div style="padding:0 16px 14px;">
+        ${s.byType.length ? `
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+              <th style="padding:6px;">Item type</th><th style="padding:6px;">Items</th><th style="padding:6px;">Net</th><th style="padding:6px;">Amount</th>
+            </tr></thead>
+            <tbody>
+              ${s.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
+                <td style="padding:6px;">${esc(g.description)}</td>
+                <td style="padding:6px;">${g.count}</td>
+                <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
+                <td style="padding:6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        ` : ''}
+      </div>
+    </details>
+  `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
+}
+
+const INV_SUBTAB_RENDER = { byType: invByTypeHtml, summary: invSummaryHtml, byDay: invByDayHtml, bySeller: invBySellerHtml };
+
 async function renderInventory() {
   const params = new URLSearchParams();
   if (invFrom) params.set('from', invFrom);
@@ -486,90 +589,51 @@ async function renderInventory() {
 
   root.innerHTML = `
     <section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
-      <div class="eyebrow">// Inventory</div>
-      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Item-type inventory</h2>
-      <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Computed live from every current load — deleting a load removes its items here automatically, nothing is tallied separately.</div>
+      <div style="display:flex; justify-content:space-between; align-items:start; gap:12px;">
+        <div>
+          <div class="eyebrow">// Inventory</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Item-type inventory</h2>
+          <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Computed live from every current load — deleting a load removes its items here automatically, nothing is tallied separately.</div>
+        </div>
+        <div style="position:relative;">
+          <button id="btnInvExportMenu" class="btn" title="Export" style="padding:6px 10px; font-size:16px; line-height:1;">⋮</button>
+          <div id="invExportMenu" class="ac-dropdown hidden" style="left:auto; right:0; width:170px; max-height:none;">
+            <div class="ac-item" data-export="xlsx">Export as Excel</div>
+            <div class="ac-item" data-export="pdf">Export as PDF</div>
+          </div>
+        </div>
+      </div>
 
-      <div style="display:flex; gap:10px; align-items:end; margin-bottom:24px; flex-wrap:wrap;">
+      <div style="display:flex; gap:10px; align-items:end; margin-bottom:16px; flex-wrap:wrap;">
         <div class="field" style="margin-bottom:0;"><label>From</label><input id="inv_from" type="date" value="${esc(invFrom)}"></div>
         <div class="field" style="margin-bottom:0;"><label>To</label><input id="inv_to" type="date" value="${esc(invTo)}"></div>
         <button id="btnInvApply" class="btn btn-primary">Apply</button>
         <button id="btnInvClear" class="btn">Clear</button>
       </div>
 
-      <div class="card" style="padding:18px 20px; margin-bottom:24px; display:inline-block;">
-        <span style="font-family:var(--font-mono); font-size:28px; font-weight:600; color:var(--text-strong);">${data.loadCount}</span>
-        <span style="font-family:var(--font-mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-left:10px;">load${data.loadCount === 1 ? '' : 's'} ${(invFrom || invTo) ? 'in range' : 'total'}</span>
+      <div style="display:flex; gap:6px; margin-bottom:22px; border-bottom:1px solid var(--border-subtle); flex-wrap:wrap;">
+        ${INV_SUBTABS.map(t => `
+          <button class="btn inv-subtab-btn" data-subtab="${t.id}" style="border:none; border-radius:0; border-bottom:2px solid ${invSubTab === t.id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:9px 12px; font-size:12.5px; font-weight:${invSubTab === t.id ? '700' : '500'}; color:${invSubTab === t.id ? 'var(--text-strong)' : 'var(--text-muted)'};">${esc(t.label)}</button>
+        `).join('')}
       </div>
 
-      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">By item type</div>
-      ${data.byType.length ? `
-        <table style="width:100%; border-collapse:collapse; margin-bottom:32px; font-size:13px;">
-          <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-            <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net</th><th style="padding:8px 6px;">Amount</th>
-          </tr></thead>
-          <tbody>
-            ${data.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
-              <td style="padding:8px 6px;">${esc(g.description)}</td>
-              <td style="padding:8px 6px;">${g.count}</td>
-              <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
-              <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
-              <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
-              <td style="padding:8px 6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px; margin-bottom:32px;">No items in this range.</div>`}
-
-      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">By seller — how much bought from each</div>
-      <div style="margin-bottom:32px;">
-      ${data.bySeller.length ? data.bySeller.map(s => `
-        <details class="card" style="margin-bottom:8px; padding:0;">
-          <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
-            <span style="font-weight:600;">${esc(s.seller)}</span>
-            <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + s.amount : '—'}</span>
-          </summary>
-          <div style="padding:0 16px 14px;">
-            ${s.byType.length ? `
-              <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-                  <th style="padding:6px;">Item type</th><th style="padding:6px;">Items</th><th style="padding:6px;">Net</th><th style="padding:6px;">Amount</th>
-                </tr></thead>
-                <tbody>
-                  ${s.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
-                    <td style="padding:6px;">${esc(g.description)}</td>
-                    <td style="padding:6px;">${g.count}</td>
-                    <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
-                    <td style="padding:6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
-                  </tr>`).join('')}
-                </tbody>
-              </table>
-            ` : ''}
-          </div>
-        </details>
-      `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`}
-      </div>
-
-      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">Loads per day</div>
-      ${data.byDay.length ? `
-        <table style="width:100%; border-collapse:collapse; font-size:13px;">
-          <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-            <th style="padding:8px 6px;">Date</th><th style="padding:8px 6px;">Loads</th><th style="padding:8px 6px;">Net total</th><th style="padding:8px 6px;">Amount total</th>
-          </tr></thead>
-          <tbody>
-            ${data.byDay.map(d => `<tr style="border-bottom:1px solid var(--border-subtle);">
-              <td style="padding:8px 6px;">${esc(d.date)}</td>
-              <td style="padding:8px 6px;">${d.loadCount}</td>
-              <td style="padding:8px 6px;">${d.net} ${esc(data.unit)}</td>
-              <td style="padding:8px 6px;">$${d.amount}</td>
-            </tr>`).join('')}
-          </tbody>
-        </table>
-      ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`}
+      <div id="invSubtabBody">${INV_SUBTAB_RENDER[invSubTab](data)}</div>
     </section>`;
 
   $('btnInvApply').addEventListener('click', () => { invFrom = $('inv_from').value; invTo = $('inv_to').value; renderInventory(); });
   $('btnInvClear').addEventListener('click', () => { invFrom = ''; invTo = ''; renderInventory(); });
+  root.querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => { invSubTab = btn.dataset.subtab; renderInventory(); }));
+
+  // Export menu — kebab toggles a small dropdown; picking an option navigates
+  // to the export route with the current date filter attached (cookie auth
+  // carries automatically, same as any other dashboard page load).
+  const exportMenu = $('invExportMenu');
+  $('btnInvExportMenu').addEventListener('click', (ev) => { ev.stopPropagation(); exportMenu.classList.toggle('hidden'); });
+  document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+  exportMenu.querySelectorAll('.ac-item').forEach(item => item.addEventListener('click', () => {
+    exportMenu.classList.add('hidden');
+    location.href = `/api/loads/inventory/export.${item.dataset.export}${qs}`;
+  }));
 }
 
 // ── BOARD ─────────────────────────────────────────────────────────────────
@@ -1922,11 +1986,30 @@ function stopCamera() {}
 // across loads (same wording every time, easier to total/report on later).
 // "Others" is the escape hatch for anything not on the list, and reveals a
 // free-text box right below the dropdown when chosen.
-const ITEM_DESC_OPTIONS = [
+const ITEM_DESC_OPTIONS_BASE = [
   'Auto cast', 'Al rims(Dirty)', 'Mixed', 'Chrome', 'Sealed units', 'Motors',
   'Al combo', 'Steel combo', 'Alternator', 'Ac compressor', 'Starter',
 ];
 const ITEM_DESC_OTHER = 'Others';
+
+// Custom descriptions typed via "Others…" on a PREVIOUS load — per Apsara
+// 2026-08-15 ("when something gets added in others, it should get added to
+// existing list of description"). Fetched fresh each time the load modal
+// opens (see resetLoadModal/openEditLoadModal) and appended after the base
+// list, so a description typed once via "Others…" shows up as a normal
+// selectable option on every load after that, not just this session's.
+let customItemTypes = [];
+async function refreshCustomItemTypes() {
+  try { customItemTypes = await api('/api/item-types'); }
+  catch (err) { customItemTypes = []; } // best-effort — dropdown just falls back to the base list
+}
+// What renderItemRows actually renders — base list plus any custom ones not
+// already on it (case-insensitive), so a custom entry that happens to match
+// a base option in different casing doesn't show up twice.
+function itemDescOptions() {
+  const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
+  return ITEM_DESC_OPTIONS_BASE.concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())));
+}
 
 // Live-recomputes ONE row's net weight (gross - tare) and amount (net *
 // price) directly from that row's own inputs — called on every input event
@@ -1956,11 +2039,12 @@ function renderItemRows() {
   // throwing — which is why Add Item/Save Load looked completely broken).
   const rowsHtml = currentLoadItems.map((it, i) => {
     const desc = it.description || '';
-    const isPreset = ITEM_DESC_OPTIONS.includes(desc);
-    const isOther = desc && !isPreset; // non-empty, not on the list -> came from the "Others" box
+    const descOptions = itemDescOptions();
+    const isPreset = descOptions.includes(desc);
+    const isOther = desc && !isPreset; // non-empty, not on the (base + custom) list -> came from the "Others" box
     const selectVal = isPreset ? desc : (isOther ? ITEM_DESC_OTHER : '');
     const optionsHtml = ['<option value="" disabled ' + (selectVal ? '' : 'selected') + '>Select item…</option>']
-      .concat(ITEM_DESC_OPTIONS.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
+      .concat(descOptions.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
       .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
       .join('');
     const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
@@ -2272,23 +2356,35 @@ function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
   setTimeout(() => document.addEventListener('click', outsideClick, true), 0);
 }
 
+// tare_weight defaults to "0" now, not blank — per Apsara 2026-08-15 ("by
+// default tare should be zero, unless user overrides"): most items on this
+// scale aren't in a container/vehicle with its own tare weight, so typing
+// "0" on every single row was pure friction. Still a plain editable input —
+// override it same as before for anything that actually has a tare.
+// validateItemsBeforeSave/the item filter above both EXCLUDE tare_weight
+// from "does this row have data" on purpose, so an untouched spare row
+// (still showing the "0" default, nothing else filled in) isn't wrongly
+// treated as a real item requiring a description.
 function blankLoadItem() {
-  return { description: '', gross_weight: '', tare_weight: '', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
 }
 
-// Edge Metals is always the seller on every load now, per Apsara — the
-// field stays visible (for consistency with the PDF) but is locked
-// (disabled input) rather than removed outright, so it's still obvious on
-// screen who the seller is without anyone being able to accidentally type
-// over it.
-const SELLER_FIXED_NAME = 'Edge Metals Inc.';
+// Edge Trading is always the BUYER on every load — per Apsara 2026-08-15
+// ("no. buyer should be edge trading"), correcting the field that used to be
+// fixed here (it was "Seller" = "Edge Metals Inc.", backwards: Edge Trading
+// is the one buying the scrap, so it's the buyer, and the outside company is
+// the seller). Field stays visible (locked/disabled input) rather than
+// removed, so it's still obvious on screen who the buyer is without anyone
+// being able to accidentally type over it. See helpers/loads.js's
+// getInventoryReport and pdf.js — both read the SELLER field now (the
+// editable one, below) for the counterparty's name.
+const BUYER_FIXED_NAME = 'Edge Trading';
 
-// ── Address Book integration on the Buyer (= "Seller" on the document,
-// see pdf.js's relabeling comment) name field — per Apsara 2026-08-15:
-// typing a name here should suggest existing /address-book entries;
-// picking one fills in the address; a name that matches NOTHING gets
-// both name+address saved back to the Address Book automatically once the
-// load save succeeds, so the book grows on its own. Cache is small (same
+// ── Address Book integration on the Seller name field — per Apsara
+// 2026-08-15: typing a name here should suggest existing /address-book
+// entries; picking one fills in the address; a name that matches NOTHING
+// gets both name+address saved back to the Address Book automatically once
+// the load save succeeds, so the book grows on its own. Cache is small (same
 // "let the client filter" reasoning as api.js's own comment on this route)
 // and refreshed every time the load modal opens, not just once per page
 // load, so a Sync-from-Doc or manual add elsewhere is picked up promptly.
@@ -2315,18 +2411,24 @@ function todayLocalDateStr() {
 function resetLoadModal() {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_buyer', 'ld_buyer_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
-  if ($('ld_seller')) $('ld_seller').value = SELLER_FIXED_NAME;
+  if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
+  // Re-render after the fetch lands so any description typed via "Others…"
+  // on a previous load shows up as a real option, not just the base list —
+  // renderItemRows() above already ran synchronously with whatever
+  // customItemTypes held before this call (usually last load modal's data,
+  // or empty on first open), so this catches it up.
+  refreshCustomItemTypes().then(renderItemRows);
 }
 
 // Opens the SAME modal used for creating a load, pre-filled from an existing
@@ -2349,17 +2451,18 @@ function openEditLoadModal(load) {
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
-  if ($('ld_date'))           $('ld_date').value           = load.date || '';
-  if ($('ld_seller'))         $('ld_seller').value         = SELLER_FIXED_NAME;
-  if ($('ld_buyer'))          $('ld_buyer').value          = load.buyer || '';
-  if ($('ld_buyer_address'))  $('ld_buyer_address').value  = load.buyer_address || '';
-  if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
+  if ($('ld_date'))            $('ld_date').value            = load.date || '';
+  if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
+  if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
+  if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
+  if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
+  refreshCustomItemTypes().then(renderItemRows);
   $('loadModal').classList.remove('hidden');
 }
 
@@ -2661,15 +2764,15 @@ function renderLoads(loads) {
         <div class="modal-body">
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
-            <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name" disabled></div>
+            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field" style="position:relative;">
-              <label>Buyer</label>
-              <input id="ld_buyer" placeholder="Buyer name" autocomplete="off">
-              <div id="ld_buyer_ac" class="ac-dropdown hidden"></div>
+              <label>Seller</label>
+              <input id="ld_seller" placeholder="Seller name" autocomplete="off">
+              <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label>Buyer address</label><textarea id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
@@ -2708,7 +2811,9 @@ function renderLoads(loads) {
 function validateItemsBeforeSave(items) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const hasAnyData = it.description || it.gross_weight || it.tare_weight || it.price;
+    // Tare excluded here — see blankLoadItem's comment (defaults to "0" now,
+    // which would otherwise make an untouched spare row look "filled in").
+    const hasAnyData = it.description || it.gross_weight || it.price;
     if (!hasAnyData) continue;
     const label = it.description ? `"${it.description}"` : `#${i + 1}`;
     if (!it.description || !String(it.description).trim()) return `Item ${label}: description is required.`;
@@ -2737,13 +2842,19 @@ function wireLoadsEvents() {
   // per-row inside renderItemRows() now (re-attached every render since
   // rows come and go) — nothing load-level left to wire here for weights.
 
-  // ── Address Book autocomplete on Buyer name ────────────────────────────
-  const acBox = $('ld_buyer_ac');
+  // ── Address Book autocomplete on Seller name ───────────────────────────
+  const acBox = $('ld_seller_ac');
   const closeAc = () => { acBox.classList.add('hidden'); acBox.innerHTML = ''; };
-  $('ld_buyer').addEventListener('input', () => {
-    const q = $('ld_buyer').value.trim().toLowerCase();
+  $('ld_seller').addEventListener('input', () => {
+    const q = $('ld_seller').value.trim().toLowerCase();
     if (!q) { closeAc(); return; }
-    const matches = addressBookCache.filter(e => (e.aliases || []).some(a => a.toLowerCase().includes(q))).slice(0, 8);
+    // Cap raised 8->40 per Apsara 2026-08-15 ("not showing all matching
+    // hits") — with several similarly-named contacts (e.g. multiple "...
+    // Metals" companies), 8 was cutting off real matches. The dropdown
+    // already scrolls (.ac-dropdown's max-height), so this is just a sanity
+    // ceiling against an unbounded list for a single generic letter, not a
+    // meaningful "top N" cutoff.
+    const matches = addressBookCache.filter(e => (e.aliases || []).some(a => a.toLowerCase().includes(q))).slice(0, 40);
     if (!matches.length) { closeAc(); return; }
     acBox.innerHTML = matches.map((e, i) => `<div class="ac-item" data-idx="${i}">${esc(e.aliases.join(' / '))}</div>`).join('');
     acBox.classList.remove('hidden');
@@ -2751,13 +2862,13 @@ function wireLoadsEvents() {
       el.addEventListener('mousedown', (ev) => { // mousedown (not click) fires BEFORE the input's blur, so blur's setTimeout close below can't race this selection
         ev.preventDefault();
         const entry = matches[i];
-        $('ld_buyer').value = entry.aliases[0];
-        $('ld_buyer_address').value = entry.raw;
+        $('ld_seller').value = entry.aliases[0];
+        $('ld_seller_address').value = entry.raw;
         closeAc();
       });
     });
   });
-  $('ld_buyer').addEventListener('blur', () => setTimeout(closeAc, 150));
+  $('ld_seller').addEventListener('blur', () => setTimeout(closeAc, 150));
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
@@ -2772,7 +2883,7 @@ function wireLoadsEvents() {
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const items = currentLoadItems
-        .filter(it => (it.description || it.gross_weight || it.tare_weight || it.price))
+        .filter(it => (it.description || it.gross_weight || it.price))
         .map(it => ({
           description: it.description,
           gross_weight: it.gross_weight || null,
@@ -2792,11 +2903,26 @@ function wireLoadsEvents() {
           tare_photo_link : it.tare_photo_link  || null,
           tare_photo_drive_id : it.tare_photo_drive_id  || null,
         }));
+      // Auto-grow the item-type list — any description on this load that
+      // isn't already on the base+custom list came from "Others…" and is
+      // genuinely new. Fire-and-forget, same reasoning as the Address Book
+      // auto-save just above: the load itself is what matters, this is a
+      // convenience that must never block or fail the load save. Per Apsara
+      // 2026-08-15 ("when something gets added in others, it should get
+      // added to existing list of description").
+      const knownDescs = itemDescOptions().map(d => d.toLowerCase());
+      const newDescs = [...new Set(items.map(it => it.description).filter(Boolean))]
+        .filter(d => !knownDescs.includes(d.toLowerCase()));
+      newDescs.forEach(d => {
+        api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: d }) })
+          .then(() => { customItemTypes.push(d); })
+          .catch(() => {});
+      });
       const payload = {
         date: $('ld_date').value || null,
-        seller: SELLER_FIXED_NAME,
-        buyer: $('ld_buyer').value.trim() || null,
-        buyer_address: $('ld_buyer_address').value.trim() || null,
+        buyer: BUYER_FIXED_NAME,
+        seller: $('ld_seller').value.trim() || null,
+        seller_address: $('ld_seller_address').value.trim() || null,
         description: desc,
         items,
         weight_unit: 'lb',
@@ -2813,9 +2939,9 @@ function wireLoadsEvents() {
       // saved successfully, so a failure here must never surface as a load-
       // save error. Per Apsara 2026-08-15 ("if its a new seller, then both
       // name and address needs to be propogated to address book and saved").
-      if (payload.buyer && payload.buyer_address && !addressBookExactMatch(payload.buyer)) {
-        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.buyer], raw: payload.buyer_address }) })
-          .then(() => { addressBookCache.push({ aliases: [payload.buyer], raw: payload.buyer_address }); })
+      if (payload.seller && payload.seller_address && !addressBookExactMatch(payload.seller)) {
+        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address }) })
+          .then(() => { addressBookCache.push({ aliases: [payload.seller], raw: payload.seller_address }); })
           .catch(() => {});
       }
       stopCamera();

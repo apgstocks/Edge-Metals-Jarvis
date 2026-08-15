@@ -88,10 +88,18 @@ function nextLoadId(loads) {
 // a warning: she explicitly confirmed a load should NOT be saveable with an
 // item that's only gross-weighed and waiting on tare (e.g. truck hasn't
 // returned yet) — that item must be completed (or removed) before Save
-// works at all, no partial saves. Seller is always the fixed constant sent
-// by both dashboard and mobile-app clients, but is checked here too as a
-// real, non-bypassable gate rather than trusted from the request body —
-// this function is the single choke point both POST /api/loads and
+// works at all, no partial saves.
+//
+// FIELD MAPPING (corrected 2026-08-15 per Apsara, "no. buyer should be edge
+// trading"): `seller`/`seller_address` are the free-text, EDITABLE fields —
+// the outside company Edge Trading is buying scrap FROM, entered by
+// dashboard/mobile-app staff (with Address Book autocomplete). `buyer`/
+// `buyer_address` are the FIXED constant, always "Edge Trading" — Edge
+// Trading is the one buying the material, so it's the buyer. Required here
+// is `entry.seller`, not `entry.buyer`: a load must have a real counterparty
+// name, while the buyer side is always the same and never blank anyway.
+// This is a real, non-bypassable gate rather than trusted from the request
+// body — this function is the single choke point both POST /api/loads and
 // PUT /api/loads/:id run through (via addLoad/editLoad below), so any
 // current or future client hitting the API directly is covered too, not
 // just the two UIs that already validate this client-side first.
@@ -105,7 +113,15 @@ function validateLoadForSave(entry) {
     }
     const items = Array.isArray(entry.items) ? entry.items : [];
     items.forEach((it, i) => {
-        const hasAnyData = it.description || it.gross_weight || it.tare_weight || it.price;
+        // Tare EXCLUDED from this check, per Apsara 2026-08-15 ("by default
+        // tare should be zero, unless user overrides") — the dashboard/mobile
+        // forms now pre-fill every new item row's tare with "0" rather than
+        // leaving it blank, which would otherwise make hasAnyData true for
+        // an untouched spare row (a non-empty "0" is truthy) and wrongly
+        // force it through full validation just for existing. A row only
+        // counts as "an item" once description, gross weight, or price is
+        // actually entered.
+        const hasAnyData = it.description || it.gross_weight || it.price;
         if (!hasAnyData) return;
         const label = it.description ? `"${it.description}"` : `#${i + 1}`;
         if (!it.description || !String(it.description).trim()) {
@@ -295,17 +311,13 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     const byDay = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
 
     // Grouped by SELLER — per Apsara 2026-08-15 ("group by seller as well so
-    // that we will know how much we bought overall from that seller"). NOTE:
-    // the outside party's name lives in `l.buyer`/`l.buyer_address`, not
-    // `l.seller` — `l.seller` is a fixed constant ("Edge Metals Inc.", the
-    // company itself) that the dashboard/mobile forms hardcode into a
-    // disabled field, while the free-text field the UI labels "Buyer" is the
-    // one the generated PDF actually relabels to "Seller:" (see pdf.js).
-    // This grouping follows that same real-world meaning, not the raw field
-    // name, or "seller" here would silently show one entry: Edge Metals Inc.
+    // that we will know how much we bought overall from that seller").
+    // l.seller/l.seller_address hold the outside party's name+address —
+    // l.buyer is the fixed "Edge Trading" constant (see helpers/loads.js's
+    // top-of-file note and pdf.js's comment on the 2026-08-15 field swap).
     const sellerMap = new Map();
     for (const l of filtered) {
-        const key = (l.buyer && String(l.buyer).trim()) || 'Unknown seller';
+        const key = (l.seller && String(l.seller).trim()) || 'Unknown seller';
         if (!sellerMap.has(key)) sellerMap.set(key, { seller: key, loadCount: 0, net: 0, amount: 0, items: [] });
         const s = sellerMap.get(key);
         s.loadCount += 1;
