@@ -1097,7 +1097,26 @@ function createApi() {
     });
 
     // ── Static dashboard ──────────────────────────────────────────────────────
-    app.use('/', express.static(path.join(cfg.ROOT, 'dashboard')));
+    // no-cache on .html specifically — added 2026-08-15 after a real support
+    // case: two rounds of PDF fixes landed in dashboard/index.html, both
+    // pushed and pulled onto the VM, and Apsara still saw old button
+    // behavior in her browser. express.static's default sends NO
+    // Cache-Control header at all, which leaves each browser free to use its
+    // own heuristic freshness lifetime for static-looking files — exactly
+    // the kind of silent staleness that looks identical to "the deploy
+    // didn't happen" from the user's side but isn't fixable by anything on
+    // the server. Forcing revalidation on every load costs nothing (this
+    // dashboard is a handful of KB, not a CDN-scale asset) and removes an
+    // entire class of "I pulled the fix, why don't I see it" confusion.
+    // Icons/manifest are left on express.static's default — they're inert
+    // once generated and don't carry this risk.
+    app.use('/', express.static(path.join(cfg.ROOT, 'dashboard'), {
+        setHeaders: (res, filePath) => {
+            if (filePath.endsWith('.html')) {
+                res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+            }
+        },
+    }));
 
     return app;
 }
