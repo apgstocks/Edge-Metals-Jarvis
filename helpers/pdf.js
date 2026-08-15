@@ -361,11 +361,16 @@ function generateLoadPdf(load, opts = {}) {
             // inputs, API body, helpers/loads.js) untouched, so this stays
             // contained to the document text rather than rippling into the
             // dashboard form, the mobile app, or the data model.
+            // Order matters here: drawFieldBox lays two-col fields out
+            // left-to-right, top-to-bottom (index 0/1 = row 1, index 2 = row
+            // 2 col 1) — so [Date, Created, Seller] puts Created directly
+            // beside Date on row 1, and Seller directly beneath Date on
+            // row 2, per Apsara 2026-08-15.
             drawLetterhead(doc, 'Load Ticket', load);
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
-                { label: 'Seller:',  value: load.buyer },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
+                { label: 'Seller:',  value: load.buyer },
             ], [
                 { label: 'Seller Address:', value: load.buyer_address },
                 { label: 'Description:',    value: load.description },
@@ -455,11 +460,14 @@ function generateWeightsPdf(load, opts = {}) {
             // redundant. Labels/Created field match generateLoadPdf — see
             // its comments for why "Buyer" became "Seller" and where
             // Created: comes from.
+            // Same [Date, Created, Seller] ordering as generateLoadPdf — see
+            // its comment for why that puts Created beside Date and Seller
+            // beneath Date.
             drawLetterhead(doc, 'Weight Record', load);
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
-                { label: 'Seller:',  value: load.buyer },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
+                { label: 'Seller:',  value: load.buyer },
             ], [
                 { label: 'Seller Address:', value: load.buyer_address },
                 { label: 'Description:',    value: load.description },
