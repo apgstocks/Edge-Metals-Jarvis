@@ -2243,7 +2243,7 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>
+        ${ROLE !== 'staff' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
