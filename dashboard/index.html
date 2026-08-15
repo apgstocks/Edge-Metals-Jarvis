@@ -121,6 +121,7 @@ input::placeholder { color:var(--steel-500); }
 .spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.nav-section-label { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--steel-500); padding:6px 13px 6px; }
 .nav-btn:hover { background:var(--steel-800); color:#fff; }
 .nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
 .row-hover:hover { background:var(--surface-hover); }
@@ -371,22 +372,34 @@ let ROLE = 'user';
 let CURRENT_TAB = 'board';
 let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pending — WA rotates the QR string every ~20-30s until scanned
 
+// Grouped for the sidebar (Apsara 2026-08-15: "admin console is unstructured").
+// Order within NAV_ITEMS now reflects display order — group by group, not
+// insertion history. renderNav() below reads `group` to insert section
+// headers and only shows a header if at least one item in it survives the
+// role filter (e.g. a non-admin 'user' role never sees "System").
 const NAV_ITEMS = [
-  { id: 'board',     label: 'Board' },
-  { id: 'bookings',  label: 'Bookings' },
-  { id: 'truckers',  label: 'Truckers' },
-  { id: 'suppliers', label: 'Suppliers' },
-  { id: 'whatsapp',  label: 'WhatsApp', adminOnly: true },
-  { id: 'contacts',  label: 'Contacts', adminOnly: true },
-  { id: 'email-contacts', label: 'Email Contacts', adminOnly: true },
-  { id: 'address-book', label: 'Address Book', adminOnly: true },
-  { id: 'quote-requests', label: 'Quote Requests', adminOnly: true },
-  { id: 'settings',  label: 'Settings', adminOnly: true },
-  { id: 'bot',       label: 'Bot' },
-  { id: 'tasks',     label: 'Tasks' },
-  { id: 'facts',     label: 'Facts', adminOnly: true },
-  { id: 'loads',     label: 'Loads' },
-  { id: 'inventory', label: 'Inventory' },
+  // Daily ops — the tabs anyone running the yard touches every day.
+  { id: 'board',     label: 'Board',     group: 'Operations' },
+  { id: 'loads',     label: 'Loads',     group: 'Operations' },
+  { id: 'inventory', label: 'Inventory', group: 'Operations' },
+  { id: 'bookings',  label: 'Bookings',  group: 'Operations' },
+  { id: 'truckers',  label: 'Truckers',  group: 'Operations' },
+  { id: 'suppliers', label: 'Suppliers', group: 'Operations' },
+
+  // Jarvis (the bot) itself — behavior, memory, to-dos.
+  { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
+  { id: 'facts',     label: 'Facts', group: 'Bot & Automation', adminOnly: true },
+  { id: 'tasks',     label: 'Tasks', group: 'Bot & Automation' },
+
+  // Who Jarvis talks to and how — channels, directories, inbound requests.
+  { id: 'whatsapp',       label: 'WhatsApp',       group: 'Contacts & Outreach', adminOnly: true },
+  { id: 'contacts',       label: 'Contacts',       group: 'Contacts & Outreach', adminOnly: true },
+  { id: 'email-contacts', label: 'Email Contacts', group: 'Contacts & Outreach', adminOnly: true },
+  { id: 'address-book',   label: 'Address Book',   group: 'Contacts & Outreach', adminOnly: true },
+  { id: 'quote-requests', label: 'Quote Requests', group: 'Contacts & Outreach', adminOnly: true },
+
+  // App-wide configuration.
+  { id: 'settings',  label: 'Settings', group: 'System', adminOnly: true },
 ];
 
 async function api(path, opts = {}) {
@@ -399,9 +412,15 @@ async function api(path, opts = {}) {
 
 function renderNav() {
   const nav = $('sideNav');
-  nav.innerHTML = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin') && (ROLE !== 'staff' || n.id === 'loads')).map(n => `
-    <button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>
-  `).join('');
+  const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin') && (ROLE !== 'staff' || n.id === 'loads'));
+  let lastGroup = null;
+  nav.innerHTML = visible.map(n => {
+    const header = n.group !== lastGroup
+      ? `<div class="nav-section-label"${lastGroup === null ? '' : ' style="margin-top:14px;"'}>${esc(n.group)}</div>`
+      : '';
+    lastGroup = n.group;
+    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>`;
+  }).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     // Address book is its own standalone page (dashboard/address-book.html,
     // served via the /address-book route), not an in-app tab — same session
