@@ -261,4 +261,45 @@ async function renumberLoad(oldId, newId) {
     return renamed;
 }
 
-module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad };
+// Item-type inventory + per-day load rollup across a set of loads —
+// computed FRESH from whatever's currently in loads.json every call, never
+// a separately maintained running counter. Per Apsara 2026-08-15 ("it keeps
+// on adding inventory as per the load creation. if a load gets deleted it
+// should also get modified"): the only way a deleted load automatically
+// disappears from the inventory with zero extra bookkeeping is if nothing
+// was ever incrementally accumulated in the first place — this just
+// re-scans current loads every time it's called (same approach already
+// used for the yard report's all-time section), so a delete is reflected on
+// the very next read, no separate cleanup step needed anywhere.
+// `from`/`to` are optional 'YYYY-MM-DD' strings (inclusive) — a load with no
+// date is excluded whenever a filter is active (can't place it in range),
+// but included when no filter is applied at all.
+function getInventoryReport(allLoads, { from, to } = {}) {
+    const { groupItemsByDescription } = require('./pdf');
+    const filtered = (from || to)
+        ? allLoads.filter(l => l.date && (!from || l.date >= from) && (!to || l.date <= to))
+        : allLoads;
+
+    const items = filtered.flatMap(l => Array.isArray(l.items) ? l.items : []);
+    const byType = items.length ? groupItemsByDescription(items) : [];
+
+    const dayMap = new Map();
+    for (const l of filtered) {
+        const key = l.date || 'Unknown date';
+        if (!dayMap.has(key)) dayMap.set(key, { date: key, loadCount: 0, net: 0, amount: 0 });
+        const d = dayMap.get(key);
+        d.loadCount += 1;
+        d.net += l.net_weight || 0;
+        d.amount += l.amount || 0;
+    }
+    const byDay = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
+
+    return {
+        loadCount: filtered.length,
+        unit: filtered.find(l => l.weight_unit)?.weight_unit || 'lb',
+        byType,
+        byDay,
+    };
+}
+
+module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad, getInventoryReport };

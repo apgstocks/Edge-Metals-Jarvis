@@ -312,6 +312,12 @@ body { overflow-y:auto; }
       <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
     </div>
   </div>
+  <!-- Loads | Inventory — visible to every role including staff, per Apsara
+       2026-08-15 ("everyone when they open the app"). Loads renders first
+       on every login/boot (see bootLoads()) — Inventory only fetches once
+       someone actually taps it, per her earlier "unless user specifically
+       opens, it should not open." -->
+  <div id="mobileTabBar" style="display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid var(--steel-800);"></div>
   <div id="viewRoot"></div>
 </div>
 
@@ -1470,6 +1476,76 @@ async function doLogin() {
   }
 }
 
+// Loads | Inventory — per Apsara 2026-08-15. Loads is the default every
+// time the app boots or you sign in (bootLoads() below always resets to it
+// first) — Inventory is a second tab everyone can see, but its data is only
+// fetched once someone actually taps it (renderCurrentMobileTab does the
+// fetch, and it's never called for 'inventory' until that tap happens).
+let currentMobileTab = 'loads';
+function renderMobileTabs() {
+  $('mobileTabBar').innerHTML = `
+    <button class="mobile-tab-btn" data-tab="loads" style="padding:7px 16px; border-radius:7px; border:none; font-size:12.5px; font-weight:600; cursor:pointer; background:${currentMobileTab === 'loads' ? 'var(--accent)' : 'transparent'}; color:${currentMobileTab === 'loads' ? '#0C0E10' : 'var(--text-faint)'};">Loads</button>
+    <button class="mobile-tab-btn" data-tab="inventory" style="padding:7px 16px; border-radius:7px; border:none; font-size:12.5px; font-weight:600; cursor:pointer; background:${currentMobileTab === 'inventory' ? 'var(--accent)' : 'transparent'}; color:${currentMobileTab === 'inventory' ? '#0C0E10' : 'var(--text-faint)'};">Inventory</button>
+  `;
+  $('mobileTabBar').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.tab === currentMobileTab) return;
+    currentMobileTab = b.dataset.tab;
+    renderMobileTabs();
+    renderCurrentMobileTab();
+  }));
+}
+
+async function renderCurrentMobileTab() {
+  try {
+    if (currentMobileTab === 'loads') { renderLoads(await api('/api/loads')); return; }
+    if (currentMobileTab === 'inventory') { await renderInventoryTab(); return; }
+  } catch (err) {
+    // api() already routes a 401 to the login screen; anything else
+    // (network error, 500, etc.) surfaces here instead of a blank screen.
+    if (err.message !== 'unauthorized') {
+      $('viewRoot').innerHTML = '<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">' + esc(err.message) + '</div>';
+    }
+  }
+}
+
+let mobInvFrom = '', mobInvTo = '';
+async function renderInventoryTab() {
+  const params = new URLSearchParams();
+  if (mobInvFrom) params.set('from', mobInvFrom);
+  if (mobInvTo) params.set('to', mobInvTo);
+  const qs = params.toString() ? '?' + params.toString() : '';
+  const data = await api('/api/loads/inventory' + qs);
+  $('viewRoot').innerHTML = `
+    <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
+      <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <div class="field" style="flex:1; margin-bottom:0;"><label>From</label><input id="inv_from" type="date" value="${esc(mobInvFrom)}"></div>
+        <div class="field" style="flex:1; margin-bottom:0;"><label>To</label><input id="inv_to" type="date" value="${esc(mobInvTo)}"></div>
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:18px;">
+        <button id="btnInvApply" class="btn btn-primary" style="flex:1;">Apply</button>
+        <button id="btnInvClear" class="btn" style="flex:1;">Clear</button>
+      </div>
+      <div style="background:var(--surface-sunken); border-radius:8px; padding:14px; margin-bottom:18px;">
+        <div style="font-size:26px; font-weight:600; color:var(--text-strong);">${data.loadCount}</div>
+        <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-top:4px;">load${data.loadCount === 1 ? '' : 's'} ${(mobInvFrom || mobInvTo) ? 'in range' : 'total'}</div>
+      </div>
+      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">By item type</div>
+      ${data.byType.length ? data.byType.map(g => `
+        <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
+          <span style="color:var(--text-strong);">${esc(g.description)}</span>
+          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${g.count} item${g.count === 1 ? '' : 's'} · ${g.net} ${esc(data.unit)}</span>
+        </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`}
+      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Loads per day</div>
+      ${data.byDay.length ? data.byDay.map(d => `
+        <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
+          <span style="color:var(--text-strong);">${esc(d.date)}</span>
+          <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${d.loadCount} load${d.loadCount === 1 ? '' : 's'} · $${d.amount}</span>
+        </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`}
+    </section>`;
+  $('btnInvApply').addEventListener('click', () => { mobInvFrom = $('inv_from').value; mobInvTo = $('inv_to').value; renderInventoryTab(); });
+  $('btnInvClear').addEventListener('click', () => { mobInvFrom = ''; mobInvTo = ''; renderInventoryTab(); });
+}
+
 async function bootLoads() {
   showAppShell();
   $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : ROLE === 'staff' ? 'Staff access' : 'Standard access';
@@ -1478,11 +1554,14 @@ async function bootLoads() {
   // server-side in api.js, so a non-admin session can't actually use what's
   // behind this button even if it were shown.
   $('btnAdminSettings').classList.toggle('hidden', ROLE !== 'admin');
+  // Always land on Loads first, per Apsara ("loads should open by
+  // default") — every boot/login resets the tab state rather than
+  // remembering whatever was open last time.
+  currentMobileTab = 'loads';
+  renderMobileTabs();
   try {
-    renderLoads(await api('/api/loads'));
+    await renderCurrentMobileTab();
   } catch (err) {
-    // api() already routes a 401 to the login screen; anything else
-    // (network error, 500, etc.) surfaces here instead of a blank screen.
     if (err.message !== 'unauthorized') {
       $('viewRoot').innerHTML = '<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">' + esc(err.message) + '</div>';
     }

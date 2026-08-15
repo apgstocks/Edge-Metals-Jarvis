@@ -614,6 +614,19 @@ function createApi() {
             res.json(loadLoads());
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // Item-type inventory + per-day rollup — per Apsara 2026-08-15. Computed
+    // live on every request from helpers/loads.js's getInventoryReport, not
+    // a stored/cached value, so a deleted load is reflected on the very
+    // next call with no extra cleanup step. Optional ?from=YYYY-MM-DD and/or
+    // ?to=YYYY-MM-DD (inclusive) narrow the range; omitted = all-time.
+    // Visible to every role (staff included) — same as the rest of
+    // /api/loads/* under STAFF_ALLOWED_PATH_PREFIXES, no extra gate needed.
+    app.get('/api/loads/inventory', (req, res) => {
+        try {
+            const { loadLoads, getInventoryReport } = require('./helpers/loads');
+            res.json(getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     app.get('/api/loads/:id', (req, res) => {
         try {
             const { getLoad } = require('./helpers/loads');

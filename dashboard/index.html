@@ -378,6 +378,7 @@ const NAV_ITEMS = [
   { id: 'tasks',     label: 'Tasks' },
   { id: 'facts',     label: 'Facts', adminOnly: true },
   { id: 'loads',     label: 'Loads' },
+  { id: 'inventory', label: 'Inventory' },
 ];
 
 async function api(path, opts = {}) {
@@ -445,9 +446,93 @@ async function loadTab(tab) {
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts'));
     if (tab === 'loads') return renderLoads(await api('/api/loads'));
+    // Deliberately NOT fetched anywhere during boot/init — loadTab() only
+    // runs this when the Inventory nav button is actually clicked, same
+    // lazy-per-tab pattern every tab above already uses. That's what
+    // satisfies Apsara's "unless user specifically opens, it should not
+    // open" — no special-casing needed, it falls out of this switch already
+    // being on-demand.
+    if (tab === 'inventory') return renderInventory();
   } catch (err) {
     root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`;
   }
+}
+
+// ── INVENTORY ─────────────────────────────────────────────────────────────
+// Item-type inventory across loads, computed live server-side (helpers/
+// loads.js's getInventoryReport) every time this tab is opened or its date
+// filter changes — never a running counter, so a deleted load's items just
+// stop appearing on the very next fetch with zero extra bookkeeping. Per
+// Apsara 2026-08-15.
+let invFrom = '', invTo = '';
+async function renderInventory() {
+  const params = new URLSearchParams();
+  if (invFrom) params.set('from', invFrom);
+  if (invTo) params.set('to', invTo);
+  const qs = params.toString() ? '?' + params.toString() : '';
+  const root = $('viewRoot');
+  root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
+  let data;
+  try { data = await api('/api/loads/inventory' + qs); }
+  catch (err) { root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`; return; }
+
+  root.innerHTML = `
+    <section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// Inventory</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Item-type inventory</h2>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Computed live from every current load — deleting a load removes its items here automatically, nothing is tallied separately.</div>
+
+      <div style="display:flex; gap:10px; align-items:end; margin-bottom:24px; flex-wrap:wrap;">
+        <div class="field" style="margin-bottom:0;"><label>From</label><input id="inv_from" type="date" value="${esc(invFrom)}"></div>
+        <div class="field" style="margin-bottom:0;"><label>To</label><input id="inv_to" type="date" value="${esc(invTo)}"></div>
+        <button id="btnInvApply" class="btn btn-primary">Apply</button>
+        <button id="btnInvClear" class="btn">Clear</button>
+      </div>
+
+      <div class="card" style="padding:18px 20px; margin-bottom:24px; display:inline-block;">
+        <span style="font-family:var(--font-mono); font-size:28px; font-weight:600; color:var(--text-strong);">${data.loadCount}</span>
+        <span style="font-family:var(--font-mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-left:10px;">load${data.loadCount === 1 ? '' : 's'} ${(invFrom || invTo) ? 'in range' : 'total'}</span>
+      </div>
+
+      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">By item type</div>
+      ${data.byType.length ? `
+        <table style="width:100%; border-collapse:collapse; margin-bottom:32px; font-size:13px;">
+          <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+            <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net</th><th style="padding:8px 6px;">Amount</th>
+          </tr></thead>
+          <tbody>
+            ${data.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
+              <td style="padding:8px 6px;">${esc(g.description)}</td>
+              <td style="padding:8px 6px;">${g.count}</td>
+              <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
+              <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
+              <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
+              <td style="padding:8px 6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px; margin-bottom:32px;">No items in this range.</div>`}
+
+      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">Loads per day</div>
+      ${data.byDay.length ? `
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+            <th style="padding:8px 6px;">Date</th><th style="padding:8px 6px;">Loads</th><th style="padding:8px 6px;">Net total</th><th style="padding:8px 6px;">Amount total</th>
+          </tr></thead>
+          <tbody>
+            ${data.byDay.map(d => `<tr style="border-bottom:1px solid var(--border-subtle);">
+              <td style="padding:8px 6px;">${esc(d.date)}</td>
+              <td style="padding:8px 6px;">${d.loadCount}</td>
+              <td style="padding:8px 6px;">${d.net} ${esc(data.unit)}</td>
+              <td style="padding:8px 6px;">$${d.amount}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No loads in this range.</div>`}
+    </section>`;
+
+  $('btnInvApply').addEventListener('click', () => { invFrom = $('inv_from').value; invTo = $('inv_to').value; renderInventory(); });
+  $('btnInvClear').addEventListener('click', () => { invFrom = ''; invTo = ''; renderInventory(); });
 }
 
 // ── BOARD ─────────────────────────────────────────────────────────────────
