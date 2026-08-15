@@ -2,8 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover so the standalone (home-screen) app can paint into the
+     iPhone's safe areas instead of leaving white bars around the notch. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jarvis — Edge Metals Ops</title>
+
+<!-- ── Installable-on-iPhone support, added 2026-08-12 ────────────────────────
+     There is no native iOS app: a free Apple Developer account cannot
+     distribute one (7-day expiry, cable install only, no TestFlight), and the
+     iOS Simulator has no camera, so a native build could not even be tested
+     against this app's core job of photographing the scale.
+     None of that is needed. iOS Safari already supports the camera capture
+     this dashboard uses (the capture="environment" inputs further down), and
+     the site is served over HTTPS via Caddy, which is Safari's requirement for
+     camera access. Add to Home Screen then gives a real app icon that opens
+     fullscreen with no browser chrome — same code, no App Store, no signing,
+     no expiry.
+     apple-mobile-web-app-capable is what makes iOS honour standalone display;
+     iOS ignores the manifest's own "display" field, so both are needed. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0C0E10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Edge Loads">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
