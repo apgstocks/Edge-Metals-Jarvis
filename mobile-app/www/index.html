@@ -334,7 +334,14 @@ body { overflow-y:auto; }
     </div>
     <div class="modal-body">
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Renumber a load</div>
-      <div class="field"><label>Current load #</label><input id="as_renumber_old" placeholder="e.g. EDGE_07"></div>
+      <!-- A dropdown, not a free-text field — per Apsara 2026-08-15 ("what
+           is this current load and new load, i want system to generate
+           current load"): typing the exact existing id from memory is
+           error-prone, so the system lists the real current loads instead
+           of asking her to type one. Populated fresh every time the modal
+           opens (see btnAdminSettings's click handler) from /api/loads —
+           always the actual current set, never stale. -->
+      <div class="field"><label>Current load #</label><select id="as_renumber_old"><option value="">Loading loads…</option></select></div>
       <div class="field" style="margin-top:10px;"><label>New load #</label><input id="as_renumber_new" placeholder="e.g. EDGE_50"></div>
       <button id="btnDoRenumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Renumber</button>
       <div id="as_renumber_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
@@ -1487,13 +1494,24 @@ $('btnSignout').addEventListener('click', () => {
 });
 
 // ── Admin settings modal ─────────────────────────────────────────────────
-// Per Apsara 2026-08-15. Fetches the current yard_report_enabled value on
-// EVERY open (not cached) so it can't show a stale checkbox state if it was
-// changed from the dashboard since the app was last opened.
+// Per Apsara 2026-08-15. Fetches the current yard_report_enabled value AND
+// the live list of loads (for the renumber dropdown) on EVERY open — not
+// cached — so neither can show something stale if it changed from the
+// dashboard, or a new load was added, since the app was last opened.
 $('btnAdminSettings').addEventListener('click', async () => {
-  $('as_renumber_old').value = ''; $('as_renumber_new').value = ''; $('as_renumber_msg').textContent = '';
+  $('as_renumber_new').value = ''; $('as_renumber_msg').textContent = '';
   $('as_report_msg').textContent = '';
   $('adminSettingsModal').classList.remove('hidden');
+  const oldSelect = $('as_renumber_old');
+  oldSelect.innerHTML = '<option value="">Loading loads…</option>';
+  try {
+    const loads = await api('/api/loads');
+    oldSelect.innerHTML = loads.length
+      ? loads.map(l => `<option value="${esc(l.id)}">${esc(l.id)} — ${esc(l.seller || 'Unnamed seller')}${l.date ? ' — ' + esc(l.date) : ''}</option>`).join('')
+      : '<option value="">No loads yet</option>';
+  } catch (err) {
+    oldSelect.innerHTML = '<option value="">Could not load list</option>';
+  }
   try {
     const settings = await api('/api/settings');
     $('as_report_enabled').checked = !!settings.yard_report_enabled;
@@ -1517,7 +1535,16 @@ $('btnDoRenumber').addEventListener('click', async () => {
     const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId }) });
     msg.style.color = 'var(--status-success, #3fae55)';
     msg.textContent = res.warning ? `Renumbered — ${res.warning}` : `Renumbered ${oldId} → ${newId}.`;
-    $('as_renumber_old').value = ''; $('as_renumber_new').value = '';
+    $('as_renumber_new').value = '';
+    // Refresh the dropdown — oldId no longer exists under that name, so
+    // re-fetching keeps the list honest instead of leaving a now-wrong
+    // option sitting there.
+    try {
+      const loads = await api('/api/loads');
+      $('as_renumber_old').innerHTML = loads.length
+        ? loads.map(l => `<option value="${esc(l.id)}">${esc(l.id)} — ${esc(l.seller || 'Unnamed seller')}${l.date ? ' — ' + esc(l.date) : ''}</option>`).join('')
+        : '<option value="">No loads yet</option>';
+    } catch {}
   } catch (err) {
     msg.style.color = 'var(--status-danger)';
     msg.textContent = err.message;

@@ -303,9 +303,19 @@ function formatCreatedAt(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
     if (isNaN(d.getTime())) return '—';
+    // Explicit timeZone per Apsara 2026-08-15 ("i want this time in...los
+    // angeles local time") — without it, toLocaleString renders in whatever
+    // timezone the SERVER PROCESS happens to be running in (confirmed this
+    // sandbox is Asia/Calcutta; the production VM is whatever it's set to,
+    // almost certainly not Pacific), not the business's own timezone. Edge
+    // Trading's letterhead address is Los Angeles, so both this field
+    // ("Created:") and drawLetterhead's "Generated" line (which calls this
+    // same function) need to read correctly for someone in LA regardless of
+    // what timezone the server itself happens to be in.
     return d.toLocaleString('en-US', {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit',
+        timeZone: 'America/Los_Angeles', timeZoneName: 'short',
     });
 }
 
