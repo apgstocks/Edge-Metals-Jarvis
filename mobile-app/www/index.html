@@ -1596,41 +1596,21 @@ async function renderCurrentMobileTab() {
 }
 
 // Sub-tabs — mirrors dashboard/index.html, see its comment (Apsara
-// 2026-08-15: "small tabs like load summary, per day, per seller. by
-// default by item type should appear").
+// 2026-08-15). "Summary" sub-tab removed same day per Apsara ("remove
+// summary tab in inventory").
 const INV_SUBTABS = [
   { id: 'byType',  label: 'Item type' },
-  { id: 'summary', label: 'Summary' },
   { id: 'byDay',   label: 'Per day' },
   { id: 'bySeller', label: 'Per seller' },
 ];
 let mobInvFrom = '', mobInvTo = '', mobInvSubTab = 'byType';
 
-function mobInvSummaryTotals(data) {
-  const sum = (key) => data.byType.reduce((acc, g) => acc + (g[key] || 0), 0);
-  return { gross: Math.round(sum('gross') * 100) / 100, tare: Math.round(sum('tare') * 100) / 100, net: Math.round(sum('net') * 100) / 100, amount: Math.round(sum('amount') * 100) / 100 };
-}
 function mobInvByTypeHtml(data) {
   return data.byType.length ? data.byType.map(g => `
     <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
       <span style="color:var(--text-strong);">${esc(g.description)}</span>
       <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${g.count} item${g.count === 1 ? '' : 's'} · ${g.net} ${esc(data.unit)}</span>
     </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
-}
-function mobInvSummaryHtml(data) {
-  const t = mobInvSummaryTotals(data);
-  const row = (label, value) => `
-    <div style="display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border-subtle); font-size:14px;">
-      <span style="color:var(--text-muted);">${esc(label)}</span>
-      <span style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${esc(value)}</span>
-    </div>`;
-  return `<div style="background:var(--surface-sunken); border-radius:8px; padding:4px 14px;">
-    ${row('Loads', String(data.loadCount) + (mobInvFrom || mobInvTo ? ' in range' : ' total'))}
-    ${row('Gross total', `${t.gross} ${data.unit}`)}
-    ${row('Tare total', `${t.tare} ${data.unit}`)}
-    ${row('Net total', `${t.net} ${data.unit}`)}
-    ${row('Amount total', `$${t.amount}`)}
-  </div>`;
 }
 function mobInvByDayHtml(data) {
   return data.byDay.length ? data.byDay.map(d => `
@@ -1655,7 +1635,7 @@ function mobInvBySellerHtml(data) {
       </div>
     </details>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
 }
-const MOB_INV_SUBTAB_RENDER = { byType: mobInvByTypeHtml, summary: mobInvSummaryHtml, byDay: mobInvByDayHtml, bySeller: mobInvBySellerHtml };
+const MOB_INV_SUBTAB_RENDER = { byType: mobInvByTypeHtml, byDay: mobInvByDayHtml, bySeller: mobInvBySellerHtml };
 
 async function renderInventoryTab() {
   const params = new URLSearchParams();

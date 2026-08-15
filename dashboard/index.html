@@ -478,18 +478,14 @@ async function loadTab(tab) {
 // previously all four views (count card, item-type table, seller list,
 // per-day table) were stacked and always visible together; this switches
 // between them instead, same underlying `data` object, no extra fetch.
+// "Load summary" sub-tab removed 2026-08-15 per Apsara ("remove summary
+// tab in inventory").
 const INV_SUBTABS = [
   { id: 'byType',  label: 'By item type' },
-  { id: 'summary', label: 'Load summary' },
   { id: 'byDay',   label: 'Per day' },
   { id: 'bySeller', label: 'Per seller' },
 ];
 let invFrom = '', invTo = '', invSubTab = 'byType';
-
-function invSummaryTotals(data) {
-  const sum = (key) => data.byType.reduce((acc, g) => acc + (g[key] || 0), 0);
-  return { gross: Math.round(sum('gross') * 100) / 100, tare: Math.round(sum('tare') * 100) / 100, net: Math.round(sum('net') * 100) / 100, amount: Math.round(sum('amount') * 100) / 100 };
-}
 
 function invByTypeHtml(data) {
   return data.byType.length ? `
@@ -509,23 +505,6 @@ function invByTypeHtml(data) {
       </tbody>
     </table>
   ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
-}
-
-function invSummaryHtml(data) {
-  const t = invSummaryTotals(data);
-  const row = (label, value) => `
-    <div style="display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border-subtle); font-size:14px;">
-      <span style="color:var(--text-muted);">${esc(label)}</span>
-      <span style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${esc(value)}</span>
-    </div>`;
-  return `
-    <div class="card" style="padding:20px 24px; max-width:420px;">
-      ${row('Loads', String(data.loadCount) + (invFrom || invTo ? ' in range' : ' total'))}
-      ${row('Gross total', `${t.gross} ${data.unit}`)}
-      ${row('Tare total', `${t.tare} ${data.unit}`)}
-      ${row('Net total', `${t.net} ${data.unit}`)}
-      ${row('Amount total', `$${t.amount}`)}
-    </div>`;
 }
 
 function invByDayHtml(data) {
@@ -574,7 +553,7 @@ function invBySellerHtml(data) {
   `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
 }
 
-const INV_SUBTAB_RENDER = { byType: invByTypeHtml, summary: invSummaryHtml, byDay: invByDayHtml, bySeller: invBySellerHtml };
+const INV_SUBTAB_RENDER = { byType: invByTypeHtml, byDay: invByDayHtml, bySeller: invBySellerHtml };
 
 async function renderInventory() {
   const params = new URLSearchParams();

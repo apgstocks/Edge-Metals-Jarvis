@@ -274,7 +274,18 @@ function createApi() {
     // (dashboard/index.html's NAV_ITEMS) hides every tab except Loads for
     // this role; this middleware is the actual server-side boundary, the
     // nav filtering is just UX so staff don't see buttons that would 403.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me'];
+    // REAL BUG, found 2026-08-15 (Apsara: "still when i type seller name, it
+    // is not showing matching contact from address book"): /api/address-book
+    // and /api/item-types were both missing from this list. Any staff-role
+    // session got a flat 403 on every GET/POST to either — refreshAddress-
+    // BookCache/refreshCustomItemTypes swallow that as a "best-effort"
+    // failure (empty list, no error shown), so the autocomplete and the
+    // growing item-type dropdown looked like they just silently didn't
+    // work, with zero indication why. Both are normal parts of the Loads
+    // workflow now (seller autocomplete + item-description dropdown live
+    // right on the load form), which staff fully own — same reasoning as
+    // /api/loads itself already being on this list.
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();

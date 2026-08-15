@@ -308,7 +308,14 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         d.net += l.net_weight || 0;
         d.amount += l.amount || 0;
     }
-    const byDay = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
+    // round2 here — per Apsara 2026-08-15 ("in per day, round off the amount
+    // to 2 decimal"). The running sums above can pick up float noise summing
+    // several loads' amounts (e.g. 250 + 40 + 60 -> 350.00000000000006), and
+    // unlike byType/bySeller (built via groupItemsByDescription, which
+    // already round2()s) this map was never rounded on the way out.
+    const byDay = Array.from(dayMap.values())
+        .map(d => ({ ...d, net: round2(d.net), amount: round2(d.amount) }))
+        .sort((a, b) => (a.date < b.date ? 1 : -1));
 
     // Grouped by SELLER — per Apsara 2026-08-15 ("group by seller as well so
     // that we will know how much we bought overall from that seller").
