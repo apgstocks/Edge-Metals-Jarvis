@@ -1313,9 +1313,12 @@ function wireLoadsEvents() {
 function wireDeckEvents() {
   document.querySelectorAll('.btn-gen-pdf').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
+    // Per Apsara 2026-08-15: the Summary section (item-type breakdown +
+    // totals box) is no longer decided automatically — ask each time.
+    const includeSummary = confirm('Include the Summary section (totals + item-type breakdown) on this PDF?');
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST' });
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
       loadTab('loads');
     } catch (err) {
       alert('PDF generation failed: ' + err.message);

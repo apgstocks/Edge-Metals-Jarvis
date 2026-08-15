@@ -15,8 +15,8 @@ const { updateLoad } = require('./loads');
 // required (a failure there throws), the weights PDF is best-effort (a
 // failure there is logged and skipped, not fatal — the main ticket having
 // uploaded successfully is what actually matters).
-async function generateAndStoreLoadPdfs(load) {
-    const buf = await generateLoadPdf(load);
+async function generateAndStoreLoadPdfs(load, opts = {}) {
+    const buf = await generateLoadPdf(load, opts);
     const file = await uploadLoadPdf(load.id, buf);
 
     // Added 2026-08-12 per Apsara: the weights PDF exists to be photo-backed
@@ -32,7 +32,7 @@ async function generateAndStoreLoadPdfs(load) {
         console.log(`[loadsPdf] ${load.id}: no scale photos captured, skipping the weights PDF`);
     } else {
         try {
-            const weightsBuf = await generateWeightsPdf(load);
+            const weightsBuf = await generateWeightsPdf(load, opts);
             const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
             weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
         } catch (e) {

@@ -28,12 +28,18 @@ function ensureSpace(doc, height) {
     if (doc.y + height > PAGE_BOTTOM) doc.addPage();
 }
 
-// The seller is not a variable on these documents — every load is sold by
-// Edge Trading, so it's part of the letterhead rather than a field that could
-// be left blank or typo'd per load. Per Apsara 2026-08-12: seller engraved as
-// Edge Trading at the top with the full business address, and the body
-// reduced to date / buyer / buyer address / description.
-const SELLER = {
+// The issuing party is not a variable on these documents — every load runs
+// through Edge Trading, so it's part of the letterhead rather than a field
+// that could be left blank or typo'd per load. Per Apsara 2026-08-12: this
+// business's name/address engraved at the top of every document.
+//
+// Renamed SELLER -> EDGE_TRADING 2026-08-15: per Apsara, Edge Trading is
+// actually the BUYER in these transactions (the counterparty supplies
+// material TO Edge Trading, not the other way round) — the old name was
+// backwards and only ever caused confusion in this file's own comments. This
+// constant was never exported, so the rename is contained entirely to this
+// file; nothing outside pdf.js references it.
+const EDGE_TRADING = {
     name: 'EDGE TRADING',
     address1: '2453 E 25th Street',
     address2: 'Los Angeles, CA 90058',
@@ -42,15 +48,15 @@ const SELLER = {
 };
 
 function drawLetterhead(doc, subtitle, load) {
-    doc.font('Helvetica-Bold').fontSize(20).fillColor(NAVY).text(SELLER.name, PAGE_L, 44);
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(NAVY).text(EDGE_TRADING.name, PAGE_L, 44);
 
     // Address block sits directly under the name, tight leading so the four
     // lines read as one unit rather than a list.
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED);
-    doc.text(SELLER.address1, PAGE_L, 70, { lineBreak: false });
-    doc.text(SELLER.address2, PAGE_L, 81, { lineBreak: false });
-    doc.text(SELLER.phone, PAGE_L, 92, { lineBreak: false });
-    doc.text(SELLER.email, PAGE_L, 103, { lineBreak: false });
+    doc.text(EDGE_TRADING.address1, PAGE_L, 70, { lineBreak: false });
+    doc.text(EDGE_TRADING.address2, PAGE_L, 81, { lineBreak: false });
+    doc.text(EDGE_TRADING.phone, PAGE_L, 92, { lineBreak: false });
+    doc.text(EDGE_TRADING.email, PAGE_L, 103, { lineBreak: false });
 
     // Document type + load id stay right-aligned, opposite the address, so
     // neither block has to compete for the same horizontal space.
@@ -274,9 +280,24 @@ function addFooters(doc, load) {
         doc.switchToPage(i);
         doc.moveTo(PAGE_L, 722).lineTo(PAGE_R, 722).lineWidth(0.5).strokeColor(RULE).stroke();
         doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
-            .text(`${SELLER.name.replace(/\b(\w)(\w*)/g, (m, a, b) => a + b.toLowerCase())} — Load ${load.id}`, PAGE_L, 729, { width: 250, lineBreak: false })
+            .text(`${EDGE_TRADING.name.replace(/\b(\w)(\w*)/g, (m, a, b) => a + b.toLowerCase())} — Load ${load.id}`, PAGE_L, 729, { width: 250, lineBreak: false })
             .text(`Page ${i - range.start + 1} of ${range.count}`, PAGE_L, 729, { width: PAGE_R - PAGE_L, align: 'right', lineBreak: false });
     }
+}
+
+// load.created_at is an ISO timestamp stamped once, server-side, the moment
+// the load record was first saved (helpers/loads.js's addLoad) — distinct
+// from load.date, which staff enter by hand on the form and can backdate.
+// Per Apsara 2026-08-15: show the real creation time on the document as an
+// audit fact, separate from the (possibly backdated) Date field.
+function formatCreatedAt(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+    });
 }
 
 // Unit column removed per Apsara (the per-item Unit field is gone from the
@@ -311,7 +332,13 @@ const GROUP_COLUMNS_WEIGHTS = [
     { key: 'net',         label: 'Net',       x: 486, width: 76,  align: 'right' },
 ];
 
-function generateLoadPdf(load) {
+function generateLoadPdf(load, opts = {}) {
+    // Per Apsara 2026-08-15: instead of the document silently deciding
+    // whether to print the Summary section, the dashboard now asks before
+    // generating. Default stays TRUE (old behavior) for any caller that
+    // doesn't pass opts at all — e.g. scheduler.js's end-of-day yard report,
+    // which runs unattended with nobody to ask.
+    const includeSummary = opts.includeSummary !== false;
     return new Promise((resolve, reject) => {
         try {
             const doc = new PDFDocument({ size: 'LETTER', margin: 50, bufferPages: true });
@@ -320,18 +347,28 @@ function generateLoadPdf(load) {
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
 
-            // Reduced to exactly what Apsara asked for: date, buyer, buyer
-            // address, description. Seller moved to the letterhead (it is
-            // always Edge Trading); Created by / Status dropped — both are
-            // internal workflow state, not part of the document the buyer
-            // receives.
+            // Reduced to exactly what Apsara asked for: date, created time,
+            // seller, seller address, description. Edge Trading's own info
+            // lives in the letterhead; Created by / Status dropped — both are
+            // internal workflow state, not part of the document the
+            // counterparty receives.
+            //
+            // "Buyer"/"Buyer Address" relabeled to "Seller"/"Seller Address"
+            // 2026-08-15 per Apsara: Edge Trading is the buyer in these
+            // transactions, so the counterparty on the document is the
+            // seller. Only the PRINTED label changed here — load.buyer /
+            // load.buyer_address remain the underlying field names (dashboard
+            // inputs, API body, helpers/loads.js) untouched, so this stays
+            // contained to the document text rather than rippling into the
+            // dashboard form, the mobile app, or the data model.
             drawLetterhead(doc, 'Load Ticket', load);
             drawFieldBox(doc, [
-                { label: 'Date:',  value: load.date },
-                { label: 'Buyer:', value: load.buyer },
+                { label: 'Date:',    value: load.date },
+                { label: 'Seller:',  value: load.buyer },
+                { label: 'Created:', value: formatCreatedAt(load.created_at) },
             ], [
-                { label: 'Buyer Address:', value: load.buyer_address },
-                { label: 'Description:',   value: load.description },
+                { label: 'Seller Address:', value: load.buyer_address },
+                { label: 'Description:',    value: load.description },
             ]);
 
             const unit = load.weight_unit || 'lb';
@@ -360,19 +397,25 @@ function generateLoadPdf(load) {
             // Item Detail directly above it — pure noise on the page. It
             // earns its place only when at least one item type appears more
             // than once, which is exactly when groups.length < items.length.
-            const groups = items.length ? groupItemsByDescription(items) : [];
-            if (groups.length && groups.length < items.length) {
-                drawSectionHeading(doc, 'Summary by Item Type');
-                drawItemTable(doc, groups, GROUP_COLUMNS);
-            }
+            // Whole Summary section (grouped table + totals box) is now
+            // opt-in per document, per Apsara 2026-08-15 — previously this
+            // decided automatically off item count; now the dashboard asks
+            // before generating and includeSummary carries that answer here.
+            if (includeSummary) {
+                const groups = items.length ? groupItemsByDescription(items) : [];
+                if (groups.length && groups.length < items.length) {
+                    drawSectionHeading(doc, 'Summary by Item Type');
+                    drawItemTable(doc, groups, GROUP_COLUMNS);
+                }
 
-            drawSectionHeading(doc, 'Summary');
-            drawSummaryBox(doc, [
-                { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
-                { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
-                { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
-                { label: 'Amount total', value: load.amount       != null ? String(load.amount)             : '—', emphasize: true },
-            ]);
+                drawSectionHeading(doc, 'Summary');
+                drawSummaryBox(doc, [
+                    { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
+                    { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
+                    { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
+                    { label: 'Amount total', value: load.amount       != null ? String(load.amount)             : '—', emphasize: true },
+                ]);
+            }
 
             // The "Captured Scale Photos" list that used to be appended here
             // was removed 2026-08-12 per Apsara: weight evidence belongs on
@@ -397,7 +440,8 @@ function generateLoadPdf(load) {
 // quick audit) doesn't need the priced item table, just the weights and the
 // photos backing them up. Shares the same letterhead/field-box/summary-box
 // styling as the main ticket for a consistent look across both documents.
-function generateWeightsPdf(load) {
+function generateWeightsPdf(load, opts = {}) {
+    const includeSummary = opts.includeSummary !== false;
     return new Promise((resolve, reject) => {
         try {
             const doc = new PDFDocument({ size: 'LETTER', margin: 50, bufferPages: true });
@@ -406,15 +450,19 @@ function generateWeightsPdf(load) {
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
 
-            // Same field reduction as the main ticket — seller lives in the
-            // letterhead now, so repeating it here would be redundant.
+            // Same field reduction as the main ticket — Edge Trading's own
+            // info lives in the letterhead now, so repeating it here would be
+            // redundant. Labels/Created field match generateLoadPdf — see
+            // its comments for why "Buyer" became "Seller" and where
+            // Created: comes from.
             drawLetterhead(doc, 'Weight Record', load);
             drawFieldBox(doc, [
-                { label: 'Date:',  value: load.date },
-                { label: 'Buyer:', value: load.buyer },
+                { label: 'Date:',    value: load.date },
+                { label: 'Seller:',  value: load.buyer },
+                { label: 'Created:', value: formatCreatedAt(load.created_at) },
             ], [
-                { label: 'Buyer Address:', value: load.buyer_address },
-                { label: 'Description:',   value: load.description },
+                { label: 'Seller Address:', value: load.buyer_address },
+                { label: 'Description:',    value: load.description },
             ]);
 
             const unit = load.weight_unit || 'lb';
@@ -455,18 +503,20 @@ function generateWeightsPdf(load) {
             });
 
             doc.moveDown(0.3);
-            if (items.length) {
-                const groups = groupItemsByDescription(items);
-                drawSectionHeading(doc, 'Summary by Item Type');
-                drawItemTable(doc, groups, GROUP_COLUMNS_WEIGHTS);
-            }
+            if (includeSummary) {
+                if (items.length) {
+                    const groups = groupItemsByDescription(items);
+                    drawSectionHeading(doc, 'Summary by Item Type');
+                    drawItemTable(doc, groups, GROUP_COLUMNS_WEIGHTS);
+                }
 
-            drawSectionHeading(doc, 'Summary');
-            drawSummaryBox(doc, [
-                { label: 'Gross total', value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
-                { label: 'Tare total',  value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
-                { label: 'Net total',   value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
-            ]);
+                drawSectionHeading(doc, 'Summary');
+                drawSummaryBox(doc, [
+                    { label: 'Gross total', value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
+                    { label: 'Tare total',  value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
+                    { label: 'Net total',   value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
+                ]);
+            }
 
             addFooters(doc, load);
             doc.end();

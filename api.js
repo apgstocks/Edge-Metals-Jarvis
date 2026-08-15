@@ -753,8 +753,14 @@ function createApi() {
 
             // Shared with scheduler.js's end-of-day yard report — see
             // helpers/loadsPdf.js for why this isn't inlined here anymore.
+            // includeSummary: dashboard now confirm()s with the user before
+            // calling this route and sends the answer in the body — per
+            // Apsara 2026-08-15. Only OFF if explicitly sent false; a missing
+            // body (old cached frontend, or scheduler.js's own direct call
+            // which never hits this route) keeps the prior always-on default.
             const { generateAndStoreLoadPdfs } = require('./helpers/loadsPdf');
-            const updated = await generateAndStoreLoadPdfs(load);
+            const includeSummary = !(req.body && req.body.includeSummary === false);
+            const updated = await generateAndStoreLoadPdfs(load, { includeSummary });
             res.json({ ok: true, load: updated });
         } catch (err) {
             console.error('[API] generate-pdf failed:', err.message);
