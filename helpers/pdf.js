@@ -343,6 +343,17 @@ const GROUP_COLUMNS = [
     { key: 'net',         label: 'Net',       x: 420, width: 70,  align: 'right' },
     { key: 'amount',      label: 'Amount',    x: 490, width: 72,  align: 'right' },
 ];
+// Same shape as GROUP_COLUMNS, relabeled for the daily inventory report's
+// "By seller" table (generateInventoryReportPdf below) — same drawItemTable
+// renderer, just a different first-column header.
+const SELLER_COLUMNS = [
+    { key: 'description', label: 'Seller',   x: 50,  width: 180, align: 'left'  },
+    { key: 'count',       label: 'Loads',    x: 230, width: 50,  align: 'right' },
+    { key: 'gross',       label: 'Gross',    x: 280, width: 70,  align: 'right' },
+    { key: 'tare',        label: 'Tare',     x: 350, width: 70,  align: 'right' },
+    { key: 'net',         label: 'Net',      x: 420, width: 70,  align: 'right' },
+    { key: 'amount',      label: 'Amount',   x: 490, width: 72,  align: 'right' },
+];
 const GROUP_COLUMNS_WEIGHTS = [
     { key: 'description', label: 'Item Type', x: 50,  width: 220, align: 'left'  },
     { key: 'count',       label: 'Items',     x: 270, width: 60,  align: 'right' },
@@ -553,8 +564,71 @@ function generateWeightsPdf(load, opts = {}) {
     });
 }
 
+// ── Daily inventory report PDF ─────────────────────────────────────────────
+// Per Apsara 2026-08-15: "everyday a pdf should be created for inventory for
+// that day and it should stored in drive as report folder." Same letterhead/
+// table styling as the load tickets above, but the content is a report, not
+// a per-load document — `dateKey` stands in for a load id in the top-right
+// corner and the footer. `todayReport`/`overallReport` are both
+// helpers/loads.js's getInventoryReport() output (today's date-filtered and
+// unfiltered respectively) — called by scheduler.js's nightly job, which
+// already has both on hand for the email/WhatsApp version of this same
+// report (buildYardReportText above), so nothing here is a third source of
+// truth for what "today's inventory" means.
+function generateInventoryReportPdf(dateKey, todayReport, overallReport) {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ size: 'LETTER', margin: 50, bufferPages: true });
+            const chunks = [];
+            doc.on('data', (c) => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            const pseudoLoad = { id: dateKey };
+            drawLetterhead(doc, 'Daily Inventory Report', pseudoLoad);
+
+            const todayNet = round2(todayReport.byType.reduce((s, g) => s + (g.net || 0), 0));
+            const todayAmount = round2(todayReport.byType.reduce((s, g) => s + (g.amount || 0), 0));
+
+            drawSectionHeading(doc, `Today — ${dateKey} (${todayReport.loadCount} load${todayReport.loadCount === 1 ? '' : 's'})`);
+            if (todayReport.byType.length) {
+                drawItemTable(doc, todayReport.byType, GROUP_COLUMNS);
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No loads recorded today.');
+                doc.moveDown(0.6);
+            }
+            drawSummaryBox(doc, [
+                { label: 'Loads today',  value: String(todayReport.loadCount) },
+                { label: 'Net total',    value: `${todayNet} ${todayReport.unit}`, emphasize: true },
+                { label: 'Amount total', value: `$${todayAmount}`, emphasize: true },
+            ]);
+
+            drawSectionHeading(doc, `By seller — today`);
+            if (todayReport.bySeller.length) {
+                drawItemTable(doc, todayReport.bySeller.map(s => ({ description: s.seller, count: s.loadCount, gross: '—', tare: '—', net: s.net, amount: s.amount })), SELLER_COLUMNS);
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No loads recorded today.');
+                doc.moveDown(0.6);
+            }
+
+            drawSectionHeading(doc, `All-time (${overallReport.loadCount} load${overallReport.loadCount === 1 ? '' : 's'} recorded total)`);
+            if (overallReport.byType.length) {
+                drawItemTable(doc, overallReport.byType, GROUP_COLUMNS);
+            } else {
+                doc.font('Helvetica').fontSize(10).fillColor(INK).text('No loads recorded yet.');
+                doc.moveDown(0.6);
+            }
+
+            addFooters(doc, pseudoLoad);
+            doc.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
 // Exported 2026-08-15 so scheduler.js's eodYardReport can reuse the exact
 // same item-type grouping logic for its new inventory sections instead of
 // duplicating this reduce elsewhere — one definition of "how items roll up
 // by type" for both the PDF and the report.
-module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription };
+module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription, generateInventoryReportPdf };

@@ -108,6 +108,14 @@ input::placeholder { color:var(--steel-500); }
 .field label { display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px; }
 .field input, .field select { width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; }
 .field input:focus, .field select:focus { border-color:var(--accent); }
+/* Address Book autocomplete dropdown under the Buyer/Seller name field —
+   per Apsara 2026-08-15 ("as soon as user starts typing seller name, it
+   should get matched and show all possible matches"). */
+.ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:180px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
+.ac-dropdown.hidden { display:none; }
+.ac-item { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border-subtle); white-space:pre-line; }
+.ac-item:last-child { border-bottom:none; }
+.ac-item:hover { background:var(--surface-sunken); }
 .badge { display:inline-block; font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:4px 10px; border-radius:var(--radius-xs); }
 .hidden { display:none !important; }
 .spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
@@ -512,6 +520,35 @@ async function renderInventory() {
           </tbody>
         </table>
       ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px; margin-bottom:32px;">No items in this range.</div>`}
+
+      <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">By seller — how much bought from each</div>
+      <div style="margin-bottom:32px;">
+      ${data.bySeller.length ? data.bySeller.map(s => `
+        <details class="card" style="margin-bottom:8px; padding:0;">
+          <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
+            <span style="font-weight:600;">${esc(s.seller)}</span>
+            <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + s.amount : '—'}</span>
+          </summary>
+          <div style="padding:0 16px 14px;">
+            ${s.byType.length ? `
+              <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
+                  <th style="padding:6px;">Item type</th><th style="padding:6px;">Items</th><th style="padding:6px;">Net</th><th style="padding:6px;">Amount</th>
+                </tr></thead>
+                <tbody>
+                  ${s.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
+                    <td style="padding:6px;">${esc(g.description)}</td>
+                    <td style="padding:6px;">${g.count}</td>
+                    <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
+                    <td style="padding:6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+                  </tr>`).join('')}
+                </tbody>
+              </table>
+            ` : ''}
+          </div>
+        </details>
+      `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`}
+      </div>
 
       <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:10px;">Loads per day</div>
       ${data.byDay.length ? `
@@ -2246,6 +2283,26 @@ function blankLoadItem() {
 // over it.
 const SELLER_FIXED_NAME = 'Edge Metals Inc.';
 
+// ── Address Book integration on the Buyer (= "Seller" on the document,
+// see pdf.js's relabeling comment) name field — per Apsara 2026-08-15:
+// typing a name here should suggest existing /address-book entries;
+// picking one fills in the address; a name that matches NOTHING gets
+// both name+address saved back to the Address Book automatically once the
+// load save succeeds, so the book grows on its own. Cache is small (same
+// "let the client filter" reasoning as api.js's own comment on this route)
+// and refreshed every time the load modal opens, not just once per page
+// load, so a Sync-from-Doc or manual add elsewhere is picked up promptly.
+let addressBookCache = [];
+async function refreshAddressBookCache() {
+  try { addressBookCache = await api('/api/address-book'); }
+  catch (err) { addressBookCache = []; } // best-effort — autocomplete just won't suggest anything
+}
+function addressBookExactMatch(name) {
+  const q = String(name || '').trim().toLowerCase();
+  if (!q) return null;
+  return addressBookCache.find(e => (e.aliases || []).some(a => a.toLowerCase() === q)) || null;
+}
+
 // Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on
 // the WRONG calendar day for anyone west of Greenwich in the evening
 // (e.g. 9pm Pacific is already the next day in UTC), which is exactly the
@@ -2269,6 +2326,7 @@ function resetLoadModal() {
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
   renderItemRows();
   stopCamera();
+  refreshAddressBookCache();
 }
 
 // Opens the SAME modal used for creating a load, pre-filled from an existing
@@ -2301,6 +2359,7 @@ function openEditLoadModal(load) {
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
   renderItemRows();
   stopCamera();
+  refreshAddressBookCache();
   $('loadModal').classList.remove('hidden');
 }
 
@@ -2605,8 +2664,12 @@ function renderLoads(loads) {
             <div class="field"><label>Seller</label><input id="ld_seller" placeholder="Seller name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
-            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name"></div>
-            <div class="field"><label>Buyer address</label><input id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX"></div>
+            <div class="field" style="position:relative;">
+              <label>Buyer</label>
+              <input id="ld_buyer" placeholder="Buyer name" autocomplete="off">
+              <div id="ld_buyer_ac" class="ac-dropdown hidden"></div>
+            </div>
+            <div class="field"><label>Buyer address</label><textarea id="ld_buyer_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
@@ -2674,6 +2737,28 @@ function wireLoadsEvents() {
   // per-row inside renderItemRows() now (re-attached every render since
   // rows come and go) — nothing load-level left to wire here for weights.
 
+  // ── Address Book autocomplete on Buyer name ────────────────────────────
+  const acBox = $('ld_buyer_ac');
+  const closeAc = () => { acBox.classList.add('hidden'); acBox.innerHTML = ''; };
+  $('ld_buyer').addEventListener('input', () => {
+    const q = $('ld_buyer').value.trim().toLowerCase();
+    if (!q) { closeAc(); return; }
+    const matches = addressBookCache.filter(e => (e.aliases || []).some(a => a.toLowerCase().includes(q))).slice(0, 8);
+    if (!matches.length) { closeAc(); return; }
+    acBox.innerHTML = matches.map((e, i) => `<div class="ac-item" data-idx="${i}">${esc(e.aliases.join(' / '))}</div>`).join('');
+    acBox.classList.remove('hidden');
+    acBox.querySelectorAll('.ac-item').forEach((el, i) => {
+      el.addEventListener('mousedown', (ev) => { // mousedown (not click) fires BEFORE the input's blur, so blur's setTimeout close below can't race this selection
+        ev.preventDefault();
+        const entry = matches[i];
+        $('ld_buyer').value = entry.aliases[0];
+        $('ld_buyer_address').value = entry.raw;
+        closeAc();
+      });
+    });
+  });
+  $('ld_buyer').addEventListener('blur', () => setTimeout(closeAc, 150));
+
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
     const desc = $('ld_desc').value.trim();
@@ -2721,6 +2806,17 @@ function wireLoadsEvents() {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      // Auto-grow the Address Book — only for a genuinely NEW seller (no
+      // existing alias matches this name at all, case-insensitive) with an
+      // address actually entered. Fire-and-forget: the load itself already
+      // saved successfully, so a failure here must never surface as a load-
+      // save error. Per Apsara 2026-08-15 ("if its a new seller, then both
+      // name and address needs to be propogated to address book and saved").
+      if (payload.buyer && payload.buyer_address && !addressBookExactMatch(payload.buyer)) {
+        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.buyer], raw: payload.buyer_address }) })
+          .then(() => { addressBookCache.push({ aliases: [payload.buyer], raw: payload.buyer_address }); })
+          .catch(() => {});
       }
       stopCamera();
       $('loadModal').classList.add('hidden');

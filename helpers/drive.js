@@ -425,7 +425,100 @@ async function uploadLoadPdf(loadId, pdfBuffer, filenameOverride) {
     return created.data;
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder };
+// ── "Reports" folder — nightly inventory backup + daily PDF ────────────────
+// Per Apsara 2026-08-15: "an excel should be created to track this inventory
+// ... everyday a pdf should be created for inventory for that day and it
+// should stored in drive as report folder." One fixed-name subfolder under
+// the same GDRIVE_UPLOAD_FOLDER_ID everything else already uses — cached per
+// process lifetime, same reasoning as loadSubfolderCache above (this gets
+// hit once a night, not per-load, but the pattern's cheap and consistent).
+let reportsFolderId = null;
+async function getOrCreateReportsFolder(drive) {
+    if (reportsFolderId) return reportsFolderId;
+    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and name = 'Reports' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+    });
+    if (list.data.files && list.data.files.length > 0) {
+        reportsFolderId = list.data.files[0].id;
+    } else {
+        const created = await drive.files.create({
+            requestBody: { name: 'Reports', mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+            fields: 'id',
+            supportsAllDrives: true,
+        });
+        reportsFolderId = created.data.id;
+        console.log(`[DRIVE] Created Reports folder (${reportsFolderId})`);
+    }
+    return reportsFolderId;
+}
+
+// The Excel backup is ONE persistent, always-current file — updated in
+// place every night (per Apsara: "last 5 day tab loads and one overall
+// sheet", i.e. a rolling snapshot, not a dated archive) rather than piling
+// up a new copy every day. Finds-and-replaces by fixed name.
+async function uploadInventoryBackupXlsx(buffer) {
+    if (!buffer) throw new Error('workbook buffer required');
+    const drive = getDrive();
+    const parentId = await getOrCreateReportsFolder(drive);
+    const { Readable } = require('stream');
+    const name = 'Inventory-Backup.xlsx';
+    const mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and name = '${name}' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+    });
+    const media = { mimeType, body: Readable.from(buffer) };
+    if (list.data.files && list.data.files.length > 0) {
+        const updated = await drive.files.update({ fileId: list.data.files[0].id, media, fields: 'id, name, webViewLink', supportsAllDrives: true });
+        console.log(`[DRIVE] Updated ${name} (${updated.data.id})`);
+        return updated.data;
+    }
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] },
+        media,
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Uploaded ${name} (${created.data.id})`);
+    return created.data;
+}
+
+// The daily inventory PDF is the opposite: a dated ARCHIVE, one new file per
+// day, per Apsara ("everyday a pdf should be created ... and stored"). Never
+// overwrites — a duplicate call for the same date (e.g. a manual re-run)
+// would just leave two files with the same name in Drive rather than
+// silently losing one, which is an acceptable edge case for a once-nightly
+// job with idempotency already handled one layer up (scheduler.js's
+// brain.proactive_sent guard).
+async function uploadDailyInventoryPdf(dateKey, buffer) {
+    if (!buffer) throw new Error('pdf buffer required');
+    const drive = getDrive();
+    const parentId = await getOrCreateReportsFolder(drive);
+    const { Readable } = require('stream');
+    const name = `Inventory-Report-${dateKey}.pdf`;
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] },
+        media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Uploaded ${name} (${created.data.id})`);
+    return created.data;
+}
+
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

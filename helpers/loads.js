@@ -294,11 +294,41 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     }
     const byDay = Array.from(dayMap.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
 
+    // Grouped by SELLER — per Apsara 2026-08-15 ("group by seller as well so
+    // that we will know how much we bought overall from that seller"). NOTE:
+    // the outside party's name lives in `l.buyer`/`l.buyer_address`, not
+    // `l.seller` — `l.seller` is a fixed constant ("Edge Metals Inc.", the
+    // company itself) that the dashboard/mobile forms hardcode into a
+    // disabled field, while the free-text field the UI labels "Buyer" is the
+    // one the generated PDF actually relabels to "Seller:" (see pdf.js).
+    // This grouping follows that same real-world meaning, not the raw field
+    // name, or "seller" here would silently show one entry: Edge Metals Inc.
+    const sellerMap = new Map();
+    for (const l of filtered) {
+        const key = (l.buyer && String(l.buyer).trim()) || 'Unknown seller';
+        if (!sellerMap.has(key)) sellerMap.set(key, { seller: key, loadCount: 0, net: 0, amount: 0, items: [] });
+        const s = sellerMap.get(key);
+        s.loadCount += 1;
+        s.net += l.net_weight || 0;
+        s.amount += l.amount || 0;
+        if (Array.isArray(l.items)) s.items.push(...l.items);
+    }
+    const bySeller = Array.from(sellerMap.values())
+        .map(s => ({
+            seller: s.seller,
+            loadCount: s.loadCount,
+            net: round2(s.net),
+            amount: round2(s.amount),
+            byType: s.items.length ? groupItemsByDescription(s.items) : [],
+        }))
+        .sort((a, b) => (b.net || 0) - (a.net || 0));
+
     return {
         loadCount: filtered.length,
         unit: filtered.find(l => l.weight_unit)?.weight_unit || 'lb',
         byType,
         byDay,
+        bySeller,
     };
 }
 

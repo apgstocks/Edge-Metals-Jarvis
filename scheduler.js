@@ -667,8 +667,14 @@ function buildYardReportText(dateKey, todays, allLoads) {
         amount: acc.amount + (l.amount       || 0),
     }), { gross: 0, tare: 0, net: 0, amount: 0 });
 
+    // REAL BUG, found 2026-08-15 while building the new daily inventory PDF
+    // report right next to this: this used `l.seller`, which is the FIXED
+    // constant "Edge Metals Inc." on every single load (see helpers/loads.js
+    // and pdf.js's comments — the actual counterparty name lives in
+    // `l.buyer`). Every load line in this report has been printing "Edge
+    // Metals Inc." instead of the real seller since the report shipped.
     const lines = todays.map(l =>
-        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
+        `• ${l.id} — ${l.buyer || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
     );
 
     const todayItems  = todays.flatMap(l => Array.isArray(l.items) ? l.items : []);
@@ -752,6 +758,36 @@ async function eodYardReport() {
     await markSent(key);
 
     const summaryText = buildYardReportText(dateKey, todays, allLoads);
+
+    // Excel backup + daily inventory PDF — per Apsara 2026-08-15 ("as a
+    // backup, an excel should be created to track this inventory... everyday
+    // a pdf should be created for inventory for that day and it should
+    // stored in drive as report folder"). Piggybacks on this SAME nightly
+    // job/toggle rather than a separate cron entry — it's the same "daily
+    // inventory reporting" feature bundle Apsara is turning on/off with one
+    // switch (Settings > Yard > yard_report_enabled), just two more output
+    // formats of the exact same data. Best-effort: a Drive hiccup here must
+    // never block the email/WhatsApp send below, which is the part someone's
+    // actually waiting to read tonight.
+    try {
+        const { getInventoryReport } = require('./helpers/loads');
+        const { inventoryWorkbookBuffer } = require('./helpers/inventoryExcel');
+        const { generateInventoryReportPdf } = require('./helpers/pdf');
+        const { uploadInventoryBackupXlsx, uploadDailyInventoryPdf } = require('./helpers/drive');
+
+        const todayReport = getInventoryReport(allLoads, { from: dateKey, to: dateKey });
+        const overallReport = getInventoryReport(allLoads, {});
+
+        const xlsxBuffer = await inventoryWorkbookBuffer(allLoads);
+        await uploadInventoryBackupXlsx(xlsxBuffer);
+
+        const pdfBuffer = await generateInventoryReportPdf(dateKey, todayReport, overallReport);
+        await uploadDailyInventoryPdf(dateKey, pdfBuffer);
+
+        console.log(`[SCHED] eod-yard-report: inventory backup (xlsx) + daily report (pdf) uploaded to Drive Reports folder for ${dateKey}`);
+    } catch (e) {
+        console.error('[SCHED] eod-yard-report: inventory Excel/PDF backup failed (email/WhatsApp send still proceeds):', e.message);
+    }
 
     // Make sure every one of today's loads actually HAS its PDFs before
     // trying to attach/link them — a load only gets PDFs once someone hits
