@@ -96,7 +96,13 @@ function drawFieldBox(doc, twoColFields, fullFields) {
         return { ...f, h };
     });
 
-    const boxH = rows2 * rowH + fullBlockH + 20;
+    // Gap before the full-width block tightened 16->8 per Apsara 2026-08-15
+    // ("reduce spacing between seller and seller address" — Seller sits in
+    // the last two-col row, Seller Address is the first full-width row right
+    // after it). Bottom margin below the box's last field kept at the same
+    // 4pt it was before (20 - 16 = 4, now 12 - 8 = 4) so only the gap that
+    // was actually flagged shrinks, not the box's own bottom padding.
+    const boxH = rows2 * rowH + fullBlockH + 12;
     // Height is fully known BEFORE anything is drawn (measured above), so
     // the page-break check runs first and doc.y is only read AFTER that —
     // boxTop is then guaranteed to be the top of wherever this box actually
@@ -114,7 +120,7 @@ function drawFieldBox(doc, twoColFields, fullFields) {
         doc.font('Helvetica').fontSize(9).fillColor(INK).text(' ' + (f.value || '—'));
     });
 
-    let fy = boxTop + 16 + rows2 * rowH;
+    let fy = boxTop + 8 + rows2 * rowH;
     measured.forEach(f => {
         doc.font('Helvetica-Bold').fontSize(8).fillColor(NAVY).text(f.label, PAGE_L + 14, fy, { characterSpacing: 0.3 });
         doc.font('Helvetica').fontSize(9.5).fillColor(INK).text(f.value || '—', PAGE_L + 14, fy + 12, { width: 484 });
