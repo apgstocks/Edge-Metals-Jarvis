@@ -1,0 +1,87 @@
+# iOS compile check — runs on a GitHub-hosted macOS runner, which already has
+# Xcode and CocoaPods installed, so it needs NOTHING from your Mac.
+#
+# What this does and does not do, deliberately:
+#   DOES  — prove the Capacitor iOS project actually builds: pods resolve, the
+#           web assets sync, and the Swift/Obj-C compiles for a simulator.
+#           That catches a broken project days before you sit down with Xcode.
+#   DOES NOT — produce an installable app. Signing is skipped on purpose
+#           (CODE_SIGNING_ALLOWED=NO). A FREE Apple Developer account cannot
+#           sign in CI at all: it only supports "personal team" signing from
+#           inside Xcode while logged in with your Apple ID, and cannot issue
+#           the distribution certificate / provisioning profile a runner would
+#           need. Installing on a real iPhone with a free account means
+#           building locally in Xcode over a cable, and repeating it every 7
+#           days when the free provisioning profile expires.
+#
+# If the account is ever upgraded to the paid $99/year tier, this same file is
+# the right place to add the signing + TestFlight upload steps — the build
+# portion below does not change.
+
+name: iOS build check
+
+on:
+  workflow_dispatch:        # run it manually from the Actions tab
+  push:
+    paths:
+      - 'mobile-app/**'
+      - '.github/workflows/ios-build-check.yml'
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: mobile-app/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: mobile-app
+        run: npm ci
+
+      # Copies mobile-app/www into ios/App/App/public and refreshes the native
+      # plugin registration. The www folder is the source of truth for the app
+      # UI — the same file the Android build bundles — so this is what keeps
+      # iOS from silently shipping stale web code.
+      - name: Sync web assets into the iOS project
+        working-directory: mobile-app
+        run: npx cap sync ios
+
+      - name: Install CocoaPods dependencies
+        working-directory: mobile-app/ios/App
+        run: pod install --repo-update
+
+      # Simulator destination + signing disabled: this is a compile check, not
+      # a distributable build, so it needs no certificates or Apple account.
+      - name: Build for simulator (no signing)
+        working-directory: mobile-app/ios/App
+        run: |
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      # Surfaces the one mistake that is easy to make and invisible until a
+      # driver reports "the app is behaving like the old version": the bundled
+      # iOS web assets drifting from mobile-app/www.
+      - name: Verify the bundled web assets match www/
+        working-directory: mobile-app
+        run: |
+          if diff -q www/index.html ios/App/App/public/index.html > /dev/null; then
+            echo "iOS bundle matches www/index.html"
+          else
+            echo "::error::ios/App/App/public/index.html differs from www/index.html after cap sync"
+            exit 1
+          fi
