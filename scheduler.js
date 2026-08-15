@@ -638,6 +638,67 @@ function getEasternDateKey() {
     return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+// Builds the full text summary — used as BOTH the email body and the
+// WhatsApp message, same text, two channels — for a given day's yard
+// report. Pulled out as its own pure function, separate from eodYardReport's
+// Drive/email/WhatsApp side effects below, specifically so the TEXT can be
+// tested on its own against plain in-memory load arrays without a live
+// Drive/Gmail/WhatsApp connection.
+//
+// The two "Inventory by item type" sections were added 2026-08-15 per
+// Apsara ("I want inventory report to be sent... item type summary of all
+// the loads so far... per day, how many loads"). Her direct answer on scope
+// was "Two categories. per day load data and then in another, overall load
+// inventory" — so this is deliberately TWO separate sections (today's
+// breakdown, then an all-time cumulative one across every load ever
+// recorded), both folded into this one existing report rather than a
+// second send, per her preference on structure. Reuses helpers/pdf.js's
+// groupItemsByDescription — the exact same grouping the PDF's own "Summary
+// by Item Type" table already uses — so "how items roll up by type" has one
+// definition, not two that could drift apart.
+function buildYardReportText(dateKey, todays, allLoads) {
+    const { groupItemsByDescription } = require('./helpers/pdf');
+
+    const unit = todays.find(l => l.weight_unit)?.weight_unit || 'lb';
+    const totals = todays.reduce((acc, l) => ({
+        gross : acc.gross  + (l.gross_weight || 0),
+        tare  : acc.tare   + (l.tare_weight  || 0),
+        net   : acc.net    + (l.net_weight   || 0),
+        amount: acc.amount + (l.amount       || 0),
+    }), { gross: 0, tare: 0, net: 0, amount: 0 });
+
+    const lines = todays.map(l =>
+        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
+    );
+
+    const todayItems  = todays.flatMap(l => Array.isArray(l.items) ? l.items : []);
+    const todayGroups = todayItems.length ? groupItemsByDescription(todayItems) : [];
+    const todayInventoryLines = todayGroups.length
+        ? todayGroups.map(g => `• ${g.description} — ${g.count} item${g.count === 1 ? '' : 's'} — Net ${g.net} ${unit}`)
+        : ['No items recorded today.'];
+
+    const allItems  = allLoads.flatMap(l => Array.isArray(l.items) ? l.items : []);
+    const allGroups = allItems.length ? groupItemsByDescription(allItems) : [];
+    const allUnit   = allLoads.find(l => l.weight_unit)?.weight_unit || unit;
+    const allInventoryLines = allGroups.length
+        ? allGroups.map(g => `• ${g.description} — ${g.count} item${g.count === 1 ? '' : 's'} — Net ${g.net} ${allUnit}`)
+        : ['No loads recorded yet.'];
+
+    return [
+        `Edge Metals — Yard Report — ${dateKey}`,
+        '',
+        todays.length ? `${todays.length} load${todays.length === 1 ? '' : 's'} recorded today:` : 'No loads recorded today.',
+        ...lines,
+        ...(todays.length ? ['', `Totals: Gross ${totals.gross} ${unit} | Tare ${totals.tare} ${unit} | Net ${totals.net} ${unit} | $${totals.amount}`] : []),
+        '',
+        'Inventory by item type — today:',
+        ...todayInventoryLines,
+        '',
+        `Inventory by item type — all-time (${allLoads.length} load${allLoads.length === 1 ? '' : 's'} recorded total):`,
+        ...allInventoryLines,
+    ].join('\n');
+}
+
 // ── 8PM Eastern — end-of-day yard report ────────────────────────────────────
 // Apsara asked for a daily wrap-up of that day's scrap-yard "Loads" activity
 // (dashboard/index.html's Loads tab, backed by helpers/loads.js): the priced
@@ -653,6 +714,19 @@ async function eodYardReport() {
 
     const { loadSettings } = require('./helpers/json');
     const settings = loadSettings();
+
+    // Master on/off switch — Settings > Yard, dashboard-editable. Added
+    // 2026-08-15 per Apsara ("there should be an option to enable the daily
+    // report sending in dashboard admin access"). Checked BEFORE the
+    // recipients check below and does NOT markSent — same reasoning as the
+    // "no recipients configured" case: flipping this on later should send
+    // on the very next 8PM run, not stay skipped because today already
+    // "ran" while it was off.
+    if (!settings.yard_report_enabled) {
+        console.log(`[SCHED] eod-yard-report: disabled in Settings > Yard for ${dateKey} — skipping`);
+        return;
+    }
+
     const emails = (settings.yard_report_emails || '').split(',').map(s => s.trim()).filter(Boolean);
     const waTargets = [];
     if (settings.yard_whatsapp_group_id) waTargets.push(settings.yard_whatsapp_group_id.trim());
@@ -670,33 +744,14 @@ async function eodYardReport() {
     }
 
     const { loadLoads } = require('./helpers/loads');
-    const todays = loadLoads().filter(l => l.date === dateKey);
+    const allLoads = loadLoads();
+    const todays = allLoads.filter(l => l.date === dateKey);
 
     // Mark BEFORE sending — see dailyTruckerCheck's comment above for why
     // (a crash mid-send costs one skipped day, not a duplicate report).
     await markSent(key);
 
-    const unit = todays.find(l => l.weight_unit)?.weight_unit || 'lb';
-    const totals = todays.reduce((acc, l) => ({
-        gross : acc.gross  + (l.gross_weight || 0),
-        tare  : acc.tare   + (l.tare_weight  || 0),
-        net   : acc.net    + (l.net_weight   || 0),
-        amount: acc.amount + (l.amount       || 0),
-    }), { gross: 0, tare: 0, net: 0, amount: 0 });
-
-    const lines = todays.map(l =>
-        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
-    );
-    const summaryText = todays.length
-        ? [
-            `Edge Metals — Yard Report — ${dateKey}`,
-            '',
-            `${todays.length} load${todays.length === 1 ? '' : 's'} recorded:`,
-            ...lines,
-            '',
-            `Totals: Gross ${totals.gross} ${unit} | Tare ${totals.tare} ${unit} | Net ${totals.net} ${unit} | $${totals.amount}`,
-          ].join('\n')
-        : `Edge Metals — Yard Report — ${dateKey}\n\nNo loads recorded today.`;
+    const summaryText = buildYardReportText(dateKey, todays, allLoads);
 
     // Make sure every one of today's loads actually HAS its PDFs before
     // trying to attach/link them — a load only gets PDFs once someone hits
@@ -773,4 +828,4 @@ function start() {
     console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
 }
 
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport };
+module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText };

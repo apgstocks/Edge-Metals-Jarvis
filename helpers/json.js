@@ -205,6 +205,14 @@ function loadSettings() {
         // floor, just use the scanned max+1 like always." See nextLoadId's
         // own comment for why this doesn't need to be cleared after use.
         next_load_number: null,
+        // Master on/off switch for scheduler.js's eodYardReport — per Apsara
+        // 2026-08-15 ("there should be an option to enable the daily report
+        // sending in dashboard admin access"). Defaults FALSE deliberately:
+        // the report already existed in code before this flag was added, so
+        // defaulting it OFF means nobody gets an unexpected 8PM email/
+        // WhatsApp blast the moment this ships — it only starts sending once
+        // someone explicitly turns it on in Settings > Yard.
+        yard_report_enabled: false,
     });
 }
 const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);

@@ -1403,6 +1403,14 @@ function renderSettings(s) {
 
       <div id="settingsYardPanel" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
         <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">End-of-day yard report — on/off</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">Master switch for the whole 8:00 PM Eastern report below — both the email and the WhatsApp send. Off by default until you turn it on here.</div>
+          <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer;">
+            <input id="s_yard_report_enabled" type="checkbox" ${s.yard_report_enabled ? 'checked' : ''} style="width:16px; height:16px; margin:0;">
+            Send the daily yard report
+          </label>
+        </div>
+        <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">End-of-day yard report — email</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Every day at 8:00 PM Eastern, Jarvis emails the priced ticket + weights PDF for every load dated that day to everyone listed here. Comma-separate multiple addresses.</div>
           <div class="field" style="margin-bottom:0;"><label>Recipients</label><input id="s_yard_emails" value="${esc(s.yard_report_emails || '')}" placeholder="e.g. bose@edgemetals.com, apsara@edgemetals.com"></div>
@@ -1470,6 +1478,7 @@ function renderSettings(s) {
         yard_whatsapp_group_id: $('s_yard_group').value.trim(),
         yard_whatsapp_contacts: $('s_yard_contacts').value.trim(),
         next_load_number: $('s_next_load_number').value.trim() ? parseInt($('s_next_load_number').value.trim(), 10) : null,
+        yard_report_enabled: $('s_yard_report_enabled').checked,
       }) });
       $('settingsSaved').style.display = 'block';
     } catch (e) { $('settingsError').textContent = e.message; $('settingsError').style.display = 'block'; }

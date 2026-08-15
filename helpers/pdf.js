@@ -543,4 +543,8 @@ function generateWeightsPdf(load, opts = {}) {
     });
 }
 
-module.exports = { generateLoadPdf, generateWeightsPdf };
+// Exported 2026-08-15 so scheduler.js's eodYardReport can reuse the exact
+// same item-type grouping logic for its new inventory sections instead of
+// duplicating this reduce elsewhere — one definition of "how items roll up
+// by type" for both the PDF and the report.
+module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription };
