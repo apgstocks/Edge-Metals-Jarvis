@@ -768,17 +768,13 @@ function createApi() {
     // failure here is reported back (unlike delete's cleanup above) since
     // it's directly relevant to whether the rename is fully consistent —
     // the load record change itself still isn't rolled back either way.
-    // Staff-blocked per Apsara 2026-08-15 ("i dont want it in staff access").
-    // Hiding the button in the UI alone isn't enough — this route sits under
-    // /api/loads/*, which STAFF_ALLOWED_PATH_PREFIXES (above) already lets a
-    // staff session reach for the normal Loads workflow, so a staff login
-    // could still call this directly (curl, or if the button ever came back)
-    // without this explicit check. Checked here rather than folded into
-    // requireAdmin, which also blocks role 'user' — renumbering should stay
-    // available to 'user' (full access today, same as delete/edit on loads),
-    // just not 'staff'.
+    // Re-opened to staff per Apsara 2026-08-15 ("this renumber should be
+    // there for staff access") — reverses the earlier same-day block. No
+    // extra guard needed here: STAFF_ALLOWED_PATH_PREFIXES already lets a
+    // staff session reach anything under /api/loads/*, so this route just
+    // falls under that existing allowance now that nothing here narrows it
+    // further.
     app.put('/api/loads/:id/renumber', async (req, res) => {
-        if (req.role === 'staff') return res.status(403).json({ error: 'Renumbering loads is not available to staff accounts.' });
         try {
             const { renumberLoad } = require('./helpers/loads');
             const oldId = req.params.id;

@@ -356,6 +356,18 @@ body { overflow-y:auto; }
       </label>
       <button id="btnSaveReportToggle" class="btn btn-primary" style="margin-top:12px; width:100%;">Save</button>
       <div id="as_report_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+
+      <div style="height:1px; background:var(--border-subtle); margin:22px 0;"></div>
+
+      <!-- Mirrors the dashboard's Settings > Yard "Next load number" field
+           — per Apsara 2026-08-15 ("Next load number ... this should be
+           there for admin access in app"). Same next_load_number setting,
+           same floor behavior (see helpers/loads.js's nextLoadId). -->
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Load numbering</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number instead, use the Renumber button on its card.</div>
+      <div class="field"><label>Next load number</label><input id="as_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
+      <button id="btnSaveNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
+      <div id="as_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
     </div>
   </div>
 </div>
@@ -966,7 +978,7 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        ${ROLE !== 'staff' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
+        <button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -1515,6 +1527,7 @@ $('btnAdminSettings').addEventListener('click', async () => {
   try {
     const settings = await api('/api/settings');
     $('as_report_enabled').checked = !!settings.yard_report_enabled;
+    $('as_next_load_number').value = settings.next_load_number ?? '';
   } catch (err) {
     $('as_report_msg').textContent = 'Could not load current setting: ' + err.message;
     $('as_report_msg').style.color = 'var(--status-danger)';
@@ -1560,6 +1573,24 @@ $('btnSaveReportToggle').addEventListener('click', async () => {
   msg.textContent = '';
   try {
     await api('/api/settings', { method: 'PUT', body: JSON.stringify({ yard_report_enabled: $('as_report_enabled').checked }) });
+    msg.style.color = 'var(--status-success, #3fae55)';
+    msg.textContent = 'Saved.';
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+});
+
+$('btnSaveNextLoadNumber').addEventListener('click', async () => {
+  const msg = $('as_next_load_msg');
+  const btn = $('btnSaveNextLoadNumber');
+  const raw = $('as_next_load_number').value.trim();
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.textContent = '';
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ next_load_number: raw ? parseInt(raw, 10) : null }) });
     msg.style.color = 'var(--status-success, #3fae55)';
     msg.textContent = 'Saved.';
   } catch (err) {
