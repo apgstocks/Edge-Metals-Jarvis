@@ -143,6 +143,7 @@ body { overflow-y:auto; }
       .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
       #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
       #loadModal .modal-shell { max-width:900px; width:100%; }
+      #adminSettingsModal.modal-overlay { display:flex; } /* same fix as #loadModal above — same underlying .modal-overlay quirk */
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
          the load level per Apsara — a load can mix items with different
@@ -299,12 +300,57 @@ body { overflow-y:auto; }
 <div id="appShell" class="hidden">
   <div id="appTopBar">
     <div>
-      <div class="brand">Jarvis — Loads</div>
+      <div class="brand">Edge Yard</div>
       <div class="role" id="roleLabel"></div>
     </div>
-    <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <!-- Admin-only — shown/hidden in bootLoads() based on ROLE, same
+           pattern as everything else role-gated in this file. Per Apsara
+           2026-08-15 ("for admin access, there should be settings emoji in
+           top right"). -->
+      <button id="btnAdminSettings" class="btn btn-dark hidden" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 12px; font-size:15px;" title="Admin settings">⚙️</button>
+      <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
+    </div>
   </div>
   <div id="viewRoot"></div>
+</div>
+
+<!-- Admin settings modal — per Apsara 2026-08-15: renumber-a-load (the same
+     PUT /api/loads/:id/renumber the per-card Renumber button already uses,
+     just reachable without needing the load's card on screen) and the daily
+     yard report on/off switch (same yard_report_enabled setting the
+     dashboard's Settings > Yard page writes — GET/PUT /api/settings is
+     already requireAdmin-gated server-side in api.js, so this panel can
+     only ever do what an admin session is already allowed to do). Static
+     top-level markup (like #loginScreen/#appShell above), not generated
+     inside a view template, since it's an app-wide overlay, not part of the
+     Loads view specifically. -->
+<div id="adminSettingsModal" class="hidden modal-overlay">
+  <div class="modal-shell" style="max-width:420px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Admin settings</div>
+      <button id="btnCloseAdminSettings" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Renumber a load</div>
+      <div class="field"><label>Current load #</label><input id="as_renumber_old" placeholder="e.g. EDGE_07"></div>
+      <div class="field" style="margin-top:10px;"><label>New load #</label><input id="as_renumber_new" placeholder="e.g. EDGE_50"></div>
+      <button id="btnDoRenumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Renumber</button>
+      <div id="as_renumber_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+
+      <div style="height:1px; background:var(--border-subtle); margin:22px 0;"></div>
+
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Daily yard report</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Master switch for the 8:00 PM Eastern report (email + WhatsApp) — same setting as the dashboard's Settings &gt; Yard page.</div>
+      <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer;">
+        <input id="as_report_enabled" type="checkbox" style="width:16px; height:16px; margin:0;">
+        Send the daily yard report
+      </label>
+      <button id="btnSaveReportToggle" class="btn btn-primary" style="margin-top:12px; width:100%;">Save</button>
+      <div id="as_report_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1004,6 +1050,7 @@ function renderLoads(loads) {
       .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
       #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
       #loadModal .modal-shell { max-width:900px; width:100%; }
+      #adminSettingsModal.modal-overlay { display:flex; } /* same fix as #loadModal above — same underlying .modal-overlay quirk */
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
          the load level per Apsara — a load can mix items with different
@@ -1407,6 +1454,11 @@ async function doLogin() {
 async function bootLoads() {
   showAppShell();
   $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : ROLE === 'staff' ? 'Staff access' : 'Standard access';
+  // Gear icon only for admin — per Apsara 2026-08-15. This is UI convenience
+  // only, not the real boundary: /api/settings is already requireAdmin-gated
+  // server-side in api.js, so a non-admin session can't actually use what's
+  // behind this button even if it were shown.
+  $('btnAdminSettings').classList.toggle('hidden', ROLE !== 'admin');
   try {
     renderLoads(await api('/api/loads'));
   } catch (err) {
@@ -1432,6 +1484,63 @@ $('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin
 $('btnSignout').addEventListener('click', () => {
   setToken(null);
   showLoginScreen();
+});
+
+// ── Admin settings modal ─────────────────────────────────────────────────
+// Per Apsara 2026-08-15. Fetches the current yard_report_enabled value on
+// EVERY open (not cached) so it can't show a stale checkbox state if it was
+// changed from the dashboard since the app was last opened.
+$('btnAdminSettings').addEventListener('click', async () => {
+  $('as_renumber_old').value = ''; $('as_renumber_new').value = ''; $('as_renumber_msg').textContent = '';
+  $('as_report_msg').textContent = '';
+  $('adminSettingsModal').classList.remove('hidden');
+  try {
+    const settings = await api('/api/settings');
+    $('as_report_enabled').checked = !!settings.yard_report_enabled;
+  } catch (err) {
+    $('as_report_msg').textContent = 'Could not load current setting: ' + err.message;
+    $('as_report_msg').style.color = 'var(--status-danger)';
+  }
+});
+$('btnCloseAdminSettings').addEventListener('click', () => $('adminSettingsModal').classList.add('hidden'));
+
+$('btnDoRenumber').addEventListener('click', async () => {
+  const oldId = $('as_renumber_old').value.trim();
+  const newId = $('as_renumber_new').value.trim();
+  const msg = $('as_renumber_msg');
+  msg.style.color = 'var(--status-danger)';
+  if (!oldId || !newId) { msg.textContent = 'Both fields are required.'; return; }
+  const btn = $('btnDoRenumber');
+  btn.disabled = true; btn.textContent = 'Renumbering…';
+  msg.textContent = '';
+  try {
+    const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId }) });
+    msg.style.color = 'var(--status-success, #3fae55)';
+    msg.textContent = res.warning ? `Renumbered — ${res.warning}` : `Renumbered ${oldId} → ${newId}.`;
+    $('as_renumber_old').value = ''; $('as_renumber_new').value = '';
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Renumber';
+  }
+});
+
+$('btnSaveReportToggle').addEventListener('click', async () => {
+  const msg = $('as_report_msg');
+  const btn = $('btnSaveReportToggle');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.textContent = '';
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ yard_report_enabled: $('as_report_enabled').checked }) });
+    msg.style.color = 'var(--status-success, #3fae55)';
+    msg.textContent = 'Saved.';
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────
