@@ -1,6 +1,6 @@
 {
-  "name": "Edge Metals Loads",
-  "short_name": "Edge Loads",
+  "name": "Edge Yard",
+  "short_name": "Edge Yard",
   "description": "Weigh-in, scale photo capture and load tickets for Edge Trading.",
   "start_url": "/?source=homescreen",
   "scope": "/",

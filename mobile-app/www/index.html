@@ -309,7 +309,7 @@ body { overflow-y:auto; }
 
 <script>
 // ══════════════════════════════════════════════════════════════════════
-// Edge Metals Loads — standalone mobile app (Capacitor shell)
+// Edge Yard — standalone mobile app (Capacitor shell)
 //
 // This is the SAME Loads tab code that lives in dashboard/index.html,
 // extracted so yard staff get a dedicated installable app instead of the
@@ -913,6 +913,7 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+        <button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -1332,7 +1333,10 @@ function wireDeckEvents() {
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
-    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard — photos and any generated PDFs already in Drive are kept.`)) return;
+    // Copy corrected 2026-08-15 — used to say photos/PDFs "are kept"; per
+    // Apsara they should now be removed too (api.js's DELETE route trashes
+    // the load's whole Drive subfolder — recoverable for 30 days).
+    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
@@ -1340,6 +1344,22 @@ function wireDeckEvents() {
     } catch (err) {
       alert('Delete failed: ' + err.message);
       btn.disabled = false; btn.textContent = 'Delete';
+    }
+  }));
+  document.querySelectorAll('.btn-renumber-load').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    const oldId = btn.dataset.id;
+    const newId = prompt('New load number:', oldId);
+    if (newId === null) return;
+    if (newId.trim() === oldId) return;
+    btn.disabled = true; btn.textContent = 'Renumbering…';
+    try {
+      const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId: newId.trim() }) });
+      if (res.warning) alert(res.warning);
+      loadTab('loads');
+    } catch (err) {
+      alert('Renumber failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Renumber';
     }
   }));
 }

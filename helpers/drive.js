@@ -304,6 +304,94 @@ async function exportDocAsText(docId) {
     return Buffer.from(res.data).toString('utf8');
 }
 
+// Resolves the SAME parentId uploadScaleTicketImage/uploadLoadPdf use before
+// calling getOrCreateLoadSubfolder — pulled out so the rename/trash helpers
+// below search the right place without duplicating this fallback logic a
+// third time.
+function loadSubfolderParentId() {
+    return cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+}
+
+// Finds a load's existing subfolder by name WITHOUT creating one if it's
+// missing (unlike getOrCreateLoadSubfolder, which is wrong for rename/trash —
+// creating an empty folder just to immediately rename or trash it would be
+// pointless and, for trash, would leave a stray empty folder in some edge
+// case). Returns null (not the parentId fallback) if nothing is found, so
+// callers can tell "no folder exists" apart from "folder found, id below."
+async function findLoadSubfolder(drive, parentId, loadId) {
+    const escapedId = loadId.replace(/'/g, "\\'");
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and name = '${escapedId}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+    });
+    return (list.data.files && list.data.files[0]) || null;
+}
+
+// Renames a load's Drive subfolder to match a renumbered load id — called by
+// api.js's PUT /api/loads/:id/renumber route right after helpers/loads.js's
+// renumberLoad() changes the JSON record. Per Apsara 2026-08-15 ("there
+// should be a way to adjust the load number"). Deliberately RENAMES the
+// existing folder in place rather than creating a new one and moving files —
+// a rename is one API call, atomic, and every existing photo/PDF inside it
+// stays exactly where it is. Skipping this (or it failing) would leave the
+// load's files sitting under their OLD name while any future upload for the
+// new id creates a second, new-named folder via getOrCreateLoadSubfolder —
+// splitting one load's files across two folders. Best-effort: returns a
+// { renamed: false } shape instead of throwing on any failure, since the
+// load record itself is already renamed by the time this runs and a Drive
+// hiccup here shouldn't make renumbering look like it failed outright.
+async function renameLoadSubfolder(oldLoadId, newLoadId) {
+    const parentId = loadSubfolderParentId();
+    if (!parentId) return { renamed: false, reason: 'not_configured' };
+    const drive = getDrive();
+    try {
+        const folder = await findLoadSubfolder(drive, parentId, oldLoadId);
+        if (!folder) return { renamed: false, reason: 'not_found' }; // load never had a photo/PDF uploaded — nothing to rename
+        await drive.files.update({ fileId: folder.id, requestBody: { name: newLoadId }, supportsAllDrives: true });
+        loadSubfolderCache.delete(`${parentId}::${oldLoadId}`);
+        loadSubfolderCache.set(`${parentId}::${newLoadId}`, folder.id);
+        console.log(`[DRIVE] Renamed load subfolder "${oldLoadId}" -> "${newLoadId}" (${folder.id})`);
+        return { renamed: true, folderId: folder.id };
+    } catch (err) {
+        console.warn(`[DRIVE] Could not rename subfolder for load "${oldLoadId}" -> "${newLoadId}":`, err.message);
+        return { renamed: false, reason: 'error', error: err.message };
+    }
+}
+
+// Trashes (NOT permanently deletes — same reasoning as deletePdfByBooking
+// below: recoverable from Drive's Trash for 30 days) a load's entire Drive
+// subfolder — its gross/tare photos AND its generated PDFs, since
+// uploadScaleTicketImage and uploadLoadPdf both file into the SAME per-load
+// subfolder via getOrCreateLoadSubfolder. One trash call therefore cleans up
+// everything for that load, rather than needing to trash each item photo and
+// PDF file individually. Called by api.js's DELETE /api/loads/:id route,
+// per Apsara 2026-08-15 ("whatever the artifacts stored under that load
+// should get deleted in my drive"). Best-effort/fails soft: a Drive error
+// here must not make the load un-deletable from the dashboard/mobile app —
+// the JSON record delete (helpers/loads.js's deleteLoad) is what actually
+// matters to the user and always proceeds regardless of this outcome.
+async function trashLoadFolder(loadId) {
+    if (!loadId) return { trashed: false, reason: 'no_load_id' };
+    const parentId = loadSubfolderParentId();
+    if (!parentId) return { trashed: false, reason: 'not_configured' };
+    const drive = getDrive();
+    try {
+        const folder = await findLoadSubfolder(drive, parentId, loadId);
+        if (!folder) return { trashed: false, reason: 'not_found' }; // load never had a photo/PDF uploaded
+        await drive.files.update({ fileId: folder.id, requestBody: { trashed: true }, supportsAllDrives: true });
+        loadSubfolderCache.delete(`${parentId}::${loadId}`);
+        console.log(`[DRIVE] Trashed load subfolder "${loadId}" (${folder.id}) — recoverable from Drive's Trash for 30 days`);
+        return { trashed: true, folderId: folder.id };
+    } catch (err) {
+        console.warn(`[DRIVE] Could not trash subfolder for load "${loadId}":`, err.message);
+        return { trashed: false, reason: 'error', error: err.message };
+    }
+}
+
 // ── Upload a generated load-ticket PDF to Shared Drive ────────────────────────
 // Same Shared Drive/service account as everything else here. Called by
 // helpers/pdf.js's generateLoadPdf() after rendering, never called directly
@@ -337,7 +425,7 @@ async function uploadLoadPdf(loadId, pdfBuffer, filenameOverride) {
     return created.data;
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf };
+module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

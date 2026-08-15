@@ -1,4 +1,4 @@
-const { mutateJson, loadJson } = require('./json');
+const { mutateJson, loadJson, loadSettings } = require('./json');
 const cfg = require('../config');
 
 function loadLoads() {
@@ -60,12 +60,25 @@ function sumItems(items) {
 // the mutateJson callback below (i.e. under the file lock), not before it —
 // computing it earlier would let two concurrent saves both read the same
 // "current max" and mint the same ID.
+// next_load_number (Settings > Yard, dashboard-editable — see helpers/json.js's
+// loadSettings) is a FLOOR, not a one-shot override: added per Apsara
+// 2026-08-15 ("add that admin setting under yard... so next time it will
+// start from this, unless explicitly mentioned it should run in sequence").
+// Whichever is higher — the scanned max+1 above, or this floor — wins, so
+// setting it once (e.g. to skip ahead to EDGE_500 for a new ticket book)
+// naturally keeps sequencing from there on every SUBSEQUENT call without
+// needing to be cleared or re-applied: once a load using the floor exists,
+// the scan above finds IT as the new max and takes over. No extra state to
+// go stale. "Unless explicitly mentioned" = renumberLoad (see below) lets
+// any single load jump anywhere regardless of this floor.
 function nextLoadId(loads) {
     let max = 0;
     for (const l of loads) {
         const m = /^EDGE_(\d+)$/.exec(l.id || '');
         if (m) max = Math.max(max, parseInt(m[1], 10));
     }
+    const floor = parseInt(loadSettings().next_load_number, 10);
+    if (isFinite(floor) && floor > max + 1) max = floor - 1;
     return `EDGE_${String(max + 1).padStart(2, '0')}`;
 }
 
@@ -213,4 +226,39 @@ function getLoad(id) {
     return loadLoads().find(l => l.id === id) || null;
 }
 
-module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad };
+// Changes an existing load's id (e.g. "EDGE_07" -> "EDGE_12") — added per
+// Apsara 2026-08-15 ("there should be a way to adjust the load number").
+// Validation runs BEFORE mutateJson, not by throwing inside its mutator —
+// mutateJson's own catch block swallows any error a mutator throws and
+// silently falls back to returning the unmodified data (see helpers/json.js),
+// so a thrown "not found"/"already exists" in there would look like success
+// to the caller instead of surfacing as an error. Same reasoning as
+// deleteLoad's `found` flag below: real errors have to be detected with a
+// pre-check + a captured result, not an exception crossing that boundary.
+// Does NOT touch Drive — the caller (api.js's PUT /:id/renumber route) is
+// responsible for renaming the load's Drive subfolder to match, since this
+// file has no Drive dependency and shouldn't grow one just for this.
+async function renumberLoad(oldId, newId) {
+    newId = String(newId || '').trim();
+    if (!newId) throw new Error('New load number is required.');
+    if (newId === oldId) throw new Error('That\'s already this load\'s number.');
+
+    const existing = loadLoads();
+    if (!existing.some(x => x.id === oldId)) throw new Error(`Load ${oldId} not found.`);
+    if (existing.some(x => x.id === newId)) throw new Error(`Load ${newId} already exists — choose a different number.`);
+
+    let renamed = null;
+    await mutateJson(cfg.LOADS_FILE, [], (loads) => {
+        const l = loads.find(x => x.id === oldId);
+        if (!l) return loads;
+        if (loads.some(x => x.id === newId)) return loads; // race guard, belt & suspenders
+        l.id = newId;
+        l.updated_at = new Date().toISOString();
+        renamed = l;
+        return loads;
+    });
+    if (!renamed) throw new Error(`Could not renumber ${oldId} — it may have just changed. Try again.`);
+    return renamed;
+}
+
+module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad };

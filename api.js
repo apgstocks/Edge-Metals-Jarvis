@@ -736,10 +736,57 @@ function createApi() {
             const { deleteLoad } = require('./helpers/loads');
             const found = await deleteLoad(req.params.id);
             if (!found) return res.status(404).json({ error: 'not found' });
+            // Per Apsara 2026-08-15: deleting a load (from mobile or the
+            // dashboard — both hit this same route) now also removes its
+            // Drive artifacts, not just the JSON record. Gross/tare photos
+            // and generated PDFs for a load all live in ONE Drive subfolder
+            // (see helpers/drive.js's getOrCreateLoadSubfolder), so trashing
+            // that one folder cleans up everything. Trashed, not permanently
+            // deleted — recoverable from Drive's Trash for 30 days if this
+            // was a mistake. Best-effort AFTER the JSON delete already
+            // succeeded: a Drive hiccup must not make the load
+            // un-deletable, and the load record itself is already gone by
+            // this point regardless of what happens here.
+            try {
+                const { trashLoadFolder } = require('./helpers/drive');
+                await trashLoadFolder(req.params.id);
+            } catch (driveErr) {
+                console.warn(`[API] Drive cleanup failed for deleted load ${req.params.id}:`, driveErr.message);
+            }
             res.json({ ok: true });
         } catch (err) {
             console.error('[API] delete load failed:', err.message);
             res.status(500).json({ error: err.message });
+        }
+    });
+    // Changes a load's id — per Apsara 2026-08-15 ("there should be a way to
+    // adjust the load number"). Renames the JSON record first (the part that
+    // actually matters — search, PDF regen, the dashboard list all key off
+    // this), then best-effort renames the Drive subfolder to match so future
+    // uploads/PDF regens keep landing next to the load's EXISTING files
+    // instead of splitting into a second, new-named folder. A Drive rename
+    // failure here is reported back (unlike delete's cleanup above) since
+    // it's directly relevant to whether the rename is fully consistent —
+    // the load record change itself still isn't rolled back either way.
+    app.put('/api/loads/:id/renumber', async (req, res) => {
+        try {
+            const { renumberLoad } = require('./helpers/loads');
+            const oldId = req.params.id;
+            const newId = String((req.body && req.body.newId) || '').trim();
+            const updated = await renumberLoad(oldId, newId);
+            let driveWarning = null;
+            try {
+                const { renameLoadSubfolder } = require('./helpers/drive');
+                const result = await renameLoadSubfolder(oldId, newId);
+                if (!result.renamed && result.reason === 'error') driveWarning = 'Load renamed, but its Drive folder could not be — new uploads for this load may land in a new folder.';
+            } catch (driveErr) {
+                driveWarning = 'Load renamed, but its Drive folder could not be — new uploads for this load may land in a new folder.';
+                console.warn(`[API] Drive subfolder rename failed for ${oldId} -> ${newId}:`, driveErr.message);
+            }
+            res.json({ ok: true, load: updated, warning: driveWarning });
+        } catch (err) {
+            console.error('[API] renumber load failed:', err.message);
+            res.status(400).json({ error: err.message });
         }
     });
     // Generates the PDF from the load record as saved (photos referenced as

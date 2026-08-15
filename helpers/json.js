@@ -200,6 +200,11 @@ function loadSettings() {
         yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
         yard_whatsapp_group_id : '',
         yard_whatsapp_contacts : '',
+        // Floor for helpers/loads.js's nextLoadId — dashboard-editable under
+        // Settings > Yard. Per Apsara 2026-08-15. Empty/null means "no
+        // floor, just use the scanned max+1 like always." See nextLoadId's
+        // own comment for why this doesn't need to be cleared after use.
+        next_load_number: null,
     });
 }
 const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);

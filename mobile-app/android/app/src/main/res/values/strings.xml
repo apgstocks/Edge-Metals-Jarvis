@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Edge Metals Loads</string>
-    <string name="title_activity_main">Edge Metals Loads</string>
+    <string name="app_name">Edge Yard</string>
+    <string name="title_activity_main">Edge Yard</string>
     <string name="package_name">com.edgemetals.loads</string>
     <string name="custom_url_scheme">com.edgemetals.loads</string>
 </resources>

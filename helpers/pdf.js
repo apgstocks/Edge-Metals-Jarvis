@@ -61,9 +61,12 @@ function drawLetterhead(doc, subtitle, load) {
     // Document type + load id stay right-aligned, opposite the address, so
     // neither block has to compete for the same horizontal space.
     doc.font('Helvetica-Bold').fontSize(12).fillColor(NAVY).text(load.id, PAGE_L, 44, { width: PAGE_R - PAGE_L, align: 'right' });
+    // Date+time, not just date, per Apsara 2026-08-15 — reuses
+    // formatCreatedAt (defined below) so "Generated" on the letterhead and
+    // "Created:" in the field box render in the exact same style.
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
         .text(subtitle.toUpperCase(), PAGE_L, 62, { width: PAGE_R - PAGE_L, align: 'right', characterSpacing: 1.2 })
-        .text(`Generated ${new Date().toLocaleDateString()}`, PAGE_L, 76, { width: PAGE_R - PAGE_L, align: 'right' });
+        .text(`Generated ${formatCreatedAt(new Date().toISOString())}`, PAGE_L, 76, { width: PAGE_R - PAGE_L, align: 'right' });
 
     // Rule moved down from 92 to clear the taller address block — the old
     // value would have struck straight through the phone/email lines.
