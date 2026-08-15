@@ -19,13 +19,25 @@ async function generateAndStoreLoadPdfs(load) {
     const buf = await generateLoadPdf(load);
     const file = await uploadLoadPdf(load.id, buf);
 
+    // Added 2026-08-12 per Apsara: the weights PDF exists to be photo-backed
+    // proof of weight, so if no scale photos were ever captured for this load
+    // there is nothing for it to prove and it shouldn't be produced at all —
+    // previously it was generated unconditionally, yielding a document whose
+    // whole purpose (the photo links under each weight) was empty.
+    const items = Array.isArray(load.items) ? load.items : [];
+    const hasScalePhotos = items.some(it => it.gross_photo_link || it.tare_photo_link);
+
     let weightsPatch = {};
-    try {
-        const weightsBuf = await generateWeightsPdf(load);
-        const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
-        weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
-    } catch (e) {
-        console.error(`[loadsPdf] weights-pdf generation failed for ${load.id}:`, e.message);
+    if (!hasScalePhotos) {
+        console.log(`[loadsPdf] ${load.id}: no scale photos captured, skipping the weights PDF`);
+    } else {
+        try {
+            const weightsBuf = await generateWeightsPdf(load);
+            const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
+            weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
+        } catch (e) {
+            console.error(`[loadsPdf] weights-pdf generation failed for ${load.id}:`, e.message);
+        }
     }
 
     const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch });

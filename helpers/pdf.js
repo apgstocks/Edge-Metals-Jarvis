@@ -28,17 +28,42 @@ function ensureSpace(doc, height) {
     if (doc.y + height > PAGE_BOTTOM) doc.addPage();
 }
 
+// The seller is not a variable on these documents — every load is sold by
+// Edge Trading, so it's part of the letterhead rather than a field that could
+// be left blank or typo'd per load. Per Apsara 2026-08-12: seller engraved as
+// Edge Trading at the top with the full business address, and the body
+// reduced to date / buyer / buyer address / description.
+const SELLER = {
+    name: 'EDGE TRADING',
+    address1: '2453 E 25th Street',
+    address2: 'Los Angeles, CA 90058',
+    phone: '(310) 938-2525',
+    email: 'bose@edgemetals.com',
+};
+
 function drawLetterhead(doc, subtitle, load) {
-    doc.font('Helvetica-Bold').fontSize(20).fillColor(NAVY).text('EDGE METALS INC.', PAGE_L, 48);
-    doc.font('Helvetica').fontSize(8.5).fillColor(MUTED).text(subtitle.toUpperCase(), PAGE_L, 72, { characterSpacing: 1.2 });
+    doc.font('Helvetica-Bold').fontSize(20).fillColor(NAVY).text(SELLER.name, PAGE_L, 44);
 
-    doc.font('Helvetica-Bold').fontSize(12).fillColor(NAVY).text(load.id, PAGE_L, 48, { width: PAGE_R - PAGE_L, align: 'right' });
-    doc.font('Helvetica').fontSize(8).fillColor(MUTED)
-        .text(`Generated ${new Date().toLocaleDateString()}`, PAGE_L, 64, { width: PAGE_R - PAGE_L, align: 'right' });
+    // Address block sits directly under the name, tight leading so the four
+    // lines read as one unit rather than a list.
+    doc.font('Helvetica').fontSize(8.5).fillColor(MUTED);
+    doc.text(SELLER.address1, PAGE_L, 70, { lineBreak: false });
+    doc.text(SELLER.address2, PAGE_L, 81, { lineBreak: false });
+    doc.text(SELLER.phone, PAGE_L, 92, { lineBreak: false });
+    doc.text(SELLER.email, PAGE_L, 103, { lineBreak: false });
 
-    doc.moveTo(PAGE_L, 92).lineTo(PAGE_R, 92).lineWidth(1.5).strokeColor(NAVY).stroke();
+    // Document type + load id stay right-aligned, opposite the address, so
+    // neither block has to compete for the same horizontal space.
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(NAVY).text(load.id, PAGE_L, 44, { width: PAGE_R - PAGE_L, align: 'right' });
+    doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
+        .text(subtitle.toUpperCase(), PAGE_L, 62, { width: PAGE_R - PAGE_L, align: 'right', characterSpacing: 1.2 })
+        .text(`Generated ${new Date().toLocaleDateString()}`, PAGE_L, 76, { width: PAGE_R - PAGE_L, align: 'right' });
+
+    // Rule moved down from 92 to clear the taller address block — the old
+    // value would have struck straight through the phone/email lines.
+    doc.moveTo(PAGE_L, 122).lineTo(PAGE_R, 122).lineWidth(1.5).strokeColor(NAVY).stroke();
     doc.lineWidth(1);
-    doc.y = 106;
+    doc.y = 136;
 }
 
 // twoColFields render as "Label value" pairs, 2 per row, inside a shaded box.
@@ -249,7 +274,7 @@ function addFooters(doc, load) {
         doc.switchToPage(i);
         doc.moveTo(PAGE_L, 722).lineTo(PAGE_R, 722).lineWidth(0.5).strokeColor(RULE).stroke();
         doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
-            .text(`Edge Metals Inc. — Load ${load.id}`, PAGE_L, 729, { width: 250, lineBreak: false })
+            .text(`${SELLER.name.replace(/\b(\w)(\w*)/g, (m, a, b) => a + b.toLowerCase())} — Load ${load.id}`, PAGE_L, 729, { width: 250, lineBreak: false })
             .text(`Page ${i - range.start + 1} of ${range.count}`, PAGE_L, 729, { width: PAGE_R - PAGE_L, align: 'right', lineBreak: false });
     }
 }
@@ -295,16 +320,18 @@ function generateLoadPdf(load) {
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
 
+            // Reduced to exactly what Apsara asked for: date, buyer, buyer
+            // address, description. Seller moved to the letterhead (it is
+            // always Edge Trading); Created by / Status dropped — both are
+            // internal workflow state, not part of the document the buyer
+            // receives.
             drawLetterhead(doc, 'Load Ticket', load);
             drawFieldBox(doc, [
-                { label: 'Date:',       value: load.date },
-                { label: 'Seller:',     value: load.seller },
-                { label: 'Buyer:',      value: load.buyer },
-                { label: 'Created by:', value: load.created_by },
-                { label: 'Status:',     value: load.status },
+                { label: 'Date:',  value: load.date },
+                { label: 'Buyer:', value: load.buyer },
             ], [
-                { label: 'Description:',   value: load.description },
                 { label: 'Buyer Address:', value: load.buyer_address },
+                { label: 'Description:',   value: load.description },
             ]);
 
             const unit = load.weight_unit || 'lb';
@@ -327,8 +354,14 @@ function generateLoadPdf(load) {
             // the grand totals so a load with many pulls of the same item
             // doesn't require manually adding up scattered rows to see "how
             // much Auto cast did we actually move today."
-            if (items.length) {
-                const groups = groupItemsByDescription(items);
+            // Only worth printing when grouping actually COLLAPSES something.
+            // Per Apsara 2026-08-12: with a single item, or with every item a
+            // different type, this table is a line-for-line restatement of
+            // Item Detail directly above it — pure noise on the page. It
+            // earns its place only when at least one item type appears more
+            // than once, which is exactly when groups.length < items.length.
+            const groups = items.length ? groupItemsByDescription(items) : [];
+            if (groups.length && groups.length < items.length) {
                 drawSectionHeading(doc, 'Summary by Item Type');
                 drawItemTable(doc, groups, GROUP_COLUMNS);
             }
@@ -341,22 +374,13 @@ function generateLoadPdf(load) {
                 { label: 'Amount total', value: load.amount       != null ? String(load.amount)             : '—', emphasize: true },
             ]);
 
-            // Each item's captured scale photos, linked (not re-embedded — the
-            // photos already live in Drive by the time this runs).
-            const itemsWithPhotos = items.filter(it => it.gross_photo_link || it.tare_photo_link);
-            if (itemsWithPhotos.length) {
-                drawSectionHeading(doc, 'Captured Scale Photos');
-                doc.fontSize(9).font('Helvetica');
-                items.forEach((it, i) => {
-                    if (!it.gross_photo_link && !it.tare_photo_link) return;
-                    doc.fillColor(INK).font('Helvetica-Bold').text(`${i + 1}. ${it.description || 'Item ' + (i + 1)}`);
-                    doc.font('Helvetica').fillColor('#1a5fb4');
-                    if (it.gross_photo_link) doc.text('   Gross photo: ' + it.gross_photo_link, { link: it.gross_photo_link, underline: true });
-                    if (it.tare_photo_link)  doc.text('   Tare photo: '  + it.tare_photo_link,  { link: it.tare_photo_link,  underline: true });
-                    doc.fillColor(INK);
-                    doc.moveDown(0.3);
-                });
-            }
+            // The "Captured Scale Photos" list that used to be appended here
+            // was removed 2026-08-12 per Apsara: weight evidence belongs on
+            // the separate weights PDF only, so the ticket ends on the
+            // Summary rather than trailing a page of photo links. The weights
+            // PDF still carries each item's gross/tare photo links inline on
+            // its per-item cards, so nothing is lost — it just isn't
+            // duplicated on the document the buyer receives.
 
             addFooters(doc, load);
             doc.end();
@@ -382,11 +406,15 @@ function generateWeightsPdf(load) {
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
 
+            // Same field reduction as the main ticket — seller lives in the
+            // letterhead now, so repeating it here would be redundant.
             drawLetterhead(doc, 'Weight Record', load);
             drawFieldBox(doc, [
-                { label: 'Date:',   value: load.date },
-                { label: 'Seller:', value: load.seller },
-                { label: 'Buyer:',  value: load.buyer },
+                { label: 'Date:',  value: load.date },
+                { label: 'Buyer:', value: load.buyer },
+            ], [
+                { label: 'Buyer Address:', value: load.buyer_address },
+                { label: 'Description:',   value: load.description },
             ]);
 
             const unit = load.weight_unit || 'lb';
