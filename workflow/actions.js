@@ -3297,30 +3297,28 @@ async function handleQuoteLegReply(chatId, text) {
 
 // Entry point from brain.js's 'get_contact_quote' intent.
 //
-// WhatsApp confirmation redesigned 2026-08-16 per Apsara: "just have
-// whatsapp verify button in phon[e] number" — this used to pause and ask a
-// yes/no over WhatsApp chat on EVERY request that had an unverified
-// address-book mobile candidate (see git history / the removed
-// pauseForContactQuoteWhatsappConfirm). That's gone: verification is now a
-// one-time toggle on the Address Book dashboard page (helpers/addressBook.js's
-// setMobileVerified, via api.js's PUT /api/address-book/:id/verify-whatsapp).
-// This function no longer needs to ask about WhatsApp at all — it just reads
-// whether the candidate is already verified and dispatches straight through.
+// Recipient model rebuilt 2026-08-16 (same day, later) per Apsara: "i should
+// have quotes contact where i have separate group/whatsapp/email mimicking
+// trucker implementation." Recipients now come from helpers/contacts.js
+// (dedicated list, trucker-shaped record) instead of merging Email Contacts
+// + Address Book, and resolve to exactly ONE channel via
+// helpers/quoteRequests.js's resolveTruckerChannel — same as a trucker gets.
+// No more separate WhatsApp verification step: a contact's group_id/
+// whatsapp/email are set directly by Apsara on the dashboard, trusted the
+// same way a trucker's own fields are.
 async function startContactQuoteRequestFlow(chatId, recipientQuery, details) {
     const cqr = require('../helpers/contactQuoteRequests');
     const resolved = cqr.resolveQuoteContact(recipientQuery);
 
     if (resolved.type === 'not_found') {
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Couldn't find "${recipientQuery}" in Email Contacts or the Address Book`);
+        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Couldn't find "${recipientQuery}" in Contacts`);
     }
     if (resolved.type === 'ambiguous') {
-        const listText = resolved.matches.map((m, i) => `${i + 1}. ${m.displayName || m.name || m.aliases?.[0]} (${m.kind})`).join('\n');
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `"${recipientQuery}" matches more than one saved contact:\n${listText}\n\nReply with the correct name/email, or "cancel"`, /* skipPrefix */ true);
+        const listText = resolved.matches.map((m, i) => `${i + 1}. ${m.name}`).join('\n');
+        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `"${recipientQuery}" matches more than one saved contact:\n${listText}\n\nReply with the exact name, or "cancel"`, /* skipPrefix */ true);
     }
-
-    // resolved.type === 'resolved'
-    if (!resolved.email && !resolved.whatsapp_candidate) {
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Found "${resolved.name}" but no email or phone on file`);
+    if (resolved.type === 'resolved_no_channel') {
+        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Found "${resolved.name}" but no WhatsApp group/number or email on file — add one from the dashboard (Contacts)`);
     }
     return dispatchContactQuote(chatId, resolved, recipientQuery, details);
 }
@@ -3334,12 +3332,14 @@ async function pauseForContactQuoteRetry(chatId, recipientQuery, details, messag
         await _send(chatId, `${message}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask again once that's resolved.`);
         return { action_taken: 'contact_quote_recipient_unresolved_queued' };
     }
-    await _send(chatId, skipPrefix ? message : `${message} — reply with the correct name or an email address (or "cancel").`);
+    await _send(chatId, skipPrefix ? message : `${message} — reply with the exact contact name (or "cancel").`);
     return { action_taken: 'contact_quote_recipient_unresolved' };
 }
 
 // Reply to pauseForContactQuoteRetry's "couldn't find X / ambiguous" question.
-// Same verbatim-capture + cancel/email-shortcut pattern as resumeQuoteWithTruckerRetry.
+// Same verbatim-capture + cancel pattern as resumeQuoteWithTruckerRetry (minus
+// the email-shortcut branch — a contact-quote recipient is always a saved
+// Contacts entry now, never a one-off address typed straight into the reply).
 async function resumeContactQuoteWithRetry(chatId, pending, text) {
     await clearPending(chatId);
     const clean = String(text || '').trim();
@@ -3351,33 +3351,20 @@ async function resumeContactQuoteWithRetry(chatId, pending, text) {
     return startContactQuoteRequestFlow(chatId, clean, details);
 }
 
-// Everything's resolved — actually send. Mirrors dispatchQuoteToTruckers'
-// structure: build legs, hand off to the workflow layer, report back with a
-// clear sent/failed summary and the same 30/60/90 follow-up note.
-// buildLegsFromResolution decides WhatsApp inclusion purely off
-// resolved.whatsapp_candidate.verified now (see that function's own
-// comment) — this only needs to explain an UNVERIFIED skip to Apsara, not
-// ask her about it.
+// Everything's resolved — actually send. Mirrors dispatchQuoteToTruckers's
+// structure closely: one resolved channel, one leg, hand off to the workflow
+// layer, report back with a clear sent/failed summary and the same 30/60/90
+// follow-up note.
 async function dispatchContactQuote(chatId, resolved, recipientQuery, details) {
     const contactFlow = require('./contactQuoteRequests');
-    const legs = contactFlow.buildLegsFromResolution(resolved);
-    const unverifiedSkipped = resolved.whatsapp_candidate && !resolved.whatsapp_candidate.verified;
-
-    if (!legs.length) {
-        const note = unverifiedSkipped
-            ? ` — found ${resolved.whatsapp_candidate.raw} but it's not verified for WhatsApp yet. Verify it on the Address Book dashboard, then ask again.`
-            : ' — no email or verified WhatsApp number on file.';
-        await _send(chatId, `Couldn't send to ${resolved.name}${note}`);
-        return { action_taken: 'contact_quote_request_failed' };
-    }
+    const legs = [{ channel: resolved.channel, target: resolved.target, target_label: resolved.target }];
 
     const { sentTo, failed } = await contactFlow.startContactQuoteRequest({
         recipientQuery, recipientName: resolved.name, details, legs, askedByChat: chatId, send: _send,
     });
 
-    const lines = [`Quote request sent to ${resolved.name} via ${sentTo.join(', ') || '(nobody — all sends failed)'} for: ${details}.`];
+    const lines = [`Quote request sent to ${resolved.name} via ${sentTo.join(', ') || '(send failed)'} for: ${details}.`];
     if (failed.length) lines.push(`Send failed for: ${failed.join(', ')}.`);
-    if (unverifiedSkipped) lines.push(`Also found ${resolved.whatsapp_candidate.raw} but it's not verified for WhatsApp yet — verify it on the Address Book dashboard to include it next time.`);
     if (sentTo.length) lines.push(`I'll follow up at 30/60/90 min if there's no price yet, then loop in the manager.`);
     await _send(chatId, lines.join('\n'));
     return { action_taken: sentTo.length ? 'contact_quote_request_sent' : 'contact_quote_request_failed' };

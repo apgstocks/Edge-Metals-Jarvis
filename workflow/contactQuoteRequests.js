@@ -30,45 +30,27 @@ function managerChatId() {
     return (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
 }
 
-// Builds the legs to actually dispatch to, from resolveQuoteContact's
-// output. Both channels fire when both are available — Apsara asked for
-// "whatsapp/email support," not "whichever one first" — each is tracked and
-// reminded independently, same as two different trucker legs would be.
-//
-// The WhatsApp candidate is only included when ALREADY verified —
-// resolved.whatsapp_candidate.verified reflects addressBook.js's
-// entry.whatsapp_verified flag, set via the "Verify WhatsApp" button on the
-// Address Book dashboard page (2026-08-16 per Apsara: "just have whatsapp
-// verify button in phon[e] number" — replaces the earlier design where
-// Jarvis asked a yes/no over WhatsApp chat on every single request). An
-// unverified candidate is silently skipped here — dispatchContactQuote in
-// actions.js is what tells Apsara it was skipped and points her at the
-// dashboard, not this function.
-function buildLegsFromResolution(resolved) {
-    const legs = [];
-    if (resolved.email?.address) {
-        legs.push({ channel: 'email', target: resolved.email.address, target_label: resolved.email.address });
-    }
-    if (resolved.whatsapp_candidate?.verified) {
-        const target = `${resolved.whatsapp_candidate.digits}@c.us`;
-        legs.push({ channel: 'whatsapp', target, target_label: resolved.whatsapp_candidate.raw });
-    }
-    return legs;
-}
-
+// REBUILT 2026-08-16 (same day, later) per Apsara: "i should have quotes
+// contact where i have separate group/whatsapp/email mimicking trucker
+// implementation" — recipients now resolve to ONE channel via
+// helpers/quoteRequests.js's resolveTruckerChannel (group_id → whatsapp →
+// email, or preferred_mode:'email' outright), exactly like a trucker gets,
+// not a dual email+WhatsApp candidate needing separate verification. This
+// mirrors workflow/quoteRequests.js's dispatchLeg almost exactly — same
+// channel values (whatsapp_group/whatsapp_individual/email), same shape —
+// just building the message/subject from request.details instead of an
+// origin→destination lane.
 async function dispatchLeg(request, leg, send) {
     const message = cqr.buildContactQuoteMessage(request);
     try {
-        if (leg.channel === 'whatsapp') {
+        if (leg.channel === 'whatsapp_group' || leg.channel === 'whatsapp_individual') {
             const ok = await send(leg.target, message);
             if (!ok) return false;
             await cqr.markLegSent(request.id, leg.channel);
         } else if (leg.channel === 'email') {
             const { sendEmail } = require('../helpers/gmail');
-            const cc = require('../helpers/emailContacts').resolveContact(request.recipient_query)?.contact?.cc || [];
             const sent = await sendEmail({
                 to: leg.target,
-                cc: cc.length ? cc : undefined,
                 subject: `Quote request: ${request.details}`,
                 body: message,
             });
@@ -88,7 +70,7 @@ async function scheduleFirstReminder(request, leg) {
         type: 'contact_quote_reminder',
         target_kind: 'contact',
         target_name: request.recipient_name,
-        target_chat: leg.channel === 'whatsapp' ? leg.target : null,
+        target_chat: leg.channel !== 'email' ? leg.target : null,
         message: cqr.buildReminderMessage(request, 1),
         fire_at: new Date(Date.now() + cfg.QUOTE_REMINDER_SCHEDULE_MIN[0] * 60000).toISOString(),
         condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, channel: leg.channel },
@@ -100,7 +82,9 @@ async function scheduleFirstReminder(request, leg) {
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
-// legs: already-built [{channel, target, target_label}] from buildLegsFromResolution.
+// legs: already-built [{channel, target, target_label}] — actions.js builds
+// this directly from helpers/contactQuoteRequests.js's resolveQuoteContact
+// result now (single resolved channel, trucker-style), one-element array.
 async function startContactQuoteRequest({ recipientQuery, recipientName, details, legs, askedByChat, send }) {
     const request = await cqr.createContactQuoteRequest({ recipientQuery, recipientName, details, legs, askedByChat });
 
@@ -160,7 +144,7 @@ async function handleReminderTask(task, { send }) {
         await tasks.enqueue({
             type: 'contact_quote_reminder',
             target_kind: 'contact', target_name: request.recipient_name,
-            target_chat: leg.channel === 'whatsapp' ? leg.target : null,
+            target_chat: leg.channel !== 'email' ? leg.target : null,
             message: cqr.buildReminderMessage(request, stage + 1),
             fire_at: new Date(sentAtMs + cfg.QUOTE_REMINDER_SCHEDULE_MIN[stage] * 60000).toISOString(),
             condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, channel: leg.channel },
@@ -317,7 +301,6 @@ async function handleEmailLegReply(request, leg, text) {
 }
 
 module.exports = {
-    buildLegsFromResolution,
     startContactQuoteRequest,
     handleReminderTask,
     handleEscalationTask,

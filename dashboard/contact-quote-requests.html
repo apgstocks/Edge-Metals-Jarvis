@@ -72,7 +72,53 @@ tr:last-child td { border-bottom:none; }
     <div><div class="eyebrow">// Quotes</div><h2 style="font-size:24px; text-transform:uppercase;">Contact quote requests</h2></div>
     <button id="btnRefresh" class="btn btn-secondary">Refresh</button>
   </div>
-  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Every "quote to X for Y" ask sent to a saved Email Contact or Address Book contact — not truckers. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only. Auto-refreshes every 30s. (Trucker lane quotes are on the separate <a href="/quote-requests">Quote Requests</a> page.)</div>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Every "quote to X for Y" ask sent to a saved Contact — not truckers. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only for requests, but Contacts below are managed here. Auto-refreshes every 30s. (Trucker lane quotes are on the separate <a href="/quote-requests">Quote Requests</a> page.)</div>
+
+  <!-- ── Contacts management (2026-08-16, per Apsara: "separate group/
+       whatsapp/email mimicking trucker implementation") ────────────────────
+       Same field set as a trucker record (group_id/whatsapp/email/
+       preferred_mode), backed by /api/contacts (helpers/contacts.js) via
+       api.js's shared contactRoutes() factory — same upsert-by-name pattern
+       the Truckers/Suppliers tabs already use. -->
+  <div class="card" style="padding:18px 20px; margin-bottom:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+      <div style="font-size:14px; font-weight:700; color:var(--text-strong);">Contacts</div>
+      <button id="btnAddContact" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">+ Add contact</button>
+    </div>
+    <div id="contactsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+
+  <div id="contactModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="width:100%; max-width:420px; padding:22px 24px;">
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:14px;">Add / edit contact</div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Name
+          <input id="cmName" type="text" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp group ID (optional)
+          <input id="cmGroupId" type="text" placeholder="1234567890-1234567890@g.us" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp number (optional)
+          <input id="cmWhatsapp" type="text" placeholder="15551234567" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Email (optional)
+          <input id="cmEmail" type="text" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Preferred channel
+          <select id="cmPreferredMode" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+            <option value="">Default (group → WhatsApp → email)</option>
+            <option value="email">Email</option>
+          </select>
+        </label>
+      </div>
+      <div id="cmError" class="hidden" style="margin-top:10px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+        <button id="cmCancel" class="btn btn-secondary" style="padding:8px 16px; font-size:11px;">Cancel</button>
+        <button id="cmSave" class="btn btn-primary" style="padding:8px 16px; font-size:11px;">Save</button>
+      </div>
+    </div>
+  </div>
+
   <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-muted); margin-bottom:16px; cursor:pointer;">
     <input id="hideClosedToggle" type="checkbox">
     <span>Hide closed requests (everyone priced or escalated)</span>
@@ -110,7 +156,7 @@ const STATUS_LABEL = {
   no_response_escalated: { text: 'No response — escalated', color: 'var(--status-danger)' },
   send_failed: { text: 'Send failed', color: 'var(--status-danger)' },
 };
-const CHANNEL_LABEL = { whatsapp: 'WhatsApp', email: 'Email' };
+const CHANNEL_LABEL = { whatsapp_group: 'WhatsApp (group)', whatsapp_individual: 'WhatsApp (DM)', email: 'Email' };
 
 function fmtTime(iso) {
   if (!iso) return '—';
@@ -186,6 +232,103 @@ $('btnRefresh').addEventListener('click', () => load());
 $('hideClosedToggle').addEventListener('change', render);
 load();
 setInterval(load, 30000);
+
+// ── Contacts management (2026-08-16) ─────────────────────────────────────
+// name-keyed CRUD against /api/contacts (helpers/contacts.js), same
+// upsert-by-name factory api.js already uses for Truckers/Suppliers — POST
+// with an existing name overwrites that record (used here as "edit").
+let contactsData = [];
+let contactEditingOriginalName = null;
+
+const PREFERRED_MODE_LABEL = { email: 'Email preferred' };
+
+function contactCard(c) {
+  const channels = [];
+  if (c.group_id) channels.push('WhatsApp group');
+  if (c.whatsapp) channels.push(`WhatsApp ${esc(c.whatsapp)}`);
+  if (c.email) channels.push(esc(c.email));
+  const channelText = channels.length ? channels.join(' · ') : '<span style="color:var(--status-danger);">No channel on file</span>';
+  return `
+    <div class="card" style="padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <div>
+        <div style="font-size:13.5px; font-weight:700; color:var(--text-strong);">${esc(c.name)}${c.preferred_mode ? ` <span class="badge" style="background:rgba(58,110,165,.15); color:var(--blue-500); margin-left:4px;">${esc(PREFERRED_MODE_LABEL[c.preferred_mode] || c.preferred_mode)}</span>` : ''}</div>
+        <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${channelText}</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-shrink:0;">
+        <button class="btn btn-secondary btn-edit-contact" data-name="${esc(c.name)}" style="padding:5px 10px; font-size:10.5px;">Edit</button>
+        <button class="btn btn-secondary btn-delete-contact" data-name="${esc(c.name)}" style="padding:5px 10px; font-size:10.5px; color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
+      </div>
+    </div>`;
+}
+
+function renderContacts() {
+  const el = $('contactsList');
+  el.innerHTML = contactsData.length
+    ? contactsData.map(contactCard).join('')
+    : `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:16px 0;">No contacts yet — click "+ Add contact" above.</div>`;
+  el.querySelectorAll('.btn-edit-contact').forEach(btn => btn.addEventListener('click', () => {
+    const c = contactsData.find(x => x.name === btn.dataset.name);
+    if (c) openContactModal(c);
+  }));
+  el.querySelectorAll('.btn-delete-contact').forEach(btn => btn.addEventListener('click', () => deleteContact(btn.dataset.name)));
+}
+
+async function loadContacts() {
+  try {
+    contactsData = await api('/api/contacts');
+    renderContacts();
+  } catch (e) {
+    $('contactsList').innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
+  }
+}
+
+function openContactModal(contact) {
+  contactEditingOriginalName = contact ? contact.name : null;
+  $('cmName').value = contact ? contact.name : '';
+  $('cmGroupId').value = contact ? (contact.group_id || '') : '';
+  $('cmWhatsapp').value = contact ? (contact.whatsapp || '') : '';
+  $('cmEmail').value = contact ? (contact.email || '') : '';
+  $('cmPreferredMode').value = contact ? (contact.preferred_mode || '') : '';
+  $('cmError').classList.add('hidden');
+  $('contactModalOverlay').classList.remove('hidden');
+}
+function closeContactModal() { $('contactModalOverlay').classList.add('hidden'); contactEditingOriginalName = null; }
+
+async function deleteContact(name) {
+  if (!confirm(`Remove "${name}" from Contacts? Any open quote requests to them keep running.`)) return;
+  try {
+    await api(`/api/contacts/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadContacts();
+  } catch (e) { alert('Could not delete: ' + e.message); }
+}
+
+$('btnAddContact').addEventListener('click', () => openContactModal(null));
+$('cmCancel').addEventListener('click', closeContactModal);
+$('contactModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'contactModalOverlay') closeContactModal(); });
+$('cmSave').addEventListener('click', async () => {
+  const name = $('cmName').value.trim();
+  if (!name) { $('cmError').textContent = 'Name is required.'; $('cmError').classList.remove('hidden'); return; }
+  const body = {
+    name,
+    group_id: $('cmGroupId').value.trim() || null,
+    whatsapp: $('cmWhatsapp').value.trim() || null,
+    email: $('cmEmail').value.trim() || null,
+    preferred_mode: $('cmPreferredMode').value || null,
+  };
+  try {
+    // A rename (editing name changed) leaves the old-named record behind
+    // (POST here is upsert-by-name, same as Truckers/Suppliers) — delete
+    // the stale one so renaming doesn't silently leave a duplicate.
+    await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
+    if (contactEditingOriginalName && contactEditingOriginalName !== name) {
+      await api(`/api/contacts/${encodeURIComponent(contactEditingOriginalName)}`, { method: 'DELETE' });
+    }
+    closeContactModal();
+    await loadContacts();
+  } catch (e) { $('cmError').textContent = e.message; $('cmError').classList.remove('hidden'); }
+});
+
+loadContacts();
 </script>
 </body>
 </html>

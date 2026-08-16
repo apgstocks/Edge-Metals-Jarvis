@@ -5,123 +5,78 @@
 // asks TRUCKERS for a haul price between two address-book lanes (origin →
 // destination). This is a separate, parallel feature: ask any saved PERSON
 // or COMPANY (a buyer like Eccomelt, a supplier, anyone with a saved
-// contact) for a quote on something — a commodity/description, not a lane —
-// over WhatsApp and/or email.
+// contact) for a quote on something — a commodity/description, not a lane.
+//
+// RECIPIENT MODEL REBUILT 2026-08-16 (same day, later) per Apsara: "i should
+// have quotes contact where i have separate group/whatsapp/email mimicking
+// trucker implementation." The original version resolved a recipient by
+// merging helpers/emailContacts.js + helpers/addressBook.js — that's gone.
+// Recipients now come from helpers/contacts.js, a dedicated flat-JSON list
+// shaped exactly like a trucker record (name, group_id, whatsapp, email,
+// preferred_mode), which lets this reuse helpers/quoteRequests.js's
+// resolveTruckerChannel UNCHANGED — same group_id → whatsapp → email
+// fallback (or preferred_mode:'email' winning outright), same function, no
+// fork. One resolved channel per contact, exactly like a trucker gets, not
+// a dual email+WhatsApp candidate needing separate confirmation.
 //
 // DELIBERATELY A SEPARATE FILE/STORE, not a generalized version of
 // helpers/quoteRequests.js — same reasoning helpers/emailContacts.js's own
 // header gives for why IT is a separate file from truckers.json/
 // suppliers.json despite overlapping names: "an email recipient list is its
-// own concern, even where names overlap with operational contacts." Two
-// concrete reasons this matters here, not just style:
-//   1. Recipient resolution is fundamentally different — trucker legs
-//      resolve through workflow/truckers.js (Supabase); contact legs here
-//      resolve through helpers/emailContacts.js AND helpers/addressBook.js
-//      (flat JSON), matched against BOTH per Apsara's explicit answer.
-//   2. Generalizing the trucker file in place would risk regressing the
-//      lane-quote flow that was JUST fixed (see workflow/brain.js's
-//      parseGetQuoteCommand, 2026-08-16 fix) — this file imports
-//      classifyQuoteReply from helpers/quoteRequests.js (identical price-
-//      detection logic, no reason to fork it) but changes NOTHING there.
+// own concern, even where names overlap with operational contacts." This
+// file imports classifyQuoteReply AND resolveTruckerChannel from
+// helpers/quoteRequests.js (identical logic, no reason to fork either) but
+// changes NOTHING there — the trucker lane-quote flow (already live, with
+// real active requests and scheduled reminders) is untouched.
 //
 // Storage: own flat array, config.CONTACT_QUOTE_REQUESTS_FILE — same
 // request/leg shape as helpers/quoteRequests.js (see that file's header),
 // except origin_query/destination_query are replaced with recipient_query/
-// details (a free-text commodity/ask description, not a lane), and legs are
-// keyed by CHANNEL for one resolved recipient (whatsapp + email can both be
-// "legs" of the same ask to the same person) rather than one leg per
-// different trucker.
+// details (a free-text commodity/ask description, not a lane).
 //
 // request shape:
 //   { id, recipient_query, recipient_name, details, created_at, asked_by_chat,
 //     status: 'active'|'closed', legs: [ legShape, ... ] }
 // leg shape (same as helpers/quoteRequests.js's, minus trucker_name):
-//   { channel: 'whatsapp'|'email', target, target_label,
+//   { channel: 'whatsapp_group'|'whatsapp_individual'|'email', target, target_label,
 //     status: 'awaiting_reply'|'price_received'|'no_response_escalated'|'send_failed',
 //     sent_at, last_reply_at, last_reply_text, reminders_sent, price, failed_reason }
+// legs is still an array (one leg today, one contact per request) so the
+// store/scheduling shape stays forward-compatible if multi-recipient asks
+// are ever added, same as truckers' legs array.
 
 const crypto = require('crypto');
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
-const { resolveContact } = require('./emailContacts');
-const { resolveAddress } = require('./addressBook');
-const { classifyQuoteReply } = require('./quoteRequests'); // reuse, don't fork — see header
+const { getContactsByName } = require('./contacts');
+const { classifyQuoteReply, resolveTruckerChannel } = require('./quoteRequests'); // reuse, don't fork — see header
 
 const loadContactQuoteRequests = () => loadJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, []);
 
-// ── Recipient resolution — checks BOTH directories, merges channels ────────
-// Per Apsara 2026-08-16: "Match for email,whatsapp in both email contact,
-// address book" — a query like "Eccomelt" should find the saved email (from
-// emailContacts' domain-group resolution, e.g. Audrey Meador as primary +
-// cc) AND, separately, whatever's in the address book (raw address block +
-// optional `mobile` field) for the same name, then offer whichever
-// channel(s) actually have something usable rather than requiring both.
-//
-// mobile IS SURFACED AS A CANDIDATE, NOT TRUSTED OUTRIGHT — addressBook.js's
-// own header is explicit that `mobile` is "just a reference number to have
-// on hand alongside the address... not something the app dials or builds a
-// WhatsApp chatId from." Address-book entries are typed in from a running
-// Google Doc / freight paperwork and frequently ARE office/landline numbers,
-// not personal WhatsApp numbers. Rather than silently trusting every
-// digit-string as a real WhatsApp target (a real risk: firing a quote ask at
-// a company's front-desk landline), this only offers it as `whatsapp_candidate`
-// when it digit-strips to something phone-shaped (10-15 digits).
-//
-// `verified` reflects addressBook.js's entry.whatsapp_verified flag — set via
-// the "Verify WhatsApp" button on the Address Book dashboard page (2026-08-16
-// per Apsara: "just have whatsapp verify button in phon[e] number"), NOT a
-// per-request WhatsApp chat confirmation like earlier. workflow/
-// contactQuoteRequests.js.buildLegsFromResolution only includes the WhatsApp
-// leg when this is true — an unverified candidate is skipped entirely, with
-// Apsara pointed at the dashboard to verify it once. Still "ask, don't
-// guess," just moved from a per-message chat prompt to a one-time dashboard
-// action, same as every other resolver's ambiguous-tier posture elsewhere in
-// this codebase (resolveContact's ambiguous tier, LaneResolutionError, etc).
+// ── Recipient resolution — helpers/contacts.js, trucker-style channel pick ──
+// Mirrors workflow/quoteRequests.js's resolveTruckerNames in spirit (exact
+// name match wins; 2+ matches is ambiguous, ask; 0 matches is not-found) but
+// synchronous and single-name, since contact-quote's command grammar
+// ("quote to X for Y") only ever names one recipient per ask today.
 //
 // Returns:
-//   { type: 'resolved', name, email: {address}|null,
-//     whatsapp_candidate: {digits, raw, verified}|null,
-//     source: 'email_contacts'|'address_book'|'both' }
-//   { type: 'ambiguous', matches: [...] }   — caller must ask which one
-//   { type: 'not_found' }                    — nothing in either directory
+//   { type: 'resolved', name, channel, target }          — ready to dispatch
+//   { type: 'resolved_no_channel', name }                 — contact exists but has no group/whatsapp/email on file
+//   { type: 'ambiguous', matches: [{name, ...}] }          — caller must ask which one
+//   { type: 'not_found' }                                  — no saved contact matches
 function resolveQuoteContact(query) {
     const raw = String(query || '').trim();
     if (!raw) return { type: 'not_found' };
 
-    const emailResult = resolveContact(raw); // exact | domain_default | single_partial | ambiguous | null
-    const addressResult = resolveAddress(raw); // exact | partial | ambiguous | null
+    const matches = getContactsByName(raw);
+    if (!matches.length) return { type: 'not_found' };
+    if (matches.length > 1) return { type: 'ambiguous', matches };
 
-    if (emailResult?.type === 'ambiguous' || addressResult?.type === 'ambiguous') {
-        const matches = [
-            ...(emailResult?.type === 'ambiguous' ? emailResult.matches.map((m) => ({ kind: 'email', ...m })) : []),
-            ...(addressResult?.type === 'ambiguous' ? addressResult.matches.map((m) => ({ kind: 'address', ...m })) : []),
-        ];
-        return { type: 'ambiguous', matches };
-    }
+    const contact = matches[0];
+    const channel = resolveTruckerChannel(contact); // {channel, target} | null — same function truckers use
+    if (!channel) return { type: 'resolved_no_channel', name: contact.name };
 
-    const emailContact = emailResult && emailResult.type !== 'ambiguous' ? emailResult.contact : null;
-    const addressEntry = addressResult && addressResult.type !== 'ambiguous' ? addressResult.entry : null;
-
-    if (!emailContact && !addressEntry) return { type: 'not_found' };
-
-    let whatsappCandidate = null;
-    if (addressEntry?.mobile) {
-        const digits = String(addressEntry.mobile).replace(/\D/g, '');
-        if (digits.length >= 10 && digits.length <= 15) {
-            whatsappCandidate = { digits, raw: addressEntry.mobile, verified: !!addressEntry.whatsapp_verified };
-        }
-    }
-
-    const name = emailContact?.displayName || emailContact?.name || addressEntry?.aliases?.[0] || raw;
-    const source = emailContact && addressEntry ? 'both' : emailContact ? 'email_contacts' : 'address_book';
-
-    return {
-        type: 'resolved',
-        name,
-        email: emailContact ? { address: emailContact.email, cc: emailContact.cc || [] } : null,
-        whatsapp_candidate: whatsappCandidate,
-        source,
-    };
+    return { type: 'resolved', name: contact.name, channel: channel.channel, target: channel.target };
 }
 
 // ── Message building ─────────────────────────────────────────────────────────

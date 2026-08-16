@@ -405,14 +405,13 @@ const NAV_ITEMS = [
   { id: 'whatsapp',       label: 'WhatsApp',       group: 'Contacts & Outreach', adminOnly: true },
   { id: 'email-contacts', label: 'Email Contacts', group: 'Contacts & Outreach', adminOnly: true },
   { id: 'address-book',   label: 'Address Book',   group: 'Contacts & Outreach', adminOnly: true },
+  // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
+  // same"): this ONE tab now shows trucker lane quotes AND contact quotes
+  // together (dashboard/quote-requests.html fetches both /api/quote-requests
+  // and /api/contact-quote-requests and renders one combined list). A
+  // separate "Contact Quotes" nav entry used to exist here — removed, since
+  // that page's content lives on this same one now.
   { id: 'quote-requests', label: 'Quote Requests', group: 'Contacts & Outreach', adminOnly: true },
-  // Separate tab (2026-08-16 per Apsara: "these are just truckers. i want
-  // to have another tab where there is quote request and have
-  // whatsapp/email support for quote") — asks any saved Email Contact /
-  // Address Book contact, not just truckers. Kept as its own nav entry
-  // rather than merged into Quote Requests above, matching the separate
-  // backend store (helpers/contactQuoteRequests.js) and standalone page.
-  { id: 'contact-quote-requests', label: 'Contact Quotes', group: 'Contacts & Outreach', adminOnly: true },
 
   // App-wide configuration.
   { id: 'settings',  label: 'Settings', group: 'System', adminOnly: true },
@@ -444,7 +443,6 @@ function renderNav() {
     if (b.dataset.tab === 'address-book') { window.location.href = '/address-book'; return; }
     // Same standalone-page pattern as address-book above.
     if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
-    if (b.dataset.tab === 'contact-quote-requests') { window.location.href = '/contact-quote-requests'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }

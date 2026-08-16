@@ -72,7 +72,54 @@ tr:last-child td { border-bottom:none; }
     <div><div class="eyebrow">// Quotes</div><h2 style="font-size:24px; text-transform:uppercase;">Quote requests</h2></div>
     <button id="btnRefresh" class="btn btn-secondary">Refresh</button>
   </div>
-  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Every "get quote from X to Y" ask, per trucker — who was asked, over which channel, and where each one stands. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only. Auto-refreshes every 30s.</div>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Every quote ask Jarvis has sent — trucker lane quotes ("get quote from X to Y") and contact quotes ("quote to X for Y") together, one list, sorted by most recent. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only for requests. Auto-refreshes every 30s.</div>
+
+  <!-- ── Contacts management (for contact-quote asks — buyers/companies,
+       not truckers) — 2026-08-16, per Apsara: "separate group/whatsapp/
+       email mimicking trucker implementation." Same field set as a trucker
+       record, backed by /api/contacts (helpers/contacts.js) via api.js's
+       shared contactRoutes() factory — same upsert-by-name pattern the
+       Truckers/Suppliers tabs already use. Trucker records themselves are
+       still managed on the main dashboard's Truckers tab, unchanged. -->
+  <div class="card" style="padding:18px 20px; margin-bottom:24px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+      <div style="font-size:14px; font-weight:700; color:var(--text-strong);">Contacts <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(for "quote to X for Y" asks)</span></div>
+      <button id="btnAddContact" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">+ Add contact</button>
+    </div>
+    <div id="contactsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+
+  <div id="contactModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="width:100%; max-width:420px; padding:22px 24px;">
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:14px;">Add / edit contact</div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Name
+          <input id="cmName" type="text" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp group ID (optional)
+          <input id="cmGroupId" type="text" placeholder="1234567890-1234567890@g.us" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp number (optional)
+          <input id="cmWhatsapp" type="text" placeholder="15551234567" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Email (optional)
+          <input id="cmEmail" type="text" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        </label>
+        <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Preferred channel
+          <select id="cmPreferredMode" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+            <option value="">Default (group → WhatsApp → email)</option>
+            <option value="email">Email</option>
+          </select>
+        </label>
+      </div>
+      <div id="cmError" class="hidden" style="margin-top:10px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+        <button id="cmCancel" class="btn btn-secondary" style="padding:8px 16px; font-size:11px;">Cancel</button>
+        <button id="cmSave" class="btn btn-primary" style="padding:8px 16px; font-size:11px;">Save</button>
+      </div>
+    </div>
+  </div>
+
   <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-muted); margin-bottom:16px; cursor:pointer;">
     <input id="hideClosedToggle" type="checkbox">
     <span>Hide closed requests (everyone priced or escalated)</span>
@@ -81,13 +128,24 @@ tr:last-child td { border-bottom:none; }
 </section>
 
 <script>
-// ── QUOTE REQUESTS COMPARISON TABLE ──────────────────────────────────────
-// Built 2026-08-05 alongside workflow/quoteRequests.js. Reads GET
-// /api/quote-requests (data/quote_requests.json as-is — one row per request,
-// each holding an array of per-trucker "legs") and renders one card per
-// request with a per-leg table: trucker / channel / status / price / last
-// reply / reminders sent. Standalone page, same pattern as
-// dashboard/address-book.html — served at /quote-requests (see api.js).
+// ── QUOTE REQUESTS — combined lane (trucker) + contact table ────────────
+// Built 2026-08-05 alongside workflow/quoteRequests.js (trucker lane
+// quotes); MERGED 2026-08-16 per Apsara ("Contact Quotes and Quote
+// Requests... both are same") to show both in ONE list here, one card per
+// request, tagged by _kind ('lane'|'contact') client-side.
+//
+// Reads GET /api/quote-requests (trucker legs, data/quote_requests.json)
+// AND GET /api/contact-quote-requests (contact legs, data/
+// contact_quote_requests.json) — deliberately still TWO backend stores and
+// TWO reminder/escalation pipelines (workflow/quoteRequests.js vs
+// workflow/contactQuoteRequests.js), not merged server-side: the trucker
+// store has real active requests and scheduled reminder tasks running in
+// production right now, and folding it into one file/schema would mean
+// editing every message-building and alert call site in that live file —
+// real regression risk for no visible benefit, since the ONLY thing Apsara
+// actually asked for is "one list to look at." This page delivers that by
+// fetching both endpoints and rendering one combined, sorted table — same
+// outcome, zero risk to the live trucker flow.
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 const $ = (id) => document.getElementById(id);
 
@@ -109,6 +167,9 @@ const STATUS_LABEL = {
   // a real still-pending ask.
   send_failed: { text: 'Send failed', color: 'var(--status-danger)' },
 };
+// whatsapp_group/whatsapp_individual/email are the trucker+contact channel
+// values (helpers/quoteRequests.js's resolveTruckerChannel, reused by
+// contact-quote resolution too — see that function's own header).
 const CHANNEL_LABEL = { whatsapp_group: 'WhatsApp (group)', whatsapp_individual: 'WhatsApp (DM)', email: 'Email' };
 
 function fmtTime(iso) {
@@ -121,34 +182,40 @@ function fmtPrice(price) {
   return price.amount != null ? `$${price.amount.toLocaleString()}` : price.raw_text || '—';
 }
 
-function legRow(leg) {
+// legName: 'lane' legs are keyed by trucker_name, 'contact' legs by the
+// request's single recipient_name (same value on every leg of that request,
+// since a contact-quote request has at most one leg per channel today).
+function legRow(leg, recipientName) {
   const status = STATUS_LABEL[leg.status] || { text: leg.status, color: 'var(--text-muted)' };
   return `
     <tr>
-      <td style="font-weight:600; color:var(--text-strong);">${esc(leg.trucker_name)}</td>
+      <td style="font-weight:600; color:var(--text-strong);">${esc(leg.trucker_name || recipientName)}</td>
       <td>${esc(CHANNEL_LABEL[leg.channel] || leg.channel)}</td>
       <td><span class="badge" style="background:${status.color}22; color:${status.color};">${esc(status.text)}</span></td>
       <td style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${fmtPrice(leg.price)}</td>
       <td style="max-width:220px; color:var(--text-muted);">${esc(leg.last_reply_text || '—')}</td>
-      <td style="color:var(--text-faint);">${leg.reminders_sent.length} sent</td>
+      <td style="color:var(--text-faint);">${(leg.reminders_sent || []).length} sent</td>
       <td style="color:var(--text-faint); font-size:11.5px;">${fmtTime(leg.sent_at)}</td>
     </tr>`;
 }
 
 function requestCard(r) {
   const closed = r.status === 'closed';
+  const isLane = r._kind === 'lane';
+  const title = isLane ? `${esc(r.origin_query)} &rarr; ${esc(r.destination_query)}` : `${esc(r.recipient_name)} <span style="color:var(--text-faint); font-weight:400;">— ${esc(r.details)}</span>`;
+  const kindBadge = `<span class="badge" style="background:${isLane ? 'rgba(58,110,165,.15)' : 'rgba(215,126,61,.15)'}; color:${isLane ? 'var(--blue-500)' : 'var(--copper-300)'};">${isLane ? 'Lane' : 'Contact'}</span>`;
   return `
     <div class="card" style="padding:18px 20px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:4px;">
-        <div style="font-size:15px; font-weight:700; color:var(--text-strong);">${esc(r.origin_query)} &rarr; ${esc(r.destination_query)}</div>
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); display:flex; align-items:center; gap:8px;">${kindBadge} ${title}</div>
         <span class="badge" style="background:${closed ? 'rgba(87,97,106,.25)' : 'rgba(61,168,54,.15)'}; color:${closed ? 'var(--text-faint)' : 'var(--leaf-400)'};">${closed ? 'Closed' : 'Active'}</span>
       </div>
       <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:4px;">Asked ${fmtTime(r.created_at)}</div>
-      ${r.cargo_details ? `<div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"><strong style="color:var(--text-body);">Cargo:</strong> ${esc(r.cargo_details)}</div>` : '<div style="margin-bottom:12px;"></div>'}
+      ${isLane && r.cargo_details ? `<div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"><strong style="color:var(--text-body);">Cargo:</strong> ${esc(r.cargo_details)}</div>` : '<div style="margin-bottom:12px;"></div>'}
       <div style="overflow-x:auto;">
         <table>
-          <thead><tr><th>Trucker</th><th>Channel</th><th>Status</th><th>Price</th><th>Last reply</th><th>Reminders</th><th>Sent</th></tr></thead>
-          <tbody>${r.legs.map(legRow).join('')}</tbody>
+          <thead><tr><th>${isLane ? 'Trucker' : 'Contact'}</th><th>Channel</th><th>Status</th><th>Price</th><th>Last reply</th><th>Reminders</th><th>Sent</th></tr></thead>
+          <tbody>${r.legs.map((l) => legRow(l, r.recipient_name)).join('')}</tbody>
         </table>
       </div>
     </div>`;
@@ -164,7 +231,7 @@ function render() {
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const el = $('qrList');
   if (!requestsData.length) {
-    el.innerHTML = `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No quote requests yet — say "get quote from X to Y" on WhatsApp to start one.</div>`;
+    el.innerHTML = `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No quote requests yet — say "get quote from X to Y" (truckers) or "quote to X for Y" (contacts) on WhatsApp to start one.</div>`;
     return;
   }
   el.innerHTML = list.length
@@ -174,7 +241,14 @@ function render() {
 
 async function load() {
   try {
-    requestsData = await api('/api/quote-requests');
+    const [lane, contact] = await Promise.all([
+      api('/api/quote-requests'),
+      api('/api/contact-quote-requests'),
+    ]);
+    requestsData = [
+      ...lane.map((r) => ({ ...r, _kind: 'lane' })),
+      ...contact.map((r) => ({ ...r, _kind: 'contact' })),
+    ];
     render();
   } catch (e) {
     $('qrList').innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
@@ -185,6 +259,100 @@ $('btnRefresh').addEventListener('click', () => load());
 $('hideClosedToggle').addEventListener('change', render);
 load();
 setInterval(load, 30000);
+
+// ── Contacts management (2026-08-16) ─────────────────────────────────────
+// name-keyed CRUD against /api/contacts (helpers/contacts.js), same
+// upsert-by-name factory api.js already uses for Truckers/Suppliers — POST
+// with an existing name overwrites that record (used here as "edit").
+let contactsData = [];
+let contactEditingOriginalName = null;
+
+const PREFERRED_MODE_LABEL = { email: 'Email preferred' };
+
+function contactCard(c) {
+  const channels = [];
+  if (c.group_id) channels.push('WhatsApp group');
+  if (c.whatsapp) channels.push(`WhatsApp ${esc(c.whatsapp)}`);
+  if (c.email) channels.push(esc(c.email));
+  const channelText = channels.length ? channels.join(' · ') : '<span style="color:var(--status-danger);">No channel on file</span>';
+  return `
+    <div class="card" style="padding:12px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+      <div>
+        <div style="font-size:13.5px; font-weight:700; color:var(--text-strong);">${esc(c.name)}${c.preferred_mode ? ` <span class="badge" style="background:rgba(58,110,165,.15); color:var(--blue-500); margin-left:4px;">${esc(PREFERRED_MODE_LABEL[c.preferred_mode] || c.preferred_mode)}</span>` : ''}</div>
+        <div style="font-size:11.5px; color:var(--text-faint); margin-top:2px;">${channelText}</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-shrink:0;">
+        <button class="btn btn-secondary btn-edit-contact" data-name="${esc(c.name)}" style="padding:5px 10px; font-size:10.5px;">Edit</button>
+        <button class="btn btn-secondary btn-delete-contact" data-name="${esc(c.name)}" style="padding:5px 10px; font-size:10.5px; color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
+      </div>
+    </div>`;
+}
+
+function renderContacts() {
+  const el = $('contactsList');
+  el.innerHTML = contactsData.length
+    ? contactsData.map(contactCard).join('')
+    : `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:16px 0;">No contacts yet — click "+ Add contact" above.</div>`;
+  el.querySelectorAll('.btn-edit-contact').forEach(btn => btn.addEventListener('click', () => {
+    const c = contactsData.find(x => x.name === btn.dataset.name);
+    if (c) openContactModal(c);
+  }));
+  el.querySelectorAll('.btn-delete-contact').forEach(btn => btn.addEventListener('click', () => deleteContact(btn.dataset.name)));
+}
+
+async function loadContacts() {
+  try {
+    contactsData = await api('/api/contacts');
+    renderContacts();
+  } catch (e) {
+    $('contactsList').innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`;
+  }
+}
+
+function openContactModal(contact) {
+  contactEditingOriginalName = contact ? contact.name : null;
+  $('cmName').value = contact ? contact.name : '';
+  $('cmGroupId').value = contact ? (contact.group_id || '') : '';
+  $('cmWhatsapp').value = contact ? (contact.whatsapp || '') : '';
+  $('cmEmail').value = contact ? (contact.email || '') : '';
+  $('cmPreferredMode').value = contact ? (contact.preferred_mode || '') : '';
+  $('cmError').classList.add('hidden');
+  $('contactModalOverlay').classList.remove('hidden');
+}
+function closeContactModal() { $('contactModalOverlay').classList.add('hidden'); contactEditingOriginalName = null; }
+
+async function deleteContact(name) {
+  if (!confirm(`Remove "${name}" from Contacts? Any open quote requests to them keep running.`)) return;
+  try {
+    await api(`/api/contacts/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await loadContacts();
+  } catch (e) { alert('Could not delete: ' + e.message); }
+}
+
+$('btnAddContact').addEventListener('click', () => openContactModal(null));
+$('cmCancel').addEventListener('click', closeContactModal);
+$('contactModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'contactModalOverlay') closeContactModal(); });
+$('cmSave').addEventListener('click', async () => {
+  const name = $('cmName').value.trim();
+  if (!name) { $('cmError').textContent = 'Name is required.'; $('cmError').classList.remove('hidden'); return; }
+  const body = {
+    name,
+    group_id: $('cmGroupId').value.trim() || null,
+    whatsapp: $('cmWhatsapp').value.trim() || null,
+    email: $('cmEmail').value.trim() || null,
+    preferred_mode: $('cmPreferredMode').value || null,
+  };
+  try {
+    await api('/api/contacts', { method: 'POST', body: JSON.stringify(body) });
+    if (contactEditingOriginalName && contactEditingOriginalName !== name) {
+      await api(`/api/contacts/${encodeURIComponent(contactEditingOriginalName)}`, { method: 'DELETE' });
+    }
+    closeContactModal();
+    await loadContacts();
+  } catch (e) { $('cmError').textContent = e.message; $('cmError').classList.remove('hidden'); }
+});
+
+loadContacts();
 </script>
 </body>
 </html>

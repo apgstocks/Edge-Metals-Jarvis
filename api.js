@@ -931,6 +931,19 @@ function createApi() {
     contactRoutes('truckers',  loadTruckers,  upsertTrucker,  deleteTrucker);
     contactRoutes('suppliers', loadSuppliers, upsertSupplier, deleteSupplier);
 
+    // ── Quote-request contacts (2026-08-16, per Apsara: "separate group/
+    // whatsapp/email mimicking trucker implementation") — same factory,
+    // same upsert-by-name contract, just backed by helpers/contacts.js's
+    // flat JSON store instead of Supabase. See that file's header for why
+    // it's not folded into truckers/suppliers.
+    const contactsStore = require('./helpers/contacts');
+    contactRoutes(
+        'contacts',
+        async () => contactsStore.loadContacts(),
+        (body) => contactsStore.upsertContact(body),
+        (name) => contactsStore.deleteContact(name),
+    );
+
     // ── Email contacts (draft_email/reply_email's saved name→address directory) ─
     // Built 2026-08-03 alongside helpers/emailContacts.js — see that file for
     // the resolve/ambiguity logic used by workflow/actions.js. Reuses the
@@ -1279,10 +1292,13 @@ function createApi() {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'quote-requests.html'));
     });
 
-    // Contact quote requests — same standalone-page pattern as quote-requests
-    // above, registered before the static mount for the same reason.
+    // Old standalone Contact Quotes page — MERGED into /quote-requests
+    // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
+    // same"). dashboard/contact-quote-requests.html still exists on disk
+    // (unreferenced from nav) but this route now redirects any stale
+    // bookmark/link straight to the merged page instead of serving it.
     app.get('/contact-quote-requests', (req, res) => {
-        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'contact-quote-requests.html'));
+        res.redirect(301, '/quote-requests');
     });
 
     // ── Static dashboard ──────────────────────────────────────────────────────
