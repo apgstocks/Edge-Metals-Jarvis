@@ -1278,14 +1278,21 @@ return { action_taken: 'escalated' };
 }
 
 // ── Feedback loop — "remember X" or an AI-detected correction ───────────────
-// Persists to facts.json (already fed into every AI prompt, last 15 — see
-// helpers/context.js formatForAI). This is how corrections and standing
-// instructions survive across conversations without a code change: no
-// retraining happens, this is durable prompt-context, not model weights.
+// Persists to facts.json, fed into every AI prompt (see helpers/context.js
+// formatForAI). This is how corrections and standing instructions survive
+// across conversations without a code change: no retraining happens, this
+// is durable prompt-context, not model weights.
+//
+// pinned:true (2026-08-16, per Apsara: "i want infra... it remembers
+// forever like a child being taught") — a "remember X" she actually typed
+// is a deliberate standing instruction, not an ambient note, so it's exempt
+// from the 15-item recency window from the moment it's saved. She no
+// longer has to separately go pin it on the dashboard for it to actually
+// stick — see helpers/json.js's addFact header for the full reasoning.
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
-await addFact(clean);
+await addFact(clean, true);
 await _send(chatId, `Got it — I'll remember: "${clean}"`);
 return { action_taken: 'fact_stored' };
 }
@@ -1599,8 +1606,12 @@ if (!toAdd.length) {
     await _send(chatId, 'No changes made.');
     return { action_taken: 'fact_batch_declined' };
 }
+// pinned:true (2026-08-16, per Apsara's "remembers forever" ask) — same
+// reasoning as rememberFact above: these are AI-detected corrections she's
+// explicitly reviewing and confirming here, not ambient notes, so they're
+// exempt from the recency window from the moment she approves them.
 for (const fact of toAdd) {
-    await addFact(fact);
+    await addFact(fact, true);
 }
 await _send(chatId, `Added ${toAdd.length} fact${toAdd.length === 1 ? '' : 's'}:\n${toAdd.map(f => `- ${f}`).join('\n')}`);
 return { action_taken: 'fact_batch_confirmed' };

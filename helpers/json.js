@@ -271,22 +271,42 @@ function loadTranscripts(chatId, n = 5) {
 }
 
 // ── Facts (long-term memory, replaces Firestore facts collection) ─────────────
-// pinned facts (2026-08-16, per Apsara: "i never want it to forget as it is
-// like a learning... i want that to be reinforced") — helpers/context.js's
-// formatForAI used to feed the AI only the most recent 15 facts by
-// insertion order, so a genuinely durable standing rule could silently fall
-// out of the prompt the moment 15 newer facts were added, with nothing
-// telling anyone it happened. `pinned: true` facts are exempt from that
-// recency window (see formatForAI) AND from the 200-cap eviction below —
-// only unpinned facts ever get shifted out, so a pinned fact only leaves
-// the store if someone explicitly deletes it from the dashboard.
+// pinned facts (2026-08-16, per Apsara: "i never want it to forget... i want
+// infra to be in a way that it remembers forever like a child being taught")
+// — helpers/context.js's formatForAI used to feed the AI only the most
+// recent 15 facts by insertion order, so a genuinely durable standing rule
+// could silently fall out of the prompt the moment 15 newer facts were
+// added, with nothing telling anyone it happened. `pinned: true` facts are
+// exempt from that recency window (see formatForAI) — read on EVERY AI call,
+// permanently.
+//
+// "Remembers forever" also means the 200-cap below must NEVER evict a
+// pinned fact, full stop — not "usually", not "until the whole store is
+// pinned". Only the unpinned pool (one-off/ambient notes, not standing
+// instructions) is capped; once that pool is exhausted, the pinned pool is
+// simply allowed to keep growing past 200. A real business will accumulate
+// dozens of standing rules over its lifetime, not thousands — token cost
+// from that growth is a real, worth-monitoring trade-off, not a free lunch,
+// but it's the honest cost of an actual "never forget" guarantee rather
+// than a cap that quietly breaks the promise once enough lessons pile up.
+//
+// Per the same "child being taught" framing, `rememberFact`/`resolveFactBatch`
+// in workflow/actions.js (the WhatsApp "remember X" command and AI-detected
+// corrections the manager confirms) now call addFact with pinned=true by
+// default — a correction Apsara actually voiced is exactly the kind of
+// lesson meant to stick permanently, not decay out after 15 newer facts,
+// without her having to remember to separately pin it every time. Manual
+// adds from the dashboard's Facts tab still default the pin checkbox
+// checked for the same reason, but stay a deliberate per-fact choice there.
 const loadFacts = () => loadJson(cfg.FACTS_FILE, []);
 async function addFact(text, pinned = false) {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         facts.push({ text, pinned: !!pinned, created_at: new Date().toISOString() });
         if (facts.length > 200) {
             const idx = facts.findIndex((f) => !f.pinned);
-            if (idx >= 0) facts.splice(idx, 1); else facts.shift();
+            if (idx >= 0) facts.splice(idx, 1);
+            // else: every fact is pinned — let the store exceed 200 rather
+            // than silently breaking "never forget" by evicting one anyway.
         }
         return facts;
     });
