@@ -32,13 +32,25 @@ function loadContacts() {
     return loadJson(cfg.PRICELIST_CONTACTS_FILE, []);
 }
 
-async function addContact(name, whatsapp, standing = false) {
-    if (!name || !whatsapp) throw new Error('name and whatsapp required');
-    const digits = String(whatsapp).replace(/\D/g, '');
-    if (digits.length < 8) throw new Error('whatsapp number looks invalid');
+// groupId (optional) — per Apsara 2026-08-16 ("what if i want to share it
+// to a group?"): a saved contact is now EITHER an individual (whatsapp,
+// digits, chats via @c.us) OR a WhatsApp group (groupId, the raw id a
+// group search already returns, e.g. "120363...@g.us" — used as-is, no
+// @c.us suffix). Exactly one of the two is required, not both — resolving
+// which kind a saved contact is happens in resolveTarget() below by
+// checking which field is present.
+async function addContact(name, whatsapp, standing = false, groupId = null) {
+    if (!name) throw new Error('name required');
+    const cleanGroupId = String(groupId || '').trim() || null;
+    let digits = null;
+    if (!cleanGroupId) {
+        if (!whatsapp) throw new Error('whatsapp number or group is required');
+        digits = String(whatsapp).replace(/\D/g, '');
+        if (digits.length < 8) throw new Error('whatsapp number looks invalid');
+    }
     await mutateJson(cfg.PRICELIST_CONTACTS_FILE, [], (list) => {
         const i = list.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
-        const entry = { name, whatsapp: digits, standing: !!standing };
+        const entry = { name, whatsapp: digits, groupId: cleanGroupId, standing: !!standing };
         if (i >= 0) list[i] = { ...list[i], ...entry };
         else list.push(entry);
         return list;
@@ -51,8 +63,16 @@ async function removeContact(name) {
         list.filter(x => x.name.toLowerCase() !== String(name).toLowerCase()));
 }
 
-// Resolve "whoever I tell" — either a raw phone number, or a saved contact name
-// (exact match first, then substring, mirroring getTruckersByName's pattern).
+// Resolve "whoever I tell" — either a raw phone number, or a saved contact
+// name (exact match first, then substring, mirroring getTruckersByName's
+// pattern). A saved contact's chatId depends on which kind it is — a group
+// contact's groupId is used as-is (already has its own @g.us suffix from
+// the group search that produced it), an individual's whatsapp digits get
+// @c.us appended. contactChatId() centralizes that branch so both the
+// exact- and partial-match paths below stay in sync.
+function contactChatId(c) {
+    return c.groupId ? c.groupId : `${c.whatsapp}@c.us`;
+}
 function resolveTarget(nameOrNumber) {
     const raw = String(nameOrNumber || '').trim();
     if (!raw) return null;
@@ -64,10 +84,10 @@ function resolveTarget(nameOrNumber) {
 
     const contacts = loadContacts();
     const exact = contacts.find(c => c.name.toLowerCase() === raw.toLowerCase());
-    if (exact) return { chatId: exact.whatsapp + '@c.us', label: exact.name };
+    if (exact) return { chatId: contactChatId(exact), label: exact.name };
 
     const partial = contacts.find(c => c.name.toLowerCase().includes(raw.toLowerCase()));
-    if (partial) return { chatId: partial.whatsapp + '@c.us', label: partial.name };
+    if (partial) return { chatId: contactChatId(partial), label: partial.name };
 
     return null;
 }
@@ -263,7 +283,7 @@ async function checkForChangesAndNotify() {
     const text = formatPriceList(newData) + '\n\n_Changed: ' + changes.join('; ') + '_';
     const results = [];
     for (const c of contacts) {
-        const ok = await _send(c.whatsapp + '@c.us', text);
+        const ok = await _send(contactChatId(c), text);
         results.push({ name: c.name, ok });
     }
 

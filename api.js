@@ -957,17 +957,18 @@ function createApi() {
     // by wiring it through the same proven contactRoutes() factory —
     // addContact's positional (name, whatsapp, standing) signature just
     // needs a thin wrapper to accept the factory's single req.body arg.
-    // NOTE: /api/pricelist/send-city (used by the same dashboard tab's "Send"
-    // button) and /api/pricelist/webhook (the Apps Script change-detection
-    // hook described in helpers/pricelist.js's own comments) are ALSO
-    // missing from this file — real gaps too, deliberately NOT fixed here
-    // since they need actual routing/secret-check logic decided, not a
-    // mechanical 3-line wire-up like this. Flagged, not silently left out.
+    // NOTE (correction, 2026-08-16): the comment that used to be here claimed
+    // /api/pricelist/send-city and /api/pricelist/webhook were both missing.
+    // Re-checked while adding WhatsApp-group support below — both already
+    // exist elsewhere in this file (webhook near the top of the public
+    // routes section, send-city further down, right after quote-requests).
+    // That old claim was stale/wrong; corrected here rather than silently
+    // dropped so it doesn't get copy-pasted as fact again.
     const pricelist = require('./helpers/pricelist');
     contactRoutes(
         'pricelist/contacts',
         async () => pricelist.loadContacts(),
-        (body) => pricelist.addContact(body.name, body.whatsapp, body.standing),
+        (body) => pricelist.addContact(body.name, body.whatsapp, body.standing, body.groupId),
         (name) => pricelist.removeContact(name),
     );
 
