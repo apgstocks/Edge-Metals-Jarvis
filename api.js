@@ -1010,6 +1010,18 @@ function createApi() {
             res.json({ ok: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // WhatsApp verify button on the Address Book page's mobile field
+    // (2026-08-16, per Apsara — replaces the earlier per-request WhatsApp
+    // chat confirmation). Body: { verified: true|false } — same endpoint
+    // handles both verifying and un-verifying (the dashboard toggle can flip
+    // it back off if a number turns out to be wrong).
+    app.put('/api/address-book/:id/verify-whatsapp', async (req, res) => {
+        try {
+            const updated = await require('./helpers/addressBook').setMobileVerified(req.params.id, !!req.body.verified);
+            if (!updated) return res.status(404).json({ error: 'no address-book entry with that id' });
+            res.json(updated);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
 
     // ── Custom item-type descriptions (self-growing "Others…" list) ─────────
     // Per Apsara 2026-08-15. GET returns the flat array of custom entries;
@@ -1041,6 +1053,17 @@ function createApi() {
     // "small dataset, let the client filter" reasoning as address-book above.
     app.get('/api/quote-requests', (req, res) => {
         try { res.json(require('./helpers/quoteRequests').loadQuoteRequests()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── Contact quote requests (any saved contact, not just truckers, 2026-08-16) ──
+    // Separate tab/table per Apsara ("these are just truckers. i want to have
+    // another tab where there is quote request and have whatsapp/email
+    // support for quote") — same read-only/dashboard-is-a-viewer reasoning as
+    // /api/quote-requests just above; every mutation happens through the
+    // WhatsApp flow (workflow/contactQuoteRequests.js) or the scheduler.
+    app.get('/api/contact-quote-requests', (req, res) => {
+        try { res.json(require('./helpers/contactQuoteRequests').loadContactQuoteRequests()); }
         catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -1254,6 +1277,12 @@ function createApi() {
     // address-book above, registered before the static mount for the same reason.
     app.get('/quote-requests', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'quote-requests.html'));
+    });
+
+    // Contact quote requests — same standalone-page pattern as quote-requests
+    // above, registered before the static mount for the same reason.
+    app.get('/contact-quote-requests', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'contact-quote-requests.html'));
     });
 
     // ── Static dashboard ──────────────────────────────────────────────────────

@@ -179,7 +179,14 @@ const entryCard = (e) => `
       </div>
     </div>
     <pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>
-    ${e.mobile ? `<div style="margin-top:8px; font-family:var(--font-mono); font-size:12px; color:var(--text-faint);">📱 ${esc(e.mobile)}</div>` : ''}
+    ${e.mobile ? `
+    <div style="margin-top:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint);">📱 ${esc(e.mobile)}</span>
+      ${e.whatsapp_verified
+        ? `<span class="badge" style="background:rgba(61,168,54,.15); color:var(--leaf-400);">WhatsApp verified ✓</span>
+           <button class="btn btn-secondary btn-unverify-whatsapp" data-id="${esc(e.id || '')}" style="padding:3px 10px; font-size:10.5px;">Unverify</button>`
+        : `<button class="btn btn-secondary btn-verify-whatsapp" data-id="${esc(e.id || '')}" data-mobile="${esc(e.mobile)}" style="padding:3px 10px; font-size:10.5px; color:var(--leaf-400); border-color:var(--leaf-600);">Verify WhatsApp</button>`}
+    </div>` : ''}
   </div>`;
 
 function renderResults() {
@@ -197,6 +204,26 @@ function renderResults() {
     if (entry) openAbModal(entry);
   }));
   resultsEl.querySelectorAll('.btn-delete-address').forEach(btn => btn.addEventListener('click', () => deleteEntry(btn.dataset.id, btn.dataset.name)));
+  resultsEl.querySelectorAll('.btn-verify-whatsapp').forEach(btn => btn.addEventListener('click', () => setWhatsappVerified(btn.dataset.id, true, btn.dataset.mobile)));
+  resultsEl.querySelectorAll('.btn-unverify-whatsapp').forEach(btn => btn.addEventListener('click', () => setWhatsappVerified(btn.dataset.id, false)));
+}
+
+// WhatsApp verify button (2026-08-16, per Apsara: "just have whatsapp
+// verify button in phon[e] number") — one-time dashboard confirmation that a
+// saved `mobile` is a real WhatsApp number, replacing the earlier design
+// where Jarvis asked over WhatsApp chat on every single contact-quote
+// request. See helpers/addressBook.js's setMobileVerified and
+// helpers/contactQuoteRequests.js's resolveQuoteContact for how this flag is
+// consumed — an unverified mobile is still shown as a candidate but never
+// used as a send target.
+async function setWhatsappVerified(id, verified, mobile) {
+  if (!id) return;
+  if (verified && !confirm(`Confirm ${mobile} is a real WhatsApp number for this contact? Jarvis will start sending quote requests to it over WhatsApp.`)) return;
+  try {
+    await api(`/api/address-book/${encodeURIComponent(id)}/verify-whatsapp`, { method: 'PUT', body: JSON.stringify({ verified }) });
+    addressBookData = await api('/api/address-book');
+    renderResults();
+  } catch (e) { alert('Could not update WhatsApp verification: ' + e.message); }
 }
 
 async function deleteEntry(id, name) {

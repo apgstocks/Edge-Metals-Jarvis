@@ -449,6 +449,29 @@ async function taskRunner() {
                 continue;
             }
 
+            // ── Contact-quote-request reminder / escalation (2026-08-16) ────
+            // Same delegation pattern as the trucker quote_reminder/
+            // quote_escalation block just above (own module resolves its own
+            // destination per leg — email vs whatsapp — and needs nothing
+            // from the chatId-resolution code below), but routed to
+            // workflow/contactQuoteRequests.js instead, and gated on its own
+            // task types so this can't collide with or change behavior of
+            // the trucker block above it.
+            if (task.type === 'contact_quote_reminder' || task.type === 'contact_quote_escalation') {
+                await tasks.updateTask(task.id, { status: 'firing' });
+                const contactQuoteRequests = require('./workflow/contactQuoteRequests');
+                try {
+                    const result = task.type === 'contact_quote_reminder'
+                        ? await contactQuoteRequests.handleReminderTask(task, { send: _sendMessage })
+                        : await contactQuoteRequests.handleEscalationTask(task, { send: _sendMessage });
+                    await tasks.archive(task.id, { status: 'done', result_note: result.fired ? 'fired' : (result.reason || 'send_failed') });
+                } catch (err) {
+                    console.error(`[TASK] contact-quote task ${task.id} failed:`, err.message);
+                    await tasks.archive(task.id, { status: 'failed', result_note: 'runner_exception: ' + err.message });
+                }
+                continue;
+            }
+
             // 2. Resolve target chatId. Look up by name; fall back to explicit chat if not found.
             let chatId = task.target_chat || null;
             let targetRecord = null;
@@ -607,6 +630,23 @@ async function quoteEmailReplyWatch() {
         if (result.replied) console.log(`[SCHED] quote email poll: ${result.replied}/${result.checked} legs had a new reply`);
     } catch (err) {
         console.error('[SCHED] quote-email-poll:', err.message);
+    }
+}
+
+// ── Contact-quote-request email-leg reply poll (2026-08-16) ────────────────
+// Same reasoning/cadence as quoteEmailReplyWatch just above, for the new
+// contact-quote-request feature's email legs instead of trucker legs — see
+// workflow/contactQuoteRequests.js's pollEmailReplies for the actual polling
+// logic (reuses the same gmail-token-sender-read.json client as the trucker
+// poll, so if that token isn't set up, BOTH polls no-op with a warning until
+// it is — not a new dependency).
+async function contactQuoteEmailReplyWatch() {
+    try {
+        const contactQuoteRequests = require('./workflow/contactQuoteRequests');
+        const result = await contactQuoteRequests.pollEmailReplies();
+        if (result.replied) console.log(`[SCHED] contact-quote email poll: ${result.replied}/${result.checked} legs had a new reply`);
+    } catch (err) {
+        console.error('[SCHED] contact-quote-email-poll:', err.message);
     }
 }
 
@@ -861,6 +901,7 @@ function start() {
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
+    cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => generalEmailReplyWatch().catch(e => console.error('[SCHED] general-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
     cron.schedule('45 23 * * *', () => {

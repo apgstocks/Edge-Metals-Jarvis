@@ -221,11 +221,52 @@ async function updateEntryById(id, { aliases, raw, locked = true, mobile = null 
     await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => {
         const entry = book.find((e) => e.id === id);
         if (!entry) return book;
+        // A changed mobile number invalidates any prior WhatsApp verification
+        // (2026-08-16, see setMobileVerified below) — a verify click on the
+        // OLD digits shouldn't silently carry over to a DIFFERENT number
+        // someone just typed in.
+        if (clean.mobile !== entry.mobile) entry.whatsapp_verified = false;
         entry.aliases = clean.aliases;
         entry.raw = clean.raw;
         entry.mobile = clean.mobile;
         entry.manually_edited = !!locked;
         entry.updated_at = new Date().toISOString();
+        updated = entry;
+        return book;
+    });
+    return updated;
+}
+
+// ── WhatsApp verification (2026-08-16) ──────────────────────────────────────
+// Per Apsara: "just have whatsapp verify button in phon[e] number" — replaces
+// the earlier design (Jarvis asking a yes/no over WhatsApp chat, per-request,
+// every time a contact-quote went to an address-book mobile) with a one-time
+// dashboard toggle on the entry itself. Once marked verified here,
+// helpers/contactQuoteRequests.js's resolveQuoteContact treats the mobile as
+// a trusted WhatsApp target with no further chat confirmation; until then,
+// it's still surfaced as a candidate but excluded from sends. Same reasoning
+// as before for why this isn't automatic on save: a `mobile` typed into
+// freight paperwork is frequently an office/landline number, not a personal
+// WhatsApp line — verifying is a deliberate, one-time human decision, now
+// just made once on the dashboard instead of re-asked over chat every time.
+async function setMobileVerified(id, verified) {
+    if (!id) throw new Error('id required');
+    // Validated OUTSIDE the mutateJson mutator on purpose — mutateJson's own
+    // catch block swallows a thrown error and just logs it (see its comment
+    // in helpers/json.js), which would turn a clean "no mobile on this
+    // entry" 400 into a silent no-op returning null indistinguishable from
+    // "id not found". Reading first lets this throw a real, catchable error
+    // back to the caller (api.js), same as validateEntryInput's throws above.
+    const existing = loadAddressBook().find((e) => e.id === id);
+    if (!existing) return null;
+    if (!existing.mobile) throw new Error('this entry has no mobile number to verify');
+
+    let updated = null;
+    await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => {
+        const entry = book.find((e) => e.id === id);
+        if (!entry) return book;
+        entry.whatsapp_verified = !!verified;
+        entry.whatsapp_verified_at = verified ? new Date().toISOString() : null;
         updated = entry;
         return book;
     });
@@ -246,5 +287,5 @@ async function deleteEntryById(id) {
 
 module.exports = {
     parseAddressBookDoc, mergeEntries, loadAddressBook, syncFromDoc, resolveAddress,
-    addManualEntry, updateEntryById, deleteEntryById,
+    addManualEntry, updateEntryById, deleteEntryById, setMobileVerified,
 };

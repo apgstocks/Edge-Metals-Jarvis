@@ -118,6 +118,21 @@ function parseGetQuoteCommand(rawText) {
     const destination = rest.replace(/,\s*$/, '').trim();
     return { origin, destination, namesText, emails };
 }
+
+// Parses "[send/request] [a] quote [request] to <recipient> for <details>" —
+// built 2026-08-16 per Apsara's "another tab" ask (see workflow/contactQuoteRequests.js's
+// header). Deliberately a SEPARATE parser/pattern from parseGetQuoteCommand
+// above, not a shared one — that one is keyed on "...from X to Y" (a lane);
+// this one is keyed on "...to X for Y" (a recipient + what you're asking
+// them for), and the two verbs ("from"/"for") never collide: a message
+// containing "from" and no "for" only ever matches the trucker-lane parser
+// above (checked first), and vice versa. Returns null if the text isn't a
+// "quote to X for Y" command at all.
+function parseContactQuoteCommand(rawText) {
+    const m = String(rawText || '').trim().match(/^(?:send|request)?\s*(?:a\s+)?quote(?:\s+request)?\s+to\s+(.+?)\s+for\s+(.+)$/i);
+    if (!m) return null;
+    return { recipientQuery: m[1].trim(), details: m[2].trim().replace(/[.?!]+$/, '') };
+}
 const { matchTruckerByChat }                       = require('./truckers');
 const { matchSupplierByChat }                      = require('./suppliers');
 const actions = require('./actions');
@@ -367,6 +382,22 @@ function policyDecide(ctx) {
         return { intent: 'quote_trucker_retry_received', resolvedBy: 'policy', data: { retry_text: ctx.text.trim() } };
     }
 
+    // ── A0f-2. Contact quote-request pending (2026-08-16, see
+    // workflow/contactQuoteRequests.js). Same verbatim-capture reasoning as
+    // A0f-1 above — "couldn't find X — correct name, or an email address to
+    // use directly?"
+    //
+    // The sibling await_contact_quote_whatsapp_confirm pending ("use this
+    // unverified mobile for WhatsApp too? yes/no") that used to live here was
+    // REMOVED 2026-08-16 per Apsara ("just have whatsapp verify button in
+    // phon[e] number") — WhatsApp verification is now a one-time toggle on
+    // the Address Book dashboard page (helpers/addressBook.js's
+    // setMobileVerified), not a per-request chat prompt. If you're looking
+    // for that flow, it no longer exists on purpose.
+    if (ctx.pendingAction?.type === 'await_contact_quote_recipient_retry') {
+        return { intent: 'contact_quote_recipient_retry_received', resolvedBy: 'policy', data: {} };
+    }
+
     // ── A0f. Multi-select reply to "who should I ask?" (quote request with
     // no trucker named — see helpers/quoteRequests.js / workflow/quoteRequests.js).
     // Unlike every other p.options pending (single-pick, handled generically
@@ -405,6 +436,20 @@ function policyDecide(ctx) {
         const { findActiveLegByTarget } = require('../helpers/quoteRequests');
         if (findActiveLegByTarget(ctx.chatId).length) {
             return { intent: 'quote_leg_reply_received', resolvedBy: 'policy', data: {} };
+        }
+
+        // ── A0g2. Same check, contact-quote-request store (2026-08-16) ──────
+        // Parallel to the trucker leg-reply check just above, but against
+        // helpers/contactQuoteRequests.js's own store (data/contact_quote_
+        // requests.json) instead of helpers/quoteRequests.js's — a WhatsApp
+        // reply from a non-trucker contact with an open contact-quote leg.
+        // Checked second so a chat that happens to be BOTH an active trucker
+        // leg AND (implausibly) an active contact-quote leg still resolves
+        // to the trucker flow unchanged — this can only fire when the
+        // trucker check just above found nothing.
+        const { findActiveLegByTarget: findActiveContactQuoteLeg } = require('../helpers/contactQuoteRequests');
+        if (findActiveContactQuoteLeg(ctx.chatId).length) {
+            return { intent: 'contact_quote_leg_reply_received', resolvedBy: 'policy', data: {} };
         }
     }
 
@@ -628,6 +673,22 @@ function policyDecide(ctx) {
                 return {
                     intent: 'get_quote', resolvedBy: 'policy',
                     data: { origin: parsed.origin, destination: parsed.destination, names_text: parsed.namesText, emails: parsed.emails },
+                };
+            }
+        }
+
+        // "quote to Eccomelt for junk cars" / "send a quote request to X for Y" —
+        // contact quote-request flow (2026-08-16, see workflow/contactQuoteRequests.js).
+        // Checked right after get_quote's lane parser above, same "let the more
+        // specific well-formed command win" reasoning — a message that failed
+        // the "from...to" lane shape gets one more specific try here before
+        // falling through to the generic draft_email/AI classifier.
+        {
+            const parsed = parseContactQuoteCommand(ctx.text);
+            if (parsed) {
+                return {
+                    intent: 'get_contact_quote', resolvedBy: 'policy',
+                    data: { recipient_query: parsed.recipientQuery, details: parsed.details },
                 };
             }
         }
@@ -1199,10 +1260,13 @@ async function route(decision, ctx, sendMessage) {
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
+        case 'get_contact_quote':       return actions.startContactQuoteRequestFlow(chatId, d.recipient_query, d.details);
+        case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());
         case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
         case 'quote_cargo_details_received': return actions.resumeQuoteWithCargoDetails(chatId, ctx.pendingAction, d.cargo_text);
         case 'quote_trucker_retry_received':  return actions.resumeQuoteWithTruckerRetry(chatId, ctx.pendingAction, d.retry_text);
         case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
+        case 'contact_quote_leg_reply_received': return actions.handleContactQuoteLegReply(chatId, ctx.text.trim());
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {

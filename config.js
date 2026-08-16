@@ -171,6 +171,17 @@ const ADDRESS_BOOK_FILE     = path.join(DATA_DIR, 'address_book.json');
 // Own flat-array store, same pattern as address_book.json — one row per
 // quote request, each holding an array of per-trucker "legs".
 const QUOTE_REQUESTS_FILE = path.join(DATA_DIR, 'quote_requests.json');
+// Contact quote requests — built 2026-08-16 per Apsara: a separate tab from
+// the trucker lane-quote feature above ("these are just truckers... I want
+// another tab where there is quote request and have whatsapp/email support
+// for quote"). Same request/leg shape and reminder/escalation machinery as
+// QUOTE_REQUESTS_FILE (see helpers/contactQuoteRequests.js's header for why
+// it's a SEPARATE store rather than a generalized version of the trucker
+// one), but the recipient is resolved against helpers/emailContacts.js
+// and/or helpers/addressBook.js instead of workflow/truckers.js — any saved
+// person/company, not just truckers. Own flat-array store, same pattern as
+// quote_requests.json.
+const CONTACT_QUOTE_REQUESTS_FILE = path.join(DATA_DIR, 'contact_quote_requests.json');
 // General sent-email reply tracking — 2026-08-06, per Apsara: "notification
 // bell icon in website for reply thread". Separate from QUOTE_REQUESTS_FILE
 // on purpose: quote requests already have their own full reply-tracking
@@ -340,7 +351,7 @@ module.exports = {
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
-    QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
+    QUOTE_REQUESTS_FILE, CONTACT_QUOTE_REQUESTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
