@@ -271,32 +271,55 @@ async function fetchGroupNameDirect(id) {
 // Only returns groups Jarvis is a member of — you cannot validate a group
 // Jarvis hasn't been added to yet. Prerequisite: user adds Jarvis to the
 // group on their phone BEFORE clicking Validate here.
+//
+// UPDATE 2026-08-16 (Apsara: still seeing "couldn't list WhatsApp chats...
+// original: 'r'" even with WhatsApp showing Connected in the dashboard):
+// the try/catch-and-reword fix above wasn't the real fix — it just made the
+// SAME underlying failure easier to read. Root-caused properly this time by
+// reading whatsapp-web.js's own injected browser script directly
+// (node_modules/whatsapp-web.js/src/util/Injected/Utils.js):
+// client.getChats() calls window.WWebJS.getChats(), which maps every raw
+// chat through window.WWebJS.getChatModel(chat) — and THAT calls
+// chat.serialize() on each one. That serialize() step is what's actually
+// throwing ("r" is a minified variable name from inside WhatsApp Web's own
+// bundled frontend code, several layers past whatsapp-web.js, which is why
+// the message is so cryptic). fetchGroupNameDirect above already sidesteps
+// this successfully for ONE chat by passing getAsModel:false, which — per
+// the same source file — skips getChatModel/serialize() entirely and
+// returns the raw internal chat object instead. This does the identical
+// bypass in bulk: reads WhatsApp's own internal chat collection directly
+// (window.require('WAWebCollections').Chat.getModelsArray() — the exact
+// same collection getAsModel:false pulls a single chat from) and reads
+// id/name/isGroup straight off the raw model, the same direct-property
+// access fetchGroupNameDirect already relies on successfully. No
+// getChatModel/serialize() call anywhere in this path, so nothing left to
+// hit the "r" bug. client.getChats() is no longer called here at all —
+// it was the actual point of failure, not something to retry or wrap.
 waState.setGroupsLookupHandler(async (nameFragment) => {
     if (!waReady) throw new Error('WhatsApp not ready');
     const q = String(nameFragment || '').toLowerCase().trim();
     if (!q) return [];
-    let chats;
+    let groupChats;
     try {
-        chats = await client.getChats();
+        groupChats = await client.pupPage.evaluate(() => {
+            const chats = window.require('WAWebCollections').Chat.getModelsArray();
+            return chats
+                .filter((c) => c.isGroup)
+                .map((c) => ({
+                    id: c.id?._serialized || null,
+                    name: c.formattedTitle || c.name || c.groupMetadata?.subject || c.subject || null,
+                    participants: c.groupMetadata?.participants?.length || null,
+                }));
+        });
     } catch (e) {
-        // Was an unhandled throw before this fix — surfaced all the way up
-        // to the API route's catch as e.message, which for this specific
-        // whatsapp-web.js bug is just the single cryptic character "r".
-        // Reworded here into something actually actionable.
         throw new Error(`couldn't list WhatsApp chats (whatsapp-web.js internal error — original: "${e.message}")`);
     }
-    const groupChats = chats.filter(c => c.isGroup);
-    // Resolve a real name for every group BEFORE filtering by the search
-    // term — filtering on `c.name` first (the old code) silently dropped
-    // any group hit by the construction bug from the results entirely, even
-    // when its real title matched the search. A group only actually failing
-    // to resolve at all (fetchGroupNameDirect also returns null) still gets
-    // excluded, same as before, but that's now the true failure case rather
-    // than the common one.
-    const withNames = await Promise.all(groupChats.map(async (c) => ({
-        id: c.id?._serialized,
-        name: c.name || await fetchGroupNameDirect(c.id?._serialized),
-        participants: c.groupMetadata?.participants?.length || null,
+    // A handful of groups can still come back with no resolvable name even
+    // via the raw model (rare — e.g. a group WhatsApp hasn't fully synced
+    // metadata for yet). fetchGroupNameDirect is the same single-chat bypass
+    // used above; only called for that small leftover, not the bulk case.
+    const withNames = await Promise.all(groupChats.map(async (g) => ({
+        ...g, name: g.name || await fetchGroupNameDirect(g.id),
     })));
     return withNames
         .filter(g => g.id && (g.name || '').toLowerCase().includes(q))
