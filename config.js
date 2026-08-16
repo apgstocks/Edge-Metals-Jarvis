@@ -6,6 +6,17 @@ require('dotenv').config();
 const path = require('path');
 const fs   = require('fs');
 
+// Display name used ONLY by the Loads/Yard feature (mobile app + the
+// nightly yard report) — per Apsara 2026-08-16: first said rename
+// everywhere, then corrected to "no. just in mobile app and yard, it is
+// edge trading." Everything else (WhatsApp bot menu/persona, price lists,
+// outbound email sign-offs) stays "Edge Metals" — that rename was reverted,
+// see workflow/brain.js, workflow/actions.js, helpers/pricelist.js. Only
+// scheduler.js's buildYardReportText/eodYardReport reads this constant;
+// mobile-app/www/index.html has no access to this file so its two
+// "Edge Trading" instances (title, login tagline) are hardcoded by hand.
+const COMPANY_NAME = 'Edge Trading';
+
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const ROOT     = __dirname;
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
@@ -322,6 +333,7 @@ const BOOKINGS_MENU = [
 ].join('\n');
 
 module.exports = {
+    COMPANY_NAME,
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, SESSION_PATH,

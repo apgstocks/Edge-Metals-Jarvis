@@ -657,8 +657,6 @@ function getEasternDateKey() {
 // by Item Type" table already uses — so "how items roll up by type" has one
 // definition, not two that could drift apart.
 function buildYardReportText(dateKey, todays, allLoads) {
-    const { groupItemsByDescription } = require('./helpers/pdf');
-
     const unit = todays.find(l => l.weight_unit)?.weight_unit || 'lb';
     const totals = todays.reduce((acc, l) => ({
         gross : acc.gross  + (l.gross_weight || 0),
@@ -671,38 +669,35 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // l.buyer earlier today after finding this WAS reading the wrong field —
     // that diagnosis was correct at the time, but Apsara then corrected the
     // field mapping itself: seller/seller_address are now the free-text
-    // counterparty fields and buyer is the fixed "Edge Trading" constant —
-    // see helpers/loads.js's validateLoadForSave comment. l.seller is right
+    // counterparty fields and buyer is the fixed company constant — see
+    // helpers/loads.js's validateLoadForSave comment. l.seller is right
     // again under the new mapping.)
     const lines = todays.map(l =>
         `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
     );
 
-    const todayItems  = todays.flatMap(l => Array.isArray(l.items) ? l.items : []);
-    const todayGroups = todayItems.length ? groupItemsByDescription(todayItems) : [];
-    const todayInventoryLines = todayGroups.length
-        ? todayGroups.map(g => `• ${g.description} — ${g.count} item${g.count === 1 ? '' : 's'} — Net ${g.net} ${unit}`)
-        : ['No items recorded today.'];
-
-    const allItems  = allLoads.flatMap(l => Array.isArray(l.items) ? l.items : []);
-    const allGroups = allItems.length ? groupItemsByDescription(allItems) : [];
-    const allUnit   = allLoads.find(l => l.weight_unit)?.weight_unit || unit;
-    const allInventoryLines = allGroups.length
-        ? allGroups.map(g => `• ${g.description} — ${g.count} item${g.count === 1 ? '' : 's'} — Net ${g.net} ${allUnit}`)
-        : ['No loads recorded yet.'];
-
+    // Reformatted 2026-08-16 per Apsara ("this looks ugly and unorganised" /
+    // "show this in pdf"): the two "Inventory by item type" sections that
+    // used to live here (today's breakdown + an ever-growing all-time list)
+    // are gone — that content now lives in the daily inventory PDF
+    // (helpers/pdf.js's generateInventoryReportPdf, already generated just
+    // below in eodYardReport and now actually attached to the email instead
+    // of only sitting in Drive). This text is WhatsApp's job: a quick
+    // same-night read, not the full record — see the "WhatsApp gets the
+    // text summary only" comment further down for the email-vs-WhatsApp
+    // split this follows. `*text*` renders bold on WhatsApp; email clients
+    // just show the literal asterisks, which is an acceptable tradeoff for
+    // one shared body string across both channels (per Apsara's original
+    // "same text, two channels" design — see this function's header
+    // comment) rather than maintaining two separately-formatted bodies.
     return [
-        `Edge Metals — Yard Report — ${dateKey}`,
+        `*${cfg.COMPANY_NAME} — Yard Report — ${dateKey}*`,
         '',
-        todays.length ? `${todays.length} load${todays.length === 1 ? '' : 's'} recorded today:` : 'No loads recorded today.',
-        ...lines,
-        ...(todays.length ? ['', `Totals: Gross ${totals.gross} ${unit} | Tare ${totals.tare} ${unit} | Net ${totals.net} ${unit} | $${totals.amount}`] : []),
+        `*Loads today (${todays.length})*`,
+        ...(todays.length ? lines : ['No loads recorded today.']),
+        ...(todays.length ? ['', '*Totals*', `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · $${totals.amount}`] : []),
         '',
-        'Inventory by item type — today:',
-        ...todayInventoryLines,
-        '',
-        `Inventory by item type — all-time (${allLoads.length} load${allLoads.length === 1 ? '' : 's'} recorded total):`,
-        ...allInventoryLines,
+        'Full inventory breakdown (by item type, today + all-time) is in the attached PDF.',
     ].join('\n');
 }
 
@@ -770,6 +765,10 @@ async function eodYardReport() {
     // formats of the exact same data. Best-effort: a Drive hiccup here must
     // never block the email/WhatsApp send below, which is the part someone's
     // actually waiting to read tonight.
+    // Hoisted so the email block below can attach it — see that block's
+    // comment. Stays null if generation/upload fails; email send still
+    // proceeds without it (best-effort, same as the try/catch already did).
+    let inventoryPdfBuffer = null;
     try {
         const { getInventoryReport } = require('./helpers/loads');
         const { inventoryWorkbookBuffer } = require('./helpers/inventoryExcel');
@@ -782,8 +781,8 @@ async function eodYardReport() {
         const xlsxBuffer = await inventoryWorkbookBuffer(allLoads);
         await uploadInventoryBackupXlsx(xlsxBuffer);
 
-        const pdfBuffer = await generateInventoryReportPdf(dateKey, todayReport, overallReport);
-        await uploadDailyInventoryPdf(dateKey, pdfBuffer);
+        inventoryPdfBuffer = await generateInventoryReportPdf(dateKey, todayReport, overallReport);
+        await uploadDailyInventoryPdf(dateKey, inventoryPdfBuffer);
 
         console.log(`[SCHED] eod-yard-report: inventory backup (xlsx) + daily report (pdf) uploaded to Drive Reports folder for ${dateKey}`);
     } catch (e) {
@@ -824,8 +823,18 @@ async function eodYardReport() {
                     catch (e) { console.error(`[SCHED] eod-yard-report: couldn't download weights_${l.id}.pdf to attach:`, e.message); }
                 }
             }
+            // The daily inventory report (item-type breakdown, today + all-
+            // time) — per Apsara 2026-08-16 ("show this in pdf"), this is now
+            // the ONLY place that breakdown appears; buildYardReportText's
+            // WhatsApp/email text no longer includes it. Was already being
+            // generated and uploaded to Drive above (inventoryPdfBuffer) but
+            // never actually attached here before — this is the fix, not
+            // just a rename.
+            if (inventoryPdfBuffer) {
+                attachments.push({ filename: `inventory_${dateKey}.pdf`, mimeType: 'application/pdf', base64: inventoryPdfBuffer.toString('base64') });
+            }
             const { sendEmail } = require('./helpers/gmail');
-            await sendEmail({ to: emails.join(', '), subject: `Edge Metals — Yard Report — ${dateKey}`, body: summaryText, attachments });
+            await sendEmail({ to: emails.join(', '), subject: `${cfg.COMPANY_NAME} — Yard Report — ${dateKey}`, body: summaryText, attachments });
         } catch (e) {
             console.error('[SCHED] eod-yard-report: email send failed:', e.message);
         }

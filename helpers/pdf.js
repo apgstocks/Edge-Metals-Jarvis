@@ -142,11 +142,21 @@ function drawFieldBox(doc, twoColFields, fullFields) {
 function round2(n) {
     return typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : n;
 }
+// Groups on a NORMALIZED key (trimmed + lowercased), not the raw description
+// text — per Apsara 2026-08-16 ("Battery" showing as two separate lines,
+// 4075 lb and 557 lb, instead of one combined 4632 lb line in the yard
+// report). Root cause: one of the two was typed with a trailing space or
+// different casing (e.g. "Battery " or "battery"), and the old exact-string
+// key treated that as a wholly different item type. The DISPLAYED label
+// still uses whichever original spelling/casing was typed FIRST (via
+// `raw`, kept alongside the normalized key) — this only affects grouping,
+// never rewrites the text stored on the load itself.
 function groupItemsByDescription(items) {
     const groups = new Map();
     for (const it of items) {
-        const key = it.description || 'Other';
-        if (!groups.has(key)) groups.set(key, { description: key, count: 0, gross: 0, tare: 0, net: 0, amount: 0 });
+        const raw = it.description ? String(it.description).trim() : 'Other';
+        const key = raw.toLowerCase();
+        if (!groups.has(key)) groups.set(key, { description: raw, count: 0, gross: 0, tare: 0, net: 0, amount: 0 });
         const g = groups.get(key);
         g.count += 1;
         g.gross  += it.gross_weight  || 0;
