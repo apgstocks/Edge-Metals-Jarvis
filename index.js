@@ -239,6 +239,34 @@ async function recordFailureAndMaybeAlert(kind, detail) {
     }
 }
 
+// window.WWebJS.getChat is whatsapp-web.js's OWN internal helper (confirmed
+// from the library's actual source — used internally by GroupChat.leave()
+// and Chat.fetchMessages()), not a guess at Store internals. getAsModel:
+// false returns the raw serialized data directly rather than constructing a
+// full Chat/GroupChat wrapper object — that object construction is the part
+// whatsapp-web.js's own GitHub issues confirm is broken in the currently
+// pinned version (getChatById/getChats() return a group with name/
+// participants undefined even though the group genuinely exists and is
+// reachable). Module-level (not nested in one handler) — 2026-08-16, found
+// this same construction bug was ALSO silently breaking findGroups just
+// below (production logs: "[API] whatsapp/find-groups failed: r" — that "r"
+// is whatsapp-web.js's own minified internal error surfacing through
+// Puppeteer, not this app's code), even though the common-groups handler
+// further down had already worked around it. One shared implementation now,
+// used by both.
+async function fetchGroupNameDirect(id) {
+    try {
+        return await client.pupPage.evaluate(async (chatId) => {
+            const chat = window.WWebJS?.getChat ? await window.WWebJS.getChat(chatId, { getAsModel: false }) : null;
+            if (!chat) return null;
+            return chat.formattedTitle || chat.name || chat.groupMetadata?.subject || chat.subject || null;
+        }, id);
+    } catch (e) {
+        console.warn('[WA] direct store lookup failed for', id, e.message);
+        return null;
+    }
+}
+
 // Called by POST /api/whatsapp/find-groups — case-insensitive substring match on group names.
 // Only returns groups Jarvis is a member of — you cannot validate a group
 // Jarvis hasn't been added to yet. Prerequisite: user adds Jarvis to the
@@ -247,12 +275,32 @@ waState.setGroupsLookupHandler(async (nameFragment) => {
     if (!waReady) throw new Error('WhatsApp not ready');
     const q = String(nameFragment || '').toLowerCase().trim();
     if (!q) return [];
-    const chats = await client.getChats();
-    const groups = chats
-        .filter(c => c.isGroup && (c.name || '').toLowerCase().includes(q))
-        .map(c => ({ id: c.id?._serialized, name: c.name, participants: c.groupMetadata?.participants?.length || null }))
+    let chats;
+    try {
+        chats = await client.getChats();
+    } catch (e) {
+        // Was an unhandled throw before this fix — surfaced all the way up
+        // to the API route's catch as e.message, which for this specific
+        // whatsapp-web.js bug is just the single cryptic character "r".
+        // Reworded here into something actually actionable.
+        throw new Error(`couldn't list WhatsApp chats (whatsapp-web.js internal error — original: "${e.message}")`);
+    }
+    const groupChats = chats.filter(c => c.isGroup);
+    // Resolve a real name for every group BEFORE filtering by the search
+    // term — filtering on `c.name` first (the old code) silently dropped
+    // any group hit by the construction bug from the results entirely, even
+    // when its real title matched the search. A group only actually failing
+    // to resolve at all (fetchGroupNameDirect also returns null) still gets
+    // excluded, same as before, but that's now the true failure case rather
+    // than the common one.
+    const withNames = await Promise.all(groupChats.map(async (c) => ({
+        id: c.id?._serialized,
+        name: c.name || await fetchGroupNameDirect(c.id?._serialized),
+        participants: c.groupMetadata?.participants?.length || null,
+    })));
+    return withNames
+        .filter(g => g.id && (g.name || '').toLowerCase().includes(q))
         .slice(0, 20); // safety cap; a real workspace can have hundreds of groups
-    return groups;
 });
 
 // Called by POST /api/whatsapp/verify-number — checks a number has a WhatsApp account.
@@ -294,34 +342,9 @@ waState.setCommonGroupsHandler(async (contactId) => {
         console.warn('[WA] common-groups: bulk getChats() failed, falling back to per-group lookup:', e.message);
     }
     const chatById = new Map(allChats.map(c => [c.id?._serialized, c]));
-
-    // Last-resort name lookup: whatsapp-web.js's own GitHub issues confirm a
-    // current, version-specific bug where getChatById/getChats() fail to
-    // properly construct a GroupChat object — name/participants come back
-    // undefined even though the group genuinely exists and is reachable.
-    // This bypasses that broken wrapper entirely and asks WhatsApp's own
-    // internal page-context data directly for just the group's title —
-    // a much narrower query than building a full Chat object, so it isn't
-    // hitting the same construction bug.
-    async function fetchGroupNameDirect(id) {
-        try {
-            // window.WWebJS.getChat is whatsapp-web.js's OWN internal helper —
-            // confirmed from the library's actual source (used internally by
-            // GroupChat.leave() and Chat.fetchMessages()), not a guess at
-            // Store internals. getAsModel:false returns the raw serialized
-            // data directly rather than constructing a full Chat/GroupChat
-            // wrapper object — that object construction is the part
-            // confirmed broken, so this deliberately avoids it.
-            return await client.pupPage.evaluate(async (chatId) => {
-                const chat = window.WWebJS?.getChat ? await window.WWebJS.getChat(chatId, { getAsModel: false }) : null;
-                if (!chat) return null;
-                return chat.formattedTitle || chat.name || chat.groupMetadata?.subject || chat.subject || null;
-            }, id);
-        } catch (e) {
-            console.warn('[WA] common-groups: direct store lookup also failed for', id, e.message);
-            return null;
-        }
-    }
+    // fetchGroupNameDirect (bypasses the same getChats()/getChatById()
+    // construction bug) is now a module-level function shared with
+    // findGroups above — see its own comment for the full explanation.
 
     const groups = [];
     for (const rawId of rawIds) {

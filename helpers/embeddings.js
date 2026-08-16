@@ -38,13 +38,32 @@ function getGenAI() {
     return genAI;
 }
 
+// REAL BUG, found 2026-08-16 while investigating production log spam
+// ("[EMBEDDINGS] search failed (non-fatal): Value must be a list given an
+// array path requests[]" — that error text comes straight from Google's
+// backend rejecting the malformed request this function was sending).
+// Confirmed directly against the installed @google/genai@0.3.1 SDK's own
+// type definitions (node_modules/@google/genai/dist/genai.d.ts):
+// EmbedContentParameters requires `contents` (plural — a ContentListUnion,
+// e.g. a single string or an array), not `content` (singular) — the wrong
+// key name meant the SDK never got a valid request body, hence the
+// batch-endpoint-shaped validation error at the API level. The response
+// side had the matching bug: EmbedContentResponse carries `embeddings`
+// (plural array, one ContentEmbedding per input), not a singular
+// `embedding` — so even if the request had somehow succeeded, reading
+// `response.embedding.values` would still have come back undefined and
+// thrown the "Embedding returned 0 dims" error below instead.
+// Every call to Gemini's embedding API through this file has been failing
+// silently since this was written — storeEmbedding() and searchSimilar()
+// both catch and log "(non-fatal)", by design, so nothing crashed, but
+// semantic memory (session-summary recall) has effectively never worked.
 async function embedText(text, taskType = 'RETRIEVAL_DOCUMENT') {
     const response = await getGenAI().models.embedContent({
         model: EMBED_MODEL,
-        content: text,
+        contents: text,
         config: { taskType, outputDimensionality: EMBED_DIMENSIONS },
     });
-    const vector = response?.embedding?.values;
+    const vector = response?.embeddings?.[0]?.values;
     if (!Array.isArray(vector) || vector.length !== EMBED_DIMENSIONS) {
         throw new Error(`Embedding returned ${vector?.length ?? 0} dims, expected ${EMBED_DIMENSIONS}`);
     }
