@@ -166,13 +166,26 @@ async function getMessage(gmail, id) {
 // `attachments` is omitted/empty, this produces the EXACT SAME plain-text
 // message as before (same header order, same body-only payload) — every
 // existing caller (draftEmailForConfirm, replies, etc.) is unaffected.
+// RFC 2047 encoded-word — headers are technically US-ASCII only; an
+// unencoded non-ASCII byte (e.g. the em dash "—" every subject built via
+// `${cfg.COMPANY_NAME} — Yard Report — ...` uses) gets read back by mail
+// clients as if it were Latin-1, producing exactly the mojibake Apsara saw
+// (Subject "Edge Trading Ã¢Â€Â” Yard Report ..." 2026-08-16). Only bother
+// wrapping when a non-ASCII byte is actually present — plain-ASCII subjects
+// (the overwhelming majority of existing callers) go out byte-for-byte
+// identical to before this fix, so nothing that already worked changes.
+function encodeHeader(str) {
+    if (/^[\x00-\x7F]*$/.test(str)) return str;
+    return `=?UTF-8?B?${Buffer.from(String(str), 'utf8').toString('base64')}?=`;
+}
+
 function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     const boundary = hasAttachments ? `----jarvis-${Date.now()}-${Math.random().toString(36).slice(2)}` : null;
 
     const headers = [
         `To: ${to}`,
-        `Subject: ${subject}`,
+        `Subject: ${encodeHeader(subject)}`,
         hasAttachments ? `Content-Type: multipart/mixed; boundary="${boundary}"` : 'Content-Type: text/plain; charset="UTF-8"',
         'MIME-Version: 1.0',
     ];
