@@ -183,6 +183,58 @@ async function renderPriceListImage(rows, title, subtitle) {
     }
 }
 
+// Multi-city variant of renderPriceListImage — used only by the change-notify
+// path below, which (per Apsara 2026-08-16, "when price list change gets
+// sent, i want that to be sent as image only not as text") must send ONE
+// image covering every city, not the old wall-of-monospace-text message.
+// Same rendering approach as renderPriceListImage (same Chromium instance,
+// same throw-if-browser-not-ready contract) — just stacks each city's table
+// under its own heading instead of rendering a single city.
+async function renderFullPriceListImage(data, subtitle) {
+    const browser = _getBrowser();
+    if (!browser) throw new Error('WhatsApp browser not ready — cannot render price list image');
+
+    const sections = Object.entries(data)
+        .filter(([, rows]) => rows && rows.length)
+        .map(([city, rows]) => `
+        <div class="city">${escapeHtml(city)}</div>
+        <table>${rows.map(r => `
+            <tr>
+                <td class="item">${escapeHtml(r.item)}</td>
+                <td class="price">${escapeHtml(r.priceRaw)}</td>
+            </tr>`).join('')}</table>`).join('');
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #ffffff; padding: 24px; width: 480px; }
+    h1 { font-size: 22px; color: #111111; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #666666; margin-bottom: 16px; white-space: pre-line; }
+    .city { font-size: 15px; font-weight: 700; color: #111111; margin: 16px 0 4px; }
+    .city:first-of-type { margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    td { padding: 8px 4px; font-size: 16px; border-bottom: 1px solid #eeeeee; }
+    .item { color: #222222; text-align: left; }
+    .price { color: #111111; font-weight: 700; text-align: right; white-space: nowrap; padding-left: 16px; }
+    tr:last-child td { border-bottom: none; }
+</style></head>
+<body>
+    <h1>Edge Metals — Price List</h1>
+    <div class="subtitle">${escapeHtml(subtitle)}</div>
+    ${sections}
+</body></html>`;
+
+    const page = await browser.newPage();
+    try {
+        await page.setViewport({ width: 480, height: 100 });
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
+        const base64 = await page.screenshot({ type: 'png', fullPage: true, encoding: 'base64' });
+        return base64;
+    } finally {
+        await page.close().catch(() => {});
+    }
+}
+
 // ── Send current price list to one resolved target ───────────────────────────
 async function sendPriceListTo(nameOrNumber) {
     const target = resolveTarget(nameOrNumber);
@@ -280,10 +332,26 @@ async function checkForChangesAndNotify() {
     if (!changes.length) return { changed: false };
 
     const contacts = standingContacts();
-    const text = formatPriceList(newData) + '\n\n_Changed: ' + changes.join('; ') + '_';
+
+    // Image-only per Apsara 2026-08-16. Text is now ONLY a fallback for when
+    // the render itself fails (e.g. WhatsApp's Chromium instance isn't up
+    // yet) — same degrade-gracefully pattern as sendPriceListCityTo, so a
+    // rendering hiccup still gets the update out instead of silently
+    // dropping it, but the normal path is image with no caption at all.
+    const updatedLine = `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)\nChanged: ${changes.join('; ')}`;
+    let media = null;
+    let text = null;
+    try {
+        const base64 = await renderFullPriceListImage(newData, updatedLine);
+        media = { mimetype: 'image/png', base64, filename: 'pricelist_update.png' };
+    } catch (err) {
+        console.warn('[PRICELIST] Change-notify image render failed, falling back to text:', err.message);
+        text = formatPriceList(newData) + '\n\n_Changed: ' + changes.join('; ') + '_';
+    }
+
     const results = [];
     for (const c of contacts) {
-        const ok = await _send(contactChatId(c), text);
+        const ok = await _send(contactChatId(c), text, media);
         results.push({ name: c.name, ok });
     }
 
