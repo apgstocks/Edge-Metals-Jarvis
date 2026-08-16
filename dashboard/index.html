@@ -378,10 +378,20 @@ let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pendin
 // headers and only shows a header if at least one item in it survives the
 // role filter (e.g. a non-admin 'user' role never sees "System").
 const NAV_ITEMS = [
-  // Daily ops — the tabs anyone running the yard touches every day.
+  // Scrap-yard side of the app — per Apsara 2026-08-16 ("Price lists also
+  // move it under Yard"): split out of the old single "Operations" bucket,
+  // matching the "Yard" terminology already established elsewhere (Yard
+  // Report, Settings > Yard sub-tab, the mobile app's own Loads/Inventory
+  // scope). 'contacts' is really the price-list send-to list (see
+  // renderPriceContacts's "Price list contacts" page title) — relabeled
+  // here for clarity since it now sits next to Loads/Inventory instead of
+  // next to Email Contacts/WhatsApp, where "Contacts" alone was ambiguous.
+  { id: 'loads',     label: 'Loads',       group: 'Yard' },
+  { id: 'inventory', label: 'Inventory',   group: 'Yard' },
+  { id: 'contacts',  label: 'Price Lists', group: 'Yard', adminOnly: true },
+
+  // Freight-forwarding/booking side of the app.
   { id: 'board',     label: 'Board',     group: 'Operations' },
-  { id: 'loads',     label: 'Loads',     group: 'Operations' },
-  { id: 'inventory', label: 'Inventory', group: 'Operations' },
   { id: 'bookings',  label: 'Bookings',  group: 'Operations' },
   { id: 'truckers',  label: 'Truckers',  group: 'Operations' },
   { id: 'suppliers', label: 'Suppliers', group: 'Operations' },
@@ -393,7 +403,6 @@ const NAV_ITEMS = [
 
   // Who Jarvis talks to and how — channels, directories, inbound requests.
   { id: 'whatsapp',       label: 'WhatsApp',       group: 'Contacts & Outreach', adminOnly: true },
-  { id: 'contacts',       label: 'Contacts',       group: 'Contacts & Outreach', adminOnly: true },
   { id: 'email-contacts', label: 'Email Contacts', group: 'Contacts & Outreach', adminOnly: true },
   { id: 'address-book',   label: 'Address Book',   group: 'Contacts & Outreach', adminOnly: true },
   { id: 'quote-requests', label: 'Quote Requests', group: 'Contacts & Outreach', adminOnly: true },
