@@ -10,7 +10,7 @@ const crypto  = require('crypto');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
         mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking,
-        loadFacts, addFact } = require('./helpers/json');
+        loadFacts, addFact, setFactPinned } = require('./helpers/json');
 const { daysUntil }   = require('./helpers/time');
 const { listAlerts, snoozeAlert, muteBooking } = require('./alerts');
 const cfg = require('./config');
@@ -1214,7 +1214,21 @@ function createApi() {
     app.post('/api/facts', requireAdmin, async (req, res) => {
         const text = String(req.body?.text || '').trim();
         if (!text) return res.status(400).json({ error: 'text required' });
-        await addFact(text);
+        await addFact(text, !!req.body?.pinned);
+        res.json({ ok: true });
+    });
+
+    // Pin/unpin an existing fact — see helpers/json.js's addFact header for
+    // why this exists: unpinned facts fall out of every AI prompt once 15
+    // newer facts exist, even though they're still stored. Pinning exempts
+    // a fact from that window so a standing rule Apsara wants reinforced
+    // (e.g. a routing/CC rule) is guaranteed to always be read, not just
+    // usually read.
+    app.patch('/api/facts/:index', requireAdmin, async (req, res) => {
+        const idx = parseInt(req.params.index, 10);
+        if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'invalid index' });
+        const ok = await setFactPinned(idx, !!req.body?.pinned);
+        if (!ok) return res.status(404).json({ error: 'not found' });
         res.json({ ok: true });
     });
 

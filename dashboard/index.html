@@ -3161,28 +3161,54 @@ function wireDeckEvents() {
 }
 
 // ── FACTS (admin only) — Jarvis's learned memory, fed into every AI prompt ─
+// 2026-08-16 fix: this used to render esc(f) where f is the full
+// {text, pinned, created_at} record, not a string — String({...}) is
+// literally "[object Object]", so every fact on this tab displayed as that
+// instead of its actual text. Real, live bug, found while adding pinning
+// below; fixed alongside it (esc(f.text) instead of esc(f)).
+//
+// Pinning (per Apsara: "i never want it to forget... i want that to be
+// reinforced") — helpers/context.js only ever fed the AI the most recent 15
+// facts; anything older silently fell out of every prompt with no warning,
+// even though it was still sitting right here. A pinned fact is exempt from
+// that window (see helpers/context.js/formatForAI) — it's read on every AI
+// call, permanently, until someone unpins or deletes it here.
 function renderFacts(data) {
   const facts = data.facts || [];
+  const pinned = facts.map((f, i) => ({ ...f, i })).filter((f) => f.pinned);
+  const unpinned = facts.map((f, i) => ({ ...f, i })).filter((f) => !f.pinned).reverse();
+  const factRow = (f) => `
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs); ${f.pinned ? 'border:1px solid var(--accent);' : ''}">
+      <span style="font-size:13px;">${f.pinned ? '<span title="Pinned — always included, never ages out" style="margin-right:6px;">📌</span>' : ''}${esc(f.text)}</span>
+      <span style="display:flex; gap:6px; flex-shrink:0;">
+        <button class="btn btn-secondary btn-pin-fact" data-idx="${f.i}" data-pinned="${f.pinned ? '1' : '0'}" style="padding:5px 10px; font-size:10px;">${f.pinned ? 'Unpin' : 'Pin'}</button>
+        <button class="btn btn-danger btn-del-fact" data-idx="${f.i}" style="padding:5px 10px; font-size:10px;">Del</button>
+      </span>
+    </div>`;
   $('viewRoot').innerHTML = `
     <section style="max-width:800px; margin:0 auto; padding:38px 40px 80px;">
       <div class="eyebrow">// Facts</div>
       <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Learned memory</h2>
-      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Explicit "remember X" commands and AI-detected corrections land here, and every one feeds every future AI answer.</div>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Explicit "remember X" commands and AI-detected corrections land here, and every one feeds every future AI answer. Regular facts only stay in the AI's view for the most recent 15 — pin anything that should never age out.</div>
       <div class="card" style="padding:18px 20px; margin-bottom:16px;">
         <div style="display:flex; gap:8px;">
           <input id="f_new_text" style="flex:1; padding:11px 12px; border:1px solid var(--border-default); border-radius:var(--radius-sm);" placeholder="e.g. DALA booking numbers can include a dash">
           <button id="btnAddFact" class="btn btn-primary">Add</button>
         </div>
+        <label style="display:flex; align-items:center; gap:6px; margin-top:10px; font-size:12px; color:var(--text-muted); cursor:pointer;">
+          <input type="checkbox" id="f_new_pinned"> Pin this — always reinforce it, never let it age out of the AI's memory
+        </label>
         <div id="factAddErr" style="color:var(--status-danger); font-size:12px; margin-top:8px;"></div>
       </div>
+      ${pinned.length ? `
+      <div class="card" style="padding:18px 20px; margin-bottom:16px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin-bottom:12px;">📌 Pinned — always applied</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">${pinned.map(factRow).join('')}</div>
+      </div>` : ''}
       <div class="card" style="padding:18px 20px;">
-        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">All facts (most recent first)</div>
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">All other facts (most recent first — only last 15 reach the AI)</div>
         <div id="factList" style="display:flex; flex-direction:column; gap:8px;">
-          ${facts.length ? facts.map((f, i) => `
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
-              <span style="font-size:13px;">${esc(f)}</span>
-              <button class="btn btn-danger btn-del-fact" data-idx="${i}" style="padding:5px 10px; font-size:10px;">Del</button>
-            </div>`).reverse().join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No facts yet.</div>'}
+          ${unpinned.length ? unpinned.map(factRow).join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No facts yet.</div>'}
         </div>
       </div>
     </section>`;
@@ -3190,12 +3216,17 @@ function renderFacts(data) {
     const text = $('f_new_text').value.trim();
     if (!text) { $('factAddErr').textContent = 'Enter some text first.'; return; }
     $('factAddErr').textContent = '';
-    try { await api('/api/facts', { method: 'POST', body: JSON.stringify({ text }) }); loadTab('facts'); }
+    try { await api('/api/facts', { method: 'POST', body: JSON.stringify({ text, pinned: $('f_new_pinned').checked }) }); loadTab('facts'); }
     catch (e) { $('factAddErr').textContent = e.message; }
   });
   document.querySelectorAll('.btn-del-fact').forEach(btn => btn.addEventListener('click', async () => {
     if (!confirm('Delete this fact?')) return;
     await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'DELETE' });
+    loadTab('facts');
+  }));
+  document.querySelectorAll('.btn-pin-fact').forEach(btn => btn.addEventListener('click', async () => {
+    const nowPinned = btn.dataset.pinned !== '1';
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'PATCH', body: JSON.stringify({ pinned: nowPinned }) });
     loadTab('facts');
   }));
 }

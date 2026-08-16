@@ -271,13 +271,33 @@ function loadTranscripts(chatId, n = 5) {
 }
 
 // ── Facts (long-term memory, replaces Firestore facts collection) ─────────────
+// pinned facts (2026-08-16, per Apsara: "i never want it to forget as it is
+// like a learning... i want that to be reinforced") — helpers/context.js's
+// formatForAI used to feed the AI only the most recent 15 facts by
+// insertion order, so a genuinely durable standing rule could silently fall
+// out of the prompt the moment 15 newer facts were added, with nothing
+// telling anyone it happened. `pinned: true` facts are exempt from that
+// recency window (see formatForAI) AND from the 200-cap eviction below —
+// only unpinned facts ever get shifted out, so a pinned fact only leaves
+// the store if someone explicitly deletes it from the dashboard.
 const loadFacts = () => loadJson(cfg.FACTS_FILE, []);
-async function addFact(text) {
+async function addFact(text, pinned = false) {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
-        facts.push({ text, created_at: new Date().toISOString() });
-        if (facts.length > 200) facts.shift();
+        facts.push({ text, pinned: !!pinned, created_at: new Date().toISOString() });
+        if (facts.length > 200) {
+            const idx = facts.findIndex((f) => !f.pinned);
+            if (idx >= 0) facts.splice(idx, 1); else facts.shift();
+        }
         return facts;
     });
+}
+async function setFactPinned(index, pinned) {
+    let ok = false;
+    await mutateJson(cfg.FACTS_FILE, [], (facts) => {
+        if (index >= 0 && index < facts.length) { facts[index].pinned = !!pinned; ok = true; }
+        return facts;
+    });
+    return ok;
 }
 
 module.exports = {
@@ -289,5 +309,5 @@ module.exports = {
     loadSettings, saveSettings,
     updateWorkflow, archiveBooking,
     saveTranscript, loadTranscripts,
-    loadFacts, addFact,
+    loadFacts, addFact, setFactPinned,
 };

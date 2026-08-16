@@ -3032,6 +3032,27 @@ async function continueQuoteFlow(chatId, state) {
     const hasNames = state.names && state.names.length;
     const hasEmails = state.directEmails && state.directEmails.length;
     if (!hasNames && !hasEmails) {
+        // Real gap found 2026-08-16, live (Apsara: "Send quote request from
+        // Junk car to Eccomelt" listed TRUCKERS to ask, even though Eccomelt
+        // is a saved Contacts entry, not a trucker). The natural "from X to
+        // Y" phrasing always matches THIS parser (parseGetQuoteCommand in
+        // brain.js) rather than the separate "to X for Y" contact-quote
+        // parser, so any quote asked this way to a company/buyer saved as a
+        // Contact — never a trucker — could only ever list the trucker
+        // roster, which has nothing to do with the request. Fix: when no
+        // trucker names/emails were given, check whether the DESTINATION
+        // matches a saved Contact first. If it does, this is a contact
+        // quote — route through the already-tested contact-quote flow
+        // (startContactQuoteRequestFlow below), using origin as the "for"
+        // details, instead of asking her to pick from an unrelated trucker
+        // list. Only falls through to the trucker-roster prompt when the
+        // destination doesn't match any saved contact at all, so a genuine
+        // hauling-lane quote ("get quote from LA to Richmond") is completely
+        // unaffected.
+        const contactsHelper = require('../helpers/contacts');
+        if (contactsHelper.getContactsByName(state.destinationQuery).length) {
+            return startContactQuoteRequestFlow(chatId, state.destinationQuery, state.originQuery);
+        }
         return askWhichTruckers(chatId, { originQuery: state.originQuery, destinationQuery: state.destinationQuery });
     }
 
@@ -3138,11 +3159,23 @@ async function pauseForUnresolvedTrucker(chatId, unresolvedNames, state) {
 
 // No trucker named at all — per Apsara's answer ("just ask"): list every
 // trucker that has SOME usable contact channel and let her pick one or more.
+//
+// 2026-08-16, per Apsara ("list all the contacts say 1,2,3 and all") —
+// Contacts (helpers/contacts.js — buyers/companies, not haulers) are now
+// merged into this same numbered list, listed first (matches her stated
+// tab-order preference elsewhere: Contacts before Active/Closed). A pick by
+// number or name flows through unchanged either way — resolveTruckerNames
+// (workflow/quoteRequests.js) now searches both rosters for the picked
+// name, and resolveTruckerChannel works identically on a Contacts record
+// (same {group_id, whatsapp, email, preferred_mode} shape as a trucker).
 async function askWhichTruckers(chatId, state) {
-    const all = await loadTruckers();
-    const reachable = all.filter((t) => quoteHelper.resolveTruckerChannel(t));
+    const { loadContacts } = require('../helpers/contacts');
+    const allTruckers = await loadTruckers();
+    const reachableTruckers = allTruckers.filter((t) => quoteHelper.resolveTruckerChannel(t));
+    const reachableContacts = loadContacts().filter((c) => quoteHelper.resolveTruckerChannel(c));
+    const reachable = [...reachableContacts, ...reachableTruckers];
     if (!reachable.length) {
-        await _send(chatId, 'No truckers with a saved WhatsApp number, group, or email on file — add one from the dashboard first.');
+        await _send(chatId, 'No truckers or contacts with a saved WhatsApp number, group, or email on file — add one from the dashboard first.');
         return { action_taken: 'quote_no_truckers' };
     }
     const staged = await setPending(chatId, {

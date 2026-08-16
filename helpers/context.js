@@ -128,7 +128,18 @@ const transcripts = loadTranscripts(ctx.chatId, 5)
     .map(t => `[${t.senderRole}] ${t.senderName}: ${t.text}${t.hasMedia ? ' [media]' : ''}`)
     .join('\n') || '(none)';
 
-const facts = loadFacts().slice(-15).map(f => `- ${f.text}`).join('\n') || '(none)';
+// Pinned facts (2026-08-16, per Apsara — see helpers/json.js's addFact
+// header) always ride along, regardless of how many newer facts have been
+// added since; only the unpinned pool is windowed to the most recent 15.
+// A fact can't appear twice even if it's pinned AND happens to be within
+// the recent-15 window — dedupe by array identity (each entry is a stable
+// object reference from the same loadFacts() call).
+const allFacts = loadFacts();
+const pinnedFacts = allFacts.filter(f => f.pinned);
+const recentUnpinned = allFacts.filter(f => !f.pinned).slice(-15);
+const facts = [...pinnedFacts, ...recentUnpinned]
+    .map(f => `- ${f.pinned ? '[PINNED — always apply] ' : ''}${f.text}`)
+    .join('\n') || '(none)';
 
 // Business context — separate from facts: ongoing situations, not corrections.
 const businessContext = memory.loadBusinessContext().slice(-15).map(c => `- ${c.text}`).join('\n') || '(none)';

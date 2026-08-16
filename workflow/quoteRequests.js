@@ -51,7 +51,21 @@ function matchTruckersByTokens(query, allTruckers) {
 // ── Trucker name resolution (wraps workflow/truckers.js with the same
 // "ambiguous → ask, don't guess" rule Apsara asked for on lane resolution) ──
 // Returns { resolved: [{name, trucker}], ambiguous: [{query, matches}], unresolved: [query] }
+//
+// 2026-08-16, per Apsara ("it should still go to quote request contacts") —
+// a named recipient in a "quote from X to Y, ask NAME" command used to only
+// ever search the Truckers roster, so asking for a saved Contacts entry
+// (a buyer/company, not a hauler) by name always came back "couldn't find:
+// NAME" even though it existed right there in Contacts. Now searches BOTH
+// rosters and merges the matches into the same pool — a name found in only
+// one resolves normally; found in both (or more than one entry in either)
+// is ambiguous, same "ask, don't guess" rule as everywhere else. The
+// `trucker` field name below is kept as-is even when the match is really a
+// Contacts record — helpers/contacts.js was deliberately built with the
+// exact same {group_id, whatsapp, email, preferred_mode} shape as a trucker
+// specifically so it drops into resolveTruckerChannel/dispatch unchanged.
 async function resolveTruckerNames(names) {
+    const { getContactsByName } = require('../helpers/contacts');
     const resolved = [];
     const ambiguous = [];
     const unresolved = [];
@@ -62,8 +76,10 @@ async function resolveTruckerNames(names) {
             if (!allTruckersCache) allTruckersCache = await loadTruckers();
             matches = matchTruckersByTokens(query, allTruckersCache);
         }
-        if (matches.length === 1) resolved.push({ name: query, trucker: matches[0] });
-        else if (matches.length > 1) ambiguous.push({ query, matches });
+        const contactMatches = getContactsByName(query);
+        const combined = [...matches, ...contactMatches];
+        if (combined.length === 1) resolved.push({ name: query, trucker: combined[0] });
+        else if (combined.length > 1) ambiguous.push({ query, matches: combined });
         else unresolved.push(query);
     }
     return { resolved, ambiguous, unresolved };
