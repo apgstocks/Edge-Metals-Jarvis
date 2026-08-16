@@ -68,7 +68,30 @@ function parseGetQuoteCommand(rawText) {
     // pending, which then swallowed her well-formed retry too (same
     // pending is reused for reclassification below — see A0d). Broadened
     // to accept get/send/request/obtain as the leading verb.
-    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?\s+from\s+(.+?)\s+to\s+(.+)$/i);
+    //
+    // REAL GAP (found 2026-08-16, live — Apsara: "Send quote request to
+    // apg0596@gmail.com from Junk car to Eccomelt"): two more misses, same
+    // failure mode as the 2026-08-06 gap above — no policy match, fell
+    // through to the AI/draft_email path, which locked onto the literal
+    // email address as the target contact and asked for "a past email"
+    // instead of ever reaching this parser or the quote-request flow.
+    //   1. "quote request" (noun phrase) never matched — the old regex
+    //      required "quote"/"quotes" to be followed IMMEDIATELY by "from".
+    //      "quote request to X from Y to Z" has "request to X" sitting
+    //      between them, so it just didn't match at all.
+    //   2. Even with "quote request" accepted, a stray "to <email>" clause
+    //      landing BEFORE "from" (a natural way to say "send it to me from
+    //      A to B") still isn't part of the real origin/destination pair
+    //      and was never tolerated.
+    // Fixed both by (a) accepting an optional "request(s)" noun after
+    // "quote(s)", and (b) searching for the first "from ... to ..." lane
+    // pattern anywhere after that, rather than requiring it immediately —
+    // anything between the quote-noun and "from" (like a misplaced "to
+    // <email>") is simply skipped, not treated as part of the lane. This
+    // only WIDENS what matches; the origin/destination/email/ask
+    // extraction below (already working, unit-tested by the 2026-08-05/06
+    // gaps above) is completely unchanged.
+    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b[\s\S]*?\bfrom\s+(.+?)\s+to\s+(.+)$/i);
     if (!base) return null;
     const origin = base[1].trim();
     let rest = base[2].trim();
