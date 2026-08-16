@@ -87,9 +87,9 @@ tr:last-child td { border-bottom:none; }
        always-visible card into its own sub-tab so the request list isn't
        pushed down the page by it. -->
   <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
+    <button class="subtab-btn" data-subtab="contacts" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Contacts</button>
     <button class="subtab-btn" data-subtab="active" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Active</button>
     <button class="subtab-btn" data-subtab="closed" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Closed</button>
-    <button class="subtab-btn" data-subtab="contacts" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Contacts</button>
   </div>
 
   <div id="panelRequests">
@@ -119,6 +119,13 @@ tr:last-child td { border-bottom:none; }
         <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp group ID (optional)
           <input id="cmGroupId" type="text" placeholder="1234567890-1234567890@g.us" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
         </label>
+        <div style="display:flex; gap:8px; align-items:end;">
+          <label style="flex:1; font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">Or find a group by name
+            <input id="cmGroupSearch" type="text" placeholder="e.g. ABC Buyers Group" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+          </label>
+          <button id="cmGroupSearchBtn" type="button" class="btn btn-secondary" style="padding:8px 14px; font-size:11px;">Search</button>
+        </div>
+        <div id="cmGroupSearchResults" style="display:flex; flex-direction:column; gap:6px;"></div>
         <label style="font-size:11px; font-family:var(--font-mono); color:var(--text-faint);">WhatsApp number (optional)
           <input id="cmWhatsapp" type="text" placeholder="15551234567" style="width:100%; margin-top:4px; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
         </label>
@@ -252,7 +259,7 @@ function requestCard(r) {
 }
 
 let requestsData = [];
-let currentSubtab = 'active';
+let currentSubtab = 'contacts';
 
 function render() {
   if (currentSubtab === 'contacts') return; // panelContacts handles its own rendering
@@ -310,7 +317,7 @@ function setSubtab(name) {
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
 $('btnRefresh').addEventListener('click', () => (currentSubtab === 'contacts' ? loadContacts() : load()));
-setSubtab('active');
+setSubtab('contacts');
 load();
 setInterval(() => { if (currentSubtab !== 'contacts') load(); }, 30000);
 
@@ -367,6 +374,8 @@ function openContactModal(contact) {
   contactEditingOriginalName = contact ? contact.name : null;
   $('cmName').value = contact ? contact.name : '';
   $('cmGroupId').value = contact ? (contact.group_id || '') : '';
+  $('cmGroupSearch').value = '';
+  $('cmGroupSearchResults').innerHTML = '';
   $('cmWhatsapp').value = contact ? (contact.whatsapp || '') : '';
   $('cmEmail').value = contact ? (contact.email || '') : '';
   $('cmPreferredMode').value = contact ? (contact.preferred_mode || '') : '';
@@ -386,6 +395,28 @@ async function deleteContact(name) {
 $('btnAddContact').addEventListener('click', () => openContactModal(null));
 $('cmCancel').addEventListener('click', closeContactModal);
 $('contactModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'contactModalOverlay') closeContactModal(); });
+
+// Find-group-by-name — same /api/whatsapp/find-groups endpoint and "Use"
+// pattern as the trucker/supplier contact modal in dashboard/index.html
+// (doGroupSearch there). helpers/contacts.js only stores group_id (no
+// group_name field, unlike truckers), so "Use" fills just the Group ID
+// input — nothing to persist beyond that.
+$('cmGroupSearchBtn').addEventListener('click', async () => {
+  const name = $('cmGroupSearch').value.trim();
+  const box = $('cmGroupSearchResults');
+  if (!name) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">Type part of the group name first.</div>'; return; }
+  box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">Searching…</div>';
+  try {
+    const { groups } = await api('/api/whatsapp/find-groups', { method: 'POST', body: JSON.stringify({ name }) });
+    if (!groups || !groups.length) { box.innerHTML = '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">No matches — make sure Jarvis has already been added to that group.</div>'; return; }
+    box.innerHTML = groups.map((g) => `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:7px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+        <div style="font-size:12px;"><strong>${esc(g.name || g.subject || '(unnamed)')}</strong> <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(g.id || g.chatId || '')}</span></div>
+        <button type="button" class="btn btn-secondary cm-grp-use" data-id="${esc(g.id || g.chatId || '')}" style="padding:5px 10px; font-size:9.5px;">Use</button>
+      </div>`).join('');
+    box.querySelectorAll('.cm-grp-use').forEach((btn) => btn.addEventListener('click', () => { $('cmGroupId').value = btn.dataset.id; box.innerHTML = ''; }));
+  } catch (e) { box.innerHTML = `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--status-danger);">${esc(e.message)}</div>`; }
+});
 $('cmSave').addEventListener('click', async () => {
   const name = $('cmName').value.trim();
   if (!name) { $('cmError').textContent = 'Name is required.'; $('cmError').classList.remove('hidden'); return; }
