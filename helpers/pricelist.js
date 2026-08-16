@@ -121,7 +121,7 @@ function formatPriceRows(rows) {
     return '```\n' + rows.map((r, i) => `${items[i].padEnd(width)}${clean(r.priceRaw)}`).join('\n') + '\n```';
 }
 
-function formatPriceList(data, { title = 'Edge Metals — Price List' } = {}) {
+function formatPriceList(data, { title = 'Edge Trading — Price List' } = {}) {
     const lines = [title, `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, ''];
     for (const [city, rows] of Object.entries(data)) {
         if (!rows.length) continue;
@@ -219,7 +219,7 @@ async function renderFullPriceListImage(data, subtitle) {
     tr:last-child td { border-bottom: none; }
 </style></head>
 <body>
-    <h1>Edge Metals — Price List</h1>
+    <h1>Edge Trading — Price List</h1>
     <div class="subtitle">${escapeHtml(subtitle)}</div>
     ${sections}
 </body></html>`;
@@ -250,7 +250,7 @@ async function sendPriceListTo(nameOrNumber) {
 // reply — a number or partial name — against that list before calling this).
 function formatSingleCity(data, city) {
     const rows = data[city] || [];
-    const lines = [`*Edge Metals — ${city} Price List*`,
+    const lines = [`*Edge Trading — ${city} Price List*`,
         `Updated: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, ''];
     if (!rows.length) return lines.concat(['(no items found for this sheet)']).join('\n');
     lines.push(formatPriceRows(rows));
@@ -272,7 +272,7 @@ async function sendPriceListCityTo(targetNameOrNumber, city, fallbackChatId) {
     let text = null;
     if (rows.length) {
         try {
-            const base64 = await renderPriceListImage(rows, `Edge Metals — ${city} Price List`, updatedLine);
+            const base64 = await renderPriceListImage(rows, `Edge Trading — ${city} Price List`, updatedLine);
             media = { mimetype: 'image/png', base64, filename: `${city.replace(/\s+/g, '_')}_pricelist.png` };
         } catch (err) {
             console.warn('[PRICELIST] Image render failed, falling back to text:', err.message);
