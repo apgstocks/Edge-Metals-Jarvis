@@ -63,6 +63,11 @@ table { width:100%; border-collapse:collapse; }
 th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
 td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
+.subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+.qr-card-header:hover { background:var(--surface-hover); }
+.qr-chevron { display:inline-block; transition:transform 120ms var(--ease-out); }
+.qr-card[data-expanded="true"] .qr-chevron { transform:rotate(90deg); }
+.qr-card[data-expanded="true"] .qr-card-body { display:block !important; }
 </style>
 </head>
 <body>
@@ -72,18 +77,33 @@ tr:last-child td { border-bottom:none; }
     <div><div class="eyebrow">// Quotes</div><h2 style="font-size:24px; text-transform:uppercase;">Quote requests</h2></div>
     <button id="btnRefresh" class="btn btn-secondary">Refresh</button>
   </div>
-  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Every quote ask Jarvis has sent — trucker lane quotes ("get quote from X to Y") and contact quotes ("quote to X for Y") together, one list, sorted by most recent. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only for requests. Auto-refreshes every 30s.</div>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Every quote ask Jarvis has sent — trucker lane quotes ("get quote from X to Y") and contact quotes ("quote to X for Y") together, one list, sorted by most recent. Sending, reminders, and replies all happen over WhatsApp/email; this page is read-only for requests. Click a request to expand it. Auto-refreshes every 30s.</div>
 
-  <!-- ── Contacts management (for contact-quote asks — buyers/companies,
-       not truckers) — 2026-08-16, per Apsara: "separate group/whatsapp/
-       email mimicking trucker implementation." Same field set as a trucker
-       record, backed by /api/contacts (helpers/contacts.js) via api.js's
-       shared contactRoutes() factory — same upsert-by-name pattern the
-       Truckers/Suppliers tabs already use. Trucker records themselves are
-       still managed on the main dashboard's Truckers tab, unchanged. -->
-  <div class="card" style="padding:18px 20px; margin-bottom:24px;">
+  <!-- ── Sub-tabs: Active / Closed / Contacts (2026-08-16, per Apsara:
+       "add new sub tab as active/closed. keep the quote contacts in
+       separate tab") — replaces the old "hide closed" checkbox with real
+       Active/Closed filtering, and pulls Contacts management (added
+       alongside the trucker-shaped Contacts list, same day) out from an
+       always-visible card into its own sub-tab so the request list isn't
+       pushed down the page by it. -->
+  <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
+    <button class="subtab-btn" data-subtab="active" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Active</button>
+    <button class="subtab-btn" data-subtab="closed" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Closed</button>
+    <button class="subtab-btn" data-subtab="contacts" style="padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer;">Contacts</button>
+  </div>
+
+  <div id="panelRequests">
+    <div id="qrList" style="display:flex; flex-direction:column; gap:10px;"></div>
+  </div>
+
+  <div id="panelContacts" class="hidden">
+    <!-- Contacts management (for contact-quote asks — buyers/companies, not
+         truckers) — same field set as a trucker record, backed by
+         /api/contacts (helpers/contacts.js) via api.js's shared
+         contactRoutes() factory. Trucker records themselves are still
+         managed on the main dashboard's Truckers tab, unchanged. -->
     <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
-      <div style="font-size:14px; font-weight:700; color:var(--text-strong);">Contacts <span style="font-weight:400; color:var(--text-faint); font-size:11.5px;">(for "quote to X for Y" asks)</span></div>
+      <div style="font-size:12.5px; color:var(--text-muted);">Buyers/companies you can send a "quote to X for Y" ask to.</div>
       <button id="btnAddContact" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">+ Add contact</button>
     </div>
     <div id="contactsList" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -119,12 +139,6 @@ tr:last-child td { border-bottom:none; }
       </div>
     </div>
   </div>
-
-  <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--text-muted); margin-bottom:16px; cursor:pointer;">
-    <input id="hideClosedToggle" type="checkbox">
-    <span>Hide closed requests (everyone priced or escalated)</span>
-  </label>
-  <div id="qrList" style="display:flex; flex-direction:column; gap:16px;"></div>
 </section>
 
 <script>
@@ -199,34 +213,51 @@ function legRow(leg, recipientName) {
     </tr>`;
 }
 
+// Collapsible (2026-08-16, per Apsara: "these should be collapsible") —
+// each card starts collapsed (data-expanded="false"), showing just the
+// title/status/summary line; the full per-leg table (which can run long —
+// email legs' last_reply_text includes the whole quoted thread) only
+// renders once expanded. Expand state is keyed by request id and persisted
+// across re-renders (expandedIds set below) so a 30s auto-refresh doesn't
+// collapse a card the manager is mid-reading.
+const expandedIds = new Set();
+
 function requestCard(r) {
   const closed = r.status === 'closed';
   const isLane = r._kind === 'lane';
   const title = isLane ? `${esc(r.origin_query)} &rarr; ${esc(r.destination_query)}` : `${esc(r.recipient_name)} <span style="color:var(--text-faint); font-weight:400;">— ${esc(r.details)}</span>`;
   const kindBadge = `<span class="badge" style="background:${isLane ? 'rgba(58,110,165,.15)' : 'rgba(215,126,61,.15)'}; color:${isLane ? 'var(--blue-500)' : 'var(--copper-300)'};">${isLane ? 'Lane' : 'Contact'}</span>`;
+  const expanded = expandedIds.has(r.id);
   return `
-    <div class="card" style="padding:18px 20px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:4px;">
-        <div style="font-size:15px; font-weight:700; color:var(--text-strong); display:flex; align-items:center; gap:8px;">${kindBadge} ${title}</div>
-        <span class="badge" style="background:${closed ? 'rgba(87,97,106,.25)' : 'rgba(61,168,54,.15)'}; color:${closed ? 'var(--text-faint)' : 'var(--leaf-400)'};">${closed ? 'Closed' : 'Active'}</span>
+    <div class="card qr-card" data-id="${esc(r.id)}" data-expanded="${expanded}" style="padding:0; overflow:hidden;">
+      <div class="qr-card-header" style="cursor:pointer; padding:14px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+          <span class="qr-chevron" style="font-family:var(--font-mono); color:var(--text-faint); font-size:11px;">&#9656;</span>
+          <div style="min-width:0;">
+            <div style="font-size:14.5px; font-weight:700; color:var(--text-strong); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">${kindBadge} ${title}</div>
+            <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">Asked ${fmtTime(r.created_at)}${isLane && r.cargo_details ? ` · Cargo: ${esc(r.cargo_details)}` : ''}</div>
+          </div>
+        </div>
+        <span class="badge" style="flex-shrink:0; background:${closed ? 'rgba(87,97,106,.25)' : 'rgba(61,168,54,.15)'}; color:${closed ? 'var(--text-faint)' : 'var(--leaf-400)'};">${closed ? 'Closed' : 'Active'}</span>
       </div>
-      <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:4px;">Asked ${fmtTime(r.created_at)}</div>
-      ${isLane && r.cargo_details ? `<div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"><strong style="color:var(--text-body);">Cargo:</strong> ${esc(r.cargo_details)}</div>` : '<div style="margin-bottom:12px;"></div>'}
-      <div style="overflow-x:auto;">
-        <table>
-          <thead><tr><th>${isLane ? 'Trucker' : 'Contact'}</th><th>Channel</th><th>Status</th><th>Price</th><th>Last reply</th><th>Reminders</th><th>Sent</th></tr></thead>
-          <tbody>${r.legs.map((l) => legRow(l, r.recipient_name)).join('')}</tbody>
-        </table>
+      <div class="qr-card-body" style="display:none; padding:0 18px 16px;">
+        <div style="overflow-x:auto;">
+          <table>
+            <thead><tr><th>${isLane ? 'Trucker' : 'Contact'}</th><th>Channel</th><th>Status</th><th>Price</th><th>Last reply</th><th>Reminders</th><th>Sent</th></tr></thead>
+            <tbody>${r.legs.map((l) => legRow(l, r.recipient_name)).join('')}</tbody>
+          </table>
+        </div>
       </div>
     </div>`;
 }
 
 let requestsData = [];
+let currentSubtab = 'active';
 
 function render() {
-  const hideClosed = $('hideClosedToggle').checked;
+  if (currentSubtab === 'contacts') return; // panelContacts handles its own rendering
   const list = requestsData
-    .filter((r) => !hideClosed || r.status !== 'closed')
+    .filter((r) => (currentSubtab === 'closed' ? r.status === 'closed' : r.status !== 'closed'))
     .slice()
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const el = $('qrList');
@@ -236,8 +267,22 @@ function render() {
   }
   el.innerHTML = list.length
     ? list.map(requestCard).join('')
-    : `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">Nothing to show — every request is closed (uncheck the filter above to see them).</div>`;
+    : `<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); text-align:center; padding:30px 0;">No ${currentSubtab} requests.</div>`;
 }
+
+// Event delegation on the list container, not per-card — survives the
+// innerHTML rebuild every render()/auto-refresh does.
+$('qrList').addEventListener('click', (e) => {
+  const header = e.target.closest('.qr-card-header');
+  if (!header) return;
+  const cardEl = header.closest('.qr-card');
+  const id = cardEl.dataset.id;
+  const nowExpanded = !expandedIds.has(id);
+  if (nowExpanded) expandedIds.add(id); else expandedIds.delete(id);
+  cardEl.dataset.expanded = String(nowExpanded);
+  cardEl.querySelector('.qr-card-body').style.display = nowExpanded ? 'block' : 'none';
+  cardEl.querySelector('.qr-chevron').innerHTML = nowExpanded ? '&#9662;' : '&#9656;';
+});
 
 async function load() {
   try {
@@ -255,10 +300,19 @@ async function load() {
   }
 }
 
-$('btnRefresh').addEventListener('click', () => load());
-$('hideClosedToggle').addEventListener('change', render);
+function setSubtab(name) {
+  currentSubtab = name;
+  document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.subtab === name));
+  $('panelRequests').classList.toggle('hidden', name === 'contacts');
+  $('panelContacts').classList.toggle('hidden', name !== 'contacts');
+  if (name === 'contacts') loadContacts(); else render();
+}
+document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+
+$('btnRefresh').addEventListener('click', () => (currentSubtab === 'contacts' ? loadContacts() : load()));
+setSubtab('active');
 load();
-setInterval(load, 30000);
+setInterval(() => { if (currentSubtab !== 'contacts') load(); }, 30000);
 
 // ── Contacts management (2026-08-16) ─────────────────────────────────────
 // name-keyed CRUD against /api/contacts (helpers/contacts.js), same
