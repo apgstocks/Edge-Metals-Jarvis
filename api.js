@@ -674,6 +674,29 @@ function createApi() {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // Staff-safe next-load-number floor — Apsara 2026-08-16 wants this in a
+    // staff-facing mobile Settings panel too, alongside item description
+    // delete. /api/settings itself stays requireAdmin (manager number, team
+    // roster, WA groups, email cc/bcc, yard report toggle all live there —
+    // none of that is staff's business). Rather than loosen that gate, this
+    // is a narrow, single-field endpoint under /api/loads (already on
+    // STAFF_ALLOWED_PATH_PREFIXES) that reads/writes ONLY next_load_number —
+    // explicitly whitelisted, never spreads req.body into settings, so
+    // there's no way to smuggle other settings fields through it.
+    app.get('/api/loads/next-number', (req, res) => {
+        try { res.json({ next_load_number: loadSettings().next_load_number ?? null }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.put('/api/loads/next-number', async (req, res) => {
+        try {
+            const raw = req.body.next_load_number;
+            const val = (raw === null || raw === undefined || raw === '') ? null : parseInt(raw, 10);
+            if (val !== null && !Number.isFinite(val)) return res.status(400).json({ error: 'next_load_number must be a number' });
+            await saveSettings({ ...loadSettings(), next_load_number: val });
+            res.json({ ok: true, next_load_number: val });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/loads/:id', (req, res) => {
         try {
             const { getLoad } = require('./helpers/loads');

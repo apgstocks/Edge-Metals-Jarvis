@@ -314,6 +314,14 @@ body { overflow-y:auto; }
            2026-08-15 ("for admin access, there should be settings emoji in
            top right"). -->
       <button id="btnAdminSettings" class="btn btn-dark hidden" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 12px; font-size:15px;" title="Admin settings">⚙️</button>
+      <!-- Staff's own, deliberately smaller settings entry — per Apsara
+           2026-08-16 ("settings for staff user with load number reset ...
+           and this remove description"). Separate button + modal from
+           admin's rather than reusing #adminSettingsModal with conditional
+           sections: keeps the two roles' UI fully decoupled, so there's no
+           risk of an edit meant for one panel accidentally leaking a field
+           (renumber-a-load, yard report toggle) into the other. -->
+      <button id="btnStaffSettings" class="btn btn-dark hidden" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 12px; font-size:15px;" title="Settings">⚙️</button>
       <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
     </div>
   </div>
@@ -379,6 +387,38 @@ body { overflow-y:auto; }
       <div class="field"><label>Next load number</label><input id="as_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
       <button id="btnSaveNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
       <div id="as_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Staff settings modal — per Apsara 2026-08-16. Deliberately just two
+     things, both scoped to routes staff already has (or now has) access to:
+     the next-load-number floor (via /api/loads/next-number, NOT the
+     requireAdmin-gated /api/settings the admin panel above uses) and the
+     custom item-description list (/api/item-types, already on
+     STAFF_ALLOWED_PATH_PREFIXES since it's part of the Loads form). No
+     renumber-a-load here — that's already on every load card for staff, no
+     need to duplicate it; no yard-report toggle — that's genuinely admin
+     business. -->
+<div id="staffSettingsModal" class="hidden modal-overlay">
+  <div class="modal-shell" style="max-width:420px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Settings</div>
+      <button id="btnCloseStaffSettings" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Load numbering</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number instead, use the Renumber button on its card.</div>
+      <div class="field"><label>Next load number</label><input id="ss_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
+      <button id="btnSaveStaffNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
+      <div id="ss_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+
+      <div style="height:1px; background:var(--border-subtle); margin:22px 0;"></div>
+
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item description list</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Descriptions typed via "Others…" on a load, saved so they don't need retyping. Remove one if it was a typo — loads that already used it are unaffected.</div>
+      <div id="ss_item_type_rows" style="display:flex; flex-direction:column; gap:8px;"><div style="font-family:var(--font-mono); font-size:11px; color:var(--steel-500);">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -1707,6 +1747,10 @@ async function bootLoads() {
   // server-side in api.js, so a non-admin session can't actually use what's
   // behind this button even if it were shown.
   $('btnAdminSettings').classList.toggle('hidden', ROLE !== 'admin');
+  // Staff's smaller settings button — per Apsara 2026-08-16. Admin already
+  // gets everything staff gets (and more) via the admin modal above, so
+  // this stays hidden for admin too — one gear icon per role, not two.
+  $('btnStaffSettings').classList.toggle('hidden', ROLE !== 'staff');
   // Always land on Loads first, per Apsara ("loads should open by
   // default") — every boot/login resets the tab state rather than
   // remembering whatever was open last time.
@@ -1832,6 +1876,69 @@ $('btnSaveNextLoadNumber').addEventListener('click', async () => {
     btn.disabled = false; btn.textContent = 'Save';
   }
 });
+
+// ── Staff settings modal ─────────────────────────────────────────────────
+// Per Apsara 2026-08-16 ("settings for staff user with load number reset
+// ... and this remove description"). Uses /api/loads/next-number, NOT
+// /api/settings — see that route's comment in api.js for why (staff gets
+// exactly this one field, not the whole admin settings object).
+$('btnStaffSettings').addEventListener('click', async () => {
+  $('ss_next_load_msg').textContent = '';
+  $('staffSettingsModal').classList.remove('hidden');
+  try {
+    const s = await api('/api/loads/next-number');
+    $('ss_next_load_number').value = s.next_load_number ?? '';
+  } catch (err) {
+    $('ss_next_load_msg').style.color = 'var(--status-danger)';
+    $('ss_next_load_msg').textContent = 'Could not load current setting: ' + err.message;
+  }
+  loadStaffItemTypeRows();
+});
+$('btnCloseStaffSettings').addEventListener('click', () => $('staffSettingsModal').classList.add('hidden'));
+
+$('btnSaveStaffNextLoadNumber').addEventListener('click', async () => {
+  const msg = $('ss_next_load_msg');
+  const btn = $('btnSaveStaffNextLoadNumber');
+  const raw = $('ss_next_load_number').value.trim();
+  btn.disabled = true; btn.textContent = 'Saving…';
+  msg.textContent = '';
+  try {
+    await api('/api/loads/next-number', { method: 'PUT', body: JSON.stringify({ next_load_number: raw ? parseInt(raw, 10) : null }) });
+    msg.style.color = 'var(--status-success, #3fae55)';
+    msg.textContent = 'Saved.';
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save';
+  }
+});
+
+async function loadStaffItemTypeRows() {
+  const rows = $('ss_item_type_rows');
+  try {
+    const types = await api('/api/item-types');
+    rows.innerHTML = types.length ? types.map(d => `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; background:var(--steel-900); border-radius:8px;" data-desc="${esc(d)}">
+        <span style="font-size:12.5px; color:var(--steel-100, #fff);">${esc(d)}</span>
+        <button class="btn btn-danger btn-del-staff-item-type" data-desc="${esc(d)}" style="padding:5px 10px; font-size:10px;">Remove</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--steel-500); text-align:center; padding:8px 0;">No custom descriptions yet.</div>';
+    rows.querySelectorAll('.btn-del-staff-item-type').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm(`Remove "${btn.dataset.desc}" from the item description list?`)) return;
+      btn.disabled = true; btn.textContent = 'Removing…';
+      try {
+        await api('/api/item-types', { method: 'DELETE', body: JSON.stringify({ description: btn.dataset.desc }) });
+        // Keep the in-memory dropdown cache (customItemTypes, read by
+        // itemDescOptions() up top) in sync so it doesn't linger as an
+        // option on the load form until the next full app reload.
+        customItemTypes = customItemTypes.filter(x => x.toLowerCase() !== btn.dataset.desc.toLowerCase());
+        loadStaffItemTypeRows();
+      } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Remove'; }
+    }));
+  } catch (e) {
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:11.5px;">Couldn't load item types: ${esc(e.message)}</div>`;
+  }
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────
 (async function boot() {
