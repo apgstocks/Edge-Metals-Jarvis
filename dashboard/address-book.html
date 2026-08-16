@@ -94,6 +94,10 @@ textarea { font-family:inherit; }
         <label style="display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Full address (paste as-is, multiple lines OK)</label>
         <textarea id="abModalRaw" rows="6" placeholder="Company name&#10;Street address&#10;City, State ZIP" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; resize:vertical;"></textarea>
       </div>
+      <div>
+        <label style="display:block; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Mobile (optional)</label>
+        <input id="abModalMobile" placeholder="e.g. +91 80569 44193" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none;">
+      </div>
       <label style="display:flex; align-items:flex-start; gap:9px; font-size:12.5px; color:var(--text-muted); cursor:pointer;">
         <input id="abModalLocked" type="checkbox" checked style="margin-top:2px;">
         <span>Keep my edits — don't let "Sync from Doc" overwrite this entry. Uncheck if you want this entry to go back to tracking the Doc/Sheet.</span>
@@ -143,7 +147,7 @@ function filterAddressBook(list, qRaw) {
     const aliasesLower = e.aliases.map(a => a.toLowerCase());
     if (aliasesLower.some(a => a.startsWith(q))) prefix.push(e);
     else if (aliasesLower.some(a => a.includes(q))) aliasSub.push(e);
-    else if ((e.raw || '').toLowerCase().includes(q)) rawSub.push(e);
+    else if ((e.raw || '').toLowerCase().includes(q) || (e.mobile || '').toLowerCase().includes(q)) rawSub.push(e);
   }
   const byFirstAlias = (a, b) => (a.aliases[0] || '').localeCompare(b.aliases[0] || '');
   return [...prefix.sort(byFirstAlias), ...aliasSub.sort(byFirstAlias), ...rawSub.sort(byFirstAlias)];
@@ -175,6 +179,7 @@ const entryCard = (e) => `
       </div>
     </div>
     <pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>
+    ${e.mobile ? `<div style="margin-top:8px; font-family:var(--font-mono); font-size:12px; color:var(--text-faint);">📱 ${esc(e.mobile)}</div>` : ''}
   </div>`;
 
 function renderResults() {
@@ -211,6 +216,7 @@ let abModalEditingId = null;
 const abModalOverlay = $('abModalOverlay');
 const abModalAliases = $('abModalAliases');
 const abModalRaw = $('abModalRaw');
+const abModalMobile = $('abModalMobile');
 const abModalError = $('abModalError');
 
 function openAbModal(entry) {
@@ -218,6 +224,7 @@ function openAbModal(entry) {
   $('abModalTitle').textContent = entry ? 'Edit contact' : 'Add contact';
   abModalAliases.value = entry ? entry.aliases.join(' / ') : '';
   abModalRaw.value = entry ? entry.raw : '';
+  abModalMobile.value = entry ? (entry.mobile || '') : '';
   // Defaults checked (protected) either way — for a new entry there's
   // nothing to protect FROM yet, but if a later Doc/Sheet sync happens to
   // introduce the same alias set, defaulting locked keeps her manual entry
@@ -238,14 +245,15 @@ abModalOverlay.addEventListener('click', (e) => { if (e.target === abModalOverla
 $('btnAbModalSave').addEventListener('click', async () => {
   const aliases = abModalAliases.value.split('/').map(s => s.trim()).filter(Boolean);
   const raw = abModalRaw.value.trim();
+  const mobile = abModalMobile.value.trim() || null;
   if (!aliases.length) { abModalError.textContent = 'At least one name is required.'; return; }
   if (!raw) { abModalError.textContent = 'Address text is required.'; return; }
   const btn = $('btnAbModalSave');
   btn.disabled = true; const original = btn.textContent; btn.innerHTML = '<span class="spinner"></span>Saving…';
   const locked = $('abModalLocked').checked;
   try {
-    if (abModalEditingId) await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'PUT', body: JSON.stringify({ aliases, raw, locked }) });
-    else await api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases, raw, locked }) });
+    if (abModalEditingId) await api(`/api/address-book/${encodeURIComponent(abModalEditingId)}`, { method: 'PUT', body: JSON.stringify({ aliases, raw, locked, mobile }) });
+    else await api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases, raw, locked, mobile }) });
     addressBookData = await api('/api/address-book');
     renderResults();
     closeAbModal();

@@ -182,13 +182,19 @@ function resolveAddress(nameOrAlias) {
 // duplicate instead of updating. Every entry gets a stable `id` (assigned by
 // mergeEntries for synced entries, here for manual ones) so edit/delete
 // always target the exact right record regardless of what the aliases say.
-function validateEntryInput(aliases, raw) {
+// mobile is genuinely optional (per Apsara 2026-08-16, "add mobile as
+// optional field") and deliberately NOT digit-stripped/normalized like the
+// price-list contact phone field — this is just a reference number to have
+// on hand alongside the address (paste-ready in whatever format it was
+// given), not something the app dials or builds a WhatsApp chatId from.
+function validateEntryInput(aliases, raw, mobile) {
     const cleanAliases = (Array.isArray(aliases) ? aliases : String(aliases || '').split('/'))
         .map((a) => String(a || '').trim()).filter(Boolean);
     if (!cleanAliases.length) throw new Error('at least one name/alias is required');
     const cleanRaw = String(raw || '').trim();
     if (!cleanRaw) throw new Error('address text is required');
-    return { aliases: cleanAliases, raw: cleanRaw };
+    const cleanMobile = String(mobile || '').trim();
+    return { aliases: cleanAliases, raw: cleanRaw, mobile: cleanMobile || null };
 }
 
 // `locked` defaults to true — anything typed into the website is real work
@@ -196,16 +202,16 @@ function validateEntryInput(aliases, raw) {
 // rather than silently vanish the next time someone clicks "Sync from Doc".
 // She can uncheck the "keep my edits" box in the modal to explicitly hand a
 // specific entry back to the Doc/Sheet going forward.
-async function addManualEntry(aliases, raw, locked = true) {
-    const clean = validateEntryInput(aliases, raw);
+async function addManualEntry(aliases, raw, locked = true, mobile = null) {
+    const clean = validateEntryInput(aliases, raw, mobile);
     const entry = { id: crypto.randomUUID(), ...clean, added_at: new Date().toISOString(), source: 'manual', manually_edited: !!locked };
     await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => { book.push(entry); return book; });
     return entry;
 }
 
-async function updateEntryById(id, { aliases, raw, locked = true }) {
+async function updateEntryById(id, { aliases, raw, locked = true, mobile = null }) {
     if (!id) throw new Error('id required');
-    const clean = validateEntryInput(aliases, raw);
+    const clean = validateEntryInput(aliases, raw, mobile);
     // Deliberately doesn't throw for a missing id inside the mutator —
     // mutateJson's own catch block would swallow that throw (it fails soft
     // and just logs), turning a clean 404 into a confusing generic "[JSON]
@@ -217,6 +223,7 @@ async function updateEntryById(id, { aliases, raw, locked = true }) {
         if (!entry) return book;
         entry.aliases = clean.aliases;
         entry.raw = clean.raw;
+        entry.mobile = clean.mobile;
         entry.manually_edited = !!locked;
         entry.updated_at = new Date().toISOString();
         updated = entry;

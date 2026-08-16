@@ -992,7 +992,7 @@ function createApi() {
     // see helpers/addressBook.js's own comment on why these key by `id`
     // instead of alias matching.
     app.post('/api/address-book', async (req, res) => {
-        try { res.json(await require('./helpers/addressBook').addManualEntry(req.body.aliases, req.body.raw, req.body.locked)); }
+        try { res.json(await require('./helpers/addressBook').addManualEntry(req.body.aliases, req.body.raw, req.body.locked, req.body.mobile)); }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
     app.put('/api/address-book/:id', async (req, res) => {
