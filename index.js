@@ -303,8 +303,20 @@ waState.setGroupsLookupHandler(async (nameFragment) => {
     try {
         groupChats = await client.pupPage.evaluate(() => {
             const chats = window.require('WAWebCollections').Chat.getModelsArray();
+            // REAL BUG, found 2026-08-16 (Apsara: "No matches — make sure
+            // Jarvis has already been added to that group. but there is a
+            // group"): `c.isGroup` isn't a real property on the raw chat
+            // model — confirmed in whatsapp-web.js's own source
+            // (Injected/Utils.js's getChatModel): `isGroup` is entirely
+            // DERIVED during serialize() from `if (chat.groupMetadata) {
+            // model.isGroup = true }`. Since this bypass skips serialize()
+            // on purpose (that's the whole point — see the comment above
+            // this handler), `c.isGroup` was undefined on every chat,
+            // silently filtering the list down to zero groups every time.
+            // Checking `c.groupMetadata` directly instead — the exact same
+            // signal whatsapp-web.js's own code uses to set isGroup.
             return chats
-                .filter((c) => c.isGroup)
+                .filter((c) => !!c.groupMetadata)
                 .map((c) => ({
                     id: c.id?._serialized || null,
                     name: c.formattedTitle || c.name || c.groupMetadata?.subject || c.subject || null,
