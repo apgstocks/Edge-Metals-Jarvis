@@ -1000,6 +1000,15 @@ function createApi() {
         try { res.json(await require('./helpers/itemTypes').addCustomItemType(req.body.description)); }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
+    // Delete a wrongly-added "Others…" description (Apsara 2026-08-16). Body,
+    // not a :param, since descriptions are free text and can contain slashes.
+    // No requireAdmin gate — same reasoning as GET/POST above — but the only
+    // UI that calls this lives in the admin-only Settings tab, so in
+    // practice only admin ever exercises it.
+    app.delete('/api/item-types', async (req, res) => {
+        try { res.json(await require('./helpers/itemTypes').deleteCustomItemType(req.body.description)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
 
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────
     // Read-only — every mutation (send/reminder/escalation/reply) happens

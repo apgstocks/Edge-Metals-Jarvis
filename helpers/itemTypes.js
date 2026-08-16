@@ -36,4 +36,25 @@ async function addCustomItemType(description) {
     return { description: clean, added };
 }
 
-module.exports = { loadCustomItemTypes, addCustomItemType };
+// Removes a custom description (case-insensitive match). Only ever touches
+// this file's own list — the base ITEM_DESC_OPTIONS presets aren't stored
+// here, so there's nothing to accidentally delete on that side, and this
+// never rewrites any load that already used the description; it just stops
+// it appearing as a preset option on the NEXT load's dropdown. Per Apsara
+// 2026-08-16: "if i want to delete the newly added description via others".
+async function deleteCustomItemType(description) {
+    const clean = String(description || '').trim();
+    if (!clean) throw new Error('description is required');
+    let removed = false;
+    await mutateJson(cfg.ITEM_TYPES_FILE, [], (list) => {
+        const next = list.filter((d) => {
+            const match = String(d).toLowerCase() === clean.toLowerCase();
+            if (match) removed = true;
+            return !match;
+        });
+        return next;
+    });
+    return { description: clean, removed };
+}
+
+module.exports = { loadCustomItemTypes, addCustomItemType, deleteCustomItemType };

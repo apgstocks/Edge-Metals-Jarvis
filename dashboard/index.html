@@ -1615,6 +1615,11 @@ function renderSettings(s) {
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Sets a floor for the next auto-assigned load number (e.g. entering 500 means the next new load is EDGE_500, not the usual next-in-sequence). Every load after that keeps counting up from it automatically — you don't need to touch this again unless you want to jump the sequence forward again. To fix ONE load's number without affecting the sequence, use the Renumber button on that load's card in Yard &gt; Loads instead. Leave blank for normal behavior.</div>
           <div class="field" style="margin-bottom:0; max-width:220px;"><label>Next load number</label><input id="s_next_load_number" type="number" min="1" value="${esc(s.next_load_number ?? '')}" placeholder="e.g. 500"></div>
         </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item description list</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Descriptions someone typed via "Others…" on a load, now saved as dropdown options so no one has to retype them. Remove one here if it was a typo or added by mistake — it just stops showing as an option; loads that already used it are unaffected.</div>
+          <div id="itemTypeRows" style="display:flex; flex-direction:column; gap:8px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+        </div>
       </div>
     </section>`;
 
@@ -1670,6 +1675,35 @@ function renderSettings(s) {
 
   $('btnFindGroup').addEventListener('click', () => doGroupSearch($('groupSearch').closest('.card')));
   $('btnFindYardGroup').addEventListener('click', () => doGroupSearch($('yardGroupSearch').closest('.card')));
+
+  loadItemTypeRows();
+}
+
+async function loadItemTypeRows() {
+  const rows = $('itemTypeRows');
+  if (!rows) return; // panel not mounted (settings re-rendered/left before this resolved)
+  try {
+    const types = await api('/api/item-types');
+    rows.innerHTML = types.length ? types.map(d => `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-desc="${esc(d)}">
+        <span style="font-size:13px; color:var(--text-strong);">${esc(d)}</span>
+        <button class="btn btn-danger btn-del-item-type" data-desc="${esc(d)}" style="padding:6px 12px; font-size:10px;">Remove</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No custom descriptions yet — they show up here as soon as someone uses "Others…" on a load.</div>';
+    rows.querySelectorAll('.btn-del-item-type').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm(`Remove "${btn.dataset.desc}" from the item description list?`)) return;
+      btn.disabled = true; btn.textContent = 'Removing…';
+      try {
+        await api('/api/item-types', { method: 'DELETE', body: JSON.stringify({ description: btn.dataset.desc }) });
+        // customItemTypes is the in-memory cache the load-form dropdown reads
+        // (see itemDescOptions() above) — keep it in sync so the removed
+        // entry doesn't linger as an option until the next full page load.
+        customItemTypes = customItemTypes.filter(x => x.toLowerCase() !== btn.dataset.desc.toLowerCase());
+        loadItemTypeRows();
+      } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Remove'; }
+    }));
+  } catch (e) {
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load item types: ${esc(e.message)}</div>`;
+  }
 }
 
 // ── CONTACTS (price-list send-to contacts — separate from the Settings tab
