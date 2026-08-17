@@ -1723,13 +1723,21 @@ function wireDeckEvents() {
     // way, but it can't silently fail on a library bug either.
     const text = `Edge Trading — Load ${load.id} ticket: ${load.pdf_link}`;
     const url = `https://wa.me/${load.seller_phone}?text=${encodeURIComponent(text)}`;
-    // '_blank', not '_system' — '_system' is a Cordova InAppBrowser target
-    // name, and that plugin isn't installed here (this app only carries
-    // @capacitor/camera). Capacitor's WebView already hands off any
-    // external-origin window.open to the OS by default with a plain
-    // '_blank', which is what actually triggers Android's "open with
-    // WhatsApp" intent resolution for a wa.me link.
-    window.open(url, '_blank');
+    // CORRECTED 2026-08-17 (was window.open(url, '_blank'), which Apsara
+    // confirmed does nothing when tapped — "it is pressed, but nothing
+    // happening"). Android's WebView doesn't actually support real
+    // popup/multi-window behavior unless the host app explicitly wires up
+    // WebChromeClient.onCreateWindow, which this Capacitor app doesn't —
+    // so window.open() silently no-ops there, even though it works fine
+    // in a normal desktop browser (that's why dashboard/index.html's
+    // identical button, left untouched, is fine with window.open).
+    // Setting location.href instead is a real top-level navigation, which
+    // IS something Android's WebView intercepts and hands off to the OS
+    // for an external domain like wa.me — that's what actually opens
+    // WhatsApp. Navigating away like this is fine here: this app has one
+    // screen (Loads), and Android keeps it on the back stack, so the
+    // hardware/gesture Back button returns to Jarvis after WhatsApp opens.
+    window.location.href = url;
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
