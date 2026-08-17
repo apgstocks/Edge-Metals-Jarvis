@@ -842,6 +842,130 @@ function createApi() {
             res.status(500).json({ error: err.message });
         }
     });
+
+    // ── Outbound loads — mirror of /api/loads above, for material SOLD/
+    // SHIPPED OUT to a real buyer (Eccomelt or anyone else — general-
+    // purpose, see helpers/outboundLoads.js's header). Deliberately NOT on
+    // STAFF_ALLOWED_PATH_PREFIXES: unlike the yard scale-weighing workflow
+    // (a physical floor task staff already own), a sale record carries
+    // buyer pricing — a business-data exposure call Apsara didn't ask for,
+    // so this defaults to normal authenticated (manager/team) access only.
+    // No photo/Drive/PDF integration (not asked for) — a plain CRUD store.
+    app.get('/api/outbound-loads', (req, res) => {
+        try {
+            const { loadOutboundLoads, getLoadMargin } = require('./helpers/outboundLoads');
+            const loads = loadOutboundLoads().map((l) => ({ ...l, ...getLoadMargin(l) }));
+            res.json({ loads });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Registered before /api/outbound-loads/:id for the same route-ordering
+    // reason as /api/loads/inventory above.
+    app.get('/api/outbound-loads/report', (req, res) => {
+        try {
+            const { loadOutboundLoads, getOutboundReport } = require('./helpers/outboundLoads');
+            res.json(getOutboundReport(loadOutboundLoads(), { from: req.query.from, to: req.query.to }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/outbound-loads/:id', (req, res) => {
+        try {
+            const { getOutboundLoad, getLoadMargin } = require('./helpers/outboundLoads');
+            const load = getOutboundLoad(req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+            res.json({ ...load, ...getLoadMargin(load) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/outbound-loads', async (req, res) => {
+        const b = req.body || {};
+        try {
+            const { addOutboundLoad } = require('./helpers/outboundLoads');
+            const record = await addOutboundLoad({
+                date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
+                trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
+                linked_inbound_load_ids: b.linked_inbound_load_ids,
+                description: b.description, items: b.items, weight_unit: b.weight_unit,
+                created_by: b.created_by || req.role || 'unknown',
+            });
+            res.json({ ok: true, load: record });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] create outbound load failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+
+    app.put('/api/outbound-loads/:id', async (req, res) => {
+        const b = req.body || {};
+        try {
+            const { editOutboundLoad } = require('./helpers/outboundLoads');
+            const record = await editOutboundLoad(req.params.id, {
+                date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
+                trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
+                linked_inbound_load_ids: b.linked_inbound_load_ids,
+                description: b.description, items: b.items, weight_unit: b.weight_unit,
+            });
+            if (!record) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true, load: record });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] edit outbound load failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+
+    // Lightweight lookup for the outbound-load form's "link inbound loads"
+    // picker — id/date/seller/net/amount only, not the full record (items,
+    // photo links, etc.), since all this needs is enough to let Apsara pick
+    // which purchase(s) this sale's material came from.
+    app.get('/api/loads/lookup', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const q = String(req.query.q || '').trim().toLowerCase();
+            const rows = loadLoads()
+                .filter((l) => !q || (l.id || '').toLowerCase().includes(q) || (l.seller || '').toLowerCase().includes(q))
+                .slice(0, 50)
+                .map((l) => ({ id: l.id, date: l.date, seller: l.seller, net_weight: l.net_weight, amount: l.amount, weight_unit: l.weight_unit }));
+            res.json({ loads: rows });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/outbound-loads/:id', async (req, res) => {
+        try {
+            const { deleteOutboundLoad } = require('./helpers/outboundLoads');
+            const found = await deleteOutboundLoad(req.params.id);
+            if (!found) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] delete outbound load failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── Neo4j graph trace — "show everything connected to X" ────────────────
+    // See helpers/graph.js's header. Returns { nodes: [], edges: [] } (never
+    // an error) if Neo4j isn't configured or the query fails — an empty
+    // graph is a valid, non-error state for a caller to render as "nothing
+    // here yet", not something to alert on.
+    app.get('/api/graph/trace', requireAdmin, async (req, res) => {
+        try {
+            const { traceEntity } = require('./helpers/graph');
+            const name = String(req.query.entity || '').trim();
+            if (!name) return res.status(400).json({ error: 'entity query param required' });
+            const result = await traceEntity(name, { depth: parseInt(req.query.depth, 10) || 2 });
+            res.json(result);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/graph/status', requireAdmin, async (req, res) => {
+        try {
+            const { isConfigured, verifyConnectivity } = require('./helpers/graph');
+            if (!isConfigured()) return res.json({ configured: false });
+            const result = await verifyConnectivity();
+            res.json({ configured: true, ...result });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     // Changes a load's id — per Apsara 2026-08-15 ("there should be a way to
     // adjust the load number"). Renames the JSON record first (the part that
     // actually matters — search, PDF regen, the dashboard list all key off
@@ -851,13 +975,18 @@ function createApi() {
     // failure here is reported back (unlike delete's cleanup above) since
     // it's directly relevant to whether the rename is fully consistent —
     // the load record change itself still isn't rolled back either way.
-    // Re-opened to staff per Apsara 2026-08-15 ("this renumber should be
-    // there for staff access") — reverses the earlier same-day block. No
-    // extra guard needed here: STAFF_ALLOWED_PATH_PREFIXES already lets a
-    // staff session reach anything under /api/loads/*, so this route just
-    // falls under that existing allowance now that nothing here narrows it
-    // further.
-    app.put('/api/loads/:id/renumber', async (req, res) => {
+    // Admin-only, per Apsara 2026-08-17 ("remove renumber option for
+    // staff. this option should be there only for admin"). This route's
+    // access has actually flipped THREE times now: staff blocked
+    // (2026-08-15), reopened to staff same day, now restricted further
+    // still — to admin only, not just "not staff." requireAdmin below
+    // blocks staff AND the regular user tier alike; STAFF_ALLOWED_PATH_
+    // PREFIXES still lists '/api/loads' broadly (Generate PDF, Edit,
+    // Delete, etc. all still need it for staff), so this route needs its
+    // OWN explicit gate rather than relying on that prefix list to narrow
+    // it — the prefix list is deliberately coarse (whole-tab-level), not
+    // built for carving out one sub-route.
+    app.put('/api/loads/:id/renumber', requireAdmin, async (req, res) => {
         try {
             const { renumberLoad } = require('./helpers/loads');
             const oldId = req.params.id;
@@ -1006,7 +1135,7 @@ function createApi() {
     // see helpers/addressBook.js's own comment on why these key by `id`
     // instead of alias matching.
     app.post('/api/address-book', async (req, res) => {
-        try { res.json(await require('./helpers/addressBook').addManualEntry(req.body.aliases, req.body.raw, req.body.locked, req.body.mobile)); }
+        try { res.json(await require('./helpers/addressBook').addManualEntry(req.body.aliases, req.body.raw, req.body.locked, req.body.mobile, req.body.tags)); }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
     app.put('/api/address-book/:id', async (req, res) => {
@@ -1236,11 +1365,20 @@ function createApi() {
         const idx = parseInt(req.params.index, 10);
         if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'invalid index' });
         let removed = false;
+        let removedText = null;
         await mutateJson(cfg.FACTS_FILE, [], (facts) => {
-            if (idx < facts.length) { facts.splice(idx, 1); removed = true; }
+            if (idx < facts.length) { removedText = facts[idx].text; facts.splice(idx, 1); removed = true; }
             return facts;
         });
         if (!removed) return res.status(404).json({ error: 'not found' });
+        // Keep the graph node (if Neo4j is configured) in sync with a
+        // dashboard delete — see helpers/graph.js's header. Fire-and-forget,
+        // non-fatal: the fact is already gone from facts.json regardless of
+        // whether this succeeds.
+        if (removedText) {
+            require('./helpers/graph').deleteFactNode(removedText)
+                .catch((e) => console.error('[API] fact graph delete failed (non-fatal):', e.message));
+        }
         res.json({ ok: true });
     });
 
@@ -1304,6 +1442,12 @@ function createApi() {
     // address-book above, registered before the static mount for the same reason.
     app.get('/quote-requests', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'quote-requests.html'));
+    });
+
+    // Outbound loads (sales to buyers) — same standalone-page pattern as
+    // address-book/quote-requests above. See helpers/outboundLoads.js.
+    app.get('/outbound-loads', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'outbound-loads.html'));
     });
 
     // Old standalone Contact Quotes page — MERGED into /quote-requests

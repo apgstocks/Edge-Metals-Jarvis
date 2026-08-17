@@ -87,4 +87,38 @@ function getContactsByName(name) {
     return all.filter((c) => (c.name || '').toLowerCase().includes(lower));
 }
 
-module.exports = { loadContacts, upsertContact, deleteContact, getContactsByName };
+// ── Chat-identity match — mirrors workflow/truckers.js's matchTruckerByChat
+// EXACTLY (same 3-tier precedence: registered group → direct @c.us chat →
+// sender inside a non-registered group). Added 2026-08-17: brain.js's
+// normalize()/isAuthorized gate only ever checked the Trucker and Supplier
+// rosters, never this store — so a message from a Contacts-only vendor (e.g.
+// Eccomelt, who is a Contact, not a Trucker or Supplier) was silently
+// dropped as isAuthorized:false before it ever reached the quote-reply
+// detection in policyDecide's A0g/A0g2 checks. That's a separate root cause
+// from the reminder-restart bug fixed earlier the same day — this is what
+// actually lets Jarvis SEE a vendor's reply at all; that fix is what stops
+// Jarvis re-pinging after it's seen one.
+const digits = (v) => String(v || '').replace(/\D/g, '');
+function matchContactByChat(chatId, senderNumber) {
+    const contacts = loadContacts();
+
+    // 1. Group match — strongest signal
+    const byGroup = contacts.find((c) => c.group_id && c.group_id === chatId);
+    if (byGroup) return byGroup;
+
+    // 2. Direct chat — @c.us only, never @lid
+    if (String(chatId).endsWith('@c.us')) {
+        const num = digits(chatId);
+        const byChat = contacts.find((c) => digits(c.whatsapp) === num);
+        if (byChat) return byChat;
+    }
+
+    // 3. Sender inside a non-registered group — @c.us format only
+    if (senderNumber && !String(senderNumber).includes('@lid')) {
+        const num = digits(senderNumber);
+        if (num) return contacts.find((c) => digits(c.whatsapp) === num) || null;
+    }
+    return null;
+}
+
+module.exports = { loadContacts, upsertContact, deleteContact, getContactsByName, matchContactByChat };

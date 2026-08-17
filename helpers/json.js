@@ -298,6 +298,16 @@ function loadTranscripts(chatId, n = 5) {
 // without her having to remember to separately pin it every time. Manual
 // adds from the dashboard's Facts tab still default the pin checkbox
 // checked for the same reason, but stay a deliberate per-fact choice there.
+// Semantic fact recall (2026-08-16, researched per Apsara — this is the
+// mem0/Letta "archival memory" pattern: instead of a recency window that
+// silently drops old facts, unpinned facts are also embedded for similarity
+// search, so one that's aged out of the last-15 window can still surface in
+// formatForAI (helpers/context.js) if it's actually relevant to the current
+// message. Mirrors helpers/memory.js's archiveSessionSummary exactly — fire
+// async, non-blocking, non-fatal on failure; a memory-layer hiccup should
+// never block the actual conversation. Pinned facts don't need this (they're
+// already in every prompt unconditionally) but are embedded too, harmlessly,
+// for consistency/simplicity rather than special-casing them out.
 const loadFacts = () => loadJson(cfg.FACTS_FILE, []);
 async function addFact(text, pinned = false) {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
@@ -310,6 +320,8 @@ async function addFact(text, pinned = false) {
         }
         return facts;
     });
+    require('./embeddings').storeEmbedding({ chatId: null, text, type: 'fact' })
+        .catch((e) => console.error('[JSON] fact embedding store failed (non-fatal):', e.message));
 }
 async function setFactPinned(index, pinned) {
     let ok = false;

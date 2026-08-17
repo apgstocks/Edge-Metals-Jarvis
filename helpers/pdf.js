@@ -178,7 +178,20 @@ function groupItemsByDescription(items) {
 // Summary box further down the page; this puts a TOTAL line directly under
 // the last item so it reads top-to-bottom without jumping around the page.
 function drawItemTable(doc, items, columns, totalsRow) {
-    const fmt = (n) => (n != null ? String(n) : '—');
+    // $ prefix on price/amount only — per Apsara 2026-08-17 ("in pdf-price
+    // and amount need to have $ symbol at the front"). Scoped to these two
+    // column keys specifically so weight columns (gross/tare/net/count)
+    // don't pick up a stray $ — those are shared across TICKET_COLUMNS,
+    // GROUP_COLUMNS, and SELLER_COLUMNS, all of which use these same key
+    // names for their price/amount fields, so this one change covers the
+    // priced ticket's item table, the item-type summary table, AND the
+    // by-seller table in the daily inventory PDF, with nothing to touch in
+    // GROUP_COLUMNS_WEIGHTS (the weights-only PDF has no price/amount
+    // columns at all, so it's unaffected).
+    const fmt = (n, key) => {
+        if (n == null) return '—';
+        return (key === 'price' || key === 'amount') ? `$${n}` : String(n);
+    };
     const tableW = PAGE_R - PAGE_L;
     const headerH = 24, rowH = 22;
 
@@ -199,7 +212,7 @@ function drawItemTable(doc, items, columns, totalsRow) {
         else if (opts.zebra) doc.rect(PAGE_L, y, tableW, rowH).fill(ZEBRA);
         doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(isTotal ? NAVY : INK);
         columns.forEach(c => {
-            const raw = c.key === 'description' ? (rowData.description || (isTotal ? '' : '—')) : fmt(rowData[c.key]);
+            const raw = c.key === 'description' ? (rowData.description || (isTotal ? '' : '—')) : fmt(rowData[c.key], c.key);
             // ellipsis:true does nothing on its own in this pdfkit version
             // (0.15.2) — confirmed by testing directly against the installed
             // package, NOT assumed from docs. It only truncates when a HEIGHT
@@ -457,7 +470,7 @@ function generateLoadPdf(load, opts = {}) {
                     { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
                     { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
                     { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
-                    { label: 'Amount total', value: load.amount       != null ? String(load.amount)             : '—', emphasize: true },
+                    { label: 'Amount total', value: load.amount       != null ? `$${load.amount}`               : '—', emphasize: true },
                 ]);
             }
 

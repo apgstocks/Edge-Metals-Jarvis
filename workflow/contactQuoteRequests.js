@@ -223,11 +223,24 @@ async function handleIncomingReply(chatId, text) {
         });
         console.log(`[CONTACT QUOTE] ${request.recipient_name} priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
     } else {
+        // REAL BUG (found 2026-08-17, live — Eccomelt replied "Checking" /
+        // "Need scale tickets?" on 2026-08-16 and Jarvis kept firing
+        // 30/60/90-min "any price yet?" reminders regardless, per Apsara:
+        // "why jarvis cant listen to the whatsapp of vendor for quote
+        // request"). This branch only ever pushed a dashboard alert and left
+        // the OLD reminder schedule running untouched — any reply, priced or
+        // not, means a human is actively engaged, so re-pinging them minutes
+        // later reads as Jarvis not listening. Cancel whatever's queued and
+        // restart the 30/60/90 clock from NOW — still nudges them if they go
+        // quiet again after "Checking", but stops the immediate re-ping.
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'contact_quote_reply_received', bkgNo: null,
             message: `Reply from ${request.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
+        console.log(`[CONTACT QUOTE] ${request.recipient_name} replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
     return { request, leg, classification };
 }
@@ -292,11 +305,15 @@ async function handleEmailLegReply(request, leg, text) {
             severity: 'info',
         });
     } else {
+        // Same fix as handleIncomingReply above.
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'contact_quote_reply_received', bkgNo: null,
             message: `Email reply from ${request.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
+        console.log(`[CONTACT QUOTE] ${request.recipient_name} (email) replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
 }
 

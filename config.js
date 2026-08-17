@@ -85,6 +85,21 @@ const FILES = {
     // them later if that turns out to be wanted — kept apart for now since the
     // shapes and entry points are genuinely different.
     LOADS_FILE: path.join(DATA_DIR, 'loads.json'),
+    // Outbound loads — the MIRROR of LOADS_FILE above (2026-08-16, per
+    // Apsara: "loads sent to Eccomelt... how many loads for this month,
+    // item wise, how much amount spent"). LOADS_FILE tracks INBOUND scrap
+    // purchases at the yard (seller = outside party, buyer = fixed "Edge
+    // Trading" constant — see helpers/loads.js's field-mapping note).
+    // OUTBOUND_LOADS_FILE tracks the reverse: Edge Trading SELLING/shipping
+    // material OUT to a real buyer (Eccomelt, or anyone else — general-
+    // purpose per Apsara, not Eccomelt-specific). Deliberately its own
+    // store, not a `direction` flag bolted onto loads.json — LOADS_FILE's
+    // whole schema, validation, PDF/Drive integration, and inventory report
+    // all hard-assume buyer is the fixed constant; reusing it here would
+    // mean either breaking that assumption for every existing caller or
+    // special-casing around it everywhere, for zero benefit over a
+    // deliberately separate, much simpler store.
+    OUTBOUND_LOADS_FILE: path.join(DATA_DIR, 'outbound_loads.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads

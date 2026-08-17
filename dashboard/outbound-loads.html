@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outbound Loads — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Same design tokens as dashboard/quote-requests.html / index.html — kept
+   in sync by hand since this is a standalone page. */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7; --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; min-height:100vh; }
+h1,h2 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+button { font:inherit; }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn-danger { background:transparent; color:var(--status-danger); border-color:var(--status-danger); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.hidden { display:none !important; }
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
+td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+.subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
+.subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+.field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
+.field input, .field select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; }
+</style>
+</head>
+<body>
+<section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
+  <div class="eyebrow">// Outbound Loads</div>
+  <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Sales to buyers</h2>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Material sold/shipped OUT to a buyer (Eccomelt or anyone else) — the mirror of the yard Loads tab, which tracks purchases FROM suppliers.</div>
+
+  <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
+    <button class="subtab-btn" data-subtab="loads">Loads</button>
+    <button class="subtab-btn" data-subtab="report">Report</button>
+  </div>
+
+  <div id="panelLoads">
+    <div style="display:flex; justify-content:flex-end; margin-bottom:14px;">
+      <button id="btnAddLoad" class="btn btn-primary">+ New outbound load</button>
+    </div>
+    <div id="loadsList" style="display:flex; flex-direction:column; gap:10px;"></div>
+  </div>
+
+  <div id="panelReport" class="hidden">
+    <div style="display:flex; gap:10px; align-items:end; margin-bottom:16px;">
+      <div class="field" style="margin-bottom:0;"><label>From</label><input type="date" id="rptFrom"></div>
+      <div class="field" style="margin-bottom:0;"><label>To</label><input type="date" id="rptTo"></div>
+      <button id="btnRptApply" class="btn btn-secondary">Apply</button>
+      <button id="btnRptClear" class="btn btn-secondary">Clear</button>
+    </div>
+    <div id="rptSummary" class="card" style="padding:16px 18px; margin-bottom:16px;"></div>
+    <div id="rptByBuyer"></div>
+  </div>
+
+  <div id="loadModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
+    <div class="card" style="width:100%; max-width:640px; padding:22px 24px; max-height:90vh; overflow-y:auto;">
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:14px;">New outbound load</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="field"><label>Buyer *</label><input id="lm_buyer" placeholder="e.g. Eccomelt"></div>
+        <div class="field"><label>Buyer address</label><input id="lm_buyer_address"></div>
+        <div class="field"><label>Date</label><input type="date" id="lm_date"></div>
+        <div class="field"><label>Trucker</label><input id="lm_trucker" placeholder="who hauled it"></div>
+      </div>
+      <div class="field" style="margin-top:10px;"><label>Description (optional overall note)</label><input id="lm_description"></div>
+
+      <div style="margin-top:16px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Items</div>
+      <div id="lm_items" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
+      <button id="btnAddItem" type="button" class="btn btn-secondary" style="margin-top:8px; padding:6px 12px; font-size:10px;">+ Add item</button>
+
+      <div style="margin-top:16px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Link inbound load(s) sourced from — for margin</div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <input id="lm_inbound_search" placeholder="search by load id or seller" style="flex:1; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;">
+        <button id="btnInboundSearch" type="button" class="btn btn-secondary">Search</button>
+      </div>
+      <div id="lm_inbound_results" style="margin-top:6px; display:flex; flex-direction:column; gap:4px;"></div>
+      <div id="lm_inbound_linked" style="margin-top:8px; display:flex; flex-direction:column; gap:4px;"></div>
+
+      <div id="lmError" class="hidden" style="margin-top:12px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+        <button id="lmCancel" class="btn btn-secondary">Cancel</button>
+        <button id="lmSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+const $ = (id) => document.getElementById(id);
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+function fmtMoney(n) { return n != null ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'; }
+
+let currentSubtab = 'loads';
+function setSubtab(name) {
+  currentSubtab = name;
+  document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.subtab === name));
+  $('panelLoads').classList.toggle('hidden', name !== 'loads');
+  $('panelReport').classList.toggle('hidden', name !== 'report');
+  if (name === 'loads') loadLoads(); else loadReport();
+}
+document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+
+// ── Loads list ────────────────────────────────────────────────────────────
+function loadCard(l) {
+  const marginText = l.margin != null
+    ? `<span style="color:${l.margin >= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${fmtMoney(l.margin)} margin</span>`
+    : `<span style="color:var(--text-faint);">margin unknown (no inbound load linked)</span>`;
+  return `
+    <div class="card" style="padding:14px 18px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div>
+          <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.buyer)}</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">${esc(l.date || '(no date)')} ${l.trucker_name ? '· ' + esc(l.trucker_name) : ''} · ${l.id}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${fmtMoney(l.amount)}</div>
+          <div style="font-size:11px; margin-top:2px;">${marginText}</div>
+        </div>
+      </div>
+      ${l.items && l.items.length ? `
+        <table style="margin-top:10px;">
+          <thead><tr><th>Item</th><th>Net</th><th>Price</th><th>Amount</th></tr></thead>
+          <tbody>${l.items.map((it) => `<tr><td>${esc(it.description)}</td><td>${it.net_weight ?? '—'} ${esc(l.weight_unit)}</td><td>${it.price ?? '—'}</td><td>${fmtMoney(it.amount)}</td></tr>`).join('')}</tbody>
+        </table>` : ''}
+      <div style="margin-top:10px; text-align:right;">
+        <button class="btn btn-danger btn-del-load" data-id="${esc(l.id)}" style="padding:5px 10px; font-size:10px;">Delete</button>
+      </div>
+    </div>`;
+}
+async function loadLoads() {
+  const root = $('loadsList');
+  root.innerHTML = '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Loading…</div>';
+  try {
+    const { loads } = await api('/api/outbound-loads');
+    root.innerHTML = loads.length ? loads.map(loadCard).join('') : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No outbound loads yet.</div>';
+    root.querySelectorAll('.btn-del-load').forEach((btn) => btn.addEventListener('click', async () => {
+      if (!confirm('Delete this outbound load?')) return;
+      await api(`/api/outbound-loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      loadLoads();
+    }));
+  } catch (e) {
+    root.innerHTML = `<div style="padding:30px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Report ────────────────────────────────────────────────────────────────
+let rptFrom = '', rptTo = '';
+function buyerReportRow(b, unit) {
+  return `
+    <details class="card" style="margin-bottom:8px; padding:0;">
+      <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
+        <span style="font-weight:600;">${esc(b.buyer)}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${b.loadCount} load${b.loadCount === 1 ? '' : 's'} · ${b.net} ${esc(unit)} · ${fmtMoney(b.amount)}${b.margin != null ? ' · ' + fmtMoney(b.margin) + ' margin' : ''}</span>
+      </summary>
+      <div style="padding:0 16px 14px;">
+        ${b.byType.length ? `
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);"><th style="padding:6px;">Item type</th><th style="padding:6px;">Items</th><th style="padding:6px;">Net</th><th style="padding:6px;">Amount</th></tr></thead>
+            <tbody>${b.byType.map((g) => `<tr style="border-bottom:1px solid var(--border-subtle);"><td style="padding:6px;">${esc(g.description)}</td><td style="padding:6px;">${g.count}</td><td style="padding:6px;">${g.net} ${esc(unit)}</td><td style="padding:6px;">${fmtMoney(g.amount)}</td></tr>`).join('')}</tbody>
+          </table>` : ''}
+      </div>
+    </details>`;
+}
+async function loadReport() {
+  const params = new URLSearchParams();
+  if (rptFrom) params.set('from', rptFrom);
+  if (rptTo) params.set('to', rptTo);
+  const qs = params.toString() ? '?' + params.toString() : '';
+  try {
+    const data = await api('/api/outbound-loads/report' + qs);
+    $('rptSummary').innerHTML = `
+      <div style="display:flex; gap:24px; flex-wrap:wrap; font-size:13px;">
+        <div><div style="color:var(--text-faint); font-size:11px;">Loads</div><div style="font-weight:700; color:var(--text-strong);">${data.loadCount}</div></div>
+        <div><div style="color:var(--text-faint); font-size:11px;">Total sold</div><div style="font-weight:700; color:var(--text-strong);">${fmtMoney(data.totalAmount)}</div></div>
+        <div><div style="color:var(--text-faint); font-size:11px;">Total cost (linked loads only)</div><div style="font-weight:700; color:var(--text-strong);">${data.totalCost != null ? fmtMoney(data.totalCost) : '—'}</div></div>
+        <div><div style="color:var(--text-faint); font-size:11px;">Total margin</div><div style="font-weight:700; color:${data.totalMargin != null && data.totalMargin >= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${data.totalMargin != null ? fmtMoney(data.totalMargin) : 'unknown — link inbound loads for margin'}</div></div>
+      </div>`;
+    $('rptByBuyer').innerHTML = data.byBuyer.length ? data.byBuyer.map((b) => buyerReportRow(b, data.unit)).join('') : '<div style="padding:20px; text-align:center; color:var(--text-faint); font-size:13px;">No loads in this range.</div>';
+  } catch (e) {
+    $('rptSummary').innerHTML = `<div style="color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;
+  }
+}
+$('btnRptApply').addEventListener('click', () => { rptFrom = $('rptFrom').value; rptTo = $('rptTo').value; loadReport(); });
+$('btnRptClear').addEventListener('click', () => { rptFrom = ''; rptTo = ''; $('rptFrom').value = ''; $('rptTo').value = ''; loadReport(); });
+
+// ── Add load modal ───────────────────────────────────────────────────────
+let linkedInbound = [];
+function itemRowHtml(i) {
+  return `
+    <div class="lm-item-row" data-idx="${i}" style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:6px;">
+      <input class="lm-item-desc" placeholder="description">
+      <input class="lm-item-gross" type="number" step="any" placeholder="gross">
+      <input class="lm-item-tare" type="number" step="any" placeholder="tare" value="0">
+      <input class="lm-item-price" type="number" step="any" placeholder="price/lb">
+    </div>`;
+}
+function openLoadModal() {
+  $('lm_buyer').value = ''; $('lm_buyer_address').value = ''; $('lm_date').value = '';
+  $('lm_trucker').value = ''; $('lm_description').value = '';
+  $('lm_items').innerHTML = itemRowHtml(0);
+  $('lm_inbound_search').value = ''; $('lm_inbound_results').innerHTML = '';
+  linkedInbound = [];
+  renderLinkedInbound();
+  $('lmError').classList.add('hidden');
+  $('loadModalOverlay').classList.remove('hidden');
+}
+function closeLoadModal() { $('loadModalOverlay').classList.add('hidden'); }
+$('btnAddLoad').addEventListener('click', openLoadModal);
+$('lmCancel').addEventListener('click', closeLoadModal);
+$('loadModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'loadModalOverlay') closeLoadModal(); });
+$('btnAddItem').addEventListener('click', () => {
+  const n = $('lm_items').children.length;
+  $('lm_items').insertAdjacentHTML('beforeend', itemRowHtml(n));
+});
+
+function renderLinkedInbound() {
+  $('lm_inbound_linked').innerHTML = linkedInbound.length
+    ? linkedInbound.map((l) => `<div style="display:flex; justify-content:space-between; padding:6px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs); font-size:12px;"><span>${esc(l.id)} — ${esc(l.seller || '')} (${fmtMoney(l.amount)})</span><button type="button" class="btn btn-secondary lm-unlink" data-id="${esc(l.id)}" style="padding:2px 8px; font-size:9px;">Remove</button></div>`).join('')
+    : '';
+  $('lm_inbound_linked').querySelectorAll('.lm-unlink').forEach((b) => b.addEventListener('click', () => {
+    linkedInbound = linkedInbound.filter((l) => l.id !== b.dataset.id);
+    renderLinkedInbound();
+  }));
+}
+$('btnInboundSearch').addEventListener('click', async () => {
+  const q = $('lm_inbound_search').value.trim();
+  const box = $('lm_inbound_results');
+  box.innerHTML = '<div style="font-size:11px; color:var(--text-faint);">Searching…</div>';
+  try {
+    const { loads } = await api('/api/loads/lookup?q=' + encodeURIComponent(q));
+    box.innerHTML = loads.length ? loads.map((l) => `
+      <div style="display:flex; justify-content:space-between; padding:6px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs); font-size:12px;">
+        <span>${esc(l.id)} — ${esc(l.seller || '')} · ${esc(l.date || '')} · ${fmtMoney(l.amount)}</span>
+        <button type="button" class="btn btn-secondary lm-link" data-id="${esc(l.id)}" style="padding:2px 8px; font-size:9px;">Link</button>
+      </div>`).join('') : '<div style="font-size:11px; color:var(--text-faint);">No matches.</div>';
+    box.querySelectorAll('.lm-link').forEach((b) => b.addEventListener('click', () => {
+      const l = loads.find((x) => x.id === b.dataset.id);
+      if (l && !linkedInbound.some((x) => x.id === l.id)) linkedInbound.push(l);
+      renderLinkedInbound();
+      box.innerHTML = '';
+    }));
+  } catch (e) { box.innerHTML = `<div style="font-size:11px; color:var(--status-danger);">${esc(e.message)}</div>`; }
+});
+
+$('lmSave').addEventListener('click', async () => {
+  const buyer = $('lm_buyer').value.trim();
+  if (!buyer) { $('lmError').textContent = 'Buyer is required.'; $('lmError').classList.remove('hidden'); return; }
+  const items = Array.from($('lm_items').querySelectorAll('.lm-item-row')).map((row) => ({
+    description: row.querySelector('.lm-item-desc').value.trim(),
+    gross_weight: row.querySelector('.lm-item-gross').value || null,
+    tare_weight: row.querySelector('.lm-item-tare').value || null,
+    price: row.querySelector('.lm-item-price').value || null,
+  })).filter((it) => it.description || it.gross_weight || it.price);
+  const body = {
+    buyer, buyer_address: $('lm_buyer_address').value.trim() || null,
+    date: $('lm_date').value || null, trucker_name: $('lm_trucker').value.trim() || null,
+    description: $('lm_description').value.trim() || '',
+    items, linked_inbound_load_ids: linkedInbound.map((l) => l.id),
+  };
+  try {
+    await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(body) });
+    closeLoadModal();
+    loadLoads();
+  } catch (e) { $('lmError').textContent = e.message; $('lmError').classList.remove('hidden'); }
+});
+
+setSubtab('loads');
+</script>
+</body>
+</html>

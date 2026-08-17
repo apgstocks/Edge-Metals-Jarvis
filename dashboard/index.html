@@ -389,6 +389,12 @@ const NAV_ITEMS = [
   { id: 'loads',     label: 'Loads',       group: 'Yard' },
   { id: 'inventory', label: 'Inventory',   group: 'Yard' },
   { id: 'contacts',  label: 'Price Lists', group: 'Yard', adminOnly: true },
+  // Outbound loads (sales to buyers, e.g. Eccomelt) — mirror of Loads
+  // above, but a separate standalone page (dashboard/outbound-loads.html),
+  // not an in-app tab — same reasoning/pattern as address-book/quote-requests
+  // below. adminOnly: carries buyer pricing/margin, same call as Bot &
+  // Automation/Contacts & Outreach's admin-only entries.
+  { id: 'outbound-loads', label: 'Outbound Loads', group: 'Yard', adminOnly: true },
 
   // Freight-forwarding/booking side of the app.
   { id: 'board',     label: 'Board',     group: 'Operations' },
@@ -443,6 +449,7 @@ function renderNav() {
     if (b.dataset.tab === 'address-book') { window.location.href = '/address-book'; return; }
     // Same standalone-page pattern as address-book above.
     if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
+    if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }
@@ -2100,6 +2107,11 @@ let currentLoadItems = [];
 // editing an existing one (see openEditLoadModal) — Save then PUTs instead of
 // POSTing, and resetLoadModal() clears it back to null on close/new.
 let editingLoadId = null;
+// Set right before openEditLoadModal() when the load being edited is
+// locked (status === 'pdf_generated') — carried through to the PUT
+// request's admin_password field. Mirrors mobile-app/www/index.html's
+// same variable/flow.
+let editUnlockPassword = null;
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -2537,8 +2549,9 @@ function todayLocalDateStr() {
 
 function resetLoadModal() {
   editingLoadId = null;
+  editUnlockPassword = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
@@ -2582,6 +2595,7 @@ function openEditLoadModal(load) {
   if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
+  if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
@@ -2623,6 +2637,11 @@ function loadCardHtml(l) {
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
         ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
+        <!-- Send to seller — only once a PDF exists. Shown even without a
+             phone on file so the click handler can surface that as a
+             clear error rather than the option just silently not being
+             there — per Apsara 2026-08-17. Mirrors mobile-app/www/index.html. -->
+        ${l.pdf_link ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
@@ -2901,6 +2920,10 @@ function renderLoads(loads) {
             </div>
             <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
+          <!-- Optional — per Apsara 2026-08-17. Only used to build the
+               WhatsApp chat id for the "Send to seller" button once a PDF
+               exists; not required to save a load. -->
+          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 5551234567" autocomplete="off"></div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
           <div style="margin-top:18px;">
@@ -3050,16 +3073,23 @@ function wireLoadsEvents() {
         buyer: BUYER_FIXED_NAME,
         seller: $('ld_seller').value.trim() || null,
         seller_address: $('ld_seller_address').value.trim() || null,
+        seller_phone: $('ld_seller_phone').value.trim() || null,
         description: desc,
         items,
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
       if (isEdit) {
+        // admin_password only matters server-side when this load is
+        // locked (status === 'pdf_generated') — see the Edit button
+        // handler below, which prompts for it up front and stashes it in
+        // editUnlockPassword before this modal even opens.
+        if (editUnlockPassword) payload.admin_password = editUnlockPassword;
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
+      editUnlockPassword = null;
       // Auto-grow the Address Book — only for a genuinely NEW seller (no
       // existing alias matches this name at all, case-insensitive) with an
       // address actually entered. Fire-and-forget: the load itself already
@@ -3076,6 +3106,9 @@ function wireLoadsEvents() {
       loadTab('loads');
     } catch (err) {
       $('loadModalErr').textContent = err.message;
+      // Wrong admin password (or any other failure) — clear it rather than
+      // silently resubmitting the same rejected password on a retry.
+      editUnlockPassword = null;
     } finally {
       btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Save load';
     }
@@ -3119,7 +3152,37 @@ function wireDeckEvents() {
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
-    if (load) openEditLoadModal(load);
+    if (!load) return;
+    // Locked once a PDF has been generated — per Apsara 2026-08-17. The
+    // real gate is server-side (api.js's PUT /api/loads/:id checks
+    // load.status itself), this prompt is just the UX for it — mirrors
+    // mobile-app/www/index.html's identical flow.
+    if (load.status === 'pdf_generated') {
+      const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
+      if (pw === null) return; // cancelled
+      editUnlockPassword = pw;
+    } else {
+      editUnlockPassword = null;
+    }
+    openEditLoadModal(load);
+  }));
+  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    const load = loadsCache.find(l => l.id === btn.dataset.id);
+    if (load && !load.seller_phone) {
+      alert('No phone number on file for this seller. Click Edit to add one first.');
+      return;
+    }
+    if (!confirm(`Send this load's PDF to ${load ? (load.seller || 'the seller') : 'the seller'}'s WhatsApp now?`)) return;
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/send-to-seller`, { method: 'POST' });
+      btn.textContent = 'Sent ✓';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)'; }, 2500);
+    } catch (err) {
+      alert('Send failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)';
+    }
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();

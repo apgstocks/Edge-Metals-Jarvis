@@ -135,6 +135,7 @@ function parseContactQuoteCommand(rawText) {
 }
 const { matchTruckerByChat }                       = require('./truckers');
 const { matchSupplierByChat }                      = require('./suppliers');
+const { matchContactByChat }                       = require('../helpers/contacts');
 const actions = require('./actions');
 const cfg     = require('../config');
 
@@ -180,7 +181,16 @@ async function normalize(raw) {
     // registered group does personal-number-based manager/team detection apply.
     const trucker  = await matchTruckerByChat(raw.chatId, raw.senderNumber);
     const supplier = !trucker ? await matchSupplierByChat(raw.chatId, raw.senderNumber) : null;
-    const isRegisteredGroupChat = (trucker && trucker.group_id === raw.chatId) || (supplier && supplier.group_id === raw.chatId);
+    // Contacts (buyers/vendors used for quote requests — e.g. Eccomelt) —
+    // 2026-08-17 fix: this store was never checked here at all, so a message
+    // from a Contacts-only vendor's group/number failed isAuthorized below
+    // and was dropped before ever reaching the quote-reply detection in
+    // policyDecide. See helpers/contacts.js's matchContactByChat header for
+    // the full incident. Checked last of the three roster matches — a name
+    // that happens to exist as BOTH a trucker/supplier AND a contact still
+    // resolves to the trucker/supplier identity unchanged.
+    const contact  = (!trucker && !supplier) ? matchContactByChat(raw.chatId, raw.senderNumber) : null;
+    const isRegisteredGroupChat = (trucker && trucker.group_id === raw.chatId) || (supplier && supplier.group_id === raw.chatId) || (contact && contact.group_id === raw.chatId);
 
     const isManager = !isRegisteredGroupChat && !!managerNum && senderNum === managerNum;
     const isTeam    = !isRegisteredGroupChat && (teamNums.includes(senderNum) ||
@@ -191,8 +201,9 @@ async function normalize(raw) {
     // identity still wins over a coincidental personal-number match.
     const finalTrucker  = isRegisteredGroupChat ? trucker  : (!isManager && !isTeam && !isYard ? trucker  : null);
     const finalSupplier = isRegisteredGroupChat ? supplier : (!isManager && !isTeam && !isYard ? supplier : null);
+    const finalContact  = isRegisteredGroupChat ? contact  : (!isManager && !isTeam && !isYard ? contact  : null);
 
-    const role = isManager ? 'manager' : isTeam ? 'team' : isYard ? 'yard' : finalTrucker ? 'trucker' : finalSupplier ? 'supplier' : 'unknown';
+    const role = isManager ? 'manager' : isTeam ? 'team' : isYard ? 'yard' : finalTrucker ? 'trucker' : finalSupplier ? 'supplier' : finalContact ? 'contact' : 'unknown';
 
     return {
         ...raw,
@@ -200,9 +211,11 @@ async function normalize(raw) {
         role,
         matchedTrucker : finalTrucker,
         matchedSupplier: finalSupplier,
+        matchedContact : finalContact,
         isManagerOrTeam: isManager || isTeam,
         isTrucker      : !!finalTrucker,
         isSupplier     : !!finalSupplier,
+        isContact      : !!finalContact,
         isYard         : isYard,
         isAuthorized   : role !== 'unknown',
     };

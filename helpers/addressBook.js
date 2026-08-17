@@ -187,14 +187,33 @@ function resolveAddress(nameOrAlias) {
 // price-list contact phone field — this is just a reference number to have
 // on hand alongside the address (paste-ready in whatever format it was
 // given), not something the app dials or builds a WhatsApp chatId from.
-function validateEntryInput(aliases, raw, mobile) {
+// tags: 2026-08-17 per Apsara — "There should be a tag in address book like
+// seller,buyer for every contact... sometimes seller, sometimes buyer,
+// sometimes both." An address-book entry can be a source Edge Metals buys
+// scrap FROM (seller) or a company Edge Metals sells/ships material TO
+// (buyer, e.g. Eccomelt) — or both, since the same real company sometimes
+// plays either role depending on the deal. Stored as a plain array so it can
+// hold zero, one, or both values, same "just trusted input, no separate
+// verification step" posture as mobile/aliases above — Apsara sets it
+// directly, nothing derives or validates it against any other store.
+// Deliberately its own field here (not folded into helpers/contacts.js's
+// quote-request contacts) — this tags the free-text ADDRESS entry itself,
+// independent of whether that same company also has a separate Contacts
+// record for WhatsApp/email quote-request routing.
+const VALID_TAGS = ['seller', 'buyer'];
+function cleanTags(tags) {
+    const arr = Array.isArray(tags) ? tags : (tags ? [tags] : []);
+    return [...new Set(arr.map((t) => String(t || '').trim().toLowerCase()).filter((t) => VALID_TAGS.includes(t)))];
+}
+
+function validateEntryInput(aliases, raw, mobile, tags) {
     const cleanAliases = (Array.isArray(aliases) ? aliases : String(aliases || '').split('/'))
         .map((a) => String(a || '').trim()).filter(Boolean);
     if (!cleanAliases.length) throw new Error('at least one name/alias is required');
     const cleanRaw = String(raw || '').trim();
     if (!cleanRaw) throw new Error('address text is required');
     const cleanMobile = String(mobile || '').trim();
-    return { aliases: cleanAliases, raw: cleanRaw, mobile: cleanMobile || null };
+    return { aliases: cleanAliases, raw: cleanRaw, mobile: cleanMobile || null, tags: cleanTags(tags) };
 }
 
 // `locked` defaults to true — anything typed into the website is real work
@@ -202,16 +221,16 @@ function validateEntryInput(aliases, raw, mobile) {
 // rather than silently vanish the next time someone clicks "Sync from Doc".
 // She can uncheck the "keep my edits" box in the modal to explicitly hand a
 // specific entry back to the Doc/Sheet going forward.
-async function addManualEntry(aliases, raw, locked = true, mobile = null) {
-    const clean = validateEntryInput(aliases, raw, mobile);
+async function addManualEntry(aliases, raw, locked = true, mobile = null, tags = []) {
+    const clean = validateEntryInput(aliases, raw, mobile, tags);
     const entry = { id: crypto.randomUUID(), ...clean, added_at: new Date().toISOString(), source: 'manual', manually_edited: !!locked };
     await mutateJson(cfg.ADDRESS_BOOK_FILE, [], (book) => { book.push(entry); return book; });
     return entry;
 }
 
-async function updateEntryById(id, { aliases, raw, locked = true, mobile = null }) {
+async function updateEntryById(id, { aliases, raw, locked = true, mobile = null, tags = [] }) {
     if (!id) throw new Error('id required');
-    const clean = validateEntryInput(aliases, raw, mobile);
+    const clean = validateEntryInput(aliases, raw, mobile, tags);
     // Deliberately doesn't throw for a missing id inside the mutator —
     // mutateJson's own catch block would swallow that throw (it fails soft
     // and just logs), turning a clean 404 into a confusing generic "[JSON]
@@ -229,6 +248,7 @@ async function updateEntryById(id, { aliases, raw, locked = true, mobile = null 
         entry.aliases = clean.aliases;
         entry.raw = clean.raw;
         entry.mobile = clean.mobile;
+        entry.tags = clean.tags;
         entry.manually_edited = !!locked;
         entry.updated_at = new Date().toISOString();
         updated = entry;

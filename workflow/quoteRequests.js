@@ -329,15 +329,24 @@ async function handleIncomingReply(chatId, text) {
         });
         console.log(`[QUOTE] ${leg.trucker_name} priced ${classification.matchedText} — cancelled ${cancelled} pending reminder task(s)`);
     } else {
-        // Still worth surfacing — Apsara asked for ALL these events
-        // (sent/reminder/escalation/price) as dashboard notifications, and a
-        // non-price reply ("call me", "not today") is real signal even
-        // though the reminder schedule keeps running unchanged.
+        // REAL BUG (found 2026-08-17, live — Eccomelt replied "Checking" /
+        // "Need scale tickets?" and Jarvis kept firing 30/60/90-min reminders
+        // regardless, per Apsara: "why jarvis cant listen to the whatsapp of
+        // vendor"). This branch used to only push a dashboard alert and leave
+        // the OLD reminder schedule running unchanged — any reply, priced or
+        // not, means a human is actively engaged on this leg, so re-pinging
+        // "any price yet?" minutes later reads as Jarvis ignoring them.
+        // Cancel whatever's queued and restart the 30/60/90 clock from NOW —
+        // still nudges them if they go quiet again after "Checking", but
+        // stops the immediate double-message.
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.trucker_name);
+        await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'quote_reply_received', bkgNo: null,
             message: `Reply from ${leg.trucker_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
+        console.log(`[QUOTE] ${leg.trucker_name} replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
     return { request, leg, classification };
 }
@@ -435,11 +444,16 @@ async function handleEmailLegReply(request, leg, text) {
         });
         console.log(`[QUOTE] ${leg.trucker_name} (email) priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
     } else {
+        // Same fix as handleIncomingReply above — restart the clock instead
+        // of leaving the old schedule to fire regardless.
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.trucker_name);
+        await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'quote_reply_received', bkgNo: null,
             message: `Email reply from ${leg.trucker_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
+        console.log(`[QUOTE] ${leg.trucker_name} (email) replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
 }
 

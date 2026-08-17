@@ -131,15 +131,9 @@ const transcripts = loadTranscripts(ctx.chatId, 5)
 // Pinned facts (2026-08-16, per Apsara — see helpers/json.js's addFact
 // header) always ride along, regardless of how many newer facts have been
 // added since; only the unpinned pool is windowed to the most recent 15.
-// A fact can't appear twice even if it's pinned AND happens to be within
-// the recent-15 window — dedupe by array identity (each entry is a stable
-// object reference from the same loadFacts() call).
 const allFacts = loadFacts();
 const pinnedFacts = allFacts.filter(f => f.pinned);
 const recentUnpinned = allFacts.filter(f => !f.pinned).slice(-15);
-const facts = [...pinnedFacts, ...recentUnpinned]
-    .map(f => `- ${f.pinned ? '[PINNED — always apply] ' : ''}${f.text}`)
-    .join('\n') || '(none)';
 
 // Business context — separate from facts: ongoing situations, not corrections.
 const businessContext = memory.loadBusinessContext().slice(-15).map(c => `- ${c.text}`).join('\n') || '(none)';
@@ -150,25 +144,44 @@ const recentSummaries = memory.getRecentSummaries(ctx.chatId, 3)
     .map(s => `- (${new Date(s.closed_at).toLocaleDateString()}) ${s.text}`)
     .join('\n') || '(none)';
 
-// Semantic memory — genuine RAG, not recency. Searches EVERY past session
-// summary ever archived (any chat, any day) for whatever is MEANINGFULLY
-// similar to the current message, not just the last few or the same chat.
-// This is what lets "what did we decide about the Houston delay" work
-// even if that conversation was days ago and isn't in the recent window.
-// Costs a real embedding API call per AI-routed message — accepted
-// trade-off, see helpers/embeddings.js for the reasoning.
+// Semantic memory — genuine RAG, not recency. One embedding search covers
+// TWO recall needs, split apart by the `type` tag each row was stored with
+// (search itself isn't type-filtered at the DB level — see
+// helpers/embeddings.js/searchSimilar — so overfetch topK and split
+// client-side rather than adding a second embedding API call, which is real
+// per-message cost, not free):
+//   - session_summary rows -> "what did we decide about the Houston delay"
+//     even if that conversation was days ago and isn't in the recent window.
+//   - fact rows (2026-08-16, per Apsara's "remembers forever like a child
+//     being taught" ask, researched against mem0/Letta's "archival memory"
+//     pattern) -> an UNPINNED fact that's aged out of the last-15 window
+//     above can still surface here if it's actually relevant to what's
+//     being asked right now, instead of just silently going unread forever.
+//     Deduped against pinnedFacts/recentUnpinned by text so nothing repeats.
 let semanticMemory = '(none)';
+let semanticFactMatches = [];
 try {
     const embeddings = require('./embeddings');
-    const matches = await embeddings.searchSimilar(ctx.text, { topK: 3, minSimilarity: 0.55 });
-    if (matches.length) {
-        semanticMemory = matches
+    const matches = await embeddings.searchSimilar(ctx.text, { topK: 10, minSimilarity: 0.55 });
+    const summaryMatches = matches.filter(m => m.type === 'session_summary').slice(0, 3);
+    if (summaryMatches.length) {
+        semanticMemory = summaryMatches
             .map(m => `- (${new Date(m.created_at).toLocaleDateString()}, ${Math.round(m.similarity * 100)}% match) ${m.text}`)
             .join('\n');
     }
+    const alreadyShown = new Set([...pinnedFacts, ...recentUnpinned].map(f => f.text));
+    semanticFactMatches = matches
+        .filter(m => m.type === 'fact' && !alreadyShown.has(m.text))
+        .slice(0, 5);
 } catch (e) {
     console.error('[CONTEXT] semantic search failed (non-fatal):', e.message);
 }
+
+const facts = [
+    ...pinnedFacts.map(f => `- [PINNED — always apply] ${f.text}`),
+    ...recentUnpinned.map(f => `- ${f.text}`),
+    ...semanticFactMatches.map(m => `- [recalled from memory, ${Math.round(m.similarity * 100)}% relevant] ${m.text}`),
+].join('\n') || '(none)';
 
 const urgent = ctx.urgentBookings
     .map(b => `${b.booking_number} cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d)`)

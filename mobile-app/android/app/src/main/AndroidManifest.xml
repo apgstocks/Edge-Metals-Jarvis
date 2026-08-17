@@ -9,12 +9,29 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- android:resizeableActivity below is an explicit opt-in for
+             tablet compatibility, per Apsara 2026-08-17 ("make the
+             android app tablet friendly as well"). targetSdk 34
+             (variables.gradle) already defaults this to true, but
+             Android's large-screen/multi-window checks (split-screen,
+             freeform on Chromebooks/foldables) specifically look for it
+             declared explicitly rather than relying on the default —
+             makes the intent unambiguous rather than "true because
+             nothing said otherwise." There's no supports-screens tag
+             anywhere in this manifest restricting which screen sizes the
+             app installs on, and no orientation lock on this activity
+             (see configChanges below + no android:screenOrientation), so
+             tablets in either orientation were already never blocked at
+             the native/install level — this was really a CSS problem
+             (see mobile-app/www/index.html's breakpoint split); this
+             attribute just makes the native side explicit too. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:resizeableActivity="true"
             android:exported="true">
 
             <intent-filter>

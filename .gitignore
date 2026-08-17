@@ -8,3 +8,27 @@ bookings.json
 
 # Built APKs — 6MB binaries, rebuilt from source, do not belong in git
 *.apk
+_to_delete/quoteAgentClient.js.old
+_to_delete/negotiator_rollback_2026-08-17/migrate-quotes-to-agent.js
+_to_delete/negotiator_rollback_2026-08-17/negotiatorClient.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/config.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/index.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/package-lock.json
+_to_delete/negotiator_rollback_2026-08-17/negotiator/package.json
+_to_delete/negotiator_rollback_2026-08-17/negotiator/server.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/lib/contact.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/lib/jarvisClient.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/lib/lane.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/lib/scheduler.js
+_to_delete/negotiator_rollback_2026-08-17/negotiator/lib/store.js
+_to_delete/quote-agent-old/config.js
+_to_delete/quote-agent-old/index.js
+_to_delete/quote-agent-old/package-lock.json
+_to_delete/quote-agent-old/package.json
+_to_delete/quote-agent-old/server.js
+_to_delete/quote-agent-old/lib/contact.js
+_to_delete/quote-agent-old/lib/jarvisClient.js
+_to_delete/quote-agent-old/lib/lane.js
+_to_delete/quote-agent-old/lib/scheduler.js
+_to_delete/quote-agent-old/lib/store.js
+mobile-app/www/index.html

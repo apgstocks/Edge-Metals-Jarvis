@@ -199,12 +199,46 @@ body { overflow-y:auto; }
       .capture-menu { position:absolute; z-index:1000; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 8px 20px rgba(0,0,0,.28); padding:4px; display:flex; flex-direction:column; min-width:160px; }
       .capture-menu-btn { display:block; width:100%; text-align:left; padding:9px 12px; font-size:13px; background:none; border:none; border-radius:var(--radius-xs); color:var(--text-strong); cursor:pointer; }
       .capture-menu-btn:hover, .capture-menu-btn:active { background:var(--surface-hover); }
-      @media (max-width: 860px) {
+      /* Breakpoint split for tablet compatibility, per Apsara 2026-08-17
+         ("make it tablet device compatible as well"). Originally this was
+         one @media(max-width:860px) block, which caught tablets in
+         portrait too (iPad-class devices are commonly 768-834px CSS width
+         — all under 860) and forced them into the phone-only stacked
+         one-handed card redesign below, even though they have plenty of
+         room for the normal grid row (.item-row's own min-width is only
+         620px). Split into two tiers:
+           - 900px: generic touch ergonomics (full-screen modal, 16px
+             inputs to stop iOS zoom, stacked Cancel/Save) — genuinely
+             better on ANY touchscreen, tablet included, so this stays wide.
+           - 600px: the phone-specific stacked item-row card redesign
+             (built for a one-handed thumb grip on a narrow phone) — now
+             scoped to actual phone widths only, so tablets keep the
+             roomier grid-row layout instead. */
+      @media (max-width: 900px) {
         #loadModal { padding:0; align-items:stretch; }
         #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
         #loadModal .modal-body { max-height:none; flex:1; }
         .ld-grid-2 { grid-template-columns:1fr; }
 
+        /* iOS Safari auto-zooms the whole page on focus for any input
+           under 16px — every tap into a field was yanking the layout
+           around. 16px is the documented threshold that disables that. */
+        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
+
+        /* Load-deck card buttons (Edit/Delete/Generate PDF) — bigger,
+           easier-to-thumb-tap targets on any touchscreen. */
+        .load-card .btn { padding:9px 14px; font-size:12.5px; }
+
+        /* Cancel/Save stack full-width instead of two small buttons
+           crammed to the right — bigger target, and Save (the action
+           people actually came here to tap) lands at the bottom,
+           thumb-reachable on a one-handed grip. */
+        #loadModal .modal-foot { flex-direction:column; }
+        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
+        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
+      }
+
+      @media (max-width: 600px) {
         /* ── Mobile ergonomics pass — per Apsara, this tab's primary
            audience is yard staff on a phone, not a desktop mouse user, and
            several things sized fine for a pointer are genuinely hard to
@@ -213,11 +247,6 @@ body { overflow-y:auto; }
            bare .btn/.modal-foot/.field classes those elements also carry
            — so none of it touches Bookings/Board/Settings, which share
            those same base classes but weren't asked for here. */
-
-        /* iOS Safari auto-zooms the whole page on focus for any input
-           under 16px — every tap into a field was yanking the layout
-           around. 16px is the documented threshold that disables that. */
-        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
 
         /* ── Item-row mobile redesign (v2) ──────────────────────────────
            The first mobile pass kept the desktop's single-line 7-column
@@ -236,7 +265,9 @@ body { overflow-y:auto; }
            gets a small label above it (.ld-mobile-label, hidden on
            desktop) since the shared header row doesn't make sense once
            fields aren't in fixed columns — so the header itself is
-           hidden here instead. */
+           hidden here instead. Kept to ≤600px (phone-only) — a tablet at
+           768px+ has room for the normal grid row (min-width:620px), so
+           it no longer gets funneled into this cramped layout. */
         .ld-item-header { display:none; }
         #ld_items { overflow-x:visible; }
         .item-row {
@@ -269,18 +300,6 @@ body { overflow-y:auto; }
         .ld-item-net-wrap input, .ld-item-price-wrap input, .ld-item-amount-wrap input { width:100%; }
         .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
         .item-row .btn-remove-item, .item-row .btn-insert-item { padding:10px 4px; font-size:12px; flex:1; }
-
-        /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
-           too-small-to-thumb-tap problem as the item-row buttons above. */
-        .load-card .btn { padding:9px 14px; font-size:12.5px; }
-
-        /* Cancel/Save stack full-width instead of two small buttons
-           crammed to the right — bigger target, and Save (the action
-           people actually came here to tap) lands at the bottom,
-           thumb-reachable on a one-handed grip. */
-        #loadModal .modal-foot { flex-direction:column; }
-        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
-        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
       }
 </style>
 <!-- config.js sets window.JARVIS_CONFIG.API_BASE — the one line to edit
@@ -980,8 +999,9 @@ function todayLocalDateStr() {
 
 function resetLoadModal() {
   editingLoadId = null;
+  editUnlockPassword = null;
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
@@ -1020,6 +1040,7 @@ function openEditLoadModal(load) {
   if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
+  if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
   if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
   $('loadModalErr').textContent = '';
   if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
@@ -1061,6 +1082,13 @@ function loadCardHtml(l) {
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
         ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
+        <!-- Send to seller — only once a PDF exists (nothing to forward
+             before that). Shown even without a phone on file so the
+             button's own click handler can surface that as a clear error
+             rather than the option just silently not being there — per
+             Apsara 2026-08-17 ("introduce send option once pdf
+             generated..."). -->
+        ${l.pdf_link ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
@@ -1206,12 +1234,46 @@ function renderLoads(loads) {
       .capture-menu { position:absolute; z-index:1000; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); box-shadow:0 8px 20px rgba(0,0,0,.28); padding:4px; display:flex; flex-direction:column; min-width:160px; }
       .capture-menu-btn { display:block; width:100%; text-align:left; padding:9px 12px; font-size:13px; background:none; border:none; border-radius:var(--radius-xs); color:var(--text-strong); cursor:pointer; }
       .capture-menu-btn:hover, .capture-menu-btn:active { background:var(--surface-hover); }
-      @media (max-width: 860px) {
+      /* Breakpoint split for tablet compatibility, per Apsara 2026-08-17
+         ("make it tablet device compatible as well"). Originally this was
+         one @media(max-width:860px) block, which caught tablets in
+         portrait too (iPad-class devices are commonly 768-834px CSS width
+         — all under 860) and forced them into the phone-only stacked
+         one-handed card redesign below, even though they have plenty of
+         room for the normal grid row (.item-row's own min-width is only
+         620px). Split into two tiers:
+           - 900px: generic touch ergonomics (full-screen modal, 16px
+             inputs to stop iOS zoom, stacked Cancel/Save) — genuinely
+             better on ANY touchscreen, tablet included, so this stays wide.
+           - 600px: the phone-specific stacked item-row card redesign
+             (built for a one-handed thumb grip on a narrow phone) — now
+             scoped to actual phone widths only, so tablets keep the
+             roomier grid-row layout instead. */
+      @media (max-width: 900px) {
         #loadModal { padding:0; align-items:stretch; }
         #loadModal .modal-shell { max-width:100%; height:100%; border-radius:0; display:flex; flex-direction:column; }
         #loadModal .modal-body { max-height:none; flex:1; }
         .ld-grid-2 { grid-template-columns:1fr; }
 
+        /* iOS Safari auto-zooms the whole page on focus for any input
+           under 16px — every tap into a field was yanking the layout
+           around. 16px is the documented threshold that disables that. */
+        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
+
+        /* Load-deck card buttons (Edit/Delete/Generate PDF) — bigger,
+           easier-to-thumb-tap targets on any touchscreen. */
+        .load-card .btn { padding:9px 14px; font-size:12.5px; }
+
+        /* Cancel/Save stack full-width instead of two small buttons
+           crammed to the right — bigger target, and Save (the action
+           people actually came here to tap) lands at the bottom,
+           thumb-reachable on a one-handed grip. */
+        #loadModal .modal-foot { flex-direction:column; }
+        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
+        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
+      }
+
+      @media (max-width: 600px) {
         /* ── Mobile ergonomics pass — per Apsara, this tab's primary
            audience is yard staff on a phone, not a desktop mouse user, and
            several things sized fine for a pointer are genuinely hard to
@@ -1220,11 +1282,6 @@ function renderLoads(loads) {
            bare .btn/.modal-foot/.field classes those elements also carry
            — so none of it touches Bookings/Board/Settings, which share
            those same base classes but weren't asked for here. */
-
-        /* iOS Safari auto-zooms the whole page on focus for any input
-           under 16px — every tap into a field was yanking the layout
-           around. 16px is the documented threshold that disables that. */
-        #loadModal input, #loadModal select, #loadSearch { font-size:16px; }
 
         /* ── Item-row mobile redesign (v2) ──────────────────────────────
            The first mobile pass kept the desktop's single-line 7-column
@@ -1243,7 +1300,9 @@ function renderLoads(loads) {
            gets a small label above it (.ld-mobile-label, hidden on
            desktop) since the shared header row doesn't make sense once
            fields aren't in fixed columns — so the header itself is
-           hidden here instead. */
+           hidden here instead. Kept to ≤600px (phone-only) — a tablet at
+           768px+ has room for the normal grid row (min-width:620px), so
+           it no longer gets funneled into this cramped layout. */
         .ld-item-header { display:none; }
         #ld_items { overflow-x:visible; }
         .item-row {
@@ -1276,18 +1335,6 @@ function renderLoads(loads) {
         .ld-item-net-wrap input, .ld-item-price-wrap input, .ld-item-amount-wrap input { width:100%; }
         .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
         .item-row .btn-remove-item, .item-row .btn-insert-item { padding:10px 4px; font-size:12px; flex:1; }
-
-        /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
-           too-small-to-thumb-tap problem as the item-row buttons above. */
-        .load-card .btn { padding:9px 14px; font-size:12.5px; }
-
-        /* Cancel/Save stack full-width instead of two small buttons
-           crammed to the right — bigger target, and Save (the action
-           people actually came here to tap) lands at the bottom,
-           thumb-reachable on a one-handed grip. */
-        #loadModal .modal-foot { flex-direction:column; }
-        #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
-        #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
       }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
@@ -1323,6 +1370,11 @@ function renderLoads(loads) {
             </div>
             <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
+          <!-- Optional — per Apsara 2026-08-17 ("add phone number option in
+               application for seller"). Only used server-side to build the
+               WhatsApp chat id for the "Send to seller" button once a PDF
+               exists; not required to save a load. -->
+          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 5551234567" autocomplete="off"></div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
           <div style="margin-top:18px;">
@@ -1463,16 +1515,25 @@ function wireLoadsEvents() {
         buyer: BUYER_FIXED_NAME,
         seller: $('ld_seller').value.trim() || null,
         seller_address: $('ld_seller_address').value.trim() || null,
+        seller_phone: $('ld_seller_phone').value.trim() || null,
         description: desc,
         items,
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
       if (isEdit) {
+        // admin_password only matters server-side when this load is
+        // locked (status === 'pdf_generated') — see the Edit button
+        // handler in wireDeckEvents, which prompts for it up front and
+        // stashes it in editUnlockPassword before this modal even opens.
+        // Sent unconditionally (undefined when not locked) rather than
+        // only when set, so a locked-load edit doesn't silently omit it.
+        if (editUnlockPassword) payload.admin_password = editUnlockPassword;
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
+      editUnlockPassword = null;
       // Auto-grow the Address Book for a genuinely new seller — mirrors
       // dashboard/index.html. Fire-and-forget, never blocks/fails the save.
       if (payload.seller && payload.seller_address && !addressBookExactMatch(payload.seller)) {
@@ -1485,6 +1546,10 @@ function wireLoadsEvents() {
       loadTab('loads');
     } catch (err) {
       $('loadModalErr').textContent = err.message;
+      // Wrong admin password (or any other failure) — clear it rather than
+      // silently resubmitting the same rejected password if Save is
+      // clicked again. User has to click Edit again to re-prompt.
+      editUnlockPassword = null;
     } finally {
       btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Save load';
     }
@@ -1528,7 +1593,40 @@ function wireDeckEvents() {
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
-    if (load) openEditLoadModal(load);
+    if (!load) return;
+    // Locked once a PDF has been generated — per Apsara 2026-08-17 ("once
+    // pdf generated, edit option should be locked. on clicking edit, it
+    // should ask admin password to unlock and edit"). The prompt here is
+    // just UX — the real gate is server-side (api.js's PUT
+    // /api/loads/:id checks load.status === 'pdf_generated' itself and
+    // rejects a bad/missing password), so this can't be bypassed by
+    // skipping the prompt some other way.
+    if (load.status === 'pdf_generated') {
+      const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
+      if (pw === null) return; // cancelled
+      editUnlockPassword = pw;
+    } else {
+      editUnlockPassword = null;
+    }
+    openEditLoadModal(load);
+  }));
+  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    const load = loadsCache.find(l => l.id === btn.dataset.id);
+    if (load && !load.seller_phone) {
+      alert('No phone number on file for this seller. Click Edit to add one first.');
+      return;
+    }
+    if (!confirm(`Send this load's PDF to ${load ? (load.seller || 'the seller') : 'the seller'}'s WhatsApp now?`)) return;
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/send-to-seller`, { method: 'POST' });
+      btn.textContent = 'Sent ✓';
+      setTimeout(() => { btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)'; }, 2500);
+    } catch (err) {
+      alert('Send failed: ' + err.message);
+      btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)';
+    }
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
@@ -1567,6 +1665,13 @@ function wireDeckEvents() {
 let loadsCache = [];
 let currentLoadItems = [];
 let editingLoadId = null;
+// Set right before openEditLoadModal() when the load being edited is
+// locked (status === 'pdf_generated') — carried through to the PUT
+// request's admin_password field. null for a brand-new load or an
+// unlocked edit; the server only checks it when the load is actually
+// locked (see api.js's PUT /api/loads/:id), so sending null/undefined
+// the rest of the time is a no-op, not a security hole.
+let editUnlockPassword = null;
 
 // ── App shell (new — replaces the dashboard's sidebar/tab system, which
 // doesn't exist here since this app has exactly one screen) ─────────────

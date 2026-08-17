@@ -148,6 +148,14 @@ async function addLoad(entry) {
         date          : entry.date || null,
         seller        : entry.seller || null,
         seller_address: entry.seller_address || null,
+        // Optional — per Apsara 2026-08-17 ("add phone number option in
+        // application for seller"). Not run through validateLoadForSave;
+        // unlike seller (a hard-required counterparty name), a load should
+        // still save fine without a phone on file. Digits only, same
+        // normalization as helpers/pricelist.js's contact numbers — kept
+        // raw here (not @c.us-suffixed) since this is a data field, not a
+        // chat id; the send-to-seller route builds the chat id from it.
+        seller_phone  : entry.seller_phone ? String(entry.seller_phone).replace(/\D/g, '') || null : null,
         buyer         : entry.buyer || null,
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',
@@ -200,6 +208,7 @@ async function editLoad(id, entry) {
         date          : entry.date || null,
         seller        : entry.seller || null,
         seller_address: entry.seller_address || null,
+        seller_phone  : entry.seller_phone ? String(entry.seller_phone).replace(/\D/g, '') || null : null,
         buyer         : entry.buyer || null,
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',
