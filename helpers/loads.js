@@ -13,6 +13,31 @@ function toNum(v) {
     return isFinite(n) ? n : null;
 }
 
+// REAL BUG, found 2026-08-17 from production logs: "[SEND] Failed ->
+// 8056944193@c.us: No LID for user". That looked at first like purely the
+// unresolved upstream whatsapp-web.js "LID" bug (see api.js's send-to-seller
+// route comment) — but 8056944193 is the SAME number already on file
+// elsewhere in this app as 918056944193 (data/truckers.json,
+// data/suppliers.json, the manager number placeholder — every working
+// WhatsApp number in this codebase carries India's "91" country code
+// prefix). The old normalization here only stripped non-digits; a seller
+// phone typed the natural local way ("8056944193", no country code) was
+// stored exactly like that — 10 raw digits isn't a real WhatsApp ID at
+// all, so of course WhatsApp can't resolve a LID for it. That's on us,
+// not (only) the upstream bug. Assumes India (91) for a bare 10-digit
+// number, matching the one country code convention already used
+// everywhere else in this app; anything already carrying a country code
+// (11+ digits) is left alone. Not a perfect general solution (a genuine
+// non-Indian 10-digit number would get mis-prefixed), but it matches every
+// other number already in this system and fixes the actual failure mode
+// seen in production.
+function normalizeSellerPhone(raw) {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (!digits) return null;
+    if (digits.length === 10) return `91${digits}`;
+    return digits;
+}
+
 // Gross/tare/net/price/amount are captured PER ITEM now (a load is often
 // several items, each weighed separately, not one shared load-level
 // weight) — this is the one place that's the source of truth for those
@@ -155,7 +180,7 @@ async function addLoad(entry) {
         // normalization as helpers/pricelist.js's contact numbers — kept
         // raw here (not @c.us-suffixed) since this is a data field, not a
         // chat id; the send-to-seller route builds the chat id from it.
-        seller_phone  : entry.seller_phone ? String(entry.seller_phone).replace(/\D/g, '') || null : null,
+        seller_phone  : normalizeSellerPhone(entry.seller_phone),
         buyer         : entry.buyer || null,
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',
@@ -208,7 +233,7 @@ async function editLoad(id, entry) {
         date          : entry.date || null,
         seller        : entry.seller || null,
         seller_address: entry.seller_address || null,
-        seller_phone  : entry.seller_phone ? String(entry.seller_phone).replace(/\D/g, '') || null : null,
+        seller_phone  : normalizeSellerPhone(entry.seller_phone),
         buyer         : entry.buyer || null,
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',

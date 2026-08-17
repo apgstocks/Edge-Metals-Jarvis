@@ -487,6 +487,22 @@ const $ = (id) => document.getElementById(id);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// Mirrors helpers/loads.js's normalizeSellerPhone — added 2026-08-17 after
+// a production "No LID for user" failure traced to a seller phone typed
+// the natural local way (no country code), stored as bare 10 digits,
+// which isn't a resolvable WhatsApp ID at all. helpers/loads.js already
+// fixes this for whatever ends up on the LOAD record, but this same raw
+// value also gets sent straight to the Address Book auto-create/backfill
+// call below — normalizing it HERE, once, up front, means both
+// destinations get the same corrected number instead of the load having
+// the fixed version and the address book keeping the broken one.
+function normalizeSellerPhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length === 10) return `91${digits}`;
+  return digits;
+}
+
 // Custom Yes/No confirm — per Apsara 2026-08-17 ("for summary instead of
 // okay/cancel give yes/no option"). The browser's native confirm() can't
 // relabel its buttons (always "OK"/"Cancel", browser-localized), so this
@@ -1418,7 +1434,7 @@ function renderLoads(loads) {
                application for seller"). Only used server-side to build the
                WhatsApp chat id for the "Send to seller" button once a PDF
                exists; not required to save a load. -->
-          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 5551234567" autocomplete="off"></div>
+          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
           <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
 
           <div style="margin-top:18px;">
@@ -1559,7 +1575,7 @@ function wireLoadsEvents() {
         buyer: BUYER_FIXED_NAME,
         seller: $('ld_seller').value.trim() || null,
         seller_address: $('ld_seller_address').value.trim() || null,
-        seller_phone: $('ld_seller_phone').value.trim() || null,
+        seller_phone: normalizeSellerPhone($('ld_seller_phone').value),
         description: desc,
         items,
         weight_unit: 'lb',
