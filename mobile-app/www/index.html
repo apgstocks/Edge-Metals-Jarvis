@@ -416,8 +416,11 @@ body { overflow-y:auto; }
      requireAdmin-gated /api/settings the admin panel above uses) and the
      custom item-description list (/api/item-types, already on
      STAFF_ALLOWED_PATH_PREFIXES since it's part of the Loads form). No
-     renumber-a-load here — that's already on every load card for staff, no
-     need to duplicate it; no yard-report toggle — that's genuinely admin
+     renumber-a-load here — updated 2026-08-17: renumber is now
+     requireAdmin-gated server-side (PUT /api/loads/:id/renumber in
+     api.js) and the per-card Renumber button is hidden for anyone but
+     ROLE==='admin', so this couldn't be wired up for staff even if it
+     were added here; no yard-report toggle — that's genuinely admin
      business. -->
 <div id="staffSettingsModal" class="hidden modal-overlay">
   <div class="modal-shell" style="max-width:420px;">
@@ -428,7 +431,7 @@ body { overflow-y:auto; }
     </div>
     <div class="modal-body">
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Load numbering</div>
-      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number instead, use the Renumber button on its card.</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number, ask an admin — renumbering a single load is admin-only.</div>
       <div class="field"><label>Next load number</label><input id="ss_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
       <button id="btnSaveStaffNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
       <div id="ss_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
@@ -1092,7 +1095,13 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>
+        <!-- Admin-only, per Apsara 2026-08-17 ("remove renumber option
+             for staff. this option should be there only for admin") —
+             the real gate is server-side (requireAdmin on PUT
+             /api/loads/:id/renumber in api.js, blocks staff AND regular
+             user tier), this just keeps the button from appearing (and
+             404/403-ing) for anyone who can't use it anyway. -->
+        ${ROLE === 'admin' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -1534,12 +1543,35 @@ function wireLoadsEvents() {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
       editUnlockPassword = null;
-      // Auto-grow the Address Book for a genuinely new seller — mirrors
-      // dashboard/index.html. Fire-and-forget, never blocks/fails the save.
-      if (payload.seller && payload.seller_address && !addressBookExactMatch(payload.seller)) {
-        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address }) })
-          .then(() => { addressBookCache.push({ aliases: [payload.seller], raw: payload.seller_address }); })
-          .catch(() => {});
+      // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
+      // type a new name if it is not there in address book, it should be
+      // created as new contact with name, address(optional), phone
+      // number(optional)... for the contact which exists, if phone number
+      // not there, on entering this - it should get updated in address
+      // book." Two distinct cases, both fire-and-forget (the load itself
+      // already saved successfully — this is a convenience that must
+      // never surface as a load-save error):
+      //   1. No existing contact for this seller name at all -> create
+      //      one. Address and phone both optional now (helpers/
+      //      addressBook.js's validateEntryInput no longer requires raw).
+      //   2. Existing contact, but it has no phone on file and THIS load
+      //      has one -> backfill just the phone, leaving name/address as
+      //      they already were. Explicitly does NOT touch the address on
+      //      an existing contact — only asked to fill in a missing phone.
+      if (payload.seller) {
+        const existingContact = addressBookExactMatch(payload.seller);
+        if (!existingContact) {
+          api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address || '', mobile: payload.seller_phone || null }) })
+            .then((entry) => { addressBookCache.push(entry); })
+            .catch(() => {});
+        } else if (payload.seller_phone && !existingContact.mobile) {
+          api(`/api/address-book/${encodeURIComponent(existingContact.id)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ aliases: existingContact.aliases, raw: existingContact.raw || '', mobile: payload.seller_phone, locked: !!existingContact.manually_edited }),
+          })
+            .then((updated) => { Object.assign(existingContact, updated); })
+            .catch(() => {});
+        }
       }
       stopCamera();
       $('loadModal').classList.add('hidden');

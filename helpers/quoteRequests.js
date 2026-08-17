@@ -169,7 +169,10 @@ function buildQuoteMessage(request) {
     if (request.cargo_details) {
         lines.push('', `Cargo: ${request.cargo_details}`);
     }
-    lines.push('', 'Pickup:', request.origin_raw, '', 'Delivery:', request.destination_raw);
+    // origin_raw/destination_raw can be null now that an address-book
+    // entry's address is optional (2026-08-17) — guarded so a name-only
+    // contact never sends a trucker the literal word "null" as an address.
+    lines.push('', 'Pickup:', request.origin_raw || '(no address on file — confirm with dispatcher)', '', 'Delivery:', request.destination_raw || '(no address on file — confirm with dispatcher)');
     return lines.join('\n');
 }
 function buildReminderMessage(request, stage) {

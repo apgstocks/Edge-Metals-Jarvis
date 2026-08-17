@@ -2645,7 +2645,13 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>
+        <!-- Admin-only, per Apsara 2026-08-17 ("remove renumber option
+             for staff. this option should be there only for admin") —
+             the real gate is server-side (requireAdmin on PUT
+             /api/loads/:id/renumber in api.js, blocks staff AND regular
+             user tier), this just keeps the button from appearing (and
+             403-ing) for anyone who can't use it anyway. -->
+        ${ROLE === 'admin' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -3090,16 +3096,35 @@ function wireLoadsEvents() {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
       editUnlockPassword = null;
-      // Auto-grow the Address Book — only for a genuinely NEW seller (no
-      // existing alias matches this name at all, case-insensitive) with an
-      // address actually entered. Fire-and-forget: the load itself already
-      // saved successfully, so a failure here must never surface as a load-
-      // save error. Per Apsara 2026-08-15 ("if its a new seller, then both
-      // name and address needs to be propogated to address book and saved").
-      if (payload.seller && payload.seller_address && !addressBookExactMatch(payload.seller)) {
-        api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address }) })
-          .then(() => { addressBookCache.push({ aliases: [payload.seller], raw: payload.seller_address }); })
-          .catch(() => {});
+      // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
+      // type a new name if it is not there in address book, it should be
+      // created as new contact with name, address(optional), phone
+      // number(optional)... for the contact which exists, if phone number
+      // not there, on entering this - it should get updated in address
+      // book." Supersedes the narrower 2026-08-15 version of this block
+      // (which required an address to create anything at all). Two cases,
+      // both fire-and-forget — the load itself already saved successfully,
+      // so a failure here must never surface as a load-save error:
+      //   1. No existing contact for this seller name at all -> create
+      //      one. Address and phone both optional (helpers/addressBook.js's
+      //      validateEntryInput no longer requires raw).
+      //   2. Existing contact with no phone on file, and this load has
+      //      one -> backfill just the phone. Doesn't touch the address on
+      //      an existing contact — only asked to fill in a missing phone.
+      if (payload.seller) {
+        const existingContact = addressBookExactMatch(payload.seller);
+        if (!existingContact) {
+          api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address || '', mobile: payload.seller_phone || null }) })
+            .then((entry) => { addressBookCache.push(entry); })
+            .catch(() => {});
+        } else if (payload.seller_phone && !existingContact.mobile) {
+          api(`/api/address-book/${encodeURIComponent(existingContact.id)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ aliases: existingContact.aliases, raw: existingContact.raw || '', mobile: payload.seller_phone, locked: !!existingContact.manually_edited }),
+          })
+            .then((updated) => { Object.assign(existingContact, updated); })
+            .catch(() => {});
+        }
       }
       stopCamera();
       $('loadModal').classList.add('hidden');

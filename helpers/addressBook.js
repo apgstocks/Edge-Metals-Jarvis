@@ -206,14 +206,21 @@ function cleanTags(tags) {
     return [...new Set(arr.map((t) => String(t || '').trim().toLowerCase()).filter((t) => VALID_TAGS.includes(t)))];
 }
 
+// raw (address) made OPTIONAL per Apsara 2026-08-17 ("when i type a new
+// name if it is not there in address book, it should be created as new
+// contact with name, address(optional), phone number(optional)") — used
+// to be a hard-required field (this function used to throw "address text
+// is required" on blank), which blocked the yard app's auto-create-on-save
+// from ever creating a name-only contact. Name is still the one truly
+// required field — mobile was already optional (see 2026-08-17's earlier
+// mobile-field addition), raw now follows the same pattern.
 function validateEntryInput(aliases, raw, mobile, tags) {
     const cleanAliases = (Array.isArray(aliases) ? aliases : String(aliases || '').split('/'))
         .map((a) => String(a || '').trim()).filter(Boolean);
     if (!cleanAliases.length) throw new Error('at least one name/alias is required');
     const cleanRaw = String(raw || '').trim();
-    if (!cleanRaw) throw new Error('address text is required');
     const cleanMobile = String(mobile || '').trim();
-    return { aliases: cleanAliases, raw: cleanRaw, mobile: cleanMobile || null, tags: cleanTags(tags) };
+    return { aliases: cleanAliases, raw: cleanRaw || null, mobile: cleanMobile || null, tags: cleanTags(tags) };
 }
 
 // `locked` defaults to true — anything typed into the website is real work

@@ -3127,7 +3127,10 @@ async function pauseForLaneAmbiguity(chatId, field, matches, state) {
         state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [], directEmails: state.directEmails || null },
     });
     const query = field === 'origin' ? state.originQuery : state.destinationQuery;
-    const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
+    // e.raw can be null now (address is optional on an address-book entry
+    // as of 2026-08-17) — guarded so a name-only contact shows a plain
+    // "(no address)" here instead of the literal string "null".
+    const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${e.raw ? String(e.raw).split('\n')[0] : '(no address)'}`).join('\n');
     if (staged.queued) {
         await _send(chatId, `"${query}" matches more than one saved address, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
         return { action_taken: 'quote_lane_ambiguous_queued' };

@@ -189,11 +189,15 @@ const entryCard = (e) => `
       </div>
       <div style="display:flex; gap:8px; flex-shrink:0;">
         <button class="btn btn-secondary btn-edit-address" data-id="${esc(e.id || '')}" style="padding:6px 12px; font-size:11px;">Edit</button>
-        <button class="btn btn-secondary btn-copy-address" data-raw="${esc(e.raw)}" style="padding:6px 12px; font-size:11px;">Copy</button>
+        <button class="btn btn-secondary btn-copy-address" data-raw="${esc(e.raw || '')}" style="padding:6px 12px; font-size:11px;">Copy</button>
         <button class="btn btn-secondary btn-delete-address" data-id="${esc(e.id || '')}" data-name="${esc(e.aliases.join(' / '))}" style="padding:6px 12px; font-size:11px; color:var(--status-danger); border-color:var(--status-danger);">Delete</button>
       </div>
     </div>
-    <pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>
+    <!-- Address is optional now (per Apsara 2026-08-17 — entries can be
+         auto-created from the yard app with just a name), so a blank one
+         shows a placeholder instead of an empty <pre> or a literal
+         "null"/"undefined" from esc()ing a null value directly. -->
+    ${e.raw ? `<pre style="margin:0; font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:var(--text-muted); white-space:pre-wrap; word-break:break-word;">${esc(e.raw)}</pre>` : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); font-style:italic;">No address on file</div>'}
     ${e.mobile ? `
     <div style="margin-top:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint);">📱 ${esc(e.mobile)}</span>
@@ -265,7 +269,7 @@ function openAbModal(entry) {
   abModalEditingId = entry ? entry.id : null;
   $('abModalTitle').textContent = entry ? 'Edit contact' : 'Add contact';
   abModalAliases.value = entry ? entry.aliases.join(' / ') : '';
-  abModalRaw.value = entry ? entry.raw : '';
+  abModalRaw.value = entry ? (entry.raw || '') : '';
   abModalMobile.value = entry ? (entry.mobile || '') : '';
   $('abModalTagSeller').checked = entry ? (entry.tags || []).includes('seller') : false;
   $('abModalTagBuyer').checked = entry ? (entry.tags || []).includes('buyer') : false;
