@@ -3221,23 +3221,27 @@ function wireDeckEvents() {
     }
     openEditLoadModal(load);
   }));
-  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', async (ev) => {
+  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
-    if (load && !load.seller_phone) {
+    if (!load) return;
+    if (!load.seller_phone) {
       alert('No phone number on file for this seller. Click Edit to add one first.');
       return;
     }
-    if (!confirm(`Send this load's PDF to ${load ? (load.seller || 'the seller') : 'the seller'}'s WhatsApp now?`)) return;
-    btn.disabled = true; btn.textContent = 'Sending…';
-    try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/send-to-seller`, { method: 'POST' });
-      btn.textContent = 'Sent ✓';
-      setTimeout(() => { btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)'; }, 2500);
-    } catch (err) {
-      alert('Send failed: ' + err.message);
-      btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)';
+    if (!load.pdf_link) {
+      alert('Generate the PDF first.');
+      return;
     }
+    // Opens the seller's chat in WhatsApp (Web/Desktop, whichever handles
+    // wa.me links on this machine) instead of sending through the server
+    // — per Apsara 2026-08-17 ("just use the phone's existing whatsapp to
+    // send this"). Mirrors mobile-app/www/index.html's identical change —
+    // see its comment for the full "No LID for user" upstream-bug
+    // reasoning this replaces.
+    const text = `Edge Trading — Load ${load.id} ticket: ${load.pdf_link}`;
+    const url = `https://wa.me/${load.seller_phone}?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();

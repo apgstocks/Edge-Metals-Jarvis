@@ -1066,6 +1066,20 @@ function createApi() {
             res.status(500).json({ error: err.message });
         }
     });
+    // NOTE 2026-08-17 (later same day): neither UI calls this route
+    // anymore. It goes through whatsapp-web.js's automated session
+    // (global.__jarvisSendMessage), which started failing in production
+    // with "No LID for user" — an unresolved upstream whatsapp-web.js bug
+    // tied to WhatsApp's ongoing LID rollout (multiple open GitHub
+    // issues, still unfixed as of Jan 2026), not anything wrong here. Per
+    // Apsara ("just use the phone's existing whatsapp to send this"), the
+    // Send-to-seller button in both mobile-app/www/index.html and
+    // dashboard/index.html now opens a wa.me deep link instead — the
+    // user's own WhatsApp app sends it, bypassing this route (and the
+    // broken library call) entirely. Left in place, not deleted: harmless
+    // dead code for now, and it'd work again immediately if/when the
+    // upstream bug gets fixed and someone wants the automated path back.
+    //
     // Forward the already-generated PDF to the seller's own WhatsApp, per
     // Apsara 2026-08-17 ("introduce send option once pdf generated so that
     // it can be forwarded to that seller whatsapp automatically"). No

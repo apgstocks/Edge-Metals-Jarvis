@@ -1677,23 +1677,43 @@ function wireDeckEvents() {
     }
     openEditLoadModal(load);
   }));
-  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', async (ev) => {
+  document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
-    if (load && !load.seller_phone) {
+    if (!load) return;
+    if (!load.seller_phone) {
       alert('No phone number on file for this seller. Click Edit to add one first.');
       return;
     }
-    if (!confirm(`Send this load's PDF to ${load ? (load.seller || 'the seller') : 'the seller'}'s WhatsApp now?`)) return;
-    btn.disabled = true; btn.textContent = 'Sending…';
-    try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/send-to-seller`, { method: 'POST' });
-      btn.textContent = 'Sent ✓';
-      setTimeout(() => { btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)'; }, 2500);
-    } catch (err) {
-      alert('Send failed: ' + err.message);
-      btn.disabled = false; btn.textContent = 'Send to seller (WhatsApp)';
+    if (!load.pdf_link) {
+      alert('Generate the PDF first.');
+      return;
     }
+    // Opens the seller's chat in the PHONE'S OWN WhatsApp app instead of
+    // sending through the server — per Apsara 2026-08-17 ("just use the
+    // phone's existing whatsapp to send this"). wa.me is WhatsApp's own
+    // deep-link domain; Android/WhatsApp Desktop both register as its
+    // handler, so this hands off to the real WhatsApp app pre-filled with
+    // a message containing the PDF link, ready to tap Send.
+    // Replaces the earlier POST /api/loads/:id/send-to-seller route,
+    // which goes through whatsapp-web.js's automated session — that path
+    // is currently broken by an unresolved upstream "No LID for user"
+    // bug (WhatsApp's ongoing LID rollout breaking programmatic sends;
+    // multiple open whatsapp-web.js GitHub issues, still unfixed as of
+    // Jan 2026 — see the PM2 log triage this same day). This path never
+    // touches that broken automation: it's the same as manually opening
+    // WhatsApp and typing the message, just pre-filled. Trade-off is one
+    // manual tap on Send inside WhatsApp — can't be fully automatic this
+    // way, but it can't silently fail on a library bug either.
+    const text = `Edge Trading — Load ${load.id} ticket: ${load.pdf_link}`;
+    const url = `https://wa.me/${load.seller_phone}?text=${encodeURIComponent(text)}`;
+    // '_blank', not '_system' — '_system' is a Cordova InAppBrowser target
+    // name, and that plugin isn't installed here (this app only carries
+    // @capacitor/camera). Capacitor's WebView already hands off any
+    // external-origin window.open to the OS by default with a plain
+    // '_blank', which is what actually triggers Android's "open with
+    // WhatsApp" intent resolution for a wa.me link.
+    window.open(url, '_blank');
   }));
   document.querySelectorAll('.btn-delete-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
