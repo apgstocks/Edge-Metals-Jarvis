@@ -717,7 +717,8 @@ function createApi() {
             const { addLoad, updateLoad } = require('./helpers/loads');
             const record = await addLoad({
                 date: b.date, seller: b.seller, description: b.description,
-                seller_address: b.seller_address, buyer: b.buyer, buyer_address: b.buyer_address,
+                seller_address: b.seller_address, seller_phone: b.seller_phone,
+                buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
                 created_by: b.created_by || req.role || 'unknown',
             });
@@ -773,9 +774,42 @@ function createApi() {
             const existing = getLoad(req.params.id);
             if (!existing) return res.status(404).json({ error: 'not found' });
 
+            // Edit lock, per Apsara 2026-08-17 ("once pdf generated, edit
+            // option should be locked. on clicking edit, it should ask
+            // admin password to unlock and edit"). Enforced HERE, not just
+            // hidden/disabled client-side — same "real, non-bypassable
+            // gate" pattern validateLoadForSave already uses in
+            // helpers/loads.js, so a direct API call can't skip it either.
+            // Keyed off existing.status (helpers/loadsPdf.js stamps
+            // 'pdf_generated' the moment a PDF is produced) rather than a
+            // new field — that status already exists and is already
+            // surfaced as the "PDF ready" badge in both UIs. cfg.ADMIN_PASSWORD
+            // may be unset on some deployments (see /login's same check) —
+            // treated as "no admin tier configured," so a locked load can
+            // never be unlocked there rather than silently allowing it.
+            //
+            // NOTE: this block, and the /send-to-seller route below, went
+            // missing from api.js once already this session (2026-08-17)
+            // between when they were first written and when a later
+            // "address book changes" commit landed — that commit's api.js
+            // has the renumber fix but not these two, meaning something
+            // outside this conversation (a manual edit, another tool, a
+            // git checkout) touched this exact file mid-session. If this
+            // keeps happening, it's worth checking whether anything else
+            // is writing to api.js while I'm mid-edit on it.
+            if (existing.status === 'pdf_generated') {
+                const adminPw = cfg.ADMIN_PASSWORD;
+                const supplied = String(b.admin_password || '');
+                const eq = (a, b2) => { const A = Buffer.from(a), B = Buffer.from(b2); return A.length === B.length && crypto.timingSafeEqual(A, B); };
+                if (!adminPw || !supplied || !eq(supplied, adminPw)) {
+                    return res.status(403).json({ error: 'This load\'s PDF has already been generated. Enter the admin password to unlock editing.', locked: true });
+                }
+            }
+
             const record = await editLoad(req.params.id, {
                 date: b.date, seller: b.seller, description: b.description,
-                seller_address: b.seller_address, buyer: b.buyer, buyer_address: b.buyer_address,
+                seller_address: b.seller_address, seller_phone: b.seller_phone,
+                buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
             });
             if (!record) return res.status(404).json({ error: 'not found' });
@@ -1029,6 +1063,42 @@ function createApi() {
             res.json({ ok: true, load: updated });
         } catch (err) {
             console.error('[API] generate-pdf failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+    // Forward the already-generated PDF to the seller's own WhatsApp, per
+    // Apsara 2026-08-17 ("introduce send option once pdf generated so that
+    // it can be forwarded to that seller whatsapp automatically"). No
+    // requireAdmin gate — same as the rest of /api/loads/*, staff should be
+    // able to send a ticket to the seller they just weighed in without
+    // needing an admin around. Two hard preconditions, both checked here
+    // (not just hidden client-side, same reasoning as the edit-lock above):
+    // a PDF must actually exist yet (nothing to send otherwise), and the
+    // load needs a seller_phone on file (added this same request — see
+    // helpers/loads.js). Re-downloads the PDF bytes from Drive by file id
+    // rather than trying to reuse anything from generation time — this
+    // route can be clicked any time after generation, not just right after,
+    // so there's no in-memory buffer left over from that request to reuse.
+    app.post('/api/loads/:id/send-to-seller', async (req, res) => {
+        try {
+            const { getLoad } = require('./helpers/loads');
+            const load = getLoad(req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+            if (!load.pdf_drive_id) return res.status(400).json({ error: 'Generate the PDF before sending it.' });
+            if (!load.seller_phone) return res.status(400).json({ error: 'No phone number on file for this seller — add one via Edit.' });
+
+            const sendMessage = global.__jarvisSendMessage;
+            if (!sendMessage) throw new Error('sendMessage bridge not initialised — check index.js exposes it on global');
+
+            const { downloadPdfById } = require('./helpers/drive');
+            const base64 = await downloadPdfById(load.pdf_drive_id);
+            const chatId = `${load.seller_phone}@c.us`;
+            const caption = `${cfg.COMPANY_NAME || 'Edge Trading'} — Load ${load.id} ticket`;
+            const sent = await sendMessage(chatId, caption, { mimetype: 'application/pdf', base64, filename: `${load.id}.pdf` });
+            if (!sent) return res.status(502).json({ error: 'WhatsApp send failed — is Jarvis connected? Check Settings.' });
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] send-to-seller failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });
