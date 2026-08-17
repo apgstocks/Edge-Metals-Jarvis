@@ -487,6 +487,41 @@ const $ = (id) => document.getElementById(id);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// Custom Yes/No confirm — per Apsara 2026-08-17 ("for summary instead of
+// okay/cancel give yes/no option"). The browser's native confirm() can't
+// relabel its buttons (always "OK"/"Cancel", browser-localized), so this
+// builds a real modal styled to match the rest of the app and resolves
+// true/false the same way confirm() would. Built dynamically rather than
+// as static markup so it's a drop-in replacement usable anywhere without
+// needing its own permanent DOM nodes/ids — reuses the existing
+// .modal-overlay/.modal-shell/.modal-body/.modal-foot classes so it looks
+// identical to every other dialog in the app.
+function askYesNo(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <div class="modal-shell" style="max-width:360px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-body" style="padding:22px 24px 6px;">
+          <div style="font-size:14px; color:var(--text-strong); line-height:1.5;">${esc(message)}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="askYesNoNo">No</button>
+          <button class="btn btn-primary" id="askYesNoYes">Yes</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = (result) => { overlay.remove(); resolve(result); };
+    overlay.querySelector('#askYesNoYes').addEventListener('click', () => cleanup(true));
+    overlay.querySelector('#askYesNoNo').addEventListener('click', () => cleanup(false));
+    // Clicking the dimmed backdrop itself (not the dialog) counts as "No" —
+    // same escape-hatch behavior a native confirm()'s Cancel/Esc gives you.
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(false); });
+  });
+}
+
 
 // api() — same shape/signature as the dashboard's version (path, opts) so
 // every Loads function that calls api('/api/loads', ...) etc. works
@@ -1612,7 +1647,7 @@ function wireDeckEvents() {
     ev.stopPropagation();
     // Per Apsara 2026-08-15: the Summary section (item-type breakdown +
     // totals box) is no longer decided automatically — ask each time.
-    const includeSummary = confirm('Include the Summary section (totals + item-type breakdown) on this PDF?');
+    const includeSummary = await askYesNo('Include the Summary section (totals + item-type breakdown) on this PDF?');
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
       await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
