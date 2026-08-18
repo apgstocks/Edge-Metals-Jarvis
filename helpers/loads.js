@@ -192,6 +192,7 @@ async function addLoad(entry) {
         weight_unit   : entry.weight_unit || 'lb',
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
+        receipt_pdf_drive_id: null, receipt_pdf_link: null,
         status        : 'open',
     };
 
@@ -245,6 +246,7 @@ async function editLoad(id, entry) {
         weight_unit   : entry.weight_unit || 'lb',
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
+        receipt_pdf_drive_id: null, receipt_pdf_link: null,
         status        : 'open',
     };
 

@@ -707,8 +707,102 @@ function generateInventoryExportPdf(rangeLabel, report) {
     });
 }
 
+// ── POS/receipt-format PDF — per Apsara 2026-08-17 ("I want print option
+// once pdf generated... I want it to be pos dimension for printing") ────────
+// A completely separate renderer from generateLoadPdf/generateWeightsPdf
+// above, not a variant of them — those two are hand-built around LETTER's
+// ~512pt content width (fixed-x-position multi-column tables, side-by-side
+// field boxes), none of which fits an 80mm thermal receipt (~227pt total
+// page width, ~207pt after margins). This draws everything as simple
+// sequential single-column text instead, the way an actual POS receipt
+// reads top to bottom.
+//
+// Page height problem: pdfkit needs the page size fixed at document
+// creation, but we don't know how tall this load's receipt needs to be
+// until we've laid out every item (a load can have 1 item or 20). Rather
+// than guess a big height and print several inches of wasted blank paper
+// past the last line (or guess too short and truncate), this runs the
+// exact same draw function TWICE: once against a throwaway tall scratch
+// document just to measure how far doc.y travels, then again against a
+// real document sized to fit that measured height exactly — a real
+// continuous-receipt page, not a multi-page LETTER-style document.
+const RECEIPT_WIDTH_MM = { '58': 58, '80': 80 };
+function mmToPt(mm) { return (mm / 25.4) * 72; }
+
+function drawReceiptContent(doc, load, contentWidth) {
+    const line = (text, { size = 9, bold = false, align = 'left', gap = 2, color = '#000' } = {}) => {
+        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
+            .text(text, doc.page.margins.left, doc.y, { width: contentWidth, align });
+        doc.moveDown(gap / size);
+    };
+    const divider = () => {
+        doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + contentWidth, doc.y)
+            .lineWidth(0.75).strokeColor('#000').dash(2, { space: 2 }).stroke().undash();
+        doc.moveDown(0.6);
+    };
+
+    line(EDGE_TRADING.name, { size: 13, bold: true, align: 'center', gap: 1 });
+    line(EDGE_TRADING.address1, { size: 7.5, align: 'center', color: MUTED, gap: 0.5 });
+    line(EDGE_TRADING.address2, { size: 7.5, align: 'center', color: MUTED, gap: 0.5 });
+    line(EDGE_TRADING.phone, { size: 7.5, align: 'center', color: MUTED, gap: 2 });
+    divider();
+
+    line(`Load: ${load.id || '—'}`, { size: 9, bold: true, gap: 1 });
+    line(`Date: ${load.date || '—'}`, { size: 8.5, gap: 1 });
+    line(`Seller: ${load.seller || '—'}`, { size: 8.5, gap: load.seller_address ? 0.5 : 1 });
+    if (load.seller_address) line(load.seller_address, { size: 7.5, color: MUTED, gap: 1 });
+    divider();
+
+    const unit = load.weight_unit || 'lb';
+    const items = Array.isArray(load.items) ? load.items : [];
+    items.forEach((it, i) => {
+        line(it.description || `Item ${i + 1}`, { size: 8.5, bold: true, gap: 0.5 });
+        line(`Gross ${it.gross_weight ?? '—'} ${unit}  ·  Tare ${it.tare_weight ?? '—'} ${unit}`, { size: 7.5, color: MUTED, gap: 0.5 });
+        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${it.price ?? '—'}  ·  Amount $${it.amount ?? '—'}`, { size: 7.5, gap: 1.5 });
+    });
+    divider();
+
+    line(`Net total: ${load.net_weight != null ? `${load.net_weight} ${unit}` : '—'}`, { size: 9.5, bold: true, gap: 1 });
+    line(`Amount total: ${load.amount != null ? `$${load.amount}` : '—'}`, { size: 11, bold: true, gap: 3 });
+    divider();
+
+    line(`Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, { size: 6.5, align: 'center', color: MUTED });
+}
+
+// widthMm: '58' or '80' (the two standard thermal roll widths) — defaults
+// to 80mm, the more common size for a business receipt printer.
+function generateLoadReceiptPdf(load, opts = {}) {
+    const widthMm = RECEIPT_WIDTH_MM[String(opts.widthMm)] || 80;
+    const pageWidth = mmToPt(widthMm);
+    const margin = 10;
+    const contentWidth = pageWidth - margin * 2;
+
+    return new Promise((resolve, reject) => {
+        try {
+            // Pass 1: scratch document, generously tall, never rendered —
+            // only used to find out where doc.y ends up after drawing
+            // everything, i.e. the exact content height for THIS load.
+            const scratch = new PDFDocument({ size: [pageWidth, 5000], margin });
+            drawReceiptContent(scratch, load, contentWidth);
+            const measuredHeight = scratch.y + margin;
+            scratch.end(); // never piped anywhere — just discarded
+
+            // Pass 2: the real document, sized to fit exactly.
+            const doc = new PDFDocument({ size: [pageWidth, measuredHeight], margin });
+            const chunks = [];
+            doc.on('data', (c) => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+            drawReceiptContent(doc, load, contentWidth);
+            doc.end();
+        } catch (err) {
+            reject(err);
+        }
+    });
+}
+
 // Exported 2026-08-15 so scheduler.js's eodYardReport can reuse the exact
 // same item-type grouping logic for its new inventory sections instead of
 // duplicating this reduce elsewhere — one definition of "how items roll up
 // by type" for both the PDF and the report.
-module.exports = { generateLoadPdf, generateWeightsPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf };
+module.exports = { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf };

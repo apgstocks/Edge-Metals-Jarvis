@@ -4,16 +4,17 @@
 // (which needs to make sure every one of today's loads has PDFs before it
 // can email/attach them) without duplicating this logic in two places and
 // having them drift apart. The route itself now just calls this.
-const { generateLoadPdf, generateWeightsPdf } = require('./pdf');
+const { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf } = require('./pdf');
 const { uploadLoadPdf } = require('./drive');
 const { updateLoad } = require('./loads');
 
-// Generates the priced ticket + the separate weights-only PDF for a load,
-// uploads both to Drive, and patches the load record with the resulting
-// links — returns the UPDATED load object. Mirrors the exact behavior the
-// dashboard's "Generate PDF" button already triggers: the main ticket is
-// required (a failure there throws), the weights PDF is best-effort (a
-// failure there is logged and skipped, not fatal — the main ticket having
+// Generates the priced ticket + the separate weights-only PDF + the POS
+// receipt-format PDF for a load, uploads all three to Drive, and patches
+// the load record with the resulting links — returns the UPDATED load
+// object. Mirrors the exact behavior the dashboard's "Generate PDF" button
+// already triggers: the main ticket is required (a failure there throws),
+// the weights PDF and the receipt PDF are both best-effort (a failure in
+// either is logged and skipped, not fatal — the main ticket having
 // uploaded successfully is what actually matters).
 async function generateAndStoreLoadPdfs(load, opts = {}) {
     const buf = await generateLoadPdf(load, opts);
@@ -40,7 +41,23 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
         }
     }
 
-    const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch });
+    // Receipt PDF — per Apsara 2026-08-17 ("I want print option once pdf
+    // generated... I want it to be pos dimension for printing"). Generated
+    // here, alongside the other two, so the Print button is ready the
+    // moment the rest of "Generate PDF" finishes — no separate click/round
+    // trip needed. Best-effort same as the weights PDF: a render/upload
+    // failure here shouldn't block the main ticket from counting as
+    // generated.
+    let receiptPatch = {};
+    try {
+        const receiptBuf = await generateLoadReceiptPdf(load, opts);
+        const receiptFile = await uploadLoadPdf(load.id, receiptBuf, `receipt_${load.id}.pdf`);
+        receiptPatch = { receipt_pdf_drive_id: receiptFile.id, receipt_pdf_link: receiptFile.webViewLink };
+    } catch (e) {
+        console.error(`[loadsPdf] receipt-pdf generation failed for ${load.id}:`, e.message);
+    }
+
+    const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch, ...receiptPatch });
     return loads.find(l => l.id === load.id) || null;
 }
 

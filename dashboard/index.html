@@ -2675,6 +2675,9 @@ function loadCardHtml(l) {
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
+        <!-- POS receipt PDF (80mm width) — per Apsara 2026-08-17. Mirrors
+             mobile-app/www/index.html's identical link. -->
+        ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
         ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
         <!-- Send to seller — only once a PDF exists. Shown even without a
              phone on file so the click handler can surface that as a
