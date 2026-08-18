@@ -913,10 +913,27 @@ function policyDecide(ctx) {
 
         // Supplier fires "load ready" — must be on a container currently at supplier_assigned or empty_dropped.
         if (/(load\s*ready|loaded|ready)/.test(t)) {
-            const active = supplierName
+            const rawActive = supplierName
                 ? containers.findActiveAssignments(bookings, 'supplier', supplierName, ['supplier_assigned','empty_dropped'])
                 : [];
-            if (active.length === 0) return { intent: 'silent', resolvedBy: 'policy', data: {} };
+            if (rawActive.length === 0) return { intent: 'silent', resolvedBy: 'policy', data: {} };
+
+            // 2026-08-18 fix (per Apsara: "if a booking number is assigned to
+            // that supplier and it is in empty dropped/container number
+            // already assigned against that booking — it should not ask
+            // which booking number to supplier"). WORKFLOW_STAGES order is
+            // supplier_assigned → forwarded → empty_dropped → load_ready —
+            // a container still sitting at supplier_assigned hasn't even
+            // been dropped yet, so it's not a real candidate for "load
+            // ready" once a container has actually reached empty_dropped
+            // (with a container number on file). Narrow to those first;
+            // only fall back to the full (less-advanced) set if nothing has
+            // reached empty_dropped yet, preserving prior ask-which-one
+            // behavior for that genuinely-ambiguous case.
+            const droppedWithContainer = rawActive.filter(
+                m => m.container.stage === 'empty_dropped' && m.container.container_number
+            );
+            const active = droppedWithContainer.length ? droppedWithContainer : rawActive;
 
             const bookingsInMatches = [...new Set(active.map(m => m.bookingNumber))];
 

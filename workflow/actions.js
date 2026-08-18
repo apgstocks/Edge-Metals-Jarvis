@@ -3127,10 +3127,7 @@ async function pauseForLaneAmbiguity(chatId, field, matches, state) {
         state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [], directEmails: state.directEmails || null },
     });
     const query = field === 'origin' ? state.originQuery : state.destinationQuery;
-    // e.raw can be null now (address is optional on an address-book entry
-    // as of 2026-08-17) — guarded so a name-only contact shows a plain
-    // "(no address)" here instead of the literal string "null".
-    const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${e.raw ? String(e.raw).split('\n')[0] : '(no address)'}`).join('\n');
+    const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
     if (staged.queued) {
         await _send(chatId, `"${query}" matches more than one saved address, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
         return { action_taken: 'quote_lane_ambiguous_queued' };
@@ -3353,21 +3350,52 @@ async function handleQuoteLegReply(chatId, text) {
 // No more separate WhatsApp verification step: a contact's group_id/
 // whatsapp/email are set directly by Apsara on the dashboard, trusted the
 // same way a trucker's own fields are.
+// MULTI-RECIPIENT (2026-08-18, per Apsara: "comparing buyer offers
+// side-by-side is something you actually need") — recipientQuery is now
+// split the same way the trucker flow's names_text already is (splitQuoteNames:
+// comma/"&"/"and"-separated). A single name keeps the EXACT original
+// behavior below (interactive ambiguous/not-found/no-channel retry, one
+// pending question at a time) — nothing changes for the common case. Two or
+// more names take a simpler path: resolve each independently, dispatch to
+// everyone who resolves as ONE multi-leg request (so
+// workflow/contactQuoteRequests.js's maybeSendPriceComparison can rank their
+// replies against each other), and report whoever didn't resolve in the
+// confirmation text rather than building a full interactive retry loop for
+// every name at once — real complexity for a rare case; she can just re-ask
+// for one failed name by itself and get the full retry treatment.
 async function startContactQuoteRequestFlow(chatId, recipientQuery, details) {
     const cqr = require('../helpers/contactQuoteRequests');
-    const resolved = cqr.resolveQuoteContact(recipientQuery);
+    const names = splitQuoteNames(recipientQuery);
 
-    if (resolved.type === 'not_found') {
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Couldn't find "${recipientQuery}" in Contacts`);
+    if (names.length <= 1) {
+        const resolved = cqr.resolveQuoteContact(recipientQuery);
+        if (resolved.type === 'not_found') {
+            return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Couldn't find "${recipientQuery}" in Contacts`);
+        }
+        if (resolved.type === 'ambiguous') {
+            const listText = resolved.matches.map((m, i) => `${i + 1}. ${m.name}`).join('\n');
+            return pauseForContactQuoteRetry(chatId, recipientQuery, details, `"${recipientQuery}" matches more than one saved contact:\n${listText}\n\nReply with the exact name, or "cancel"`, /* skipPrefix */ true);
+        }
+        if (resolved.type === 'resolved_no_channel') {
+            return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Found "${resolved.name}" but no WhatsApp group/number or email on file — add one from the dashboard (Contacts)`);
+        }
+        return dispatchContactQuote(chatId, [resolved], recipientQuery, details);
     }
-    if (resolved.type === 'ambiguous') {
-        const listText = resolved.matches.map((m, i) => `${i + 1}. ${m.name}`).join('\n');
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `"${recipientQuery}" matches more than one saved contact:\n${listText}\n\nReply with the exact name, or "cancel"`, /* skipPrefix */ true);
+
+    const resolvedList = [];
+    const problems = [];
+    for (const name of names) {
+        const r = cqr.resolveQuoteContact(name);
+        if (r.type === 'resolved') resolvedList.push(r);
+        else if (r.type === 'ambiguous') problems.push(`"${name}" matches more than one saved contact (${r.matches.map((m) => m.name).join(', ')}) — ask for it by itself to pick one`);
+        else if (r.type === 'resolved_no_channel') problems.push(`"${r.name}" has no WhatsApp group/number or email on file`);
+        else problems.push(`couldn't find "${name}" in Contacts`);
     }
-    if (resolved.type === 'resolved_no_channel') {
-        return pauseForContactQuoteRetry(chatId, recipientQuery, details, `Found "${resolved.name}" but no WhatsApp group/number or email on file — add one from the dashboard (Contacts)`);
+    if (!resolvedList.length) {
+        await _send(chatId, `Couldn't send to anyone — ${problems.join('; ')}.`);
+        return { action_taken: 'contact_quote_request_failed' };
     }
-    return dispatchContactQuote(chatId, resolved, recipientQuery, details);
+    return dispatchContactQuote(chatId, resolvedList, recipientQuery, details, problems);
 }
 
 async function pauseForContactQuoteRetry(chatId, recipientQuery, details, message, skipPrefix = false) {
@@ -3398,21 +3426,26 @@ async function resumeContactQuoteWithRetry(chatId, pending, text) {
     return startContactQuoteRequestFlow(chatId, clean, details);
 }
 
-// Everything's resolved — actually send. Mirrors dispatchQuoteToTruckers's
-// structure closely: one resolved channel, one leg, hand off to the workflow
-// layer, report back with a clear sent/failed summary and the same 30/60/90
-// follow-up note.
-async function dispatchContactQuote(chatId, resolved, recipientQuery, details) {
+// Everything's resolved — actually send. resolvedList: one or more
+// {name, channel, target} entries (see startContactQuoteRequestFlow above);
+// each becomes its own leg on ONE request, mirroring dispatchQuoteToTruckers's
+// multi-leg structure. problems: names from a multi-name ask that didn't
+// resolve — reported alongside the send summary, not blocking whoever DID
+// resolve.
+async function dispatchContactQuote(chatId, resolvedList, recipientQuery, details, problems = []) {
     const contactFlow = require('./contactQuoteRequests');
-    const legs = [{ channel: resolved.channel, target: resolved.target, target_label: resolved.target }];
+    const legs = resolvedList.map((r) => ({ name: r.name, channel: r.channel, target: r.target, target_label: r.target }));
 
     const { sentTo, failed } = await contactFlow.startContactQuoteRequest({
-        recipientQuery, recipientName: resolved.name, details, legs, askedByChat: chatId, send: _send,
+        recipientQuery, details, legs, askedByChat: chatId, send: _send,
     });
 
-    const lines = [`Quote request sent to ${resolved.name} via ${sentTo.join(', ') || '(send failed)'} for: ${details}.`];
+    const lines = [`Quote request sent to ${sentTo.join(', ') || '(send failed)'} for: ${details}.`];
     if (failed.length) lines.push(`Send failed for: ${failed.join(', ')}.`);
-    if (sentTo.length) lines.push(`I'll follow up at 30/60/90 min if there's no price yet, then loop in the manager.`);
+    if (problems.length) lines.push(`Also: ${problems.join('; ')}.`);
+    if (sentTo.length) {
+        lines.push(`I'll follow up at 30/60/90 min if there's no price yet, then loop in the manager.${sentTo.length > 1 ? ` I'll flag which one quotes cheapest once 2+ prices are in.` : ''}`);
+    }
     await _send(chatId, lines.join('\n'));
     return { action_taken: sentTo.length ? 'contact_quote_request_sent' : 'contact_quote_request_failed' };
 }

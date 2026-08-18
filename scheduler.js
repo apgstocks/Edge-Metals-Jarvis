@@ -136,11 +136,18 @@ async function urgentWatch() {
             message = `${b.booking_number}: cutoff in ${d}d, still at "${stepLabel(wf.step)}"`;
         }
 
+        // notify:false when d<=1 — the explicit _sendToTeam escalation just
+        // below is the message that actually goes out for that case; without
+        // this, pushAlert's own severity:'high' handling ALSO pings the
+        // manager with a near-duplicate "ALERT: ... cutoff in 1d" message in
+        // the same breath, which is the double-cutoff-message bug reported
+        // 2026-08-18. Still logged to alert history/dashboard regardless.
         await pushAlert({
             type    : 'cutoff_risk',
             bkgNo   : b.booking_number,
             message,
             severity: d <= 1 ? 'high' : 'warning',
+            notify  : d > 1,
         });
         if (d <= 1) await _sendToTeam(`${b.booking_number}: cutoff TOMORROW — ${lag.length && Array.isArray(b.containers) && b.containers.length > 1 ? `${lag.length} of ${b.containers.length} containers still lagging` : `still at "${stepLabel(wf.step)}"`}. Escalate now.`);
         await markSent(key);
@@ -287,7 +294,12 @@ async function stallWatch() {
             const msg = party === 'manager'
                 ? `${b.booking_number} STILL stalled at "${stepLabel(step)}" — ${hrsRounded}h now, needs direct attention.`
                 : `${b.booking_number}: no response from ${party} after check-in — stalled at "${stepLabel(step)}" for ${hrsRounded}h. Might need a call.`;
-            await pushAlert({ type: 'stall_escalated', bkgNo: b.booking_number, message: msg, severity: 'high' });
+            // notify:false — same duplicate-message issue as urgentWatch's
+            // cutoff alert above: pushAlert(severity:'high') would otherwise
+            // ALSO ping the manager with this exact same `msg` text via its
+            // own notify, right alongside the explicit _sendToTeam(msg) call
+            // below. Logged to alert history either way.
+            await pushAlert({ type: 'stall_escalated', bkgNo: b.booking_number, message: msg, severity: 'high', notify: false });
             await _sendToTeam(msg);
             await markSent(escalateKey);
         }

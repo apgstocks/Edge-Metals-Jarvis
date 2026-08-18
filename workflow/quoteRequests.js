@@ -327,6 +327,7 @@ async function handleIncomingReply(chatId, text) {
             message: `Price received from ${leg.trucker_name}: ${classification.matchedText} (${request.origin_query} → ${request.destination_query})`,
             severity: 'info',
         });
+        await maybeSendPriceComparison(request.id);
         console.log(`[QUOTE] ${leg.trucker_name} priced ${classification.matchedText} — cancelled ${cancelled} pending reminder task(s)`);
     } else {
         // REAL BUG (found 2026-08-17, live — Eccomelt replied "Checking" /
@@ -349,6 +350,40 @@ async function handleIncomingReply(chatId, text) {
         console.log(`[QUOTE] ${leg.trucker_name} replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
     return { request, leg, classification };
+}
+
+// ── Price comparison across legs (2026-08-18, per Apsara: "when i get price
+// from vendor, compare each one and tell which one is best to manager").
+// Fires every time a price lands on a leg, once 2+ legs on the SAME request
+// have replied with a price. Reloads the request fresh from disk rather than
+// trusting the caller's `request` object — that object may be stale for
+// OTHER legs that priced in since it was loaded, and the ranking needs to
+// reflect everyone who's answered so far, not just this one reply. A leg
+// whose reply was classified as a price but couldn't be parsed into a
+// number (amount: null — see classifyQuoteReply's own comment on why that
+// can happen) is excluded from the ranking itself (nothing to sort it by)
+// but still named in the alert so Apsara knows to check it by hand rather
+// than assuming Jarvis silently dropped it. Still just a dashboard alert —
+// same "surface it, don't act on it" posture as every other event in this
+// file; Jarvis ranks the numbers, Apsara decides.
+async function maybeSendPriceComparison(requestId) {
+    const request = qr.getRequestById(requestId);
+    if (!request) return;
+    const priced = request.legs.filter((l) => l.price);
+    if (priced.length < 2) return; // nothing to compare yet
+    const ranked = priced.filter((l) => l.price.amount != null).sort((a, b) => a.price.amount - b.price.amount);
+    const unranked = priced.filter((l) => l.price.amount == null);
+    if (!ranked.length) return; // every priced leg failed to parse into a number — nothing rankable yet
+
+    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.trucker_name}: $${l.price.amount}`);
+    if (unranked.length) {
+        lines.push(`${unranked.map((l) => l.trucker_name).join(', ')} replied with a price Jarvis couldn't read as a number — check manually: "${unranked.map((l) => l.price.raw_text).join('", "')}"`);
+    }
+    await pushAlert({
+        type: 'quote_price_comparison', bkgNo: null,
+        message: `Price comparison for ${request.origin_query} → ${request.destination_query} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].trucker_name} at $${ranked[0].price.amount}. ${lines.join(' | ')}`,
+        severity: 'info',
+    });
 }
 
 // Cancels every still-pending quote_reminder/quote_escalation task tied to
@@ -442,6 +477,7 @@ async function handleEmailLegReply(request, leg, text) {
             message: `Price received from ${leg.trucker_name} (email): ${classification.matchedText} (${request.origin_query} → ${request.destination_query})`,
             severity: 'info',
         });
+        await maybeSendPriceComparison(request.id);
         console.log(`[QUOTE] ${leg.trucker_name} (email) priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
     } else {
         // Same fix as handleIncomingReply above — restart the clock instead

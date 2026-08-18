@@ -37,13 +37,24 @@
 // request shape:
 //   { id, recipient_query, recipient_name, details, created_at, asked_by_chat,
 //     status: 'active'|'closed', legs: [ legShape, ... ] }
-// leg shape (same as helpers/quoteRequests.js's, minus trucker_name):
-//   { channel: 'whatsapp_group'|'whatsapp_individual'|'email', target, target_label,
+// leg shape (mirrors helpers/quoteRequests.js's lane-leg shape, keyed by
+// recipient_name instead of trucker_name):
+//   { recipient_name, channel: 'whatsapp_group'|'whatsapp_individual'|'email', target, target_label,
 //     status: 'awaiting_reply'|'price_received'|'no_response_escalated'|'send_failed',
 //     sent_at, last_reply_at, last_reply_text, reminders_sent, price, failed_reason }
-// legs is still an array (one leg today, one contact per request) so the
-// store/scheduling shape stays forward-compatible if multi-recipient asks
-// are ever added, same as truckers' legs array.
+//
+// MULTI-RECIPIENT (2026-08-18, per Apsara: "comparing buyer offers
+// side-by-side is something you actually need") — legs can now hold MORE
+// THAN ONE recipient per request ("quote to Eccomelt and MetalCo for..."),
+// same forward-compatible array this always was. This is why every leg
+// mutator below is keyed by `recipient_name`, not `channel` as it used to
+// be: with 2+ recipients in one request, two of them can easily share a
+// channel type (both reached by email, say), so `channel` alone stopped
+// being a safe unique key the moment more than one leg became real instead
+// of theoretical. `request.recipient_name` (singular field, kept for
+// backward-compat/display) is now a joined summary of every leg's name —
+// see createContactQuoteRequest below — while every per-leg alert/lookup
+// uses `leg.recipient_name`, the actually-unique identity.
 
 const crypto = require('crypto');
 const cfg = require('../config');
@@ -55,9 +66,12 @@ const loadContactQuoteRequests = () => loadJson(cfg.CONTACT_QUOTE_REQUESTS_FILE,
 
 // ── Recipient resolution — helpers/contacts.js, trucker-style channel pick ──
 // Mirrors workflow/quoteRequests.js's resolveTruckerNames in spirit (exact
-// name match wins; 2+ matches is ambiguous, ask; 0 matches is not-found) but
-// synchronous and single-name, since contact-quote's command grammar
-// ("quote to X for Y") only ever names one recipient per ask today.
+// name match wins; 2+ matches is ambiguous, ask; 0 matches is not-found).
+// Synchronous and single-name — workflow/actions.js's startContactQuoteRequestFlow
+// calls this once PER recipient (splitting "X and Y" itself, same pattern as
+// the trucker flow's splitQuoteNames) rather than this function taking a list,
+// so each recipient gets its own independent resolved/ambiguous/not-found
+// verdict.
 //
 // Returns:
 //   { type: 'resolved', name, channel, target }          — ready to dispatch
@@ -95,19 +109,28 @@ function buildReminderMessage(request, stage) {
 }
 
 // ── Creating a request (data only — no sending, no scheduling) ─────────────
-async function createContactQuoteRequest({ recipientQuery, recipientName, details, legs, askedByChat }) {
+// legs: [{ name, channel, target, target_label }, ...] — one entry per
+// ALREADY-RESOLVED recipient (workflow/actions.js's startContactQuoteRequestFlow
+// resolves each name via resolveQuoteContact before calling this; this
+// function does no name resolution of its own, same division of
+// responsibility as the lane/trucker flow). request.recipient_name is kept
+// as a joined summary of every leg's name, purely for display (dashboard
+// title, old single-recipient callers) — anything that needs to identify
+// ONE specific leg must use leg.recipient_name, the actually-unique key.
+async function createContactQuoteRequest({ recipientQuery, details, legs, askedByChat }) {
     if (!Array.isArray(legs) || !legs.length) {
-        throw new Error('at least one resolvable channel (whatsapp and/or email) is required');
+        throw new Error('at least one resolvable recipient (whatsapp and/or email) is required');
     }
     const request = {
         id: crypto.randomUUID(),
         recipient_query: String(recipientQuery).trim(),
-        recipient_name: recipientName,
+        recipient_name: legs.map((l) => l.name).join(', '),
         details: String(details || '').trim(),
         created_at: new Date().toISOString(),
         asked_by_chat: askedByChat || null,
         status: 'active',
         legs: legs.map((l) => ({
+            recipient_name: l.name,
             channel: l.channel,
             target: l.target,
             target_label: l.target_label || l.target,
@@ -125,14 +148,15 @@ async function createContactQuoteRequest({ recipientQuery, recipientName, detail
 }
 
 // ── Leg state updates — same shape/behavior as helpers/quoteRequests.js's,
-// keyed by channel instead of trucker_name (only one leg per channel per
-// request here, so channel is a unique-enough key). ──────────────────────
-async function markLegSent(requestId, channel, extra = {}) {
+// keyed by recipient_name (2026-08-18: `channel` stopped being a safe
+// unique key once a request could hold more than one leg — see this file's
+// header). ──────────────────────────────────────────────────────────────
+async function markLegSent(requestId, recipientName, extra = {}) {
     let updated = null;
     await mutateJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
         if (!request) return list;
-        const leg = request.legs.find((l) => l.channel === channel);
+        const leg = request.legs.find((l) => l.recipient_name === recipientName);
         if (!leg) return list;
         Object.assign(leg, extra, { sent_at: new Date().toISOString() });
         updated = leg;
@@ -141,11 +165,11 @@ async function markLegSent(requestId, channel, extra = {}) {
     return updated;
 }
 
-async function markLegFailed(requestId, channel, reason) {
+async function markLegFailed(requestId, recipientName, reason) {
     await mutateJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
         if (!request) return list;
-        const leg = request.legs.find((l) => l.channel === channel);
+        const leg = request.legs.find((l) => l.recipient_name === recipientName);
         if (!leg) return list;
         leg.status = 'send_failed';
         leg.failed_reason = reason || null;
@@ -154,35 +178,35 @@ async function markLegFailed(requestId, channel, reason) {
     });
 }
 
-async function recordReminderSent(requestId, channel, stage) {
+async function recordReminderSent(requestId, recipientName, stage) {
     await mutateJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
         if (!request) return list;
-        const leg = request.legs.find((l) => l.channel === channel);
+        const leg = request.legs.find((l) => l.recipient_name === recipientName);
         if (!leg) return list;
         leg.reminders_sent.push({ stage, at: new Date().toISOString() });
         return list;
     });
 }
 
-async function markLegEscalated(requestId, channel) {
+async function markLegEscalated(requestId, recipientName) {
     await mutateJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
         if (!request) return list;
-        const leg = request.legs.find((l) => l.channel === channel);
+        const leg = request.legs.find((l) => l.recipient_name === recipientName);
         if (!leg) return list;
         leg.status = 'no_response_escalated';
         return list;
     });
 }
 
-async function recordLegReply(requestId, channel, text) {
+async function recordLegReply(requestId, recipientName, text) {
     const classification = classifyQuoteReply(text);
     let updatedLeg = null;
     await mutateJson(cfg.CONTACT_QUOTE_REQUESTS_FILE, [], (list) => {
         const request = list.find((r) => r.id === requestId);
         if (!request) return list;
-        const leg = request.legs.find((l) => l.channel === channel);
+        const leg = request.legs.find((l) => l.recipient_name === recipientName);
         if (!leg) return list;
         leg.last_reply_at = new Date().toISOString();
         leg.last_reply_text = text;

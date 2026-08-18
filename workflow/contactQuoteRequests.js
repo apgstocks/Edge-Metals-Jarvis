@@ -46,7 +46,7 @@ async function dispatchLeg(request, leg, send) {
         if (leg.channel === 'whatsapp_group' || leg.channel === 'whatsapp_individual') {
             const ok = await send(leg.target, message);
             if (!ok) return false;
-            await cqr.markLegSent(request.id, leg.channel);
+            await cqr.markLegSent(request.id, leg.recipient_name);
         } else if (leg.channel === 'email') {
             const { sendEmail } = require('../helpers/gmail');
             const sent = await sendEmail({
@@ -54,13 +54,13 @@ async function dispatchLeg(request, leg, send) {
                 subject: `Quote request: ${request.details}`,
                 body: message,
             });
-            await cqr.markLegSent(request.id, leg.channel, { email_thread_id: sent.threadId || null });
+            await cqr.markLegSent(request.id, leg.recipient_name, { email_thread_id: sent.threadId || null });
         } else {
             return false;
         }
         return true;
     } catch (err) {
-        console.error(`[CONTACT QUOTE] dispatchLeg failed (${leg.channel}) for ${request.recipient_name}:`, err.message);
+        console.error(`[CONTACT QUOTE] dispatchLeg failed (${leg.channel}) for ${leg.recipient_name}:`, err.message);
         return false;
     }
 }
@@ -69,39 +69,44 @@ async function scheduleFirstReminder(request, leg) {
     await tasks.enqueue({
         type: 'contact_quote_reminder',
         target_kind: 'contact',
-        target_name: request.recipient_name,
+        target_name: leg.recipient_name,
         target_chat: leg.channel !== 'email' ? leg.target : null,
         message: cqr.buildReminderMessage(request, 1),
         fire_at: new Date(Date.now() + cfg.QUOTE_REMINDER_SCHEDULE_MIN[0] * 60000).toISOString(),
-        condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, channel: leg.channel },
+        condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, recipient_name: leg.recipient_name },
         created_by: 'contact_quote_request',
         contact_quote_request_id: request.id,
-        contact_quote_channel: leg.channel,
+        contact_quote_recipient_name: leg.recipient_name,
         contact_quote_stage: 1,
     });
 }
 
 // ── Main entry point ─────────────────────────────────────────────────────────
-// legs: already-built [{channel, target, target_label}] — actions.js builds
-// this directly from helpers/contactQuoteRequests.js's resolveQuoteContact
-// result now (single resolved channel, trucker-style), one-element array.
-async function startContactQuoteRequest({ recipientQuery, recipientName, details, legs, askedByChat, send }) {
-    const request = await cqr.createContactQuoteRequest({ recipientQuery, recipientName, details, legs, askedByChat });
+// legs: already-resolved [{name, channel, target, target_label}, ...] — one
+// entry per recipient. workflow/actions.js's startContactQuoteRequestFlow
+// builds this: 2026-08-18, per Apsara ("comparing buyer offers side-by-side
+// is something you actually need"), it now resolves EVERY name in a "quote
+// to X and Y for Z" ask and passes all of them through here as one
+// multi-leg request — same shape the trucker/lane flow always used, just
+// newly exercised with more than one entry. A single-recipient ask still
+// produces a one-element array, unchanged from before.
+async function startContactQuoteRequest({ recipientQuery, details, legs, askedByChat, send }) {
+    const request = await cqr.createContactQuoteRequest({ recipientQuery, details, legs, askedByChat });
 
     const sentTo = [];
     const failed = [];
     for (const leg of request.legs) {
         const ok = await dispatchLeg(request, leg, send);
         if (ok) {
-            sentTo.push(leg.channel);
+            sentTo.push(leg.recipient_name);
             await scheduleFirstReminder(request, leg);
         } else {
-            failed.push(leg.channel);
-            await cqr.markLegFailed(request.id, leg.channel, `dispatch_failed_channel_${leg.channel}`);
+            failed.push(leg.recipient_name);
+            await cqr.markLegFailed(request.id, leg.recipient_name, `dispatch_failed_channel_${leg.channel}`);
             await pushAlert({
                 type: 'contact_quote_leg_failed',
                 bkgNo: null,
-                message: `Couldn't send quote request to ${request.recipient_name} (${leg.channel}) — ${request.details}.`,
+                message: `Couldn't send quote request to ${leg.recipient_name} (${leg.channel}) — ${request.details}.`,
                 severity: 'warning',
             });
         }
@@ -111,7 +116,7 @@ async function startContactQuoteRequest({ recipientQuery, recipientName, details
     await pushAlert({
         type: 'contact_quote_request_sent',
         bkgNo: null,
-        message: `Quote request sent to ${request.recipient_name} (${sentTo.join(', ') || 'nobody — all sends failed'}) — ${request.details}`,
+        message: `Quote request sent to ${sentTo.join(', ') || 'nobody — all sends failed'} — ${request.details}`,
         severity: 'info',
     });
 
@@ -121,7 +126,7 @@ async function startContactQuoteRequest({ recipientQuery, recipientName, details
 async function handleReminderTask(task, { send }) {
     const request = cqr.getRequestById(task.contact_quote_request_id);
     if (!request) return { fired: false, reason: 'request_gone' };
-    const leg = request.legs.find((l) => l.channel === task.contact_quote_channel);
+    const leg = request.legs.find((l) => l.recipient_name === task.contact_quote_recipient_name);
     if (!leg) return { fired: false, reason: 'leg_gone' };
 
     const stage = task.contact_quote_stage;
@@ -131,10 +136,10 @@ async function handleReminderTask(task, { send }) {
         : await send(leg.target, message);
 
     if (ok) {
-        await cqr.recordReminderSent(request.id, leg.channel, stage);
+        await cqr.recordReminderSent(request.id, leg.recipient_name, stage);
         await pushAlert({
             type: 'contact_quote_reminder_sent', bkgNo: null,
-            message: `Reminder ${stage} sent to ${request.recipient_name} (${leg.channel}) — ${request.details}`,
+            message: `Reminder ${stage} sent to ${leg.recipient_name} (${leg.channel}) — ${request.details}`,
             severity: 'info',
         });
     }
@@ -143,14 +148,14 @@ async function handleReminderTask(task, { send }) {
         const sentAtMs = new Date(leg.sent_at).getTime();
         await tasks.enqueue({
             type: 'contact_quote_reminder',
-            target_kind: 'contact', target_name: request.recipient_name,
+            target_kind: 'contact', target_name: leg.recipient_name,
             target_chat: leg.channel !== 'email' ? leg.target : null,
             message: cqr.buildReminderMessage(request, stage + 1),
             fire_at: new Date(sentAtMs + cfg.QUOTE_REMINDER_SCHEDULE_MIN[stage] * 60000).toISOString(),
-            condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, channel: leg.channel },
+            condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, recipient_name: leg.recipient_name },
             created_by: 'contact_quote_request',
             contact_quote_request_id: request.id,
-            contact_quote_channel: leg.channel,
+            contact_quote_recipient_name: leg.recipient_name,
             contact_quote_stage: stage + 1,
         });
     } else {
@@ -160,12 +165,12 @@ async function handleReminderTask(task, { send }) {
             type: 'contact_quote_escalation',
             target_kind: 'manager',
             target_chat: managerChatId(),
-            message: `No price yet from ${request.recipient_name} (${leg.channel}) for "${request.details}" after 3 reminders — can you follow up?`,
+            message: `No price yet from ${leg.recipient_name} (${leg.channel}) for "${request.details}" after 3 reminders — can you follow up?`,
             fire_at: new Date(sentAtMs + (lastStageMin + 30) * 60000).toISOString(),
-            condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, channel: leg.channel },
+            condition: { type: 'contact_quote_leg_awaiting_reply', request_id: request.id, recipient_name: leg.recipient_name },
             created_by: 'contact_quote_request',
             contact_quote_request_id: request.id,
-            contact_quote_channel: leg.channel,
+            contact_quote_recipient_name: leg.recipient_name,
         });
     }
     return { fired: ok, stage };
@@ -182,7 +187,7 @@ async function sendEmailReminder(request, leg, message) {
         });
         return true;
     } catch (err) {
-        console.error(`[CONTACT QUOTE] email reminder failed for ${request.recipient_name}:`, err.message);
+        console.error(`[CONTACT QUOTE] email reminder failed for ${leg.recipient_name}:`, err.message);
         return false;
     }
 }
@@ -190,16 +195,16 @@ async function sendEmailReminder(request, leg, message) {
 async function handleEscalationTask(task, { send }) {
     const request = cqr.getRequestById(task.contact_quote_request_id);
     if (!request) return { fired: false, reason: 'request_gone' };
-    const leg = request.legs.find((l) => l.channel === task.contact_quote_channel);
+    const leg = request.legs.find((l) => l.recipient_name === task.contact_quote_recipient_name);
     if (!leg) return { fired: false, reason: 'leg_gone' };
 
     const ok = await send(managerChatId(), task.message);
     if (ok) {
-        await cqr.markLegEscalated(request.id, leg.channel);
+        await cqr.markLegEscalated(request.id, leg.recipient_name);
         await cqr.maybeCloseRequest(request.id);
         await pushAlert({
             type: 'contact_quote_escalated', bkgNo: null,
-            message: `No response from ${request.recipient_name} (${leg.channel}) — "${request.details}" — escalated to manager`,
+            message: `No response from ${leg.recipient_name} (${leg.channel}) — "${request.details}" — escalated to manager`,
             severity: 'warning',
         });
     }
@@ -211,17 +216,18 @@ async function handleIncomingReply(chatId, text) {
     if (!matches.length) return null;
     const { request, leg } = matches[0];
 
-    const { classification } = await cqr.recordLegReply(request.id, leg.channel, text);
+    const { classification } = await cqr.recordLegReply(request.id, leg.recipient_name, text);
 
     if (classification.isPrice) {
-        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.recipient_name);
         await cqr.maybeCloseRequest(request.id);
         await pushAlert({
             type: 'contact_quote_price_received', bkgNo: null,
-            message: `Price received from ${request.recipient_name}: ${classification.matchedText} — ${request.details}`,
+            message: `Price received from ${leg.recipient_name}: ${classification.matchedText} — ${request.details}`,
             severity: 'info',
         });
-        console.log(`[CONTACT QUOTE] ${request.recipient_name} priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
+        await maybeSendPriceComparison(request.id);
+        console.log(`[CONTACT QUOTE] ${leg.recipient_name} priced ${classification.matchedText} — cancelled ${cancelled} pending task(s)`);
     } else {
         // REAL BUG (found 2026-08-17, live — Eccomelt replied "Checking" /
         // "Need scale tickets?" on 2026-08-16 and Jarvis kept firing
@@ -233,24 +239,54 @@ async function handleIncomingReply(chatId, text) {
         // later reads as Jarvis not listening. Cancel whatever's queued and
         // restart the 30/60/90 clock from NOW — still nudges them if they go
         // quiet again after "Checking", but stops the immediate re-ping.
-        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.recipient_name);
         await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'contact_quote_reply_received', bkgNo: null,
-            message: `Reply from ${request.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
+            message: `Reply from ${leg.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
-        console.log(`[CONTACT QUOTE] ${request.recipient_name} replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
+        console.log(`[CONTACT QUOTE] ${leg.recipient_name} replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
     return { request, leg, classification };
 }
 
-async function cancelPendingTasksForLeg(requestId, channel) {
+// ── Price comparison across legs — same logic/reasoning as workflow/
+// quoteRequests.js's maybeSendPriceComparison, see that file's comment.
+// 2026-08-18 per Apsara ("comparing buyer offers side-by-side is something
+// you actually need") — now that a contact-quote request can genuinely hold
+// multiple recipients (see helpers/contactQuoteRequests.js's header and
+// workflow/actions.js's startContactQuoteRequestFlow), this fires for real:
+// once 2+ recipients on the SAME request have replied with a price, ranks
+// them and flags the cheapest. Comparing across two SEPARATE requests
+// (e.g. Eccomelt asked today, a different buyer asked last week) still
+// isn't attempted — only legs within one request are compared.
+async function maybeSendPriceComparison(requestId) {
+    const request = cqr.getRequestById(requestId);
+    if (!request) return;
+    const priced = request.legs.filter((l) => l.price);
+    if (priced.length < 2) return;
+    const ranked = priced.filter((l) => l.price.amount != null).sort((a, b) => a.price.amount - b.price.amount);
+    const unranked = priced.filter((l) => l.price.amount == null);
+    if (!ranked.length) return;
+
+    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.recipient_name}: $${l.price.amount}`);
+    if (unranked.length) {
+        lines.push(`${unranked.map((l) => l.recipient_name).join(', ')} replied with a price Jarvis couldn't read as a number — check manually: "${unranked.map((l) => l.price.raw_text).join('", "')}"`);
+    }
+    await pushAlert({
+        type: 'contact_quote_price_comparison', bkgNo: null,
+        message: `Price comparison for ${request.details} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].recipient_name} at $${ranked[0].price.amount}. ${lines.join(' | ')}`,
+        severity: 'info',
+    });
+}
+
+async function cancelPendingTasksForLeg(requestId, recipientName) {
     const pending = tasks.loadTasks().filter((t) =>
         t.status === 'pending' &&
         (t.type === 'contact_quote_reminder' || t.type === 'contact_quote_escalation') &&
         t.contact_quote_request_id === requestId &&
-        t.contact_quote_channel === channel
+        t.contact_quote_recipient_name === recipientName
     );
     for (const t of pending) await tasks.cancel(t.id, 'price_received');
     return pending.length;
@@ -288,32 +324,33 @@ async function pollEmailReplies() {
             await handleEmailLegReply(request, leg, body || '(empty body)');
             replied++;
         } catch (err) {
-            console.error(`[CONTACT QUOTE] pollEmailReplies failed for ${request.recipient_name}'s thread:`, err.message);
+            console.error(`[CONTACT QUOTE] pollEmailReplies failed for ${leg.recipient_name}'s thread:`, err.message);
         }
     }
     return { checked: legs.length, replied };
 }
 
 async function handleEmailLegReply(request, leg, text) {
-    const { classification } = await cqr.recordLegReply(request.id, leg.channel, text);
+    const { classification } = await cqr.recordLegReply(request.id, leg.recipient_name, text);
     if (classification.isPrice) {
-        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.recipient_name);
         await cqr.maybeCloseRequest(request.id);
         await pushAlert({
             type: 'contact_quote_price_received', bkgNo: null,
-            message: `Price received from ${request.recipient_name} (email): ${classification.matchedText} — ${request.details}`,
+            message: `Price received from ${leg.recipient_name} (email): ${classification.matchedText} — ${request.details}`,
             severity: 'info',
         });
+        await maybeSendPriceComparison(request.id);
     } else {
         // Same fix as handleIncomingReply above.
-        const cancelled = await cancelPendingTasksForLeg(request.id, leg.channel);
+        const cancelled = await cancelPendingTasksForLeg(request.id, leg.recipient_name);
         await scheduleFirstReminder(request, leg);
         await pushAlert({
             type: 'contact_quote_reply_received', bkgNo: null,
-            message: `Email reply from ${request.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
+            message: `Email reply from ${leg.recipient_name} (no price detected): "${text.slice(0, 120)}"`,
             severity: 'info',
         });
-        console.log(`[CONTACT QUOTE] ${request.recipient_name} (email) replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
+        console.log(`[CONTACT QUOTE] ${leg.recipient_name} (email) replied without a price — cancelled ${cancelled} pending task(s), restarted follow-up clock`);
     }
 }
 

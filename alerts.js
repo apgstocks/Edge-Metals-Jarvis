@@ -18,7 +18,18 @@ function isAlertSuppressed(type, bkgNo) {
     return !!until && new Date(until).getTime() > Date.now();
 }
 
-// pushAlert({ type, bkgNo, message, severity: 'info'|'warning'|'high' })
+// pushAlert({ type, bkgNo, message, severity: 'info'|'warning'|'high', notify?: boolean })
+// notify defaults to true (existing behavior: severity:'high' auto-pings the
+// manager). Pass notify:false when the caller is ALREADY sending its own,
+// more detailed message to the manager/team for this exact event — e.g.
+// scheduler.js's urgentWatch() sends a richer "cutoff TOMORROW ... Escalate
+// now" message via _sendToTeam whenever d<=1, which is the same trigger that
+// sets severity:'high' here. Without notify:false both fire, and since the
+// team chat and manager chat are frequently the same chat, that read as a
+// duplicate cutoff alert (bug reported 2026-08-18: "cut off messages are
+// coming twice every time"). The alert is still logged to history either way
+// — dashboard/"Needs Attention" is unaffected — only the extra WhatsApp ping
+// is suppressed.
 async function pushAlert(alert) {
     const entry = { ...alert, at: new Date().toISOString() };
     await mutateJson(cfg.ALERTS_FILE, { snoozed: {}, muted: {}, history: [] }, (s) => {
@@ -28,7 +39,7 @@ async function pushAlert(alert) {
         return s;
     });
 
-    if (alert.severity === 'high' && !isAlertSuppressed(alert.type, alert.bkgNo)) {
+    if (alert.severity === 'high' && alert.notify !== false && !isAlertSuppressed(alert.type, alert.bkgNo)) {
         try { await _sendToManager(`ALERT: ${alert.message}`); }
         catch (e) { console.error('[ALERTS] Manager notify failed:', e.message); }
     }

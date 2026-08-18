@@ -203,14 +203,16 @@ function fmtPrice(price) {
   return price.amount != null ? `$${price.amount.toLocaleString()}` : price.raw_text || '—';
 }
 
-// legName: 'lane' legs are keyed by trucker_name, 'contact' legs by the
-// request's single recipient_name (same value on every leg of that request,
-// since a contact-quote request has at most one leg per channel today).
+// legName: 'lane' legs are keyed by trucker_name, 'contact' legs by their
+// own leg.recipient_name (2026-08-18: a contact-quote request can now hold
+// MULTIPLE recipients, so each leg carries its own name — recipientName
+// param kept only as a fallback for any pre-existing request record that
+// predates this and never got a per-leg recipient_name written).
 function legRow(leg, recipientName) {
   const status = STATUS_LABEL[leg.status] || { text: leg.status, color: 'var(--text-muted)' };
   return `
     <tr>
-      <td style="font-weight:600; color:var(--text-strong);">${esc(leg.trucker_name || recipientName)}</td>
+      <td style="font-weight:600; color:var(--text-strong);">${esc(leg.trucker_name || leg.recipient_name || recipientName)}</td>
       <td>${esc(CHANNEL_LABEL[leg.channel] || leg.channel)}</td>
       <td><span class="badge" style="background:${status.color}22; color:${status.color};">${esc(status.text)}</span></td>
       <td style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${fmtPrice(leg.price)}</td>

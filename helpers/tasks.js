@@ -163,6 +163,28 @@ function evaluateCondition(task) {
         if (!leg) return 'skip'; // request/leg no longer exists — nothing to remind about
         return leg.status === 'awaiting_reply' ? 'fire' : 'skip';
     }
+    // Same gate as quote_leg_awaiting_reply above, for the contact/vendor
+    // pipeline's own store (data/contact_quote_requests.json). REAL GAP
+    // (found 2026-08-18 while re-keying contact-quote legs from `channel`
+    // to `recipient_name` for multi-recipient support): this condition type
+    // was referenced by workflow/contactQuoteRequests.js's enqueue() calls
+    // since that file was built, but no branch here ever checked it —
+    // falling through to this function's unconditional 'fire' default meant
+    // a contact-quote reminder/escalation task never actually skipped on
+    // its own, EVEN IF the leg had already resolved (priced or escalated).
+    // Not a live incident: cancelPendingTasksForLeg already explicitly
+    // cancels the pending task the moment a price lands (the same fix
+    // shipped earlier this session for the reminder-spam bug), so this gate
+    // was always a redundant second line of defense, not the only thing
+    // standing between a resolved leg and a stale reminder — but it should
+    // still actually work, not silently no-op.
+    if (task.condition.type === 'contact_quote_leg_awaiting_reply') {
+        const { loadContactQuoteRequests } = require('./contactQuoteRequests');
+        const request = loadContactQuoteRequests().find((r) => r.id === task.condition.request_id);
+        const leg = request && request.legs.find((l) => l.recipient_name === task.condition.recipient_name);
+        if (!leg) return 'skip';
+        return leg.status === 'awaiting_reply' ? 'fire' : 'skip';
+    }
 
     // Per-container stage check — used when task is tied to a specific container.
     // Skips (auto-completes) if the target container's stage has reached or passed
