@@ -493,7 +493,21 @@ function policyDecide(ctx) {
     // pendingAction checks above. Only kicks in when there ISN'T already a
     // more specific pending on this exact chat (e.g. an unrelated
     // await_ready_check), so it never hijacks a flow already in progress.
-    if (!ctx.pendingAction) {
+    //
+    // REAL BUG (found 2026-08-18, live — Apsara asked "Do you need scale
+    // tickets?" in NTG's quote-reply chat and got no response at all): this
+    // check had NO role gate — it fired for ANY message in a chat with an
+    // open leg, including the MANAGER's own. Logs confirmed brain.js
+    // correctly resolved her as role:'manager', but her message still got
+    // swallowed here as "NTG replied without a price" and silently recorded
+    // (handleQuoteLegReply is deliberately silent back to the chat by
+    // design — dashboard notification only, never an auto-reply), instead
+    // of falling through to the normal manager command grammar just below
+    // this block. Added `!ctx.isManagerOrTeam` so a manager/team message in
+    // that same chat is no longer treated as if the trucker sent it — the
+    // trucker's OWN replies (role isn't manager/team for them) are
+    // completely unaffected.
+    if (!ctx.pendingAction && !ctx.isManagerOrTeam) {
         const { findActiveLegByTarget } = require('../helpers/quoteRequests');
         if (findActiveLegByTarget(ctx.chatId).length) {
             return { intent: 'quote_leg_reply_received', resolvedBy: 'policy', data: {} };
