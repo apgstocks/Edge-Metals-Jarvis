@@ -91,10 +91,26 @@ function parseGetQuoteCommand(rawText) {
     // only WIDENS what matches; the origin/destination/email/ask
     // extraction below (already working, unit-tested by the 2026-08-05/06
     // gaps above) is completely unchanged.
-    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b[\s\S]*?\bfrom\s+(.+?)\s+to\s+(.+)$/i);
+    // REAL GAP (found 2026-08-18, live — Apsara: "request quote NTG,TQL,Matthew
+    // from Junk car to Eccomelt", then "why it is asking again?"): names given
+    // BEFORE "from ___ to ___" — a completely natural way to phrase it — were
+    // captured by the old `[\s\S]*?` glob between "quote" and "from" and
+    // silently thrown away, since only an "ask ___"/"email ___" clause AFTER
+    // the destination was ever read into namesText. That left namesText null,
+    // so startQuoteRequestFlow had nothing to resolve and fell back to its
+    // "Who should I ask?" prompt listing every trucker — even though she'd
+    // already named exactly who to ask. Now captured into `preNames` (group 1)
+    // instead of discarded; used as namesText below UNLESS a more explicit
+    // post-destination "ask"/"email" clause is also present, in which case
+    // that (already-working) explicit clause wins, same priority as before.
+    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b(.*?)\bfrom\s+(.+?)\s+to\s+(.+)$/i);
     if (!base) return null;
-    const origin = base[1].trim();
-    let rest = base[2].trim();
+    // Strip a leading "to " connector too — "quote request TO X from Y to Z"
+    // (the original 2026-08-16 gap case) reads as "to" + recipient, and "to"
+    // itself is never part of a name.
+    const preNames = base[1].replace(/^[,\s]+|[,\s]+$/g, '').replace(/^to\s+/i, '');
+    const origin = base[2].trim();
+    let rest = base[3].trim();
 
     let emails = null;
     const emailMatch = rest.match(/,?\s*\bemail\b\s+([\w.+-]+@[\w.-]+\.[a-z]{2,}(?:\s*(?:,|&|\band\b)\s*[\w.+-]+@[\w.-]+\.[a-z]{2,})*)/i);
@@ -108,10 +124,10 @@ function parseGetQuoteCommand(rawText) {
     // email ADDRESS clause (handled above) has already been stripped out.
     // By the time we get here, "email <real@address>" is gone from `rest`,
     // so a leftover bare "email <word(s)>" can only mean a trucker name.
-    let namesText = null;
+    let namesText = preNames || null;
     const askMatch = rest.match(/,?\s*\b(?:ask|email)\b\s+(.+)$/i);
     if (askMatch) {
-        namesText = askMatch[1].trim();
+        namesText = askMatch[1].trim(); // explicit post-destination clause wins over preNames
         rest = rest.slice(0, askMatch.index).trim();
     }
 
