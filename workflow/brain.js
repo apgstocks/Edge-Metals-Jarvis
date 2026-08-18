@@ -103,7 +103,17 @@ function parseGetQuoteCommand(rawText) {
     // instead of discarded; used as namesText below UNLESS a more explicit
     // post-destination "ask"/"email" clause is also present, in which case
     // that (already-working) explicit clause wins, same priority as before.
-    const base = String(rawText || '').trim().match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b(.*?)\bfrom\s+(.+?)\s+to\s+(.+)$/i);
+    // Strip an accidental leading digit glued onto the verb (e.g.
+    // "1request quote..."). REAL incident 2026-08-18: typing straight into a
+    // numbered "who should I ask?" list prompt left a stray leading "1" on
+    // her actual retry command, which broke this anchored match entirely and
+    // let the whole message fall through to the (separately fixed) stale
+    // await_quote_truckers multi-select pending instead of ever being read
+    // as the fresh command it was. Lookahead keeps this narrow — only strips
+    // when what follows really is one of this parser's own verbs, so it
+    // can't eat a leading digit that's part of something else entirely.
+    const cleaned = String(rawText || '').trim().replace(/^\d+[.)]?\s*(?=(?:get|send|request|obtain)\b)/i, '');
+    const base = cleaned.match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b(.*?)\bfrom\s+(.+?)\s+to\s+(.+)$/i);
     if (!base) return null;
     // Strip a leading "to " connector too — "quote request TO X from Y to Z"
     // (the original 2026-08-16 gap case) reads as "to" + recipient, and "to"
@@ -434,6 +444,28 @@ function policyDecide(ctx) {
     // ("Joey, Daekwang" or "1,3") — same comma-list parsing style as
     // await_fact_batch above, just against names/numbers instead of digits only.
     if (ctx.pendingAction?.type === 'await_quote_truckers') {
+        // REAL BUG (found 2026-08-18, live — Apsara: "request quote
+        // NTG,TQL,Matthew from Junk car to Eccomelt", sent again after
+        // getting the "who should I ask?" prompt): same carve-out reasoning
+        // as A0d's await_manual_email_address check above. A fresh,
+        // well-formed "request/get/send quote ... from X to Y" command is
+        // clearly NOT an answer to "who should I ask" — it's a brand new
+        // request, possibly a corrected retry of the very command that
+        // triggered this pending. Without this check, the whole message got
+        // fed through the comma-split multi-select matcher below, which only
+        // manages to fuzzy-match whichever ONE token happens to exactly equal
+        // a listed name (here "TQL", since it was also in the option list) —
+        // silently dropping "NTG" and "Matthew" with no error at all, and
+        // mangling the origin/destination the new command specified. route()
+        // clears this stale pending when it sees this reclassification —
+        // search for this comment there.
+        const parsedFresh = parseGetQuoteCommand(ctx.text);
+        if (parsedFresh) {
+            return {
+                intent: 'get_quote', resolvedBy: 'policy',
+                data: { origin: parsedFresh.origin, destination: parsedFresh.destination, names_text: parsedFresh.namesText, emails: parsedFresh.emails },
+            };
+        }
         const p = ctx.pendingAction;
         const tt = ctx.text.trim();
         if (/^(no|none|cancel)$/i.test(tt)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
@@ -1281,6 +1313,11 @@ async function route(decision, ctx, sendMessage) {
     // message is really a fresh get_quote command, not the address it asked
     // for — see that carve-out's comment for the real incident this fixes.
     if (ctx.pendingAction?.type === 'await_manual_email_address' && decision.intent === 'get_quote') {
+        try { await actions.clearPending(chatId); } catch {}
+    }
+    // Same clear for the "who should I ask?" trucker-picker pending — see the
+    // A0f carve-out's comment above for the 2026-08-18 incident this fixes.
+    if (ctx.pendingAction?.type === 'await_quote_truckers' && decision.intent === 'get_quote') {
         try { await actions.clearPending(chatId); } catch {}
     }
 

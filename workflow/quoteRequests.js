@@ -272,10 +272,21 @@ async function handleQuoteReminderTask(task, { send }) {
 async function sendEmailReminder(request, leg, message) {
     try {
         const { sendEmail } = require('../helpers/gmail');
+        // 2026-08-18 fix (per Apsara: "for further communication in email, i
+        // want to use the same thread in mail reply"): this reminder send was
+        // missing threadId entirely, unlike the parallel contact/vendor quote
+        // pipeline's sendEmailReminder (workflow/contactQuoteRequests.js),
+        // which already passes leg.email_thread_id — a real inconsistency,
+        // not intentional. leg.email_thread_id IS captured at the original
+        // send (markLegSent below, from sendEmail's returned threadId) but
+        // was just never read back here, so every 30/60/90-min follow-up
+        // landed as a brand-new thread instead of replying inside the
+        // original one.
         await sendEmail({
             to: leg.target,
             subject: `Re: Quote request: ${request.origin_query} to ${request.destination_query}`,
             body: message,
+            threadId: leg.email_thread_id || undefined,
         });
         return true;
     } catch (err) {
