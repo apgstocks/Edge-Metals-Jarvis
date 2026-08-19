@@ -193,7 +193,7 @@ body[data-theme="light"] {
     <div id="pfFullForm" class="hidden">
     <div class="card" style="padding:20px 22px;">
       <div class="grid4">
-        <div class="field"><label>Invoice No <span id="pfInvNoChip" class="pricing-chip hidden"></span></label><input id="pf_inv_no" placeholder="e.g. 260819 26JY105"></div>
+        <div class="field"><label>Invoice No <span id="pfInvNoChip" class="pricing-chip hidden"></span></label><input id="pf_inv_no" placeholder="e.g. 260819_AC_26JY105"></div>
         <div class="field"><label>Invoice Date</label><input type="date" id="pf_inv_date"></div>
         <div class="field"><label>Reference #</label><input id="pf_reference" value="Proforma & Email Conf."></div>
         <div class="field"><label>Qty Unit</label><select id="pf_qty_unit"><option>MT</option><option>LBS</option></select></div>
@@ -438,17 +438,60 @@ function applyPortOfDischargeDefault(customer) {
 // editable-suggestion rule as trade terms/port/pricing above, only fills
 // Invoice No when it's still empty. Never fires for a brand-new consignee
 // with no history — that stays exactly as manual as it's always been.
+// Apsara: "[date]_item_invno" — the middle segment of her real Inv No.
+// format is an ITEM CODE (material type), not a customer/agent code. She
+// gave this exact map directly. Matching is by keyword phrase against the
+// item description (uppercased), not an exact-value match, because her
+// real sheet's descriptions vary in wording from this map's own labels
+// (e.g. "AUTO CASTING TENSE" / "Auto Cast" both need to hit "AC"; "AL
+// COMBO" needs to hit "AL"; "Tough Taboo" needs to hit "TT") — confirmed
+// against her live sheet rows. Order matters: more specific phrases (AW,
+// CW) are checked before broader ones (AL) so e.g. "Aluminium Wheels"
+// can't be mistaken for "Aluminium Combo". If nothing matches, this
+// returns null and the OLD (no-item-code) format is used instead — never
+// guesses a wrong code onto a real invoice number.
+const ITEM_CODE_MAP = {
+  AL: 'ALUMINIUM COMBO', AP: 'SCRAP AUTO PARTS', RC: 'REGULAR COMBO', BT: 'BATTERY',
+  AW: 'ALUMINIUM WHEELS', CW: 'CHROME WHEELS', HW: 'HARNESS WIRE', TT: 'TAINT TABOUR',
+  AC: 'AUTO CAST', ML: 'MIXED LOAD', SU: 'SEALED UNITS', MM: 'MIXED MOTORS',
+  RD: 'ROTORS AND DRUMS', MC: 'MIXED COMBO',
+};
+const ITEM_CODE_RULES = [
+  ['AW', ['ALUMINUM WHEEL', 'ALUMINIUM WHEEL', 'AL WHEEL', 'ALLOY WHEEL']],
+  ['CW', ['CHROME WHEEL']],
+  ['AL', ['ALUMINIUM COMBO', 'ALUMINUM COMBO', 'AL COMBO']],
+  ['AC', ['AUTO CAST']],
+  ['AP', ['SCRAP AUTO PART', 'AUTO PART']],
+  ['RC', ['REGULAR COMBO']],
+  ['BT', ['BATTERY', 'BATTERIES']],
+  ['HW', ['HARNESS WIRE', 'HARNESS']],
+  ['TT', ['TAINT TABOUR', 'TAINT TABOR', 'TOUGH TABOO', 'TAINT TABOO']],
+  ['ML', ['MIXED LOAD']],
+  ['SU', ['SEALED UNIT']],
+  ['MM', ['MIXED MOTOR']],
+  ['RD', ['ROTOR', 'DRUM']],
+  ['MC', ['MIXED COMBO']],
+];
+function deriveItemCode(desc) {
+  const norm = (desc || '').trim().toUpperCase();
+  if (!norm) return null;
+  for (const [code, keywords] of ITEM_CODE_RULES) {
+    if (keywords.some((k) => norm.includes(k))) return code;
+  }
+  return null;
+}
 // Holds the running state for auto-filling each container's "Container #"
 // box with the NEXT number in the sequence (not the same number repeated).
 // null until a consignee with real history has been looked up.
 let pfNextContainerCode = null;
-function formatContainerCode(state, number) {
+function formatContainerCode(state, number, itemCode) {
   const numStr = state.numberHadLeadingZero ? String(number).padStart(state.numberDigits, '0') : String(number);
-  return `${state.yy}${state.letterCode}${numStr}`;
+  const code = `${state.yy}${state.letterCode}${numStr}`;
+  return itemCode ? `${itemCode}_${code}` : code;
 }
-function takeNextContainerCode() {
+function takeNextContainerCode(itemCode) {
   if (!pfNextContainerCode) return null;
-  const code = formatContainerCode(pfNextContainerCode, pfNextContainerCode.nextNumber);
+  const code = formatContainerCode(pfNextContainerCode, pfNextContainerCode.nextNumber, itemCode);
   pfNextContainerCode.nextNumber += 1;
   return code;
 }
@@ -458,11 +501,16 @@ function takeNextContainerCode() {
 // addContainer() below filling newly-added ones going forward. Never
 // touches a box that already has something in it (e.g. a real shipping
 // container ID someone typed) — same editable-suggestion rule as
-// everywhere else on this page.
+// everywhere else on this page. Each container gets ITS OWN item code,
+// derived from that container's own first item description — containers
+// in one shipment aren't guaranteed to hold the same material.
 function fillEmptyContainerNumbers() {
   if (!pfNextContainerCode) return;
-  $('pfContainers').querySelectorAll('.container-no').forEach((input) => {
-    if (!input.value.trim()) input.value = takeNextContainerCode();
+  $('pfContainers').querySelectorAll('.container-block').forEach((block) => {
+    const input = block.querySelector('.container-no');
+    if (!input || input.value.trim()) return;
+    const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
+    input.value = takeNextContainerCode(deriveItemCode(firstDesc));
   });
 }
 async function applyNextInvNoSuggestion(customer) {
@@ -481,7 +529,15 @@ async function applyNextInvNoSuggestion(customer) {
   try {
     const suggestion = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(customer));
     if (!suggestion || !suggestion.inv_no) return;
-    $('pf_inv_no').value = suggestion.inv_no;
+    // Embed the item code (e.g. "AC") into the suggested Invoice No when a
+    // material is already known at this point — matches her real format
+    // "[date]_[item]_[year][agentcode][number]". If no item is known yet
+    // (e.g. consignee picked before any item row is filled in), this falls
+    // back to the plain "[date] [code]" suggestion — never guesses a code.
+    const dateStr = suggestion.inv_no.split(' ')[0];
+    const firstDesc = $('pfContainers').querySelector('.item-desc') ? $('pfContainers').querySelector('.item-desc').value : '';
+    const itemCode = deriveItemCode(firstDesc);
+    $('pf_inv_no').value = itemCode ? `${dateStr}_${itemCode}_${suggestion.code_only}` : suggestion.inv_no;
     $('pfInvNoChip').textContent = `● suggested — last was ${suggestion.highest_existing}`;
     $('pfInvNoChip').classList.remove('hidden');
     pfNextContainerCode = {
@@ -579,7 +635,10 @@ function addContainer(items) {
   // with real history has been looked up.
   if (pfNextContainerCode) {
     const containerNoInput = block.querySelector('.container-no');
-    if (containerNoInput && !containerNoInput.value.trim()) containerNoInput.value = takeNextContainerCode();
+    if (containerNoInput && !containerNoInput.value.trim()) {
+      const firstDesc = (items && items[0] && items[0].desc) || '';
+      containerNoInput.value = takeNextContainerCode(deriveItemCode(firstDesc));
+    }
   }
 }
 $('btnAddContainer').addEventListener('click', () => addContainer());

@@ -24,11 +24,11 @@
 // (e.g. 25JY84 / 85 / 86 / 87 / 88), not one row per proforma.
 //
 // COLUMN MAPPING — per Apsara's explicit follow-up ("Fill consignee,inv
-// no,terms,proforma date inv price"), ONLY these five columns are
-// populated. Every other column (Inv Date, Container No., HBL/Booking/Seal
-// No., Supplier, Customer, Reference, Item Description, Weight, INVOICE
-// AMT, Commissions, RECEIVED AMT, Received Date, Freight Charge, Freight,
-// ETA) is left blank — not guessed at, not computed:
+// no,terms,proforma date inv price"), plus a later addition (Customer).
+// Every other column (Inv Date, Container No., HBL/Booking/Seal No.,
+// Supplier, Reference, Item Description, Weight, INVOICE AMT, Commissions,
+// RECEIVED AMT, Received Date, Freight Charge, Freight, ETA) is left
+// blank — not guessed at, not computed:
 //   Consignee        <- the full address-book tag as matched (e.g.
 //                        "Joey/Taewon"), NOT the split "Taewon" that goes
 //                        on the actual PDF — matches how the real sheet
@@ -36,13 +36,23 @@
 //                        data: plain customers like "Rad Metal" appear
 //                        identically there, but Joey's rows show
 //                        "Joey/Taewon" specifically in this column).
-//   Inv No.           <- "<inv_date as YYMMDD> <this container's code>" —
+//   Inv No.           <- "<inv_date as YYMMDD>_<this container's code>" —
 //                        the code that's now auto-filled into each
-//                        container's "Container #" box per Apsara's prior
-//                        request. This matches the real sheet's per-row
-//                        numbering exactly (one running number per
+//                        container's "Container #" box (which itself may
+//                        already carry an item-code segment, e.g.
+//                        "AC_26JY01" — see dashboard/documents.html's
+//                        deriveItemCode()), joined with an underscore to
+//                        match Apsara's real format:
+//                        "260819_AC_26JY19" ([date]_[item]_[year][agent
+//                        code][number]). This matches the real sheet's
+//                        per-row numbering exactly (one running number per
 //                        container), not one shared invoice number.
 //   Terms             <- payload.trade_terms
+//   Customer           <- first line of the buyer/consignee address block
+//                        (the company name shown on the PDF) — per
+//                        Apsara's explicit request; matches how this
+//                        column is already used in the real Invoice sheet
+//                        (company names like "TAEWON AUTOMOTIVE CO., LTD").
 //   Proforma Date     <- today (server date, when the row is logged)
 //   Inv price         <- this line item's rate
 //
@@ -187,11 +197,17 @@ async function getExistingInvNos(sheets, spreadsheetId) {
 // for genuine collisions — e.g. the same proforma regenerated twice, two
 // browser sessions grabbing the same "next" number, or someone typing a
 // Container # that happens to already exist in the sheet.
+//
+// Everything before the LAST space/underscore-separated token is kept as
+// the prefix, exactly as given — this now has to survive BOTH the older
+// "YYMMDD CODE" (space) shape AND the current "YYMMDD_ITEM_CODE"
+// (underscore, e.g. "260819_AC_26JY19") shape, since bumping only the
+// trailing running number must never drop the date or item-code segment.
 function bumpInvNoUntilUnique(invNo, existing) {
     if (!invNo || !existing.has(invNo)) return invNo;
-    const spaceIdx = invNo.lastIndexOf(' ');
-    const datePart = spaceIdx === -1 ? '' : invNo.slice(0, spaceIdx);
-    const codePart = spaceIdx === -1 ? invNo : invNo.slice(spaceIdx + 1);
+    const m = /^(.*[\s_])?([^\s_]+)$/.exec(invNo);
+    const prefix = m && m[1] ? m[1] : ''; // includes its own trailing separator char, if any
+    const codePart = m ? m[2] : invNo;
     const parsed = parseInvNoToken(codePart);
 
     let candidate = invNo;
@@ -203,7 +219,7 @@ function bumpInvNoUntilUnique(invNo, existing) {
             guard += 1;
             const numStr = parsed.numberHadLeadingZero ? String(n).padStart(parsed.numberDigits, '0') : String(n);
             const newCode = `${parsed.yearPrefix}${parsed.code}${numStr}${parsed.suffix}`;
-            candidate = datePart ? `${datePart} ${newCode}` : newCode;
+            candidate = `${prefix}${newCode}`;
         }
     } else {
         // Doesn't match the expected code shape — never silently let a
@@ -226,21 +242,33 @@ async function logProformaToSheet(body) {
     const proformaDate = todayStr();
     const invDateCompact = (body.inv_date || '').replace(/-/g, '').slice(2); // "2026-08-19" -> "260819"
 
+    // Company name shown on the actual PDF — first line of the buyer/
+    // consignee address block (dashboard/documents.html's payload sends
+    // this as `consignee_address`, one entry per line, first line always
+    // the name per that field's own placeholder text).
+    const customerName = Array.isArray(body.consignee_address) && body.consignee_address[0]
+        ? String(body.consignee_address[0]).trim() : '';
+
     // Column order per HEADER_ROW above. Only indices 0 (Consignee), 1 (Inv
-    // No.), 8 (Terms), 10 (Proforma Date), 14 (Inv price) are ever
-    // populated — everything else stays '' per Apsara's explicit scoping.
+    // No.), 8 (Terms), 9 (Customer), 10 (Proforma Date), 14 (Inv price) are
+    // ever populated — everything else stays '' per Apsara's explicit
+    // scoping.
     const blankRow = () => Array(HEADER_ROW.length).fill('');
 
     const rows = [];
     for (const container of (body.containers || [])) {
         const containerCode = (container.container_no || '').trim();
-        const invNo = containerCode ? `${invDateCompact} ${containerCode}`.trim() : (body.inv_no || '');
+        // Underscore-joined per Apsara's real format ("260819_AC_26JY19"),
+        // not space-joined — containerCode itself may already carry its own
+        // item-code segment (e.g. "AC_26JY01") from the client.
+        const invNo = containerCode ? `${invDateCompact}_${containerCode}`.trim() : (body.inv_no || '');
         for (const item of (container.items || [])) {
             const rate = Number(item.rate) || 0;
             const row = blankRow();
             row[0] = consignee;
             row[1] = invNo;
             row[8] = terms;
+            row[9] = customerName;
             row[10] = proformaDate;
             row[14] = rate || '';
             rows.push(row);
