@@ -418,9 +418,26 @@ function withTimeout(promise, ms, label) {
 // through to the existing, well-tested Vision-default path, so being
 // conservative here is safe; false positives would wrongly route a real
 // weighbridge photo to Gemini, which is the failure mode to avoid.
-function looksLikeCompactIndicatorFromVisionText(visionText) {
-    const t = (visionText || '').toLowerCase();
+// Known compact bench/platform indicator brands. Added 2026-08-19 after
+// testing a real Socome photo (true value 4210): the crop this classifier
+// receives is deliberately trimmed down to just the lit digits, so the
+// panel text that identifies the device ("Weighing indicator", "FUNC",
+// "ON/OFF") is cropped AWAY before this ever runs — the whole-image OCR of
+// that same photo read "socome / Weighing indicator / 42 10 / FUNC NITS",
+// but the crop read only "4210". A brand name often survives in a tight
+// crop when the button labels don't (it sits directly above the display),
+// so matching it recovers the classification the other keywords miss.
+const COMPACT_INDICATOR_BRANDS = /\b(socome|essae|contech|sansui|avery|citizen)\b/;
+
+// visionText is the CROP's text; wholeImageText (optional) is the OCR of
+// the full photo, which the pipeline already computes in parallel as a
+// fallback read and previously never used for classification. Passing it
+// matters because the identifying panel text lives OUTSIDE the digit crop
+// — see the comment above. Either source is enough to classify.
+function looksLikeCompactIndicatorFromVisionText(visionText, wholeImageText) {
+    const t = `${visionText || ''}\n${wholeImageText || ''}`.toLowerCase();
     return /\bindicat/.test(t) || /\bon\/?off\b/.test(t) || /\bfunc\b/.test(t)
+        || COMPACT_INDICATOR_BRANDS.test(t)
         || (/\bstable\b/.test(t) && /\btare\b/.test(t));
 }
 
@@ -1666,7 +1683,20 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // for when the accurate path genuinely fails (box never found, crop
     // fails, or Vision finds nothing on the crop) — NOT a routine speed
     // shortcut; see the priority note above.
-    const wholeImageVisionPromise = visionOcr.detectText(imageBase64).catch((err) => {
+    // wholeImageTextSoFar is a non-blocking PEEK at that same result, used
+    // only to classify the display type (see
+    // looksLikeCompactIndicatorFromVisionText). Deliberately a peek rather
+    // than an await: this call runs in parallel with the crop read, and
+    // awaiting it on the fast path would make every read wait for the
+    // slower of the two. By the time the crop has been read this has
+    // almost always resolved; when it hasn't, it's simply null and
+    // classification falls back to the crop text alone — i.e. exactly the
+    // old behaviour, never worse.
+    let wholeImageTextSoFar = null;
+    const wholeImageVisionPromise = visionOcr.detectText(imageBase64).then((t) => {
+        wholeImageTextSoFar = t;
+        return t;
+    }).catch((err) => {
         console.warn('[GEMINI] Whole-image Vision OCR failed:', err.message);
         return null;
     });
@@ -2060,7 +2090,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                 // compact indicators legitimately read short (e.g. 2251) and
                 // must not be held back waiting for a longer number that
                 // will never come.
-                const isCompactIndicator = looksLikeCompactIndicatorFromVisionText(visionText);
+                const isCompactIndicator = looksLikeCompactIndicatorFromVisionText(visionText, wholeImageTextSoFar);
                 const looksTruncated = !isCompactIndicator && visionWeight < 10000;
                 if (!looksTruncated) {
                     if (i > 0) console.log(`[GEMINI] Candidate ${i + 1} produced a readable result after candidate(s) 1-${i} found nothing`);
@@ -2395,7 +2425,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // "ON/OFF FUNC UNITS" every single time across 3 repeated runs).
         // Weighbridge crops never contain that vocabulary — usually just
         // bare digits plus a unit label (e.g. "ZOSI...81460").
-        const looksCompactIndicator = looksLikeCompactIndicatorFromVisionText(accurate.visionText);
+        const looksCompactIndicator = looksLikeCompactIndicatorFromVisionText(accurate.visionText, wholeImageTextSoFar);
 
         if (!looksCompactIndicator) {
             // FAST PATH — the common case. Vision is the proven-reliable
