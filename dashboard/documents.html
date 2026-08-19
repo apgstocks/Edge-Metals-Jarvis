@@ -110,6 +110,51 @@ tr:last-child td { border-bottom:none; }
       <button id="btnPricingSetup" class="btn btn-secondary">Set up / update pricing memory</button>
     </div>
 
+    <!-- ── Guided entry wizard ─────────────────────────────────────────────── -->
+    <div id="pfWizard" class="card" style="padding:20px 22px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div id="pfWizStepLabel" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Step 1 of 4</div>
+        <button id="btnPfWizSkip" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Skip — edit full form directly</button>
+      </div>
+
+      <div id="pfWizStep1">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">Who is the consignee?</div>
+        <div class="autocomplete-box">
+          <div class="field"><label>Consignee name</label>
+            <input id="pfWiz_consignee" placeholder="start typing a customer name…" autocomplete="off"></div>
+          <div id="pfWizConsigneeList" class="autocomplete-list hidden"></div>
+        </div>
+        <div style="display:flex; justify-content:flex-end;"><button id="btnPfWiz1Next" type="button" class="btn btn-primary">Next</button></div>
+      </div>
+
+      <div id="pfWizStep2" class="hidden">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">What material?</div>
+        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">
+          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="mixed" style="justify-content:flex-start; padding:12px 16px;">Mixed Combo — 21 MT</button>
+          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="split" style="justify-content:flex-start; padding:12px 16px;">AL Combo + Regular Combo — 13 MT + 8 MT</button>
+          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="custom" style="justify-content:flex-start; padding:12px 16px;">Something else — I'll enter materials manually</button>
+        </div>
+        <div style="display:flex; justify-content:space-between;"><button id="btnPfWiz2Back" type="button" class="btn btn-secondary">Back</button></div>
+      </div>
+
+      <div id="pfWizStep3" class="hidden">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Quantity / loads</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Standard quantities are pre-filled — edit any of them if this container's different.</div>
+        <div id="pfWizItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>
+        <button id="btnPfWizAddItem" type="button" class="btn btn-secondary hidden" style="padding:5px 10px; font-size:10px; margin-bottom:14px;">+ Add material</button>
+        <div class="field" style="max-width:220px;"><label>How many containers/loads?</label><input id="pfWiz_containerCount" type="number" min="1" value="1"></div>
+        <div style="display:flex; justify-content:space-between; margin-top:10px;"><button id="btnPfWiz3Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz3Next" type="button" class="btn btn-primary">Next</button></div>
+      </div>
+
+      <div id="pfWizStep4" class="hidden">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Price</div>
+        <div id="pfWizPriceNote" style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"></div>
+        <div id="pfWizPriceEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
+        <div style="display:flex; justify-content:space-between;"><button id="btnPfWiz4Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz4Finish" type="button" class="btn btn-primary">Build proforma</button></div>
+      </div>
+    </div>
+
+    <div id="pfFullForm" class="hidden">
     <div class="card" style="padding:20px 22px;">
       <div class="grid4">
         <div class="field"><label>Invoice No</label><input id="pf_inv_no" placeholder="e.g. EM-2026-0819"></div>
@@ -151,6 +196,7 @@ tr:last-child td { border-bottom:none; }
         <button id="btnPfPreview" class="btn btn-secondary">Preview PDF</button>
         <button id="btnPfGenerate" class="btn btn-primary">Generate &amp; Save</button>
       </div>
+    </div>
     </div>
 
     <div class="section-label">Saved proformas</div>
@@ -203,7 +249,7 @@ function setSubtab(name) {
   $('panelInvoice').classList.toggle('hidden', name !== 'invoice');
   $('panelProforma').classList.toggle('hidden', name !== 'proforma');
   $('panelVerification').classList.toggle('hidden', name !== 'verification');
-  if (name === 'proforma') loadSavedProformas();
+  if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
@@ -216,7 +262,16 @@ function renderConsigneeList(matches) {
   if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   box.innerHTML = matches.slice(0, 8).map((m) => `<div class="autocomplete-item" data-id="${esc(m.id)}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
   box.classList.remove('hidden');
-  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('click', () => {
+  // 'mousedown' (not 'click'), with preventDefault, on purpose: clicking a
+  // div blurs the still-focused #pf_consignee input on mousedown, BEFORE
+  // the click event ever fires — the blur handler below then hides this
+  // list on a 150ms timer, and in practice the hide could win the race
+  // before 'click' landed, so selecting an item silently did nothing. Found
+  // via Apsara: "when i click consignee name, it is not filling up".
+  // preventDefault() on mousedown stops the input from blurring in the
+  // first place, so there's no race left to lose.
+  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
     const entry = addressBook.find((e) => e.id === el.dataset.id);
     if (entry) {
       const firstAlias = (entry.aliases || [])[0] || '';
@@ -250,7 +305,12 @@ async function lookupPricingMemory(customer) {
     if (info.port_discharge && !$('pf_port_discharge').value) $('pf_port_discharge').value = info.port_discharge;
     window._pfLastPricing = info;
     // fill any existing item rows that match by description
-    document.querySelectorAll('.item-row').forEach((row) => tryFillItemRate(row));
+    // Scoped to #pfContainers on purpose — the guided wizard's own rows
+    // (step 3/4 of #pfWizard) reuse the same grid CSS class for layout but
+    // are a different shape (no .item-desc/.item-rate), and stay in the DOM
+    // hidden after the wizard finishes. An unscoped query here used to pick
+    // those up too and crash tryFillItemRate on the missing fields.
+    $('pfContainers').querySelectorAll('.item-row').forEach((row) => tryFillItemRate(row));
   } catch (e) { /* unknown customer — leave form as-is, same as the website's original smart-fill behavior */ }
 }
 async function tryFillItemRate(row) {
@@ -267,21 +327,25 @@ async function tryFillItemRate(row) {
 
 // ── Containers / items builder ────────────────────────────────────────────
 let containerCount = 0;
-function itemRowHtml() {
+function itemRowHtml(prefill) {
+  const p = prefill || {};
   return `<div class="item-row">
-    <input class="item-desc" placeholder="item description">
-    <input class="item-qty" type="number" step="any" placeholder="qty">
-    <input class="item-rate" type="number" step="any" placeholder="rate">
+    <input class="item-desc" placeholder="item description" value="${esc(p.desc || '')}">
+    <input class="item-qty" type="number" step="any" placeholder="qty" value="${p.qty || ''}">
+    <input class="item-rate" type="number" step="any" placeholder="rate" value="${p.rate || ''}">
     <button type="button" class="btn btn-danger btn-del-item" style="padding:4px 8px; font-size:9px;">×</button>
   </div>`;
 }
-function containerBlockHtml(idx) {
+// items: optional array of {desc, qty, rate} to pre-fill (used by the
+// guided wizard below) — defaults to one blank row, same as before.
+function containerBlockHtml(idx, items) {
+  const rows = (items && items.length ? items : [null]).map(itemRowHtml).join('');
   return `<div class="container-block" data-cidx="${idx}">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
       <input class="container-no" placeholder="Container #" style="max-width:220px; padding:6px 8px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:12px;">
       <button type="button" class="btn btn-danger btn-del-container" style="padding:4px 10px; font-size:9px;">Remove container</button>
     </div>
-    <div class="items-list">${itemRowHtml()}</div>
+    <div class="items-list">${rows}</div>
     <button type="button" class="btn btn-secondary btn-add-item" style="padding:5px 10px; font-size:9px; margin-top:6px;">+ Add item</button>
   </div>`;
 }
@@ -299,13 +363,168 @@ function wireItemRow(row) {
   });
   row.querySelector('.item-desc').addEventListener('blur', () => tryFillItemRate(row));
 }
-function addContainer() {
+function addContainer(items) {
   const wrap = $('pfContainers');
-  wrap.insertAdjacentHTML('beforeend', containerBlockHtml(containerCount++));
+  wrap.insertAdjacentHTML('beforeend', containerBlockHtml(containerCount++, items));
   wireContainerBlock(wrap.lastElementChild);
 }
-$('btnAddContainer').addEventListener('click', addContainer);
-addContainer(); // start with one, same as the old dc-2 form
+$('btnAddContainer').addEventListener('click', () => addContainer());
+// NOTE: no longer auto-adds a blank container on load — the guided wizard
+// below (#pfWizard) builds the first container(s) from the consignee/
+// material/quantity/price steps. "Skip" also adds one blank container, so
+// the full form still works standalone exactly like before.
+
+// ── Guided entry wizard ────────────────────────────────────────────────────
+// Added per Apsara: "when i click proforma,it should ask me who is the
+// consignee? then start matching as i type from address book.then
+// material? Quantity/Loads?then price?" Confirmed via follow-up: the 21 MT
+// (Mixed Combo alone) / 13+8 MT (AL Combo + Regular Combo) split is an
+// editable STARTING SUGGESTION, not a locked rule — every number below
+// stays a normal input the user can overwrite — and it's offered as one of
+// two standard container choices up front, not something that only kicks
+// in after both materials happen to get picked.
+const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount: 1 };
+
+function resetWizard() {
+  pfWiz.consignee = null; pfWiz.consigneeEntry = null; pfWiz.items = []; pfWiz.containerCount = 1;
+  $('pfWiz_consignee').value = '';
+  $('pfWiz_containerCount').value = '1';
+  $('pfWizConsigneeList').classList.add('hidden');
+  $('pfWizard').classList.remove('hidden');
+  $('pfFullForm').classList.add('hidden');
+  showWizStep(1);
+}
+function showWizStep(n) {
+  [1, 2, 3, 4].forEach((i) => $('pfWizStep' + i).classList.toggle('hidden', i !== n));
+  $('pfWizStepLabel').textContent = `Step ${n} of 4`;
+}
+
+// Step 1 — consignee, same address-book typeahead pattern as the full form
+// (including the mousedown/preventDefault fix — see the "when i click
+// consignee name, it is not filling up" bug this mirrors).
+function renderWizConsigneeList(matches) {
+  const box = $('pfWizConsigneeList');
+  if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.innerHTML = matches.slice(0, 8).map((m) => `<div class="autocomplete-item" data-id="${esc(m.id)}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  box.classList.remove('hidden');
+  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const entry = addressBook.find((x) => x.id === el.dataset.id);
+    if (entry) {
+      const firstAlias = (entry.aliases || [])[0] || '';
+      $('pfWiz_consignee').value = firstAlias;
+      pfWiz.consigneeEntry = entry;
+      box.classList.add('hidden');
+    }
+  }));
+}
+$('pfWiz_consignee').addEventListener('input', () => {
+  pfWiz.consigneeEntry = null; // typed something new — stale address-book match no longer applies
+  const q = $('pfWiz_consignee').value.trim().toLowerCase();
+  if (!q) { $('pfWizConsigneeList').classList.add('hidden'); return; }
+  renderWizConsigneeList(addressBook.filter((e) => (e.aliases || []).some((a) => a.toLowerCase().includes(q))));
+});
+$('pfWiz_consignee').addEventListener('blur', () => setTimeout(() => $('pfWizConsigneeList').classList.add('hidden'), 150));
+$('btnPfWiz1Next').addEventListener('click', () => {
+  const name = $('pfWiz_consignee').value.trim();
+  if (!name) return;
+  pfWiz.consignee = name;
+  showWizStep(2);
+});
+
+// Step 2 — material. The two named buttons pre-fill the standard container
+// split Apsara described; "Something else" drops straight to a blank,
+// freely-editable item list on step 3 (+ a visible "Add material" button
+// there, hidden for the two standard choices since one row already covers
+// them — still addable if a real container turns out to need a third item).
+document.querySelectorAll('.pfwiz-material-choice').forEach((btn) => btn.addEventListener('click', () => {
+  const choice = btn.dataset.choice;
+  if (choice === 'mixed') pfWiz.items = [{ desc: 'Mixed Combo', qty: 21, rate: 0 }];
+  else if (choice === 'split') pfWiz.items = [{ desc: 'AL Combo', qty: 13, rate: 0 }, { desc: 'Regular Combo', qty: 8, rate: 0 }];
+  else pfWiz.items = [{ desc: '', qty: 0, rate: 0 }];
+  renderWizItemsEditor();
+  $('btnPfWizAddItem').classList.toggle('hidden', choice !== 'custom');
+  showWizStep(3);
+}));
+$('btnPfWiz2Back').addEventListener('click', () => showWizStep(1));
+
+// Step 3 — quantity/loads, editable.
+function renderWizItemsEditor() {
+  $('pfWizItemsEditor').innerHTML = pfWiz.items.map((it, i) => `
+    <div class="item-row wiz-item-row" style="grid-template-columns:2fr 1fr auto;" data-i="${i}">
+      <input class="pfwiz-item-desc" placeholder="material" value="${esc(it.desc)}">
+      <input class="pfwiz-item-qty" type="number" step="any" placeholder="qty (MT)" value="${it.qty || ''}">
+      <button type="button" class="btn btn-danger btn-del-item" style="padding:4px 8px; font-size:9px;">×</button>
+    </div>`).join('');
+  $('pfWizItemsEditor').querySelectorAll('.wiz-item-row').forEach((row) => {
+    row.querySelector('.btn-del-item').addEventListener('click', () => {
+      if ($('pfWizItemsEditor').children.length > 1) row.remove();
+    });
+  });
+}
+$('btnPfWizAddItem').addEventListener('click', () => {
+  pfWiz.items.push({ desc: '', qty: 0, rate: 0 });
+  renderWizItemsEditor();
+});
+$('btnPfWiz3Back').addEventListener('click', () => showWizStep(2));
+$('btnPfWiz3Next').addEventListener('click', async () => {
+  // read back whatever was edited on this step before moving on
+  const rows = Array.from($('pfWizItemsEditor').querySelectorAll('.wiz-item-row'));
+  pfWiz.items = rows.map((row) => ({
+    desc: row.querySelector('.pfwiz-item-desc').value.trim(),
+    qty: parseFloat(row.querySelector('.pfwiz-item-qty').value) || 0,
+    rate: 0,
+  })).filter((it) => it.desc);
+  if (!pfWiz.items.length) return;
+  pfWiz.containerCount = Math.max(1, parseInt($('pfWiz_containerCount').value, 10) || 1);
+  await renderWizPriceEditor();
+  showWizStep(4);
+});
+
+// Step 4 — price, pre-filled from pricing memory for this consignee where known.
+async function renderWizPriceEditor() {
+  $('pfWizPriceNote').textContent = pfWiz.consignee
+    ? `Rate applies per ${$('pf_qty_unit') ? $('pf_qty_unit').value : 'MT'} across all ${pfWiz.containerCount} container(s) — checked against ${pfWiz.consignee}'s pricing memory below.`
+    : 'Rate applies across all containers below.';
+  const rows = await Promise.all(pfWiz.items.map(async (it) => {
+    let known = null;
+    if (pfWiz.consignee && it.desc) {
+      try { known = await api(`/api/customer-pricing/item-rate?customer=${encodeURIComponent(pfWiz.consignee)}&item=${encodeURIComponent(it.desc)}`); } catch (e) { /* no match */ }
+    }
+    if (known && known.rate) it.rate = known.rate;
+    return `<div class="item-row wiz-item-row" style="grid-template-columns:2fr 1fr auto;">
+      <div style="padding:8px 10px; font-size:13px; color:var(--text-body);">${esc(it.desc)} <span style="color:var(--text-faint); font-size:11px;">(${it.qty} MT)</span></div>
+      <input class="pfwiz-item-rate" data-desc="${esc(it.desc)}" type="number" step="any" placeholder="rate" value="${it.rate || ''}">
+      <span style="font-size:10px; color:${known && known.rate ? 'var(--leaf-400)' : 'var(--text-faint)'};">${known && known.rate ? 'from memory' : 'manual'}</span>
+    </div>`;
+  }));
+  $('pfWizPriceEditor').innerHTML = rows.join('');
+}
+$('btnPfWiz4Back').addEventListener('click', () => showWizStep(3));
+$('btnPfWiz4Finish').addEventListener('click', () => {
+  $('pfWizPriceEditor').querySelectorAll('.pfwiz-item-rate').forEach((inp) => {
+    const it = pfWiz.items.find((x) => x.desc === inp.dataset.desc);
+    if (it) it.rate = parseFloat(inp.value) || 0;
+  });
+
+  // Hand off to the full form: consignee + address (if matched), then one
+  // pre-filled container per the requested container count — every field
+  // still a normal editable input from here on, nothing locked.
+  $('pf_consignee').value = pfWiz.consignee || '';
+  $('pf_consignee_address').value = pfWiz.consigneeEntry ? (pfWiz.consigneeEntry.raw || '') : '';
+  $('pfContainers').innerHTML = '';
+  for (let i = 0; i < pfWiz.containerCount; i++) addContainer(pfWiz.items.map((it) => ({ ...it })));
+  lookupPricingMemory(pfWiz.consignee || '');
+
+  $('pfWizard').classList.add('hidden');
+  $('pfFullForm').classList.remove('hidden');
+});
+
+$('btnPfWizSkip').addEventListener('click', () => {
+  $('pfWizard').classList.add('hidden');
+  $('pfFullForm').classList.remove('hidden');
+  if (!$('pfContainers').children.length) addContainer();
+});
 
 function collectProformaPayload() {
   const containers = Array.from($('pfContainers').children).map((block) => ({
