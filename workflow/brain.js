@@ -218,6 +218,27 @@ async function normalize(raw) {
     const contact  = (!trucker && !supplier) ? matchContactByChat(raw.chatId, raw.senderNumber) : null;
     const isRegisteredGroupChat = (trucker && trucker.group_id === raw.chatId) || (supplier && supplier.group_id === raw.chatId) || (contact && contact.group_id === raw.chatId);
 
+    // 2026-08-18, per Apsara ("it should talk only relevant to TQL not
+    // answering generically, only in internal group and manager chat
+    // personal it can answer all generic queries") — distinct from
+    // isRegisteredGroupChat above, which is only true when THIS message's
+    // sender matched that trucker/supplier/contact. This flag answers a
+    // different question: is this chat an EXTERNAL party's channel at all
+    // (trucker/supplier/contact's own group, or the shared default
+    // GROUP_TRUCKER/GROUP_SUPPLIER fallback groups), regardless of who's
+    // currently typing — used below to keep Jarvis's generic "answer any
+    // question" AI fallback scoped to the internal team group / manager's
+    // own personal chat, not external groups where a manager's casual
+    // message to a trucker shouldn't get an unrelated bot reply injected
+    // into the conversation. NOTE: this only catches chats actually
+    // registered somewhere (a trucker/supplier/contact's group_id, or the
+    // configured default group) — an ad-hoc WhatsApp group never linked to
+    // any record in the system is invisible to this check by definition;
+    // there's no data anywhere saying "this group belongs to TQL" for
+    // Jarvis to find.
+    const isExternalPartyGroup = !!(trucker?.group_id === raw.chatId || supplier?.group_id === raw.chatId || contact?.group_id === raw.chatId
+        || (cfg.GROUP_TRUCKER && raw.chatId === cfg.GROUP_TRUCKER) || (cfg.GROUP_SUPPLIER && raw.chatId === cfg.GROUP_SUPPLIER));
+
     const isManager = !isRegisteredGroupChat && !!managerNum && senderNum === managerNum;
     const isTeam    = !isRegisteredGroupChat && (teamNums.includes(senderNum) ||
                       (!!settings.team_group_id && raw.chatId === settings.team_group_id));
@@ -239,6 +260,7 @@ async function normalize(raw) {
         matchedSupplier: finalSupplier,
         matchedContact : finalContact,
         isManagerOrTeam: isManager || isTeam,
+        isExternalPartyGroup,
         isTrucker      : !!finalTrucker,
         isSupplier     : !!finalSupplier,
         isContact      : !!finalContact,
@@ -1095,6 +1117,21 @@ function policyDecide(ctx) {
         }
     }
 
+    // 2026-08-18, per Apsara: nothing in the deterministic command grammar
+    // above matched, which is normally where the AI fallback takes a pass
+    // at answering freely (general knowledge, Edge-Metals-specific
+    // questions, etc. — see the AI prompt's manager/team instructions). But
+    // if this manager/team message landed in an EXTERNAL party's own
+    // channel (a trucker/supplier/contact's group, or the shared default
+    // trucker/supplier group) rather than the internal team group or her
+    // own personal chat, that generic answering is exactly what she doesn't
+    // want — a message like "Need scale ticket?" typed straight to a
+    // trucker shouldn't get an unrelated bot reply injected into that
+    // conversation. Stay silent there instead of asking the AI to guess.
+    if (ctx.isManagerOrTeam && ctx.isExternalPartyGroup) {
+        return { intent: 'silent', resolvedBy: 'policy', data: {} };
+    }
+
     return { intent: null, resolvedBy: null, needsAI: true };
 }
 
@@ -1282,10 +1319,27 @@ async function aiDecide(ctx) {
             };
         }
         // No contact assigned yet to ask — genuinely can't verify, say so plainly.
+        // 2026-08-18 fix (per Apsara, real incident: she typed "Need scale
+        // ticket?" directly into TQL's own WhatsApp group — a casual
+        // question FOR TQL, not a command to Jarvis, with no real booking in
+        // play at all — "Junk car to Eccomelt" is a quote lane, not a
+        // tracked booking number) and got back "No trucker assigned to THAT
+        // BOOKING yet", which falsely implies a specific booking exists and
+        // just lacks a trucker, when actually there was never any booking
+        // number in context to begin with. Branch the wording: a genuinely
+        // missing booking number gets an honest "I don't have a booking to
+        // check" instead of a reply that asserts one exists.
+        if (!bkgNo) {
+            return {
+                action: 'NEED_DATA', confidence: 0,
+                reasoning: `Manager message misclassified as a contact-confirm action (${effectiveAction}) — blocked, no booking number in context at all.`,
+                reply: `I don't have a booking number to check that against. If you meant to ask me, give me the booking number — if you were talking directly to the ${party}, ignore me.`,
+            };
+        }
         return {
             action: 'NEED_DATA', confidence: 0,
             reasoning: `Manager message misclassified as a contact-confirm action (${effectiveAction}) — blocked, no ${party} assigned yet to verify with.`,
-            reply: `No ${party} assigned to ${bkgNo || 'that booking'} yet, so I can't verify this with anyone. Assign one first, or tell me who to ask directly.`,
+            reply: `No ${party} assigned to ${bkgNo} yet, so I can't verify this with anyone. Assign one first, or tell me who to ask directly.`,
         };
     }
 
