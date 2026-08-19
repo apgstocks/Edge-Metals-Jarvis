@@ -53,6 +53,7 @@
 
 const cfg = require('../config');
 const fs  = require('fs');
+const { parseInvNoToken } = require('./nextInvoiceNo');
 
 const SHEET_FILE_NAME = 'Edge Metals';
 const TAB_NAME = 'Proforma';
@@ -168,6 +169,55 @@ function todayStr() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Reads every existing "Inv No." (column B) already in the Proforma tab —
+// used to keep this sheet duplicate-free. Apsara: "there should not be any
+// duplicate invoice number in excel sheet edge metals".
+async function getExistingInvNos(sheets, spreadsheetId) {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!B2:B` });
+    const values = res.data.values || [];
+    return new Set(values.map((r) => (r[0] || '').trim()).filter(Boolean));
+}
+
+// If invNo is already in `existing`, bumps its trailing number (reusing
+// the SAME "<year><code><number>" parsing helpers/nextInvoiceNo.js already
+// uses for suggesting numbers) until it lands on one that isn't — mutating
+// nothing, just returning the number actually safe to log. This is a
+// SAFETY NET, not the primary mechanism: helpers/nextInvoiceNo.js already
+// tries to hand out a genuinely-unused number up front. This only kicks in
+// for genuine collisions — e.g. the same proforma regenerated twice, two
+// browser sessions grabbing the same "next" number, or someone typing a
+// Container # that happens to already exist in the sheet.
+function bumpInvNoUntilUnique(invNo, existing) {
+    if (!invNo || !existing.has(invNo)) return invNo;
+    const spaceIdx = invNo.lastIndexOf(' ');
+    const datePart = spaceIdx === -1 ? '' : invNo.slice(0, spaceIdx);
+    const codePart = spaceIdx === -1 ? invNo : invNo.slice(spaceIdx + 1);
+    const parsed = parseInvNoToken(codePart);
+
+    let candidate = invNo;
+    let guard = 0;
+    if (parsed) {
+        let n = parsed.number;
+        while (existing.has(candidate) && guard < 500) {
+            n += 1;
+            guard += 1;
+            const numStr = parsed.numberHadLeadingZero ? String(n).padStart(parsed.numberDigits, '0') : String(n);
+            const newCode = `${parsed.yearPrefix}${parsed.code}${numStr}${parsed.suffix}`;
+            candidate = datePart ? `${datePart} ${newCode}` : newCode;
+        }
+    } else {
+        // Doesn't match the expected code shape — never silently let a
+        // duplicate through anyway, just suffix it instead.
+        let n = 2;
+        while (existing.has(candidate) && guard < 500) {
+            candidate = `${invNo}-${n}`;
+            n += 1;
+            guard += 1;
+        }
+    }
+    return candidate;
+}
+
 // body: the same payload POSTed to /api/proforma/generate — see the column
 // mapping notes at the top of this file for exactly where each value goes.
 async function logProformaToSheet(body) {
@@ -200,12 +250,26 @@ async function logProformaToSheet(body) {
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
+
+    const existing = await getExistingInvNos(sheets, spreadsheetId);
+    const duplicatesBumped = [];
+    for (const row of rows) {
+        const original = row[1];
+        const unique = bumpInvNoUntilUnique(original, existing);
+        if (unique !== original) {
+            duplicatesBumped.push({ was: original, now: unique });
+            console.warn(`[proforma] Edge Metals sheet: Inv No. "${original}" already existed — logged as "${unique}" instead`);
+        }
+        row[1] = unique;
+        existing.add(unique); // also guards against duplicates WITHIN this same batch
+    }
+
     await sheets.spreadsheets.values.append({
         spreadsheetId, range: `${TAB_NAME}!A:A`,
         valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
         requestBody: { values: rows },
     });
-    return { logged: rows.length, spreadsheetId };
+    return { logged: rows.length, spreadsheetId, duplicates_bumped: duplicatesBumped };
 }
 
 module.exports = { logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME };

@@ -50,6 +50,12 @@ button { font:inherit; }
 .btn-secondary:hover { border-color:var(--steel-600); }
 .btn-danger { background:transparent; color:var(--status-danger); border-color:var(--status-danger); }
 .btn:disabled { opacity:.5; cursor:not-allowed; }
+/* Apsara: "on clicking save and generate,it should show processing with
+   mimicking loading" — PDF generation (headless Chromium on the server,
+   see helpers/proformaPdf.js) takes a real 1-2s, and until now the button
+   just sat there looking clickable with zero feedback while that ran. */
+@keyframes pfSpin { to { transform: rotate(360deg); } }
+.btn-spinner { display:inline-block; width:11px; height:11px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:pfSpin .6s linear infinite; vertical-align:middle; margin-right:2px; }
 .card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
 .hidden { display:none !important; }
 .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
@@ -486,7 +492,11 @@ async function lookupPricingMemory(customer) {
   $('pfMemoryChip').classList.add('hidden');
   if (!customer) return;
   applyPortOfDischargeDefault(customer);
-  applyNextInvNoSuggestion(customer);
+  // Pass the FULL address-book tag ("Joey/Taewon"), not the split name
+  // ("Taewon") — the server groups agent-tagged consignees by whatever's
+  // before the "/" (see helpers/nextInvoiceNo.js's matchesConsignee), so
+  // it needs the "Joey" part to find Joey's other customers' numbers too.
+  applyNextInvNoSuggestion(window._pfConsigneeSheetTag || customer);
   try {
     const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(customer));
     if (!info || !info.canonical_name) return;
@@ -771,14 +781,31 @@ async function fetchProformaPdfBlob(payload, preview) {
   return res.blob();
 }
 
+// Swaps a button's label for a spinner + status text and disables it while
+// an async action is in flight, restoring the original label afterward —
+// used by both Preview and Generate & Save below, wrapped in try/finally
+// so a thrown error can never leave a button stuck disabled.
+function setButtonLoading(btn, loading, loadingText) {
+  if (loading) {
+    if (btn.dataset.originalHtml === undefined) btn.dataset.originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-spinner"></span>${esc(loadingText || 'Working…')}`;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.originalHtml !== undefined) btn.innerHTML = btn.dataset.originalHtml;
+  }
+}
 $('btnPfPreview').addEventListener('click', async () => {
   $('pfError').classList.add('hidden');
   const payload = collectProformaPayload();
   if (!payload.consignee) { $('pfError').textContent = 'Consignee is required.'; $('pfError').classList.remove('hidden'); return; }
+  const btn = $('btnPfPreview');
+  setButtonLoading(btn, true, 'Generating preview…');
   try {
     const blob = await fetchProformaPdfBlob(payload, true);
     window.open(URL.createObjectURL(blob), '_blank');
   } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
+  finally { setButtonLoading(btn, false); }
 });
 // Apsara: "when i click generate and save,i want a pdf to be generated,
 // downloaded and show in downloads folder". Before this, "Generate & Save"
@@ -816,17 +843,29 @@ $('btnPfGenerate').addEventListener('click', async () => {
   const payload = collectProformaPayload();
   if (!payload.consignee) { $('pfError').textContent = 'Consignee is required.'; $('pfError').classList.remove('hidden'); return; }
   if (!payload.containers.length) { $('pfError').textContent = 'Add at least one container with an item.'; $('pfError').classList.remove('hidden'); return; }
+  const btn = $('btnPfGenerate');
+  setButtonLoading(btn, true, 'Generating & saving…');
   try {
     const result = await fetchProformaPdfBlob(payload, false);
     loadSavedProformas();
     $('pfError').classList.add('hidden');
     const filename = result.saved_filename || '';
     const downloaded = filename ? await downloadSavedProforma(filename) : false;
-    $('pfSuccessMsg').textContent = downloaded
+    let msg = downloaded
       ? `Saved and downloaded: ${filename}`
       : `Saved: ${filename || 'proforma.pdf'} (download didn't start — open it from "Saved proformas" below instead).`;
+    // sheet_log comes from helpers/proformaSheetLog.js via the generate
+    // route — if it had to bump an Inv No. to avoid a duplicate in the
+    // Edge Metals sheet (see the dedupe logic there), that's surfaced here
+    // so the PDF's printed number and the sheet's logged number don't
+    // silently drift apart without you knowing.
+    if (result.sheet_log && result.sheet_log.duplicates_bumped && result.sheet_log.duplicates_bumped.length) {
+      msg += ` — note: ${result.sheet_log.duplicates_bumped.length} Inv No. already existed in the Edge Metals sheet and were logged with a bumped number instead (check console/server log for exact numbers).`;
+    }
+    $('pfSuccessMsg').textContent = msg;
     $('pfSuccessMsg').classList.remove('hidden');
   } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
+  finally { setButtonLoading(btn, false); }
 });
 
 // ── Saved proformas list ──────────────────────────────────────────────────

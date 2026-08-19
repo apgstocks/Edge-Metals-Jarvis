@@ -85,13 +85,17 @@ async function fetchInvoiceSheetRows() {
     return rows;
 }
 
-// Parses the trailing code token of an "Inv No." cell, e.g.
-// "250930 25JY67A" -> { yearPrefix:'25', code:'JY', number:67,
-// numberDigits:2, numberHadLeadingZero:false, suffix:'A' }.
+// Parses the trailing code token of an "Inv No." cell. Real sheet rows use
+// a SPACE before the code (e.g. "250930 25JY67A"); Apsara also described a
+// [date]_[code]_[year][customercode][number] underscore format (e.g.
+// "260819_AP_26JY19") used elsewhere — splitting on EITHER space or
+// underscore and taking the last chunk handles both without needing to
+// know which one a given cell uses, and doesn't care what the "AP"-style
+// middle segment means since only the trailing code matters for numbering.
 // Returns null for cells that don't match the expected shape (blank,
 // malformed, or a one-off format) — skipped rather than guessed at.
 function parseInvNoToken(invNoRaw) {
-    const tokens = (invNoRaw || '').trim().split(/\s+/).filter(Boolean);
+    const tokens = (invNoRaw || '').trim().split(/[\s_]+/).filter(Boolean);
     if (!tokens.length) return null;
     const token = tokens[tokens.length - 1];
     const m = /^(\d{2})([A-Za-z]+)(\d+)([A-Za-z]*)$/.exec(token);
@@ -106,10 +110,33 @@ function parseInvNoToken(invNoRaw) {
     };
 }
 
-function looseMatch(consigneeCell, query) {
-    const a = consigneeCell.toLowerCase();
-    const b = query.toLowerCase();
-    return a.includes(b) || b.includes(a);
+// Returns the lowercased text before a "/" (e.g. "joey/taewon" -> "joey"),
+// or null if there's no "/" at all.
+function agentPrefix(name) {
+    const idx = name.indexOf('/');
+    return idx === -1 ? null : name.slice(0, idx).trim().toLowerCase();
+}
+
+// Apsara: "if consignee is Joey/Taewon,look for all rows where eg:whatever
+// before / in this case joey,whichever match like joey/Daekwang,
+// Joey/Dooin.check for highest number" — confirmed against real sheet
+// data: Joey's rows for BOTH Taewon and Daekwang already share the same
+// "JY" code, so the running number is per AGENT (the part before the
+// slash), not per specific company. For an agent-tagged query, this
+// matches ANY row sharing that same agent prefix — "Joey/Taewon",
+// "Joey/Daekwang", "Joey/Dooin" all count toward ONE shared sequence.
+// Queries without a "/" keep the previous loose substring match (either
+// direction) for non-agent-tagged customers like "Rad Metal"/"MK Trading".
+function matchesConsignee(consigneeCell, query) {
+    const cell = consigneeCell.toLowerCase().trim();
+    const q = query.toLowerCase().trim();
+    const qPrefix = agentPrefix(q);
+    if (qPrefix) {
+        const cellPrefix = agentPrefix(cell);
+        if (cellPrefix) return cellPrefix === qPrefix;
+        return cell === qPrefix; // a bare "Joey" row with no slash, if one exists
+    }
+    return cell.includes(q) || q.includes(cell);
 }
 
 // Main entry point: given a consignee name (as typed/selected on the
@@ -121,7 +148,7 @@ async function suggestNextInvNo(consigneeQuery) {
     if (!query) return null;
 
     const rows = await fetchInvoiceSheetRows();
-    const matches = rows.filter((r) => looseMatch(r.consignee, query));
+    const matches = rows.filter((r) => matchesConsignee(r.consignee, query));
 
     let best = null; // the parsed token with the highest running number among matches
     for (const r of matches) {
@@ -164,4 +191,4 @@ async function suggestNextInvNo(consigneeQuery) {
     };
 }
 
-module.exports = { suggestNextInvNo, parseInvNoToken, looseMatch, fetchInvoiceSheetRows };
+module.exports = { suggestNextInvNo, parseInvNoToken, matchesConsignee, agentPrefix, fetchInvoiceSheetRows };
