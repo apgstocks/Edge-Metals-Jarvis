@@ -780,6 +780,11 @@ function createApi() {
 
             const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
             const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            // Live sheet sync — per Apsara 2026-08-19. Fire-and-forget by
+            // design: a Drive hiccup must never make saving a load fail, and
+            // every sync rebuilds from loads.json anyway, so a missed one
+            // self-heals on the next change. See helpers/sheetSync.js.
+            require('./helpers/sheetSync').scheduleSync([require('./helpers/sheetSync').monthKeyFor(finalLoad && finalLoad.date)]);
             res.json({ ok: true, load: finalLoad });
         } catch (err) {
             // validateLoadForSave (helpers/loads.js) throws a plain Error
@@ -871,6 +876,13 @@ function createApi() {
 
             const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
             const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            // Live sheet sync. Passes BOTH the old and new month: an edit can
+            // move a load across months (correcting a date from 08-01 to
+            // 07-31), which would otherwise leave July's workbook stale.
+            {
+                const sheetSync = require('./helpers/sheetSync');
+                sheetSync.scheduleSync([sheetSync.monthKeyFor(existing.date), sheetSync.monthKeyFor(finalLoad && finalLoad.date)]);
+            }
             res.json({ ok: true, load: finalLoad });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
@@ -882,9 +894,21 @@ function createApi() {
     // for why Drive photos/PDFs are deliberately left alone.
     app.delete('/api/loads/:id', async (req, res) => {
         try {
-            const { deleteLoad } = require('./helpers/loads');
+            const { deleteLoad, getLoad } = require('./helpers/loads');
+            // Read the date BEFORE deleting — afterwards the record is gone
+            // and there's no way to know which month's workbook to rebuild.
+            const doomed = getLoad(req.params.id);
+            const doomedMonth = doomed && doomed.date;
             const found = await deleteLoad(req.params.id);
             if (!found) return res.status(404).json({ error: 'not found' });
+            // Live sheet sync — this is the "if load deleted, modify
+            // accordingly" half of the requirement. Works with no delete
+            // handling of its own because every sync rebuilds from current
+            // loads.json: the deleted load simply isn't there anymore.
+            {
+                const sheetSync = require('./helpers/sheetSync');
+                sheetSync.scheduleSync([sheetSync.monthKeyFor(doomedMonth)]);
+            }
             // Per Apsara 2026-08-15: deleting a load (from mobile or the
             // dashboard — both hit this same route) now also removes its
             // Drive artifacts, not just the JSON record. Gross/tare photos

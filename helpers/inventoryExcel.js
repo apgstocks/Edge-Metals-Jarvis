@@ -136,6 +136,131 @@ async function inventoryWorkbookBuffer(allLoads) {
   return wb.xlsx.writeBuffer();
 }
 
+// ── Monthly per-day workbook ────────────────────────────────────────────────
+// Per Apsara 2026-08-19: "for daily basis, i want a new excel to track the
+// daily loads. keep on adding daily loads. that excel should be used for
+// monthly basis - august month 31 days - 31 tabs if loaded today."
+//
+// So: ONE workbook per calendar month, one tab per DAY OF THAT MONTH, and
+// each tab holds one row per LINE ITEM (her choice over one-row-per-load).
+// Distinct from buildInventoryWorkbook above, which is the rolling
+// "last 5 days + Overall" inventory rollup — this one is a chronological
+// record of the loads themselves, not an item-type rollup.
+//
+// Tabs are created only for days that actually have loads. A pre-created
+// tab for every one of the 31 days would mean opening a workbook that is
+// mostly empty sheets, and would also mean the file changes shape on the
+// 1st of a month for no reason; "31 tabs if loaded today" is satisfied by
+// a month in which all 31 days have loads. Days are ordered oldest-first
+// so the tab strip reads left-to-right as the month progresses.
+const MONTH_ITEM_COLUMNS = [
+  { header: 'Load #',      width: 14, key: 'loadId' },
+  { header: 'Seller',      width: 26, key: 'seller' },
+  { header: 'Item',        width: 26, key: 'description' },
+  { header: 'Gross',       width: 12, key: 'gross_weight' },
+  { header: 'Tare',        width: 12, key: 'tare_weight' },
+  { header: 'Net',         width: 12, key: 'net_weight' },
+  { header: 'Price',       width: 12, key: 'price' },
+  { header: 'Amount',      width: 14, key: 'amount' },
+];
+
+function writeMonthDaySheet(sheet, date, loadsForDay, unit) {
+  sheet.columns = MONTH_ITEM_COLUMNS.map(c => ({ width: c.width }));
+
+  const loadCount = loadsForDay.length;
+  const title = sheet.getCell('A1');
+  title.value = `${date} — ${loadCount} load${loadCount === 1 ? '' : 's'} (weights in ${unit})`;
+  title.font = { bold: true, size: 12 };
+  sheet.mergeCells(1, 1, 1, MONTH_ITEM_COLUMNS.length);
+
+  const headerRow = sheet.getRow(3);
+  MONTH_ITEM_COLUMNS.forEach((c, i) => { headerRow.getCell(i + 1).value = c.header; });
+  headerRow.font = { bold: true };
+  headerRow.commit();
+
+  let r = 4;
+  let totGross = 0, totTare = 0, totNet = 0, totAmount = 0;
+  for (const load of loadsForDay) {
+    const items = Array.isArray(load.items) ? load.items : [];
+    if (!items.length) continue;
+    for (const it of items) {
+      const row = sheet.getRow(r);
+      row.getCell(1).value = load.id || '';
+      row.getCell(2).value = load.seller || '';
+      row.getCell(3).value = it.description || '';
+      row.getCell(4).value = it.gross_weight ?? null;
+      row.getCell(5).value = it.tare_weight ?? null;
+      row.getCell(6).value = it.net_weight ?? null;
+      row.getCell(7).value = it.price ?? null;
+      row.getCell(8).value = it.amount ?? null;
+      row.getCell(7).numFmt = '"$"#,##0.00';
+      row.getCell(8).numFmt = '"$"#,##0.00';
+      row.commit();
+      totGross += it.gross_weight || 0;
+      totTare += it.tare_weight || 0;
+      totNet += it.net_weight || 0;
+      totAmount += it.amount || 0;
+      r += 1;
+    }
+  }
+
+  const totals = sheet.getRow(r);
+  totals.getCell(1).value = 'TOTAL';
+  totals.getCell(4).value = round2(totGross);
+  totals.getCell(5).value = round2(totTare);
+  totals.getCell(6).value = round2(totNet);
+  totals.getCell(8).value = round2(totAmount);
+  totals.getCell(8).numFmt = '"$"#,##0.00';
+  totals.font = { bold: true };
+  totals.commit();
+}
+
+// Float noise guard — the same reason helpers/loads.js rounds its own
+// sums; adding several amounts can yield 350.00000000000006.
+function round2(n) {
+  return typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : n;
+}
+
+// monthKey: 'YYYY-MM'. Returns an ExcelJS workbook covering only that month.
+function buildMonthlyLoadsWorkbook(allLoads, monthKey) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jarvis — Edge Yard';
+  wb.created = new Date();
+
+  const inMonth = (allLoads || []).filter(l => l.date && String(l.date).startsWith(monthKey));
+  const unit = inMonth.find(l => l.weight_unit)?.weight_unit || 'lb';
+
+  const byDate = new Map();
+  for (const l of inMonth) {
+    if (!byDate.has(l.date)) byDate.set(l.date, []);
+    byDate.get(l.date).push(l);
+  }
+  // Oldest-first so the tab strip reads chronologically left to right.
+  const dates = Array.from(byDate.keys()).sort();
+
+  if (!dates.length) {
+    const empty = wb.addWorksheet(safeSheetName(monthKey));
+    empty.getCell('A1').value = `No loads recorded for ${monthKey} yet.`;
+    empty.getCell('A1').font = { bold: true };
+    return wb;
+  }
+
+  for (const date of dates) {
+    // Tab named by day-of-month ("01".."31") rather than the full date:
+    // the workbook is already scoped to one month by its filename, so
+    // repeating the year/month in all 31 tab names just makes the strip
+    // harder to scan.
+    const dayLabel = String(date).slice(8, 10) || date;
+    writeMonthDaySheet(wb.addWorksheet(safeSheetName(dayLabel)), date, byDate.get(date), unit);
+  }
+  return wb;
+}
+
+async function monthlyLoadsWorkbookBuffer(allLoads, monthKey) {
+  const wb = buildMonthlyLoadsWorkbook(allLoads, monthKey);
+  return wb.xlsx.writeBuffer();
+}
+
 // ── On-demand export — dashboard/mobile Inventory tab's "⋮" export menu ────
 // Per Apsara 2026-08-15: "there should be an export option on the top with
 // three dotted emoji. when i click that export as excel/pdf." Distinct from
@@ -165,4 +290,4 @@ async function filteredInventoryWorkbookBuffer(report, rangeLabel) {
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer, buildFilteredInventoryWorkbook, filteredInventoryWorkbookBuffer };
+module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer, buildFilteredInventoryWorkbook, filteredInventoryWorkbookBuffer, buildMonthlyLoadsWorkbook, monthlyLoadsWorkbookBuffer };

@@ -463,6 +463,60 @@ async function getOrCreateReportsFolder(drive) {
 // place every night (per Apsara: "last 5 day tab loads and one overall
 // sheet", i.e. a rolling snapshot, not a dated archive) rather than piling
 // up a new copy every day. Finds-and-replaces by fixed name.
+// Create-or-replace a file in the Reports folder by NAME, returning the
+// same file id (and therefore the same shareable URL) every time — added
+// 2026-08-19 for the live inventory sheet + monthly workbook. Generalises
+// the pattern uploadInventoryBackupXlsx already used so the two new
+// artefacts don't each re-implement the list/update/create dance.
+//
+// asGoogleSheet:true uploads the SAME xlsx bytes but asks Drive to store
+// the result as a native Google Sheet (requestBody.mimeType =
+// application/vnd.google-apps.spreadsheet with an xlsx media body — Drive
+// converts on ingest). This is deliberately how the "google sheet"
+// requirement is met without touching credentials: helpers/sheets.js is
+// scoped 'spreadsheets.readonly', so the Sheets API cannot write anything,
+// but THIS client already holds the full 'drive' scope, and a conversion
+// upload is an ordinary Drive write. A files.update with new media on an
+// existing Google Sheet replaces its content in place, so the link never
+// changes and anyone who has it keeps working.
+async function upsertReportFile(name, buffer, { asGoogleSheet = false } = {}) {
+    if (!buffer) throw new Error('file buffer required');
+    const drive = getDrive();
+    const parentId = await getOrCreateReportsFolder(drive);
+    const { Readable } = require('stream');
+    const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const media = { mimeType: XLSX_MIME, body: Readable.from(buffer) };
+
+    // Escape single quotes — a name is interpolated into the Drive query
+    // string, and an apostrophe would otherwise break the query.
+    const safeName = String(name).replace(/'/g, "\\'");
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and name = '${safeName}' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+    });
+    if (list.data.files && list.data.files.length > 0) {
+        const updated = await drive.files.update({
+            fileId: list.data.files[0].id, media,
+            fields: 'id, name, webViewLink', supportsAllDrives: true,
+        });
+        return updated.data;
+    }
+    const created = await drive.files.create({
+        requestBody: asGoogleSheet
+            ? { name, parents: [parentId], mimeType: 'application/vnd.google-apps.spreadsheet' }
+            : { name, parents: [parentId] },
+        media,
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Created ${asGoogleSheet ? 'Google Sheet' : 'file'} "${name}" (${created.data.id})`);
+    return created.data;
+}
+
 async function uploadInventoryBackupXlsx(buffer) {
     if (!buffer) throw new Error('workbook buffer required');
     const drive = getDrive();
@@ -518,7 +572,7 @@ async function uploadDailyInventoryPdf(dateKey, buffer) {
     return created.data;
 }
 
-module.exports = { fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf };
+module.exports = { upsertReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete
