@@ -2054,20 +2054,40 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = 'Generate PDF';
     }
   }));
-  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
+  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
     if (!load) return;
     // Locked once a PDF has been generated — per Apsara 2026-08-17 ("once
     // pdf generated, edit option should be locked. on clicking edit, it
-    // should ask admin password to unlock and edit"). The prompt here is
-    // just UX — the real gate is server-side (api.js's PUT
-    // /api/loads/:id checks load.status === 'pdf_generated' itself and
-    // rejects a bad/missing password), so this can't be bypassed by
-    // skipping the prompt some other way.
+    // should ask admin password to unlock and edit").
+    //
+    // FIXED 2026-08-17 (Apsara: "when i click ok without entering admin
+    // password, still it is allowing me to edit"): the old version only
+    // checked for `null` (Cancel) and then opened the form immediately,
+    // so clicking OK on an empty box — or typing a WRONG password — got
+    // you a fully editable form that only failed later, at save time.
+    // The server always did reject that save (PUT /api/loads/:id still
+    // verifies independently, so nothing was ever actually editable
+    // without the password), but filling in a whole form before being
+    // told the password was wrong reads exactly like the lock is broken.
+    // Now the password is verified up front and the form simply doesn't
+    // open unless it's right.
     if (load.status === 'pdf_generated') {
       const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
       if (pw === null) return; // cancelled
+      if (!pw.trim()) { alert('Admin password is required to edit a load whose PDF has been generated.'); return; }
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Checking…';
+      try {
+        await api('/api/verify-admin-password', { method: 'POST', body: JSON.stringify({ password: pw }) });
+      } catch (err) {
+        alert(err.message === 'unauthorized' ? 'Session expired — sign in again.' : (err.message || 'Wrong admin password.'));
+        return;
+      } finally {
+        btn.disabled = false; btn.textContent = original;
+      }
       editUnlockPassword = pw;
     } else {
       editUnlockPassword = null;

@@ -3217,17 +3217,33 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = 'Generate PDF';
     }
   }));
-  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', (ev) => {
+  document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
     if (!load) return;
-    // Locked once a PDF has been generated — per Apsara 2026-08-17. The
-    // real gate is server-side (api.js's PUT /api/loads/:id checks
-    // load.status itself), this prompt is just the UX for it — mirrors
-    // mobile-app/www/index.html's identical flow.
+    // Locked once a PDF has been generated — per Apsara 2026-08-17.
+    // FIXED same day (Apsara: "when i click ok without entering admin
+    // password, still it is allowing me to edit") — the password is now
+    // verified BEFORE the form opens instead of only at save time. See
+    // mobile-app/www/index.html's identical handler for the full note.
+    // The server-side gate in PUT /api/loads/:id is unchanged and still
+    // the real boundary; this just stops the form opening on a bad or
+    // empty password.
     if (load.status === 'pdf_generated') {
       const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
       if (pw === null) return; // cancelled
+      if (!pw.trim()) { alert('Admin password is required to edit a load whose PDF has been generated.'); return; }
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Checking…';
+      try {
+        await api('/api/verify-admin-password', { method: 'POST', body: JSON.stringify({ password: pw }) });
+      } catch (err) {
+        alert(err.message || 'Wrong admin password.');
+        return;
+      } finally {
+        btn.disabled = false; btn.textContent = original;
+      }
       editUnlockPassword = pw;
     } else {
       editUnlockPassword = null;

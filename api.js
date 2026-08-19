@@ -285,7 +285,11 @@ function createApi() {
     // workflow now (seller autocomplete + item-description dropdown live
     // right on the load form), which staff fully own — same reasoning as
     // /api/loads itself already being on this list.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types'];
+    // /api/verify-admin-password added 2026-08-17: staff are exactly the
+    // people who hit the edit-unlock prompt (a locked load is locked for
+    // them too), so they must be able to have a typed admin password
+    // checked. It only answers yes/no and grants nothing — see the route.
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -302,6 +306,28 @@ function createApi() {
     }
 
     app.get('/api/me', (req, res) => res.json({ role: req.role || 'user' }));
+
+    // Check an admin password WITHOUT performing any action — added
+    // 2026-08-17 after Apsara found that clicking OK on the edit-unlock
+    // prompt with an empty box still opened the edit form. The save was
+    // (and is) still correctly rejected server-side by PUT /api/loads/:id,
+    // but letting someone fill in a whole form before telling them the
+    // password was wrong is bad UX and reads like the lock doesn't work.
+    // This lets the client verify up front and refuse to open the form at
+    // all. Deliberately does NOT create a session or elevate this
+    // request's role — it only answers yes/no, so it can't become a
+    // privilege-escalation path; the real gate stays where it was.
+    // Exposure is equivalent to the already-public /login endpoint, and
+    // uses the same constant-time compare.
+    app.post('/api/verify-admin-password', (req, res) => {
+        const adminPw = cfg.ADMIN_PASSWORD;
+        const supplied = String((req.body && req.body.password) || '');
+        if (!adminPw) return res.status(403).json({ ok: false, error: 'No admin password is configured on the server.' });
+        if (!supplied) return res.status(403).json({ ok: false, error: 'Password is required.' });
+        const eq = (a, b) => { const A = Buffer.from(a), B = Buffer.from(b); return A.length === B.length && crypto.timingSafeEqual(A, B); };
+        if (!eq(supplied, adminPw)) return res.status(403).json({ ok: false, error: 'Wrong admin password.' });
+        res.json({ ok: true });
+    });
 
     // ── Dashboard payload ─────────────────────────────────────────────────────
     app.get('/api/dashboard', (req, res) => {
