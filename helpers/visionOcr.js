@@ -234,6 +234,30 @@ const PLAUSIBLE_LOAD_WEIGHT_MIN = 200;
 // raising it without a real reason reopens exactly this class of bug.
 const PLAUSIBLE_LOAD_WEIGHT_MAX = 90000;
 
+// Expected number of digits on the yard's weight display, per Apsara
+// 2026-08-19 ("its never 146") — her scale always shows a 4-digit weight.
+//
+// This exists because the range check alone is not a strong enough
+// constraint on THIS display. The Socome indicator keeps two leading cells
+// permanently lit as "8.8.", so Vision returns e.g. "883475" for a true
+// 3475. The leading-strip loop below then removes ONE digit, gets 83475,
+// finds that inside 200-90000, and stops — returning a confidently wrong
+// number that passes every check. Knowing the real reading is 4 digits
+// makes 83475 impossible and 3475 the only candidate.
+//
+// Deliberately opt-in and env-configurable rather than hardcoded to 4: a
+// yard with a 5-digit weighbridge must not have correct readings rejected.
+// Unset (the default) preserves the previous behaviour exactly.
+// Read at CALL time, not module-load time. A module-level const captures
+// whatever the environment looked like the instant this file was first
+// required, which makes behaviour depend on require order — and it silently
+// evaluated to null in the integrated pipeline while working correctly in a
+// standalone test, which is exactly the kind of discrepancy that wastes an
+// afternoon. A function has no such ordering hazard.
+function expectedWeightDigits() {
+    return Number(process.env.EXPECTED_WEIGHT_DIGITS) || null;
+}
+
 // Returns { weight, ambiguous, candidates } instead of a bare number so the
 // caller can decide how much to trust it. `ambiguous: true` means more than
 // one number in the photo fell inside the plausible load-weight range (e.g.
@@ -413,6 +437,22 @@ function extractWeightNumberFromCrop(rawText) {
     // so the caller can flag it for review instead of trusting it as fully
     // as a clean single in-range match.
     if (Number.isFinite(n)) {
+        // When the display's digit count is known, take the RIGHTMOST that
+        // many digits directly instead of stripping one at a time and
+        // stopping at the first in-range result. Stripping stops too early
+        // on this display (883475 -> 83475, which is in range but wrong);
+        // the rightmost-N reading is the only one consistent with what the
+        // hardware can actually show.
+        const expDigits = expectedWeightDigits();
+        if (expDigits && longest.replace(/\D/g, '').length > expDigits) {
+            const digitsOnly = longest.replace(/\D/g, '');
+            const tail = digitsOnly.slice(-expDigits);
+            const tailVal = parseFloat(tail);
+            if (Number.isFinite(tailVal) && tailVal >= PLAUSIBLE_LOAD_WEIGHT_MIN && tailVal <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
+                console.warn(`[VISION-OCR] Crop read "${longest}" — taking the rightmost ${expDigits} digits ("${tail}") since this display always shows ${expDigits}; the leading cells are the permanently-lit placeholder`);
+                return { weight: tailVal, viaLeadingStrip: true };
+            }
+        }
         for (let strip = 1; strip <= 2 && strip < longest.length; strip++) {
             const suffix = longest.slice(strip);
             const val = parseFloat(suffix);

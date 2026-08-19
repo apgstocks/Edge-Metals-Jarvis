@@ -1676,7 +1676,7 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
     // compensating for a badly-framed image. Give it a good frame and the
     // compensation isn't needed.
     const TOTAL_BUDGET_MS = Number(process.env.WEIGHT_READ_BUDGET_MS)
-        || (opts.preCropped ? 2000 : 5000);
+        || (opts.preCropped ? 4500 : 5000);
 
     // ── SCANNER FAST PATH ────────────────────────────────────────────────
     // For a scanner capture the operator has already framed the display, so
@@ -1696,28 +1696,82 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
     // plausible, so a genuinely hard capture still gets the slow, careful
     // treatment rather than an immediate failure.
     if (opts.preCropped) {
+        // ⚠ KNOWN ISSUE 2026-08-19, READ BEFORE TRUSTING THIS PATH.
+        // Measured STANDALONE on Apsara's 10-photo Socome corpus, this gate
+        // is excellent: Vision and Gemini agreed on 8/10 and all 8 agreements
+        // were CORRECT — zero false accepts — with the 2 disagreements being
+        // the genuinely hard photos.
+        // Measured THROUGH this integrated path, the same 10 photos score
+        // only 6/10, every read is flagged, and the returned values match
+        // Gemini's rather than Vision's — i.e. the Vision leg appears to be
+        // resolving null in here while it works fine when called directly on
+        // the identical crop. Root cause NOT yet identified; the obvious
+        // suspects (env timing on EXPECTED_WEIGHT_DIGITS, the
+        // normalizeOrientation re-encode) were both checked and neither
+        // explains it.
+        // The safety property DOES hold throughout: WRONG-AND-UNFLAGGED was
+        // 0 in every run, so nothing incorrect is published without a
+        // "verify against the display" flag. That is why this is left in
+        // rather than reverted — but the 8/10 figure is the STANDALONE
+        // result and must not be quoted as this path's accuracy until the
+        // Vision leg is fixed and re-measured.
         const tFast = Date.now();
         try {
-            const txt = await withTimeout(visionOcr.detectText(imageBase64), 1500, 'Scanner fast-path Vision read');
-            const ex = txt ? visionOcr.extractWeightNumberFromCrop(txt) : null;
-            if (ex && ex.weight != null) {
-                // viaLeadingStrip means a leading digit had to be removed to
-                // reach a plausible number — on this display that's the
-                // always-lit "8.8." prefix cells. Correct often enough to
-                // publish, uncertain enough to flag for a glance.
-                const flagged = !!ex.viaLeadingStrip;
-                console.log(`[GEMINI] Scanner fast path read ${ex.weight} in ${Date.now() - tFast}ms (total ${elapsed()})${flagged ? ' — leading cell stripped, flagged' : ''}`);
+            // AGREEMENT GATE. Cloud Vision and Gemini read the same crop in
+            // PARALLEL, and the number is published only when they
+            // independently agree.
+            //
+            // Measured on Apsara's 10-photo Socome corpus, framed as the
+            // scanner frames them:
+            //     agreed on 8/10 — and all 8 were CORRECT (no false accepts)
+            //     disagreed on 2 — flagged instead of guessed
+            // Vision alone was 8/10 with 1 confidently WRONG read (4396 for a
+            // true 4146). The gate converts that wrong answer into a flag,
+            // which is the whole point: on a weight ticket, "please check
+            // this one" is recoverable and a silently wrong number is not.
+            //
+            // Parallel, so the cost is the slower of the two (~2.3s) rather
+            // than the sum, and both are bounded by the budget.
+            const visionP = withTimeout(visionOcr.detectText(imageBase64), Math.min(2000, remainingBudget()), 'Scanner Vision read')
+                .then((t) => {
+                    const ex = t ? visionOcr.extractWeightNumberFromCrop(t) : null;
+                    return { weight: ex && ex.weight != null ? ex.weight : null, text: t };
+                }).catch(() => ({ weight: null, text: null }));
+            const geminiP = withTimeout(
+                readWeightSinglePass(imageBase64, 'image/jpeg', 1, { isCrop: true }).catch(() => null),
+                Math.min(3500, remainingBudget()), 'Scanner Gemini read',
+            ).then((g) => (g && g.weight != null ? g.weight : null)).catch(() => null);
+
+            const [vis, gem] = await Promise.all([visionP, geminiP]);
+            const ms = Date.now() - tFast;
+
+            if (vis.weight != null && gem != null && vis.weight === gem) {
+                console.log(`[GEMINI] Scanner agreement gate: Vision and Gemini both read ${vis.weight} in ${ms}ms — accepting`);
                 return {
-                    weight: ex.weight,
-                    alternate_weight: null,
-                    alternate_source: null,
-                    weight_unit: 'lb',
-                    displays_seen: 'Cloud Vision OCR on the scanner crop (fast path — operator framed the display, no locate/cross-check needed)',
-                    raw_text: `${txt} (scanner fast path)${flagged ? ' [a leading display cell was stripped to reach a plausible weight — verify against the scale]' : ''}`,
-                    ambiguous: flagged,
+                    weight: vis.weight, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                    displays_seen: 'Cloud Vision + Gemini independently agreed on the scanner crop',
+                    raw_text: `${vis.text} (scanner agreement gate — two independent reads agreed)`,
+                    ambiguous: false,
                 };
             }
-            console.log(`[GEMINI] Scanner fast path found no plausible weight in ${Date.now() - tFast}ms — falling through to the full pipeline`);
+            // Disagreement, or only one engine produced a number. Return the
+            // one we have but FLAG it — the UI shows a "check against the
+            // scale" warning. Returning something beats making the operator
+            // re-shoot when one engine read it fine.
+            const only = vis.weight != null ? vis.weight : gem;
+            if (only != null) {
+                console.log(`[GEMINI] Scanner gate DISAGREED in ${ms}ms (Vision ${vis.weight}, Gemini ${gem}) — returning ${only} flagged for review`);
+                return {
+                    weight: only,
+                    alternate_weight: (vis.weight != null && gem != null && vis.weight !== gem) ? (only === vis.weight ? gem : vis.weight) : null,
+                    alternate_source: (vis.weight != null && gem != null && vis.weight !== gem) ? (only === vis.weight ? 'Gemini' : 'Cloud Vision') : null,
+                    weight_unit: 'lb',
+                    displays_seen: 'scanner crop — the two independent reads did not agree',
+                    raw_text: `${vis.text || ''} [Vision read ${vis.weight}, Gemini read ${gem} — they disagree, so verify against the display before saving]`,
+                    ambiguous: true,
+                };
+            }
+            console.log(`[GEMINI] Scanner gate: neither engine produced a plausible weight in ${ms}ms — falling through to the full pipeline`);
         } catch (err) {
             console.warn('[GEMINI] Scanner fast path failed, falling through:', err.message);
         }
@@ -3173,7 +3227,7 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
 // outcome and far better than a wrong weight on a ticket.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     const budget = Number(process.env.WEIGHT_READ_BUDGET_MS)
-        || (opts.preCropped ? 2000 : 5000);
+        || (opts.preCropped ? 4500 : 5000);
     // Small grace on top of the internal budget so the internal logic — which
     // can still return a good flagged answer — normally wins the race, and
     // this backstop only fires when something genuinely overran.
