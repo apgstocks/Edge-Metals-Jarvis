@@ -491,9 +491,19 @@ function formatContainerCode(state, number, itemCode) {
 }
 function takeNextContainerCode(itemCode) {
   if (!pfNextContainerCode) return null;
-  const code = formatContainerCode(pfNextContainerCode, pfNextContainerCode.nextNumber, itemCode);
+  const number = pfNextContainerCode.nextNumber;
+  const code = formatContainerCode(pfNextContainerCode, number, itemCode);
   pfNextContainerCode.nextNumber += 1;
-  return code;
+  // Raw (pre-item-code) pieces, stashed on the input itself so a LATER
+  // item-description entry can rebuild this exact code with the item
+  // segment added — see retrofitContainerItemCode() below. Apsara reported
+  // the item code wasn't showing up ("260819 26JY95 it should be
+  // 260819_itemcode_26JY95") — root cause: on the full form, consignee is
+  // often picked BEFORE any item is typed, so no material was known yet at
+  // the moment this code was generated. It can't be re-derived from the
+  // sequence at that later point (the running number would move on), so
+  // the exact number/letter/year used has to be remembered per-field.
+  return { code, raw: { yy: pfNextContainerCode.yy, letterCode: pfNextContainerCode.letterCode, number, numberDigits: pfNextContainerCode.numberDigits, numberHadLeadingZero: pfNextContainerCode.numberHadLeadingZero } };
 }
 // Fills any container-number boxes that are still blank right now — used
 // both right after a suggestion comes back (for containers the wizard
@@ -510,8 +520,41 @@ function fillEmptyContainerNumbers() {
     const input = block.querySelector('.container-no');
     if (!input || input.value.trim()) return;
     const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
-    input.value = takeNextContainerCode(deriveItemCode(firstDesc));
+    const result = takeNextContainerCode(deriveItemCode(firstDesc));
+    if (!result) return;
+    input.value = result.code;
+    input.dataset.autoRaw = JSON.stringify(result.raw);
   });
+}
+// Backfills the item-code segment into a container's code once its item
+// description becomes known AFTER the code was already auto-filled (e.g.
+// consignee picked first, item typed second, or item edited from one
+// material to another). Only touches the field if it's still exactly the
+// auto-generated value with no item code yet appended — a real shipping
+// container ID or anything else the user typed is left completely alone.
+function retrofitContainerItemCode(block) {
+  if (!block) return;
+  const input = block.querySelector('.container-no');
+  if (!input || !input.dataset.autoRaw) return;
+  const raw = JSON.parse(input.dataset.autoRaw);
+  const bareCode = formatContainerCode(raw, raw.number);
+  if (input.value.trim() !== bareCode) return; // already has an item code, or user edited it — leave alone
+  const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
+  const itemCode = deriveItemCode(firstDesc);
+  if (itemCode) input.value = formatContainerCode(raw, raw.number, itemCode);
+}
+// Same idea as retrofitContainerItemCode(), but for the top-level Invoice
+// No field — set from window._pfInvNoSuggestion (stashed by
+// applyNextInvNoSuggestion below) rather than a dataset attribute, since
+// there's only ever one of these per proforma.
+function retrofitInvNoItemCode() {
+  const sug = window._pfInvNoSuggestion;
+  if (!sug) return;
+  const plain = `${sug.dateStr} ${sug.codeOnly}`;
+  if ($('pf_inv_no').value.trim() !== plain) return; // already has an item code, or user edited it
+  const firstDesc = $('pfContainers').querySelector('.item-desc') ? $('pfContainers').querySelector('.item-desc').value : '';
+  const itemCode = deriveItemCode(firstDesc);
+  if (itemCode) $('pf_inv_no').value = `${sug.dateStr}_${itemCode}_${sug.codeOnly}`;
 }
 async function applyNextInvNoSuggestion(customer) {
   // Bail out BEFORE touching any state if Invoice No is already filled —
@@ -526,6 +569,7 @@ async function applyNextInvNoSuggestion(customer) {
   if ($('pf_inv_no').value.trim()) return;
   $('pfInvNoChip').classList.add('hidden');
   pfNextContainerCode = null;
+  window._pfInvNoSuggestion = null;
   try {
     const suggestion = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(customer));
     if (!suggestion || !suggestion.inv_no) return;
@@ -538,6 +582,9 @@ async function applyNextInvNoSuggestion(customer) {
     const firstDesc = $('pfContainers').querySelector('.item-desc') ? $('pfContainers').querySelector('.item-desc').value : '';
     const itemCode = deriveItemCode(firstDesc);
     $('pf_inv_no').value = itemCode ? `${dateStr}_${itemCode}_${suggestion.code_only}` : suggestion.inv_no;
+    // Remembered so retrofitInvNoItemCode() can add the item segment in
+    // later if it wasn't known yet at this point (see that function above).
+    window._pfInvNoSuggestion = { dateStr, codeOnly: suggestion.code_only };
     $('pfInvNoChip').textContent = `● suggested — last was ${suggestion.highest_existing}`;
     $('pfInvNoChip').classList.remove('hidden');
     pfNextContainerCode = {
@@ -623,7 +670,14 @@ function wireItemRow(row) {
   row.querySelector('.btn-del-item').addEventListener('click', () => {
     if (row.parentElement.children.length > 1) row.remove();
   });
-  row.querySelector('.item-desc').addEventListener('blur', () => tryFillItemRate(row));
+  row.querySelector('.item-desc').addEventListener('blur', () => {
+    tryFillItemRate(row);
+    // Backfills the item-code segment into this container's code and the
+    // top Invoice No if either was auto-filled before this item's material
+    // was known — see retrofitContainerItemCode()/retrofitInvNoItemCode().
+    retrofitContainerItemCode(row.closest('.container-block'));
+    retrofitInvNoItemCode();
+  });
 }
 function addContainer(items) {
   const wrap = $('pfContainers');
@@ -637,7 +691,11 @@ function addContainer(items) {
     const containerNoInput = block.querySelector('.container-no');
     if (containerNoInput && !containerNoInput.value.trim()) {
       const firstDesc = (items && items[0] && items[0].desc) || '';
-      containerNoInput.value = takeNextContainerCode(deriveItemCode(firstDesc));
+      const result = takeNextContainerCode(deriveItemCode(firstDesc));
+      if (result) {
+        containerNoInput.value = result.code;
+        containerNoInput.dataset.autoRaw = JSON.stringify(result.raw);
+      }
     }
   }
 }

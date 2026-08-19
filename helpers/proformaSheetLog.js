@@ -24,9 +24,9 @@
 // (e.g. 25JY84 / 85 / 86 / 87 / 88), not one row per proforma.
 //
 // COLUMN MAPPING — per Apsara's explicit follow-up ("Fill consignee,inv
-// no,terms,proforma date inv price"), plus a later addition (Customer).
-// Every other column (Inv Date, Container No., HBL/Booking/Seal No.,
-// Supplier, Reference, Item Description, Weight, INVOICE AMT, Commissions,
+// no,terms,proforma date inv price"), plus two later additions (Customer,
+// Item Description). Every other column (Inv Date, Container No., HBL/
+// Booking/Seal No., Supplier, Reference, Weight, INVOICE AMT, Commissions,
 // RECEIVED AMT, Received Date, Freight Charge, Freight, ETA) is left
 // blank — not guessed at, not computed:
 //   Consignee        <- the full address-book tag as matched (e.g.
@@ -54,6 +54,11 @@
 //                        column is already used in the real Invoice sheet
 //                        (company names like "TAEWON AUTOMOTIVE CO., LTD").
 //   Proforma Date     <- today (server date, when the row is logged)
+//   Item Description  <- exactly what was typed into that item's
+//                        description box on the proforma — the same text
+//                        deriveItemCode() reads client-side to pick the
+//                        Inv No.'s item-code segment, logged here as-is
+//                        (not the 2-letter code).
 //   Inv price         <- this line item's rate
 //
 // Apsara: if any of this mapping is wrong for how you actually use these
@@ -264,12 +269,14 @@ async function logProformaToSheet(body) {
         const invNo = containerCode ? `${invDateCompact}_${containerCode}`.trim() : (body.inv_no || '');
         for (const item of (container.items || [])) {
             const rate = Number(item.rate) || 0;
+            const desc = (item.desc || '').trim();
             const row = blankRow();
             row[0] = consignee;
             row[1] = invNo;
             row[8] = terms;
             row[9] = customerName;
             row[10] = proformaDate;
+            row[12] = desc;
             row[14] = rate || '';
             rows.push(row);
         }
