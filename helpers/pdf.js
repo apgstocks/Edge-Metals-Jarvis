@@ -899,4 +899,15 @@ function generateLoadReceiptPdf(load, opts = {}) {
 // same item-type grouping logic for its new inventory sections instead of
 // duplicating this reduce elsewhere — one definition of "how items roll up
 // by type" for both the PDF and the report.
-module.exports = { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf };
+module.exports = {
+    generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf,
+    // Additive exports — added 2026-08-19 for the Documents (Invoice/Proforma/
+    // Verification) build-out. These drawing primitives already existed as
+    // private module-level functions used internally by generateLoadPdf and
+    // friends; nothing about their implementation changed, they're just now
+    // reachable from other files (helpers/proformaPdf.js, helpers/invoicePdf.js)
+    // instead of being reimplemented from scratch. Zero risk to existing
+    // Load/Weights/Receipt/Inventory PDF generation above.
+    ensureSpace, drawLetterhead, drawFieldBox, drawItemTable, drawSummaryBox, drawSignatureBlock, drawSectionHeading,
+    NAVY, NAVY_LIGHT, RULE, MUTED, INK, PAGE_L, PAGE_R, PAGE_TOP, PAGE_BOTTOM,
+};

@@ -1405,6 +1405,111 @@ function createApi() {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── Documents: Proforma (dc-2) + customer pricing memory ─────────────────
+    // Added 2026-08-19 per Apsara: "i want invoice,proforma,verification in
+    // separate tabs under documents". This block covers Proforma only —
+    // Invoice and Verification are tracked separately, not yet built as of
+    // this patch (see SETUP.md). Deliberately NOT added to
+    // STAFF_ALLOWED_PATH_PREFIXES above: staff get a flat 403 on all of
+    // these, same deny-by-default reasoning as /api/expenses and the rest
+    // of what staff shouldn't touch. Both admin and user (Apsara's own
+    // staff-facing role — not to be confused with the 'staff' role, which
+    // is the more restricted Loads-only one) can generate/save proformas
+    // and edit pricing memory; no requireAdmin split within this feature —
+    // consistent with "whole site" role decision Apsara already made this
+    // pass, and both roles already share every other Operations tab.
+    const proformaPricing = require('./helpers/proformaPricing');
+    const documentsSaved = require('./helpers/documentsSaved');
+
+    // preview=1 (query string) returns the PDF inline without saving a copy
+    // or touching pricing memory — used by the "Preview" button so a user
+    // can check the layout before committing to a generation. Anything
+    // else is a real generation: saves a copy to the flat proforma archive
+    // and records/updates customer pricing memory from what was actually
+    // typed, wrapped in try/catch per proformaPricing.js's own contract —
+    // a pricing-memory failure must never break PDF generation.
+    app.post('/api/proforma/generate', async (req, res) => {
+        try {
+            const body = req.body || {};
+            const { generateProformaDc2Pdf } = require('./helpers/proformaPdf');
+            const pdf = await generateProformaDc2Pdf(body);
+
+            if (req.query.preview === '1') {
+                res.set('Content-Type', 'application/pdf');
+                res.set('Content-Disposition', 'inline; filename="proforma-preview.pdf"');
+                return res.send(pdf);
+            }
+
+            const safeInv = documentsSaved.safeName(body.inv_no || 'PROFORMA').replace(/_+/g, '_');
+            const filename = `${safeInv}_${(body.consignee || 'customer').toString().slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '')}.pdf`.replace(/\s+/g, '_');
+            const savedPath = documentsSaved.saveProformaCopy(pdf, filename);
+
+            try {
+                await proformaPricing.recordFromGeneration(
+                    body.consignee || '',
+                    body.trade_terms || '',
+                    body.port_discharge || '',
+                    (body.containers || []).flatMap((c) => c.items || []),
+                );
+            } catch (e) {
+                console.error('[proforma] pricing-memory record failed (non-fatal):', e.message);
+            }
+
+            res.json({ ok: true, saved_filename: path.basename(savedPath) });
+        } catch (e) {
+            console.error('[proforma] generate failed:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.get('/api/customer-pricing/list', (req, res) => {
+        try { res.json(proformaPricing.listCustomers()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/customer-pricing/lookup', (req, res) => {
+        try { res.json(proformaPricing.lookup(req.query.customer || '')); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/customer-pricing/item-rate', (req, res) => {
+        try { res.json(proformaPricing.lookupItemRate(req.query.customer || '', req.query.item || '') || {}); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/customer-pricing/parse-paste', (req, res) => {
+        try { res.json(proformaPricing.parsePastedText((req.body || {}).text || '')); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/customer-pricing/save', async (req, res) => {
+        try {
+            const body = req.body || {};
+            const updated = await proformaPricing.upsert(body.customer || '', {
+                tradeTerms: body.trade_terms || '',
+                portDischarge: body.port_discharge || '',
+                items: body.items || [],
+            });
+            res.json(updated);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Archive listing/download — currently proforma-only (see comment
+    // above); the invoice branch is wired for when the Invoice tab lands so
+    // this route doesn't need to change shape again later.
+    app.get('/api/documents/saved', (req, res) => {
+        try {
+            res.json({
+                invoices: documentsSaved.listSavedInvoices(),
+                proformas: documentsSaved.listSavedProformas(),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/documents/download', (req, res) => {
+        const target = documentsSaved.resolveSavedPath({
+            kind: req.query.kind, filename: req.query.file,
+            date: req.query.date, container: req.query.container,
+        });
+        if (!target) return res.status(404).json({ error: 'file not found' });
+        res.sendFile(target);
+    });
+
     // ── Custom item-type descriptions (self-growing "Others…" list) ─────────
     // Per Apsara 2026-08-15. GET returns the flat array of custom entries;
     // the client merges it with its own hardcoded ITEM_DESC_OPTIONS. No
@@ -1688,6 +1793,14 @@ function createApi() {
     // address-book/quote-requests above. See helpers/outboundLoads.js.
     app.get('/outbound-loads', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'outbound-loads.html'));
+    });
+
+    // Documents (Invoice / Proforma / Verification) — same standalone-page
+    // pattern as address-book/quote-requests/outbound-loads above. Proforma
+    // subtab is fully wired (see dashboard/documents.html); Invoice and
+    // Verification subtabs are still placeholders as of this patch.
+    app.get('/documents', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'documents.html'));
     });
 
     // Old standalone Contact Quotes page — MERGED into /quote-requests

@@ -440,6 +440,16 @@ const NAV_ITEMS = [
   { id: 'bookings',  label: 'Bookings',  group: 'Operations' },
   { id: 'truckers',  label: 'Truckers',  group: 'Operations' },
   { id: 'suppliers', label: 'Suppliers', group: 'Operations' },
+  // Invoice/Proforma/Verification — added 2026-08-19 per Apsara ("i want
+  // invoice,proforma,verification in separate tabs under documents").
+  // Standalone page (dashboard/documents.html via the /documents route),
+  // same pattern as address-book/quote-requests/outbound-loads. NOT
+  // adminOnly — Apsara confirmed pricing-memory + doc generation should be
+  // usable by her own staff-facing 'user' role too, not admin-only, same as
+  // the rest of Operations here. The narrower 'staff' role (Loads-only)
+  // still can't reach it — server-side denied by omission from
+  // STAFF_ALLOWED_PATH_PREFIXES in api.js, this is just matching UX.
+  { id: 'documents', label: 'Documents', group: 'Operations' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -489,6 +499,7 @@ function renderNav() {
     // Same standalone-page pattern as address-book above.
     if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
+    if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }

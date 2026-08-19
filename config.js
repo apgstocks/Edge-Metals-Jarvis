@@ -235,6 +235,36 @@ const QUOTE_REMINDER_SCHEDULE_MIN = [30, 60, 90];
 // SA's client_email as Viewer — same constraint as the Shared Drive above.
 const PRICE_SHEET_ID          = process.env.PRICE_SHEET_ID || '';
 const BOOKING_TRACKER_SHEET_ID = process.env.BOOKING_TRACKER_SHEET_ID || '';
+
+// ── Documents (Invoice / Proforma / Verification) — added 2026-08-19 per
+// Apsara: "i want invoice,proforma,verification in separate tabs under
+// documents". Ports the Commercial Invoice + Proforma + carrier/commission
+// verification tools that previously only existed in a separate Flask app
+// (apgstocks/Edge-internal on PythonAnywhere) into this, the real live
+// system. INVOICE_SHEET_ID is the SAME Google Sheet that Flask app read
+// from (source of truth for consignee/container/HBL/commission data) —
+// hardcoded default matches invoice_gen.py's GOOGLE_SHEET_ID exactly, same
+// pattern as ADDRESS_BOOK_DOC_ID's hardcoded default above. Must be shared
+// with the service account's client_email as Viewer, same prerequisite as
+// PRICE_SHEET_ID/ADDRESS_BOOK_DOC_ID.
+const INVOICE_SHEET_ID     = process.env.INVOICE_SHEET_ID     || '1QsCeuqeRKODuouzO2PfKbxG9qJpN8yAbIurSzhI--6s';
+const INVOICE_MAIN_GID     = process.env.INVOICE_MAIN_GID     || '571096144';
+const INVOICE_PACKING_GID  = process.env.INVOICE_PACKING_GID  || '1340048377';
+
+// Customer pricing memory (Proforma tab) — pricing-only, NOT a full
+// address/profile store, since buyer addresses already have a working
+// source: ADDRESS_BOOK_DOC_ID/ADDRESS_BOOK_FILE above via
+// helpers/addressBook.js. Same flat-JSON-store pattern as
+// address_book.json / quote_requests.json.
+const PROFORMA_PRICING_FILE = path.join(DATA_DIR, 'proforma_pricing.json');
+// Save-a-copy archive for generated Invoice/Proforma PDFs — mirrors the
+// datewise/container-wise (invoice) and flat (proforma) folder layout
+// Apsara originally asked for in the Flask app, kept identical here for
+// continuity. Local disk, not Drive — unlike Load PDFs (helpers/drive.js),
+// these documents aren't shared with truckers/suppliers over WhatsApp, so
+// there's no existing Drive-upload need driving that choice; browsed
+// in-dashboard via GET /api/documents/saved instead.
+const DOCUMENTS_SAVED_DIR = path.join(DATA_DIR, 'documents_saved');
 // Shared secret for the Apps Script → /api/pricelist/webhook call. Required
 // because Apps Script's UrlFetchApp can't carry the dashboard's session
 // cookie or the API_TOKEN bearer header the same way.
@@ -387,6 +417,8 @@ module.exports = {
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
+    INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
+    PROFORMA_PRICING_FILE, DOCUMENTS_SAVED_DIR,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,

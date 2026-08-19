@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documents — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Same design tokens as dashboard/outbound-loads.html / index.html — kept
+   in sync by hand since this is a standalone page. */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7; --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; min-height:100vh; }
+h1,h2 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+button { font:inherit; }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn-danger { background:transparent; color:var(--status-danger); border-color:var(--status-danger); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.hidden { display:none !important; }
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
+td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+.subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
+.subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+.field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
+.field input, .field select, .field textarea { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; font-family:inherit; }
+.field { margin-bottom:12px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.grid4 { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; }
+.section-label { font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px; }
+.pricing-chip { display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--leaf-400); margin-left:8px; }
+.autocomplete-box { position:relative; }
+.autocomplete-list { position:absolute; top:100%; left:0; right:0; z-index:20; background:var(--surface-card); border:1px solid var(--border-default); border-top:none; max-height:220px; overflow-y:auto; }
+.autocomplete-item { padding:8px 10px; font-size:12.5px; cursor:pointer; border-bottom:1px solid var(--border-subtle); }
+.autocomplete-item:hover { background:var(--surface-hover); }
+.container-block { border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:10px; }
+.item-row { display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:center; }
+.placeholder-note { padding:40px 20px; text-align:center; color:var(--text-faint); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm); }
+</style>
+</head>
+<body>
+<section style="max-width:1100px; margin:0 auto; padding:38px 40px 80px;">
+  <div class="eyebrow">// Documents</div>
+  <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Invoice · Proforma · Verification</h2>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Generate, save, and re-open Commercial Invoices, Proforma Invoices, and carrier/commission verification checks.</div>
+
+  <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
+    <button class="subtab-btn" data-subtab="invoice">Invoice</button>
+    <button class="subtab-btn" data-subtab="proforma">Proforma</button>
+    <button class="subtab-btn" data-subtab="verification">Verification</button>
+  </div>
+
+  <!-- ── Invoice (not yet built) ─────────────────────────────────────────── -->
+  <div id="panelInvoice" class="hidden">
+    <div class="placeholder-note">
+      Commercial Invoice generation isn't built here yet — this tab is a placeholder.<br>
+      <span style="font-size:11px;">The Proforma tab (below) is fully working. Invoice is next.</span>
+    </div>
+  </div>
+
+  <!-- ── Verification (not yet built) ────────────────────────────────────── -->
+  <div id="panelVerification" class="hidden">
+    <div class="placeholder-note">
+      ZIMEX freight / commission cross-check isn't built here yet — this tab is a placeholder.<br>
+      <span style="font-size:11px;">The Proforma tab (below) is fully working. Verification is next.</span>
+    </div>
+  </div>
+
+  <!-- ── Proforma ─────────────────────────────────────────────────────────── -->
+  <div id="panelProforma">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <div style="font-size:13px; color:var(--text-muted);">Type a customer name — if you've generated for them before, trade terms / port / item rates auto-fill from history.</div>
+      <button id="btnPricingSetup" class="btn btn-secondary">Set up / update pricing memory</button>
+    </div>
+
+    <div class="card" style="padding:20px 22px;">
+      <div class="grid4">
+        <div class="field"><label>Invoice No</label><input id="pf_inv_no" placeholder="e.g. EM-2026-0819"></div>
+        <div class="field"><label>Invoice Date</label><input type="date" id="pf_inv_date"></div>
+        <div class="field"><label>Reference #</label><input id="pf_reference" value="Proforma & Email Conf."></div>
+        <div class="field"><label>Qty Unit</label><select id="pf_qty_unit"><option>MT</option><option>LBS</option></select></div>
+      </div>
+
+      <div class="section-label">Buyer / Consignee</div>
+      <div class="autocomplete-box">
+        <div class="field"><label>Consignee name <span id="pfMemoryChip" class="pricing-chip hidden">● known customer — pricing memory found</span></label>
+          <input id="pf_consignee" placeholder="start typing a customer name…" autocomplete="off"></div>
+        <div id="pfConsigneeList" class="autocomplete-list hidden"></div>
+      </div>
+      <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
+        <textarea id="pf_consignee_address" rows="3" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
+
+      <div class="section-label">Terms</div>
+      <div class="grid4">
+        <div class="field"><label>Trade Terms</label><input id="pf_trade_terms" placeholder="e.g. CIF Busan, South Korea"></div>
+        <div class="field"><label>Port of Discharge</label><input id="pf_port_discharge"></div>
+        <div class="field"><label>Payment Terms</label><input id="pf_payment_term" value="T/T 100% Against Shipping Documents"></div>
+        <div class="field"><label>Freight</label>
+          <select id="pf_freight_label"><option value="CIF (freight included)">CIF (included)</option><option value="FOB (freight excluded)">FOB (excluded)</option></select></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>Buyer's Order No</label><input id="pf_buyer_po"></div>
+        <div class="field"><label>Buyer PO Date</label><input type="date" id="pf_buyer_po_date"></div>
+        <div class="field"><label>Country of Origin</label><input id="pf_country_of_origin" value="USA"></div>
+        <div class="field"><label>Shipment Allowance</label><input id="pf_shipment_allowance" value="+/- 10% on weights"></div>
+      </div>
+
+      <div class="section-label">Containers &amp; Items</div>
+      <div id="pfContainers"></div>
+      <button id="btnAddContainer" type="button" class="btn btn-secondary" style="margin-top:4px; padding:6px 12px; font-size:10px;">+ Add container</button>
+
+      <div id="pfError" class="hidden" style="margin-top:14px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px;">
+        <button id="btnPfPreview" class="btn btn-secondary">Preview PDF</button>
+        <button id="btnPfGenerate" class="btn btn-primary">Generate &amp; Save</button>
+      </div>
+    </div>
+
+    <div class="section-label">Saved proformas</div>
+    <div id="pfSavedList"></div>
+  </div>
+
+  <!-- ── Pricing memory setup modal ──────────────────────────────────────── -->
+  <div id="pricingModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
+    <div class="card" style="width:100%; max-width:700px; padding:22px 24px; max-height:90vh; overflow-y:auto;">
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:6px;">Set up / update pricing memory</div>
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">Paste a previous proforma's text below (terms, port, item lines with rates) — it'll be parsed into an editable table. Nothing saves until you review and confirm.</div>
+      <div class="field"><label>Customer name</label><input id="pmCustomer" placeholder="must match how you'll type it when generating"></div>
+      <div class="field"><label>Paste proforma text</label><textarea id="pmPasteText" rows="8" placeholder="Paste the old proforma's text here…"></textarea></div>
+      <button id="btnPmParse" class="btn btn-secondary" style="margin-bottom:14px;">Parse</button>
+      <div id="pmParsed" class="hidden">
+        <div class="grid2">
+          <div class="field"><label>Trade Terms</label><input id="pmTradeTerms"></div>
+          <div class="field"><label>Port of Discharge</label><input id="pmPortDischarge"></div>
+        </div>
+        <div id="pmConfidence" style="font-size:11px; margin-bottom:10px;"></div>
+        <table style="margin-bottom:10px;">
+          <thead><tr><th>Item</th><th>Rate</th><th>Unit</th></tr></thead>
+          <tbody id="pmItemsBody"></tbody>
+        </table>
+      </div>
+      <div id="pmError" class="hidden" style="margin-top:8px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+        <button id="pmCancel" class="btn btn-secondary">Close</button>
+        <button id="pmSave" class="btn btn-primary hidden">Save to pricing memory</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+const $ = (id) => document.getElementById(id);
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+let currentSubtab = 'proforma';
+function setSubtab(name) {
+  currentSubtab = name;
+  document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.subtab === name));
+  $('panelInvoice').classList.toggle('hidden', name !== 'invoice');
+  $('panelProforma').classList.toggle('hidden', name !== 'proforma');
+  $('panelVerification').classList.toggle('hidden', name !== 'verification');
+  if (name === 'proforma') loadSavedProformas();
+}
+document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+
+// ── Address book typeahead (buyer/consignee) ─────────────────────────────
+let addressBook = [];
+api('/api/address-book').then((d) => { addressBook = d || []; }).catch(() => {});
+
+function renderConsigneeList(matches) {
+  const box = $('pfConsigneeList');
+  if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.innerHTML = matches.slice(0, 8).map((m) => `<div class="autocomplete-item" data-id="${esc(m.id)}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  box.classList.remove('hidden');
+  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('click', () => {
+    const entry = addressBook.find((e) => e.id === el.dataset.id);
+    if (entry) {
+      const firstAlias = (entry.aliases || [])[0] || '';
+      $('pf_consignee').value = firstAlias;
+      $('pf_consignee_address').value = entry.raw || '';
+      box.classList.add('hidden');
+      lookupPricingMemory(firstAlias);
+    }
+  }));
+}
+$('pf_consignee').addEventListener('input', () => {
+  const q = $('pf_consignee').value.trim().toLowerCase();
+  if (!q) { $('pfConsigneeList').classList.add('hidden'); return; }
+  const matches = addressBook.filter((e) => (e.aliases || []).some((a) => a.toLowerCase().includes(q)));
+  renderConsigneeList(matches);
+});
+$('pf_consignee').addEventListener('blur', () => {
+  setTimeout(() => $('pfConsigneeList').classList.add('hidden'), 150);
+  lookupPricingMemory($('pf_consignee').value.trim());
+});
+
+// ── Pricing memory auto-fill ──────────────────────────────────────────────
+async function lookupPricingMemory(customer) {
+  $('pfMemoryChip').classList.add('hidden');
+  if (!customer) return;
+  try {
+    const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(customer));
+    if (!info || !info.canonical_name) return;
+    $('pfMemoryChip').classList.remove('hidden');
+    if (info.trade_terms && !$('pf_trade_terms').value) $('pf_trade_terms').value = info.trade_terms;
+    if (info.port_discharge && !$('pf_port_discharge').value) $('pf_port_discharge').value = info.port_discharge;
+    window._pfLastPricing = info;
+    // fill any existing item rows that match by description
+    document.querySelectorAll('.item-row').forEach((row) => tryFillItemRate(row));
+  } catch (e) { /* unknown customer — leave form as-is, same as the website's original smart-fill behavior */ }
+}
+async function tryFillItemRate(row) {
+  const customer = $('pf_consignee').value.trim();
+  const descInput = row.querySelector('.item-desc');
+  const rateInput = row.querySelector('.item-rate');
+  const desc = descInput.value.trim();
+  if (!customer || !desc || rateInput.value) return;
+  try {
+    const r = await api(`/api/customer-pricing/item-rate?customer=${encodeURIComponent(customer)}&item=${encodeURIComponent(desc)}`);
+    if (r && r.rate) rateInput.value = r.rate;
+  } catch (e) { /* no match — leave blank for manual entry */ }
+}
+
+// ── Containers / items builder ────────────────────────────────────────────
+let containerCount = 0;
+function itemRowHtml() {
+  return `<div class="item-row">
+    <input class="item-desc" placeholder="item description">
+    <input class="item-qty" type="number" step="any" placeholder="qty">
+    <input class="item-rate" type="number" step="any" placeholder="rate">
+    <button type="button" class="btn btn-danger btn-del-item" style="padding:4px 8px; font-size:9px;">×</button>
+  </div>`;
+}
+function containerBlockHtml(idx) {
+  return `<div class="container-block" data-cidx="${idx}">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <input class="container-no" placeholder="Container #" style="max-width:220px; padding:6px 8px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:12px;">
+      <button type="button" class="btn btn-danger btn-del-container" style="padding:4px 10px; font-size:9px;">Remove container</button>
+    </div>
+    <div class="items-list">${itemRowHtml()}</div>
+    <button type="button" class="btn btn-secondary btn-add-item" style="padding:5px 10px; font-size:9px; margin-top:6px;">+ Add item</button>
+  </div>`;
+}
+function wireContainerBlock(block) {
+  block.querySelector('.btn-del-container').addEventListener('click', () => block.remove());
+  block.querySelector('.btn-add-item').addEventListener('click', () => {
+    block.querySelector('.items-list').insertAdjacentHTML('beforeend', itemRowHtml());
+    wireItemRow(block.querySelector('.items-list').lastElementChild);
+  });
+  block.querySelectorAll('.item-row').forEach(wireItemRow);
+}
+function wireItemRow(row) {
+  row.querySelector('.btn-del-item').addEventListener('click', () => {
+    if (row.parentElement.children.length > 1) row.remove();
+  });
+  row.querySelector('.item-desc').addEventListener('blur', () => tryFillItemRate(row));
+}
+function addContainer() {
+  const wrap = $('pfContainers');
+  wrap.insertAdjacentHTML('beforeend', containerBlockHtml(containerCount++));
+  wireContainerBlock(wrap.lastElementChild);
+}
+$('btnAddContainer').addEventListener('click', addContainer);
+addContainer(); // start with one, same as the old dc-2 form
+
+function collectProformaPayload() {
+  const containers = Array.from($('pfContainers').children).map((block) => ({
+    container_no: block.querySelector('.container-no').value.trim(),
+    items: Array.from(block.querySelectorAll('.item-row')).map((row) => ({
+      desc: row.querySelector('.item-desc').value.trim(),
+      qty: parseFloat(row.querySelector('.item-qty').value) || 0,
+      rate: parseFloat(row.querySelector('.item-rate').value) || 0,
+      unit: $('pf_qty_unit').value,
+    })).filter((it) => it.desc),
+  })).filter((c) => c.container_no && c.items.length);
+
+  return {
+    inv_no: $('pf_inv_no').value.trim(),
+    inv_date: $('pf_inv_date').value,
+    reference: $('pf_reference').value.trim(),
+    qty_unit: $('pf_qty_unit').value,
+    consignee: $('pf_consignee').value.trim(),
+    consignee_address: $('pf_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
+    trade_terms: $('pf_trade_terms').value.trim(),
+    port_discharge: $('pf_port_discharge').value.trim(),
+    payment_term: $('pf_payment_term').value.trim(),
+    freight_label: $('pf_freight_label').value,
+    buyer_po: $('pf_buyer_po').value.trim(),
+    buyer_po_date: $('pf_buyer_po_date').value,
+    country_of_origin: $('pf_country_of_origin').value.trim(),
+    shipment_allowance: $('pf_shipment_allowance').value.trim(),
+    containers,
+  };
+}
+
+async function fetchProformaPdfBlob(payload, preview) {
+  const res = await fetch('/api/proforma/generate' + (preview ? '?preview=1' : ''), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  if (!preview) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+    return data;
+  }
+  if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || `request failed (${res.status})`); }
+  return res.blob();
+}
+
+$('btnPfPreview').addEventListener('click', async () => {
+  $('pfError').classList.add('hidden');
+  const payload = collectProformaPayload();
+  if (!payload.consignee) { $('pfError').textContent = 'Consignee is required.'; $('pfError').classList.remove('hidden'); return; }
+  try {
+    const blob = await fetchProformaPdfBlob(payload, true);
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
+});
+$('btnPfGenerate').addEventListener('click', async () => {
+  $('pfError').classList.add('hidden');
+  const payload = collectProformaPayload();
+  if (!payload.consignee) { $('pfError').textContent = 'Consignee is required.'; $('pfError').classList.remove('hidden'); return; }
+  if (!payload.containers.length) { $('pfError').textContent = 'Add at least one container with an item.'; $('pfError').classList.remove('hidden'); return; }
+  try {
+    const result = await fetchProformaPdfBlob(payload, false);
+    loadSavedProformas();
+    $('pfError').classList.add('hidden');
+    alert('Saved: ' + (result.saved_filename || 'proforma.pdf'));
+  } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
+});
+
+// ── Saved proformas list ──────────────────────────────────────────────────
+async function loadSavedProformas() {
+  const box = $('pfSavedList');
+  box.innerHTML = '<div style="padding:16px; color:var(--text-faint); font-size:12px;">Loading…</div>';
+  try {
+    const { proformas } = await api('/api/documents/saved');
+    box.innerHTML = proformas.length
+      ? `<table><thead><tr><th>File</th><th></th></tr></thead><tbody>${proformas.map((f) => `<tr><td>${esc(f)}</td><td><a href="/api/documents/download?kind=proforma&file=${encodeURIComponent(f)}" target="_blank">Open</a></td></tr>`).join('')}</tbody></table>`
+      : '<div style="padding:16px; color:var(--text-faint); font-size:12px;">No saved proformas yet.</div>';
+  } catch (e) {
+    box.innerHTML = `<div style="padding:16px; color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Pricing memory setup modal ────────────────────────────────────────────
+let pmParsedItems = [];
+$('btnPricingSetup').addEventListener('click', () => {
+  $('pmCustomer').value = $('pf_consignee').value.trim();
+  $('pmPasteText').value = '';
+  $('pmParsed').classList.add('hidden');
+  $('pmSave').classList.add('hidden');
+  $('pmError').classList.add('hidden');
+  $('pricingModalOverlay').classList.remove('hidden');
+});
+$('pmCancel').addEventListener('click', () => $('pricingModalOverlay').classList.add('hidden'));
+$('pricingModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'pricingModalOverlay') $('pricingModalOverlay').classList.add('hidden'); });
+
+$('btnPmParse').addEventListener('click', async () => {
+  $('pmError').classList.add('hidden');
+  try {
+    const parsed = await api('/api/customer-pricing/parse-paste', { method: 'POST', body: JSON.stringify({ text: $('pmPasteText').value }) });
+    $('pmTradeTerms').value = parsed.trade_terms || '';
+    $('pmPortDischarge').value = parsed.port_discharge || '';
+    pmParsedItems = parsed.items || [];
+    $('pmConfidence').innerHTML = `Confidence: <b style="color:${parsed.confidence === 'high' ? 'var(--status-success)' : parsed.confidence === 'medium' ? 'var(--status-warning)' : 'var(--status-danger)'};">${esc(parsed.confidence)}</b> — review every row below before saving; nothing here is auto-trusted.`;
+    $('pmItemsBody').innerHTML = pmParsedItems.map((it, i) => `
+      <tr>
+        <td><input data-i="${i}" data-f="desc" value="${esc(it.desc)}" style="width:100%; background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-strong); padding:4px 6px; font-size:12px;"></td>
+        <td><input data-i="${i}" data-f="rate" type="number" step="any" value="${it.rate}" style="width:90px; background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-strong); padding:4px 6px; font-size:12px;"></td>
+        <td><input data-i="${i}" data-f="unit" value="${esc(it.unit)}" style="width:60px; background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-strong); padding:4px 6px; font-size:12px;"></td>
+      </tr>`).join('');
+    $('pmItemsBody').querySelectorAll('input').forEach((inp) => inp.addEventListener('input', () => {
+      pmParsedItems[inp.dataset.i][inp.dataset.f] = inp.dataset.f === 'rate' ? parseFloat(inp.value) || 0 : inp.value;
+    }));
+    $('pmParsed').classList.remove('hidden');
+    $('pmSave').classList.remove('hidden');
+  } catch (e) { $('pmError').textContent = e.message; $('pmError').classList.remove('hidden'); }
+});
+$('pmSave').addEventListener('click', async () => {
+  $('pmError').classList.add('hidden');
+  const customer = $('pmCustomer').value.trim();
+  if (!customer) { $('pmError').textContent = 'Customer name is required.'; $('pmError').classList.remove('hidden'); return; }
+  try {
+    await api('/api/customer-pricing/save', {
+      method: 'POST',
+      body: JSON.stringify({ customer, trade_terms: $('pmTradeTerms').value, port_discharge: $('pmPortDischarge').value, items: pmParsedItems }),
+    });
+    $('pricingModalOverlay').classList.add('hidden');
+    lookupPricingMemory($('pf_consignee').value.trim());
+  } catch (e) { $('pmError').textContent = e.message; $('pmError').classList.remove('hidden'); }
+});
+
+setSubtab('proforma');
+</script>
+</body>
+</html>
