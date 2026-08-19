@@ -1149,6 +1149,69 @@ function createApi() {
     // rather than trying to reuse anything from generation time — this
     // route can be clicked any time after generation, not just right after,
     // so there's no in-memory buffer left over from that request to reuse.
+    // ── Expenses — admin only ────────────────────────────────────────────────
+    // Per Apsara 2026-08-19 ("for admin access in mobile app, i want expense
+    // tracker"). requireAdmin on every route, so staff and the regular user
+    // tier can't read or write expenses at all — this is company financial
+    // data, a genuinely different sensitivity level from yard loads.
+    // /api/expenses is deliberately NOT added to STAFF_ALLOWED_PATH_PREFIXES;
+    // that allowlist plus requireAdmin here means two independent things
+    // would both have to be wrong for a staff session to reach these.
+    // Every mutation schedules a sheet sync, same as loads.
+    app.get('/api/expenses', requireAdmin, (req, res) => {
+        try {
+            const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES } = require('./helpers/expenses');
+            const all = loadExpenses();
+            res.json({ expenses: all, report: getExpenseReport(all, {}), categories: EXPENSE_CATEGORIES });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/expenses', requireAdmin, async (req, res) => {
+        const b = req.body || {};
+        try {
+            const { addExpense } = require('./helpers/expenses');
+            const rec = await addExpense({ ...b, created_by: b.created_by || req.role || 'admin' });
+            const sheetSync = require('./helpers/sheetSync');
+            sheetSync.scheduleSync([sheetSync.monthKeyFor(rec.date)]);
+            res.json({ ok: true, expense: rec });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] create expense failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+    app.put('/api/expenses/:id', requireAdmin, async (req, res) => {
+        try {
+            const { editExpense, getExpense } = require('./helpers/expenses');
+            const existing = getExpense(req.params.id);
+            if (!existing) return res.status(404).json({ error: 'not found' });
+            const updated = await editExpense(req.params.id, req.body || {});
+            if (!updated) return res.status(404).json({ error: 'not found' });
+            // Old AND new month — an edit can move an expense across months.
+            const sheetSync = require('./helpers/sheetSync');
+            sheetSync.scheduleSync([sheetSync.monthKeyFor(existing.date), sheetSync.monthKeyFor(updated.date)]);
+            res.json({ ok: true, expense: updated });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] edit expense failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+    app.delete('/api/expenses/:id', requireAdmin, async (req, res) => {
+        try {
+            const { deleteExpense } = require('./helpers/expenses');
+            // Returns the removed record so we know which month to rebuild —
+            // after deletion there's no way to look its date up again.
+            const removed = await deleteExpense(req.params.id);
+            if (!removed) return res.status(404).json({ error: 'not found' });
+            const sheetSync = require('./helpers/sheetSync');
+            sheetSync.scheduleSync([sheetSync.monthKeyFor(removed.date)]);
+            res.json({ ok: true });
+        } catch (err) {
+            console.error('[API] delete expense failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // Save a seller signature captured on the app's signature pad, then
     // REGENERATE the PDFs so the signature actually appears on them — per
     // Apsara 2026-08-17 ("there should be an option called sign... this

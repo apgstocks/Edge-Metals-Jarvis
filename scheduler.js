@@ -892,6 +892,17 @@ async function eodYardReport() {
                     if (m.file && m.file.webViewLink) linkLines.push(`Daily loads — ${m.monthKey}: ${m.file.webViewLink}`);
                 }
             }
+            // Expense links only appear once expenses actually exist — see
+            // runSync in helpers/sheetSync.js, which skips building them
+            // entirely for a yard that doesn't use the tracker.
+            if (sheetLinks && sheetLinks.expenseSheet && sheetLinks.expenseSheet.webViewLink) {
+                linkLines.push(`Expenses (live Google Sheet): ${sheetLinks.expenseSheet.webViewLink}`);
+            }
+            if (sheetLinks && sheetLinks.expenseMonths) {
+                for (const m of sheetLinks.expenseMonths) {
+                    if (m.file && m.file.webViewLink) linkLines.push(`Daily expenses — ${m.monthKey}: ${m.file.webViewLink}`);
+                }
+            }
             const pdfLines = [];
             for (const l of withPdfs) {
                 if (l.pdf_link) pdfLines.push(`  ${l.id}: ${l.pdf_link}`);

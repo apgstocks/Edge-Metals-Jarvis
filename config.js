@@ -100,6 +100,14 @@ const FILES = {
     // special-casing around it everywhere, for zero benefit over a
     // deliberately separate, much simpler store.
     OUTBOUND_LOADS_FILE: path.join(DATA_DIR, 'outbound_loads.json'),
+    // Yard expenses — per Apsara 2026-08-19 ("for admin access in mobile
+    // app, i want expense tracker"). Its own flat store for the same reason
+    // OUTBOUND_LOADS_FILE is separate from LOADS_FILE: an expense shares
+    // almost nothing with a load (no items, no weights, no scale photos, no
+    // PDF/Drive pipeline, no buyer/seller mapping), so bolting a `type`
+    // flag onto loads.json would mean special-casing every existing
+    // consumer — getInventoryReport, the PDFs, the workbooks — for no gain.
+    EXPENSES_FILE: path.join(DATA_DIR, 'expenses.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads

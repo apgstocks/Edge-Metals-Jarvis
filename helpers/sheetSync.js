@@ -71,21 +71,42 @@ function monthsToSync(extraMonths = []) {
 
 async function runSync(months) {
     const { loadLoads } = require('./loads');
-    const { monthlyLoadsWorkbookBuffer, inventoryWorkbookBuffer } = require('./inventoryExcel');
+    const { loadExpenses } = require('./expenses');
+    const {
+        monthlyLoadsWorkbookBuffer, inventoryWorkbookBuffer,
+        monthlyExpensesWorkbookBuffer, expensesOverallWorkbookBuffer,
+    } = require('./inventoryExcel');
     const { upsertReportFile } = require('./drive');
 
     const allLoads = loadLoads();
-    const results = { sheet: null, months: [] };
+    const allExpenses = loadExpenses();
+    const results = { sheet: null, months: [], expenseSheet: null, expenseMonths: [] };
 
     // 1. Overall inventory, as a native Google Sheet.
     const overallBuf = await inventoryWorkbookBuffer(allLoads);
     results.sheet = await upsertReportFile('Inventory-Overall', Buffer.from(overallBuf), { asGoogleSheet: true });
 
-    // 2. One workbook per affected month.
+    // 2. One loads workbook per affected month.
     for (const monthKey of months) {
         const buf = await monthlyLoadsWorkbookBuffer(allLoads, monthKey);
         const file = await upsertReportFile(`Loads-${monthKey}.xlsx`, Buffer.from(buf));
         results.months.push({ monthKey, file });
+    }
+
+    // 3+4. The same pair for expenses (Apsara 2026-08-19). Skipped entirely
+    // when no expense has ever been recorded, so a yard that doesn't use the
+    // tracker doesn't accumulate empty files in its Drive folder — but once
+    // the first expense exists these are maintained on every sync, including
+    // after the last one is deleted (so a delete is correctly reflected
+    // rather than freezing the sheet at its last non-empty state).
+    if (allExpenses.length) {
+        const expOverall = await expensesOverallWorkbookBuffer(allExpenses);
+        results.expenseSheet = await upsertReportFile('Expenses-Overall', Buffer.from(expOverall), { asGoogleSheet: true });
+        for (const monthKey of months) {
+            const buf = await monthlyExpensesWorkbookBuffer(allExpenses, monthKey);
+            const file = await upsertReportFile(`Expenses-${monthKey}.xlsx`, Buffer.from(buf));
+            results.expenseMonths.push({ monthKey, file });
+        }
     }
     return results;
 }

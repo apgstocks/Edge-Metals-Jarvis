@@ -261,6 +261,144 @@ async function monthlyLoadsWorkbookBuffer(allLoads, monthKey) {
   return wb.xlsx.writeBuffer();
 }
 
+// ── Expense workbooks ───────────────────────────────────────────────────────
+// Per Apsara 2026-08-19 ("i want expense tracker... a new google sheet should
+// be created for this, similarly per day basis - i want new sheet with tabs
+// as 31/30 days as per month"). Same two shapes as the loads side above, so
+// the two live side by side in Drive and behave identically:
+//   - buildExpensesOverallWorkbook  -> uploaded as the "Expenses-Overall" Google Sheet
+//   - buildMonthlyExpensesWorkbook  -> "Expenses-<YYYY-MM>.xlsx", one tab per day
+const EXPENSE_COLUMNS = [
+  { header: 'Expense #',  width: 14 },
+  { header: 'Category',   width: 22 },
+  { header: 'Description', width: 34 },
+  { header: 'Vendor',     width: 22 },
+  { header: 'Paid by',    width: 16 },
+  { header: 'Amount',     width: 14 },
+];
+
+function writeExpenseDaySheet(sheet, date, expensesForDay) {
+  sheet.columns = EXPENSE_COLUMNS.map(c => ({ width: c.width }));
+
+  const title = sheet.getCell('A1');
+  title.value = `${date} — ${expensesForDay.length} expense${expensesForDay.length === 1 ? '' : 's'}`;
+  title.font = { bold: true, size: 12 };
+  sheet.mergeCells(1, 1, 1, EXPENSE_COLUMNS.length);
+
+  const headerRow = sheet.getRow(3);
+  EXPENSE_COLUMNS.forEach((c, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = c.header;
+    cell.fill = HEADER_FILL;
+    cell.font = HEADER_FONT;
+  });
+  headerRow.commit();
+
+  let r = 4;
+  let total = 0;
+  for (const e of expensesForDay) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = e.id || '';
+    row.getCell(2).value = e.category || '';
+    row.getCell(3).value = e.description || '';
+    row.getCell(4).value = e.vendor || '';
+    row.getCell(5).value = e.payment_method || '';
+    row.getCell(6).value = e.amount ?? null;
+    row.getCell(6).numFmt = '"$"#,##0.00';
+    row.commit();
+    total += e.amount || 0;
+    r += 1;
+  }
+
+  const totals = sheet.getRow(r);
+  totals.getCell(1).value = 'TOTAL';
+  totals.getCell(6).value = round2(total);
+  totals.getCell(6).numFmt = '"$"#,##0.00';
+  totals.font = { bold: true };
+  totals.commit();
+}
+
+function buildMonthlyExpensesWorkbook(allExpenses, monthKey) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jarvis — Edge Yard';
+  wb.created = new Date();
+
+  const inMonth = (allExpenses || []).filter(e => e.date && String(e.date).startsWith(monthKey));
+  const byDate = new Map();
+  for (const e of inMonth) {
+    if (!byDate.has(e.date)) byDate.set(e.date, []);
+    byDate.get(e.date).push(e);
+  }
+  const dates = Array.from(byDate.keys()).sort();
+
+  if (!dates.length) {
+    const empty = wb.addWorksheet(safeSheetName(monthKey));
+    empty.getCell('A1').value = `No expenses recorded for ${monthKey} yet.`;
+    empty.getCell('A1').font = { bold: true };
+    return wb;
+  }
+  for (const date of dates) {
+    const dayLabel = String(date).slice(8, 10) || date;
+    writeExpenseDaySheet(wb.addWorksheet(safeSheetName(dayLabel)), date, byDate.get(date));
+  }
+  return wb;
+}
+
+function buildExpensesOverallWorkbook(allExpenses) {
+  const { getExpenseReport } = require('./expenses');
+  const report = getExpenseReport(allExpenses, {});
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jarvis — Edge Yard';
+  wb.created = new Date();
+
+  const sheet = wb.addWorksheet('Overall');
+  sheet.columns = [{ width: 26 }, { width: 14 }, { width: 16 }, { width: 16 }];
+
+  sheet.getCell('A1').value = `All-time — ${report.count} expense${report.count === 1 ? '' : 's'}, total $${report.total}`;
+  sheet.getCell('A1').font = { bold: true, size: 12 };
+
+  let r = 3;
+  ['Category', 'Count', 'Amount ($)'].forEach((h, i) => {
+    const cell = sheet.getRow(r).getCell(i + 1);
+    cell.value = h; cell.fill = HEADER_FILL; cell.font = HEADER_FONT;
+  });
+  r += 1;
+  for (const c of report.byCategory) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = c.category;
+    row.getCell(2).value = c.count;
+    row.getCell(3).value = c.amount;
+    row.getCell(3).numFmt = '"$"#,##0.00';
+    r += 1;
+  }
+
+  r += 1;
+  sheet.getCell(`A${r}`).value = 'Daily totals — all-time';
+  sheet.getCell(`A${r}`).font = { bold: true, size: 12 };
+  r += 1;
+  ['Date', 'Expenses', 'Amount ($)'].forEach((h, i) => {
+    const cell = sheet.getRow(r).getCell(i + 1);
+    cell.value = h; cell.fill = HEADER_FILL; cell.font = HEADER_FONT;
+  });
+  r += 1;
+  for (const d of report.byDay) {
+    const row = sheet.getRow(r);
+    row.getCell(1).value = d.date;
+    row.getCell(2).value = d.count;
+    row.getCell(3).value = d.amount;
+    row.getCell(3).numFmt = '"$"#,##0.00';
+    r += 1;
+  }
+  return wb;
+}
+
+async function monthlyExpensesWorkbookBuffer(allExpenses, monthKey) {
+  return buildMonthlyExpensesWorkbook(allExpenses, monthKey).xlsx.writeBuffer();
+}
+async function expensesOverallWorkbookBuffer(allExpenses) {
+  return buildExpensesOverallWorkbook(allExpenses).xlsx.writeBuffer();
+}
+
 // ── On-demand export — dashboard/mobile Inventory tab's "⋮" export menu ────
 // Per Apsara 2026-08-15: "there should be an export option on the top with
 // three dotted emoji. when i click that export as excel/pdf." Distinct from
@@ -290,4 +428,4 @@ async function filteredInventoryWorkbookBuffer(report, rangeLabel) {
   return wb.xlsx.writeBuffer();
 }
 
-module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer, buildFilteredInventoryWorkbook, filteredInventoryWorkbookBuffer, buildMonthlyLoadsWorkbook, monthlyLoadsWorkbookBuffer };
+module.exports = { buildInventoryWorkbook, inventoryWorkbookBuffer, buildFilteredInventoryWorkbook, filteredInventoryWorkbookBuffer, buildMonthlyLoadsWorkbook, monthlyLoadsWorkbookBuffer, buildMonthlyExpensesWorkbook, monthlyExpensesWorkbookBuffer, buildExpensesOverallWorkbook, expensesOverallWorkbookBuffer };

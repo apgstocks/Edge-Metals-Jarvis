@@ -438,6 +438,35 @@ body { overflow-y:auto; }
      ROLE==='admin', so this couldn't be wired up for staff even if it
      were added here; no yard-report toggle — that's genuinely admin
      business. -->
+<!-- Expense entry modal — admin only, per Apsara 2026-08-19. Shown/hidden by
+     openExpenseModal/closeExpenseModal; every field maps 1:1 onto the
+     expense record in helpers/expenses.js. -->
+<div id="expenseModal" class="hidden modal-overlay" style="align-items:center;">
+  <div class="modal-shell" style="max-width:480px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div id="expTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add expense</div>
+      <button id="expClose" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="ld-grid-2">
+        <div class="field"><label>Date</label><input id="exp_date" type="date"></div>
+        <div class="field"><label>Amount ($)</label><input id="exp_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Category</label><select id="exp_category"></select></div>
+      <div class="field" style="margin-top:14px;"><label>Description</label><input id="exp_description" placeholder="e.g. Diesel for the loader"></div>
+      <div class="ld-grid-2" style="margin-top:14px;">
+        <div class="field"><label>Vendor (optional)</label><input id="exp_vendor" placeholder="e.g. Shell"></div>
+        <div class="field"><label>Paid by (optional)</label><input id="exp_payment" placeholder="e.g. Card, Cash"></div>
+      </div>
+      <div id="expErr" style="margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="expSave" class="btn btn-primary">Save expense</button>
+    </div>
+  </div>
+</div>
+
 <!-- Signature pad — per Apsara 2026-08-17 ("post pdf generation, there
      should be an option called sign. it should open a whiteboard where it
      allows the user to sign. this should get reflected in yard invoice
@@ -2185,7 +2214,7 @@ function showLoginScreen(err) {
   // unauthorized") while the real message ("Session expired — sign in
   // again") is hidden behind it. Reported by Apsara 2026-08-17 against the
   // signature pad; the same trap applied to every other overlay here.
-  ['loadModal', 'adminSettingsModal', 'staffSettingsModal', 'signOverlay'].forEach(id => {
+  ['loadModal', 'adminSettingsModal', 'staffSettingsModal', 'signOverlay', 'expenseModal'].forEach(id => {
     const el = $(id);
     if (el) { el.classList.add('hidden'); el.style.display = ''; }
   });
@@ -2229,10 +2258,16 @@ async function doLogin() {
 // fetch, and it's never called for 'inventory' until that tap happens).
 let currentMobileTab = 'loads';
 function renderMobileTabs() {
-  $('mobileTabBar').innerHTML = `
-    <button class="mobile-tab-btn" data-tab="loads" style="padding:7px 16px; border-radius:7px; border:none; font-size:12.5px; font-weight:600; cursor:pointer; background:${currentMobileTab === 'loads' ? 'var(--accent)' : 'transparent'}; color:${currentMobileTab === 'loads' ? '#0C0E10' : 'var(--text-faint)'};">Loads</button>
-    <button class="mobile-tab-btn" data-tab="inventory" style="padding:7px 16px; border-radius:7px; border:none; font-size:12.5px; font-weight:600; cursor:pointer; background:${currentMobileTab === 'inventory' ? 'var(--accent)' : 'transparent'}; color:${currentMobileTab === 'inventory' ? '#0C0E10' : 'var(--text-faint)'};">Inventory</button>
-  `;
+  const tabBtn = (tab, label) => `<button class="mobile-tab-btn" data-tab="${tab}" style="padding:7px 16px; border-radius:7px; border:none; font-size:12.5px; font-weight:600; cursor:pointer; background:${currentMobileTab === tab ? 'var(--accent)' : 'transparent'}; color:${currentMobileTab === tab ? '#0C0E10' : 'var(--text-faint)'};">${label}</button>`;
+  // Expenses is ADMIN ONLY, per Apsara 2026-08-19 ("for admin access in
+  // mobile app, i want expense tracker"). Hiding the tab is only the UX
+  // half — every /api/expenses route is requireAdmin-gated server-side, so
+  // a non-admin session gets a 403 even if it reaches them another way.
+  $('mobileTabBar').innerHTML = [
+    tabBtn('loads', 'Loads'),
+    tabBtn('inventory', 'Inventory'),
+    ...(ROLE === 'admin' ? [tabBtn('expenses', 'Expenses')] : []),
+  ].join('');
   $('mobileTabBar').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     if (b.dataset.tab === currentMobileTab) return;
     currentMobileTab = b.dataset.tab;
@@ -2241,10 +2276,152 @@ function renderMobileTabs() {
   }));
 }
 
+// ── Expenses tab (admin only) ────────────────────────────────────────────
+// Per Apsara 2026-08-19. Entries here feed the same live-sync machinery the
+// loads use (helpers/sheetSync.js), so every add/edit/delete updates the
+// "Expenses-Overall" Google Sheet and the current month's per-day workbook
+// within seconds — no separate "publish" step.
+let expenseCategories = [];
+let editingExpenseId = null;
+
+function todayLocalDateStrForExpense() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function renderExpensesTab() {
+  const data = await api('/api/expenses');
+  expenseCategories = data.categories || [];
+  const expenses = data.expenses || [];
+  const report = data.report || { total: 0, count: 0, byCategory: [], byDay: [] };
+  const today = todayLocalDateStrForExpense();
+  const todayTotal = (report.byDay.find(d => d.date === today) || {}).amount || 0;
+
+  // Grouped by date, newest first — mirrors how the Loads deck groups by
+  // day, so both tabs read the same way.
+  const byDate = new Map();
+  for (const e of expenses) {
+    const k = e.date || 'No date';
+    if (!byDate.has(k)) byDate.set(k, []);
+    byDate.get(k).push(e);
+  }
+  const dates = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : -1));
+
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">// Expenses</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Expense tracker</h2>
+          <div style="font-size:13px; color:var(--text-muted);">Admin only. Syncs to the Expenses Google Sheet automatically.</div>
+        </div>
+        <button id="btnAddExpense" class="btn btn-primary">+ Add expense</button>
+      </div>
+      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:24px; flex-wrap:wrap;">
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Today</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">$${esc(todayTotal)}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">All-time</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">$${esc(report.total)}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(report.count)}</div></div>
+      </div>
+      ${dates.length ? dates.map(date => {
+        const rows = byDate.get(date);
+        const dayTotal = rows.reduce((s, e) => s + (e.amount || 0), 0);
+        return `
+        <div style="margin-bottom:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+            <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(date)}</div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:var(--text-strong); font-weight:700;">$${esc(Math.round(dayTotal * 100) / 100)}</div>
+          </div>
+          ${rows.map(e => `
+            <div class="card" style="padding:12px 14px; margin-bottom:8px;">
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <div style="min-width:0;">
+                  <div style="font-size:13.5px; font-weight:700; color:var(--text-strong);">${esc(e.description || '')}</div>
+                  <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:3px;">${esc(e.id)} · ${esc(e.category || 'Other')}${e.vendor ? ' · ' + esc(e.vendor) : ''}${e.payment_method ? ' · ' + esc(e.payment_method) : ''}</div>
+                </div>
+                <div style="font-size:15px; font-weight:800; color:var(--text-strong); white-space:nowrap;">$${esc(e.amount)}</div>
+              </div>
+              <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:9px;">
+                <button class="btn btn-edit-expense" data-id="${esc(e.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+                <button class="btn btn-danger btn-delete-expense" data-id="${esc(e.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+              </div>
+            </div>`).join('')}
+        </div>`;
+      }).join('') : '<div style="padding:50px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12.5px;">No expenses recorded yet.</div>'}
+    </section>`;
+
+  $('btnAddExpense').addEventListener('click', () => openExpenseModal(null));
+  document.querySelectorAll('.btn-edit-expense').forEach(b => b.addEventListener('click', () => {
+    openExpenseModal(expenses.find(x => x.id === b.dataset.id) || null);
+  }));
+  document.querySelectorAll('.btn-delete-expense').forEach(b => b.addEventListener('click', async () => {
+    if (!await askYesNo(`Delete expense ${b.dataset.id}?`)) return;
+    b.disabled = true; b.textContent = 'Deleting…';
+    try { await api(`/api/expenses/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' }); await renderExpensesTab(); }
+    catch (err) { alert('Delete failed: ' + err.message); b.disabled = false; b.textContent = 'Delete'; }
+  }));
+}
+
+function openExpenseModal(expense) {
+  editingExpenseId = expense ? expense.id : null;
+  $('expTitle').textContent = expense ? `Edit ${expense.id}` : 'Add expense';
+  $('exp_date').value = expense ? (expense.date || '') : todayLocalDateStrForExpense();
+  $('exp_category').innerHTML = expenseCategories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  if (expense && expense.category) {
+    // A category typed before this list existed (or edited on the sheet)
+    // must not silently switch to something else just because it isn't in
+    // the current picker — add it as an option so the value round-trips.
+    if (!expenseCategories.includes(expense.category)) {
+      $('exp_category').insertAdjacentHTML('afterbegin', `<option value="${esc(expense.category)}">${esc(expense.category)}</option>`);
+    }
+    $('exp_category').value = expense.category;
+  }
+  $('exp_description').value = expense ? (expense.description || '') : '';
+  $('exp_vendor').value = expense ? (expense.vendor || '') : '';
+  $('exp_payment').value = expense ? (expense.payment_method || '') : '';
+  $('exp_amount').value = expense ? (expense.amount ?? '') : '';
+  $('expErr').textContent = '';
+  $('expenseModal').classList.remove('hidden');
+  $('expenseModal').style.display = 'flex';
+}
+function closeExpenseModal() {
+  $('expenseModal').classList.add('hidden');
+  $('expenseModal').style.display = '';
+  editingExpenseId = null;
+}
+function wireExpenseModal() {
+  $('expClose').addEventListener('click', closeExpenseModal);
+  $('expSave').addEventListener('click', async () => {
+    const payload = {
+      date: $('exp_date').value,
+      category: $('exp_category').value,
+      description: $('exp_description').value.trim(),
+      vendor: $('exp_vendor').value.trim() || null,
+      payment_method: $('exp_payment').value.trim() || null,
+      amount: $('exp_amount').value,
+    };
+    const btn = $('expSave');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    $('expErr').textContent = '';
+    try {
+      if (editingExpenseId) await api(`/api/expenses/${encodeURIComponent(editingExpenseId)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      else await api('/api/expenses', { method: 'POST', body: JSON.stringify(payload) });
+      closeExpenseModal();
+      await renderExpensesTab();
+    } catch (err) {
+      // Server validation messages are prefixed "Validation:" — strip it,
+      // the user doesn't need our internal label.
+      $('expErr').textContent = String(err.message || '').replace(/^Validation:\s*/, '');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save expense';
+    }
+  });
+}
+
 async function renderCurrentMobileTab() {
   try {
     if (currentMobileTab === 'loads') { renderLoads(await api('/api/loads')); return; }
     if (currentMobileTab === 'inventory') { await renderInventoryTab(); return; }
+    if (currentMobileTab === 'expenses') { await renderExpensesTab(); return; }
   } catch (err) {
     // api() already routes a 401 to the login screen; anything else
     // (network error, 500, etc.) surfaces here instead of a blank screen.
@@ -2398,6 +2575,7 @@ function loadTab(tab) {
 $('scanShutter').addEventListener('click', doScanCapture);
 $('scanCancel').addEventListener('click', closeScanner);
 wireSignPad();
+wireExpenseModal();
 
 $('btnLogin').addEventListener('click', doLogin);
 $('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
