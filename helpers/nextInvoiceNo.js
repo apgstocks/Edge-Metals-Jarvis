@@ -20,11 +20,14 @@
 // drift for the same real customer (e.g. "MK Trading" vs "MK Metal
 // Trading"), and loose matching catches both under one running sequence.
 //
-// New suggestions use the CURRENT 2-digit year as the prefix (e.g. "26"
-// as of 2026) per Apsara's explicit choice, even though every row in the
-// sheet today is still "25" — this only changes the YEAR PREFIX text, not
-// the running number itself, which keeps incrementing from whatever the
-// highest matched number was regardless of which year it was logged under.
+// Numbering RESTARTS every calendar year, per real data: the "25JY" series
+// ran up to 106 while "26JY" is running its OWN parallel sequence (01, 02,
+// ... 94+) that never continued from 106 — confirmed directly against the
+// live sheet on 2026-08-19. So the next number for a consignee/agent is
+// derived from the HIGHEST NUMBER SEEN THIS YEAR ONLY, never mixed with an
+// older year's tail. If a consignee/agent has no rows yet under the current
+// year, this falls back to the most recent year that DOES have rows (still
+// not mixing two different years together) rather than guessing a restart.
 
 const cfg = require('../config');
 
@@ -150,26 +153,48 @@ async function suggestNextInvNo(consigneeQuery) {
     const rows = await fetchInvoiceSheetRows();
     const matches = rows.filter((r) => matchesConsignee(r.consignee, query));
 
-    let best = null; // the parsed token with the highest running number among matches
-    for (const r of matches) {
-        const parsed = parseInvNoToken(r.invNo);
-        if (!parsed) continue;
-        if (!best || parsed.number > best.number) best = parsed;
-    }
-    if (!best) return null;
-
     const today = new Date();
     const yy = String(today.getFullYear()).slice(-2);
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const dateStr = `${yy}${mm}${dd}`;
 
+    // Numbering restarts per calendar year — confirmed against real sheet
+    // data: "25JY" ran up to 106 while "26JY" is its OWN sequence already
+    // running 01..94+ in parallel, not a continuation of 25's count. So the
+    // highest number must come from THIS YEAR's rows only, not the highest
+    // number seen across all years (which would wrongly jump onto last
+    // year's tail, e.g. suggesting 26JY107 when this year is only at 94).
+    let best = null; // highest-numbered THIS-YEAR row among matches
+    let bestAnyYear = null; // fallback: highest-numbered row from any year
+    for (const r of matches) {
+        const parsed = parseInvNoToken(r.invNo);
+        if (!parsed) continue;
+        if (!bestAnyYear || parsed.number > bestAnyYear.number) bestAnyYear = parsed;
+        if (parsed.yearPrefix === yy && (!best || parsed.number > best.number)) best = parsed;
+    }
+    // If this consignee/agent has no rows yet under the current year's
+    // prefix (brand-new year, first invoice), fall back to the newest
+    // year we do have on record instead of guessing a fresh restart at 1 —
+    // but only among rows FROM THAT SAME YEAR, so we still never mix two
+    // different years' counters together.
+    if (!best && bestAnyYear) {
+        const fallbackYear = bestAnyYear.yearPrefix;
+        for (const r of matches) {
+            const parsed = parseInvNoToken(r.invNo);
+            if (!parsed || parsed.yearPrefix !== fallbackYear) continue;
+            if (!best || parsed.number > best.number) best = parsed;
+        }
+    }
+    if (!best) return null;
+    const usePrefix = best.yearPrefix === yy ? yy : best.yearPrefix;
+
     const nextNumber = best.number + 1;
     const numberStr = best.numberHadLeadingZero
         ? String(nextNumber).padStart(best.numberDigits, '0')
         : String(nextNumber);
 
-    const codeOnly = `${yy}${best.code}${numberStr}`;
+    const codeOnly = `${usePrefix}${best.code}${numberStr}`;
     return {
         inv_no: `${dateStr} ${codeOnly}`,
         code_only: codeOnly,
@@ -184,7 +209,7 @@ async function suggestNextInvNo(consigneeQuery) {
         // separate rows on the same date) — so each container block in a
         // proforma with more than one container should get the next number
         // up, not all of them repeating the same one.
-        year_prefix: yy,
+        year_prefix: usePrefix,
         next_number: nextNumber,
         number_digits: best.numberDigits,
         number_had_leading_zero: best.numberHadLeadingZero,

@@ -76,6 +76,12 @@ tr:last-child td { border-bottom:none; }
 .field { margin-bottom:12px; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .grid4 { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; }
+/* Some grid4 fields (e.g. Invoice No) can show a "suggested" chip inside the
+   label, which wraps that one label to 2 lines while its siblings stay at 1 —
+   pushing that field's input down out of alignment with the rest of the row.
+   Reserving a fixed 2-line label height for every field in a grid4 row keeps
+   all inputs on the same baseline whether or not a chip is showing. */
+.grid4 .field label { min-height:28px; display:flex; align-items:flex-start; flex-wrap:wrap; }
 .section-label { font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px; }
 .pricing-chip { display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--leaf-400); margin-left:8px; }
 .autocomplete-box { position:relative; }
