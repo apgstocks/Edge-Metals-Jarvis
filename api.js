@@ -587,11 +587,17 @@ function createApi() {
     // New Load form BEFORE a load exists yet, so it can't be scoped to a
     // load id. largeJson (10mb) because base64 photos inflate ~33% over binary.
     app.post('/api/vision/read-weight', largeJson, async (req, res) => {
-        const { image_base64, mime_type } = req.body || {};
+        const { image_base64, mime_type, pre_cropped } = req.body || {};
         if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
         try {
+            // pre_cropped: sent by the mobile app's guided scanner (2026-08-17)
+            // when the user has already framed the display inside the on-screen
+            // box, so the uploaded image IS the display. Lets the pipeline skip
+            // its locate stage — see extractWeightFromImage's own comment. An
+            // older client that doesn't send this field is simply undefined
+            // here and gets the unchanged full-locate behavior.
             const { extractWeightFromImage } = require('./helpers/gemini');
-            const result = await extractWeightFromImage(image_base64, mime_type);
+            const result = await extractWeightFromImage(image_base64, mime_type, undefined, { preCropped: !!pre_cropped });
             res.json({ ok: true, ...result });
         } catch (err) {
             console.error('[API] read-weight failed:', err.message);
@@ -1093,6 +1099,43 @@ function createApi() {
     // rather than trying to reuse anything from generation time — this
     // route can be clicked any time after generation, not just right after,
     // so there's no in-memory buffer left over from that request to reuse.
+    // Save a seller signature captured on the app's signature pad, then
+    // REGENERATE the PDFs so the signature actually appears on them — per
+    // Apsara 2026-08-17 ("there should be an option called sign... this
+    // should get reflected in yard invoice above Seller signature").
+    // Regenerating here rather than making the client do a second call is
+    // deliberate: a signature that's saved but not yet on the document is a
+    // confusing halfway state, and the whole point is the printed/sent
+    // ticket carrying it.
+    app.post('/api/loads/:id/signature', largeJson, async (req, res) => {
+        try {
+            const { getLoad, updateLoad } = require('./helpers/loads');
+            const load = getLoad(req.params.id);
+            if (!load) return res.status(404).json({ error: 'not found' });
+            const sig = String((req.body && req.body.signature) || '');
+            // Accept only a PNG data URL — this value gets handed straight to
+            // pdfkit's doc.image(), so validating the shape here keeps a
+            // malformed/oversized body from becoming a PDF-generation crash
+            // further down. Size cap is generous for a signature-pad PNG
+            // (they run ~10-40KB) while refusing anything pathological.
+            if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sig)) {
+                return res.status(400).json({ error: 'signature must be a PNG data URL' });
+            }
+            if (sig.length > 2 * 1024 * 1024) {
+                return res.status(400).json({ error: 'signature image is too large' });
+            }
+            await updateLoad(req.params.id, { seller_signature: sig, seller_signed_at: new Date().toISOString() });
+
+            // Re-read so the regeneration sees the signature we just stored.
+            const signed = getLoad(req.params.id);
+            const { generateAndStoreLoadPdfs } = require('./helpers/loadsPdf');
+            const updated = await generateAndStoreLoadPdfs(signed, { includeSummary: req.body.includeSummary !== false });
+            res.json({ ok: true, load: updated });
+        } catch (err) {
+            console.error('[API] save signature failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
     app.post('/api/loads/:id/send-to-seller', async (req, res) => {
         try {
             const { getLoad } = require('./helpers/loads');

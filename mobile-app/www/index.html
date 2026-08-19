@@ -108,6 +108,32 @@ input::placeholder { color:var(--steel-500); }
 .chip { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:8px 14px; border-radius:20px; border:1px solid var(--border-default); background:var(--surface-card); color:var(--text-muted); cursor:pointer; }
 .chip.active { background:var(--leaf-500); color:#fff; border-color:var(--leaf-500); }
 .modal-overlay { position:fixed; inset:0; background:rgba(12,14,16,.62); backdrop-filter:blur(3px); z-index:50; align-items:flex-start; justify-content:center; padding:44px 24px; overflow-y:auto; }
+
+/* ── Guided scale-display scanner — per Apsara 2026-08-17 ("i don't want any
+   normal camera settings, i want the camera to capture the digital scale
+   weights. to avoid noise, i can have bounding box in camera and ask the
+   user to capture the image within that box"). Full-screen live camera with
+   a fixed alignment box; only the pixels INSIDE that box are ever sent for
+   OCR. z-index above .modal-overlay (50) since it opens from inside the
+   load modal and must sit on top of it. */
+#scanOverlay { position:fixed; inset:0; z-index:200; background:#000; display:none; flex-direction:column; }
+#scanOverlay.open { display:flex; }
+#scanVideoWrap { position:relative; flex:1; overflow:hidden; }
+#scanVideo { width:100%; height:100%; object-fit:cover; display:block; }
+/* The four dimmed panels around the cutout — a single box-shadow spread
+   would also work, but four explicit panels keep the cutout edges crisp on
+   WebViews that render huge shadow spreads badly. */
+.scan-shade { position:absolute; background:rgba(0,0,0,.58); pointer-events:none; }
+#scanBox { position:absolute; border:2px solid var(--leaf-400); border-radius:4px; box-shadow:0 0 0 1px rgba(0,0,0,.5); pointer-events:none; }
+#scanBox::before, #scanBox::after {
+  content:''; position:absolute; width:22px; height:22px; border:3px solid var(--leaf-300);
+}
+#scanBox::before { top:-2px; left:-2px; border-right:none; border-bottom:none; border-radius:4px 0 0 0; }
+#scanBox::after { bottom:-2px; right:-2px; border-left:none; border-top:none; border-radius:0 0 4px 0; }
+#scanHint { position:absolute; left:0; right:0; text-align:center; color:#fff; font-family:var(--font-sans); font-size:13px; line-height:1.45; text-shadow:0 1px 4px rgba(0,0,0,.9); padding:0 24px; pointer-events:none; }
+#scanFoot { padding:16px 20px calc(16px + env(safe-area-inset-bottom, 0px)); background:#0C0E10; display:flex; align-items:center; gap:12px; }
+#scanShutter { flex:1; padding:15px; font-size:14px; font-weight:700; }
+#scanErr { color:var(--status-danger); font-family:var(--font-mono); font-size:11.5px; padding:0 20px 10px; text-align:center; }
 .modal-shell { background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:760px; box-shadow:var(--shadow-lg); overflow:hidden; }
 .modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
 .modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
@@ -412,6 +438,57 @@ body { overflow-y:auto; }
      ROLE==='admin', so this couldn't be wired up for staff even if it
      were added here; no yard-report toggle — that's genuinely admin
      business. -->
+<!-- Signature pad — per Apsara 2026-08-17 ("post pdf generation, there
+     should be an option called sign. it should open a whiteboard where it
+     allows the user to sign. this should get reflected in yard invoice
+     above Seller signature"). Plain <canvas> + pointer events; no
+     signature library pulled in for what is fundamentally "draw the lines
+     the finger traced". Sized in JS on open (see openSignPad) because a
+     canvas' backing store has to be set in real pixels, not CSS. -->
+<div id="signOverlay" class="hidden modal-overlay" style="align-items:center;">
+  <div class="modal-shell" style="max-width:560px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div id="signTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Seller signature</div>
+      <button id="signClose" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">Ask the seller to sign in the box below. This is added to the load ticket and the printed receipt above the "Seller signature" line.</div>
+      <div id="signPadWrap" style="background:#fff; border:1px solid var(--border-default); border-radius:var(--radius-sm); touch-action:none; overflow:hidden;">
+        <canvas id="signPad" style="display:block; width:100%; height:200px; touch-action:none; cursor:crosshair;"></canvas>
+      </div>
+      <div id="signErr" style="margin-top:8px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="signClear" class="btn">Clear</button>
+      <button id="signSave" class="btn btn-primary">Save signature</button>
+    </div>
+  </div>
+</div>
+
+<!-- Guided scale-display scanner — per Apsara 2026-08-17. Live rear camera
+     with a fixed alignment box; the capture is CROPPED to that box before
+     anything is uploaded, so the OCR pipeline receives only the display and
+     never the surrounding yard (the "noise" this is meant to remove).
+     Top-level markup, not inside the Loads view template, because it's a
+     full-screen overlay that opens on top of the load modal. -->
+<div id="scanOverlay">
+  <div id="scanVideoWrap">
+    <video id="scanVideo" playsinline autoplay muted></video>
+    <div class="scan-shade" id="scanShadeTop"></div>
+    <div class="scan-shade" id="scanShadeBottom"></div>
+    <div class="scan-shade" id="scanShadeLeft"></div>
+    <div class="scan-shade" id="scanShadeRight"></div>
+    <div id="scanBox"></div>
+    <div id="scanHint">Fit the scale's display inside the box.<br>Fill the box as much as you can, and keep the whole number visible.</div>
+  </div>
+  <div id="scanErr"></div>
+  <div id="scanFoot">
+    <button id="scanCancel" class="btn" style="padding:15px 18px;">Cancel</button>
+    <button id="scanShutter" class="btn btn-primary">Capture weight</button>
+  </div>
+</div>
+
 <div id="staffSettingsModal" class="hidden modal-overlay">
   <div class="modal-shell" style="max-width:420px;">
     <div class="modal-stripe"></div>
@@ -700,7 +777,17 @@ function renderItemRows() {
     row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
       const role = btn.dataset.role; // 'gross' | 'tare'
       showCaptureMenu(btn, {
-        onCamera: () => hasNativeCamera() ? captureViaNativeCamera(row, role) : row.querySelector(`.ld-item-${role}-file-camera`).click(),
+        // "Scan weight" is the primary path as of 2026-08-17 (Apsara: no
+        // normal camera, a bounding box the user aligns the display in).
+        // Falls back to the previous native-camera path if this device or
+        // WebView won't hand over a live camera stream — better than a
+        // dead button on a device that can't do getUserMedia.
+        onCamera: async () => {
+          const opened = await openScanner(row, role);
+          if (opened) return;
+          if (hasNativeCamera()) return captureViaNativeCamera(row, role);
+          row.querySelector(`.ld-item-${role}-file-camera`).click();
+        },
         onFiles : () => row.querySelector(`.ld-item-${role}-file-files`).click(),
       });
     }));
@@ -772,7 +859,11 @@ function syncItemsFromDom() {
 // field, remembers the photo (per item now, not per load) so it gets
 // archived to Drive on save. `row` is the specific item-row DOM element the
 // photo button lives in — everything is scoped to that one row's fields.
-async function processWeightImage(row, roleKey, base64, mime, statusEl) {
+// opts.preCropped — set by the guided scanner (see openScanner), which has
+// already cropped the frame down to just the display. Passed through to the
+// backend so it can skip its own locate stage entirely instead of
+// re-searching an image that's already nothing but the display.
+async function processWeightImage(row, roleKey, base64, mime, statusEl, opts = {}) {
   const idx = parseInt(row.dataset.idx, 10);
 
   // Added 2026-08-11: capture-time quality gate, run BEFORE the photo is
@@ -788,6 +879,15 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
   // no Gemini call — see checkPhotoQuality's own validation notes in
   // helpers/gemini.js) and fails OPEN on any error, so a network hiccup or
   // a bug in this check can never block a real capture from going through.
+  // SKIPPED for a scanner capture (opts.preCropped): this gate exists to
+  // catch a display that's partly outside the frame of a wide yard photo,
+  // and it works by locating a display-shaped blob and checking whether it
+  // touches a frame edge. On a crop that IS the display, the blob touches
+  // every edge by construction — the check would reject every good capture.
+  // The scanner's alignment box is the equivalent safeguard, applied before
+  // the shutter instead of after. Also saves a whole network round trip,
+  // which is part of the point of the scanner (see openScanner's comment).
+  if (!opts.preCropped) {
   if (statusEl) { statusEl.style.color = ''; statusEl.style.fontWeight = ''; statusEl.textContent = 'Checking photo…'; }
   try {
     const quality = await api('/api/vision/check-photo-quality', {
@@ -806,6 +906,7 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
     console.warn('[photo-quality-check] failed, proceeding without it:', err.message);
     // fall through to the normal read — never block a capture over this check erroring
   }
+  }
 
   syncItemsFromDom(); // capture whatever's already typed before we mutate a photo onto it
   if (currentLoadItems[idx]) currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64, mime };
@@ -813,7 +914,7 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl) {
   try {
     const result = await api('/api/vision/read-weight', {
       method: 'POST',
-      body: JSON.stringify({ image_base64: base64, mime_type: mime }),
+      body: JSON.stringify({ image_base64: base64, mime_type: mime, pre_cropped: !!opts.preCropped }),
     });
     // Full reasoning (raw_text/displays_seen) goes to the console instead of
     // the on-screen status now — useful for debugging a bad read without
@@ -998,6 +1099,273 @@ async function handleFileUpload(row, roleKey, file) {
   }
 }
 
+// ── Signature pad ────────────────────────────────────────────────────────
+// Per Apsara 2026-08-17. Draws with pointer events (covers touch, stylus
+// and mouse in one code path) onto a transparent canvas, then POSTs a PNG
+// data URL to /api/loads/:id/signature, which stores it AND regenerates the
+// PDFs so the signature actually lands on the ticket + receipt.
+// Transparent background is deliberate: the PDF draws this straight over
+// its own white page above the signature rule, and a white-filled PNG
+// would paint an opaque block over that rule.
+let signLoadId = null;
+let signDrawing = false;
+let signHasInk = false;
+
+function signPoint(ev) {
+  const c = $('signPad');
+  const r = c.getBoundingClientRect();
+  // Map CSS pixels -> canvas backing-store pixels. These differ on any
+  // hi-DPI screen (and the canvas is sized to devicePixelRatio below), so
+  // skipping this scale would draw the stroke offset from the fingertip.
+  return { x: (ev.clientX - r.left) * (c.width / r.width), y: (ev.clientY - r.top) * (c.height / r.height) };
+}
+
+function openSignPad(loadId) {
+  signLoadId = loadId;
+  signHasInk = false;
+  $('signErr').textContent = '';
+  $('signSave').disabled = false;
+  $('signSave').textContent = 'Save signature';
+  $('signOverlay').classList.remove('hidden');
+  $('signOverlay').style.display = 'flex';
+  const c = $('signPad');
+  // Size the backing store to the element's real on-screen size x DPR, so
+  // the stroke is crisp rather than upscaled-blurry on a phone screen.
+  const dpr = window.devicePixelRatio || 1;
+  const rect = c.getBoundingClientRect();
+  c.width = Math.round(rect.width * dpr);
+  c.height = Math.round(rect.height * dpr);
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = '#111';
+  ctx.lineWidth = 2.4 * dpr;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+}
+
+function closeSignPad() {
+  $('signOverlay').classList.add('hidden');
+  $('signOverlay').style.display = '';
+  signLoadId = null;
+}
+
+function wireSignPad() {
+  const c = $('signPad');
+  const ctx = () => c.getContext('2d');
+  c.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault();
+    signDrawing = true; signHasInk = true;
+    c.setPointerCapture(ev.pointerId);
+    const p = signPoint(ev);
+    ctx().beginPath();
+    ctx().moveTo(p.x, p.y);
+    // A single tap with no drag should still leave a mark rather than
+    // nothing — draw a zero-length line, which lineCap:'round' renders as
+    // a dot.
+    ctx().lineTo(p.x, p.y);
+    ctx().stroke();
+  });
+  c.addEventListener('pointermove', (ev) => {
+    if (!signDrawing) return;
+    ev.preventDefault();
+    const p = signPoint(ev);
+    ctx().lineTo(p.x, p.y);
+    ctx().stroke();
+  });
+  const end = () => { signDrawing = false; };
+  c.addEventListener('pointerup', end);
+  c.addEventListener('pointercancel', end);
+  c.addEventListener('pointerleave', end);
+
+  $('signClear').addEventListener('click', () => {
+    ctx().clearRect(0, 0, c.width, c.height);
+    signHasInk = false;
+    $('signErr').textContent = '';
+  });
+  $('signClose').addEventListener('click', closeSignPad);
+  $('signSave').addEventListener('click', async () => {
+    if (!signHasInk) { $('signErr').textContent = 'Nothing signed yet — sign in the box first.'; return; }
+    if (!signLoadId) return;
+    const btn = $('signSave');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    $('signErr').textContent = '';
+    try {
+      // Regenerating the PDFs server-side is part of this same call, so it
+      // takes a few seconds — hence the explicit "Saving…" state rather
+      // than closing optimistically.
+      await api(`/api/loads/${encodeURIComponent(signLoadId)}/signature`, {
+        method: 'POST',
+        body: JSON.stringify({ signature: c.toDataURL('image/png') }),
+      });
+      closeSignPad();
+      loadTab('loads'); // refresh so the regenerated PDF links are picked up
+    } catch (err) {
+      $('signErr').textContent = 'Could not save: ' + err.message;
+      btn.disabled = false; btn.textContent = 'Save signature';
+    }
+  });
+}
+
+// ── Guided scale-display scanner ─────────────────────────────────────────
+// Per Apsara 2026-08-17: "i don't want any normal camera settings, i want
+// the camera to capture the digital scale weights. to avoid noise, i can
+// have bounding box in camera and ask the user to capture the image within
+// that box."
+//
+// This replaces the native-camera path for weight capture. The important
+// part is NOT the visual box — it's that the captured frame is CROPPED to
+// that box on-device before upload. Two concrete wins over the old
+// full-frame photo:
+//   1. The server's locate stage (finding the display inside a photo of a
+//      whole yard) becomes unnecessary — that stage is the single most
+//      expensive and most failure-prone part of the pipeline (the AI
+//      fallback alone measures 5.6-9.9s in helpers/gemini.js's own logs).
+//      The crop is sent with pre_cropped:true so the backend skips it.
+//   2. Upload shrinks from a ~2MB full-res frame to a ~100-250KB crop,
+//      which on yard mobile data is seconds of latency by itself.
+// Deliberately NOT downscaled: the box crop is taken at the camera's
+// native pixel resolution. Shrinking is what broke OCR accuracy before
+// (see downscaleToBase64's comment — 0/3 correct at 1600px vs 3/3 at
+// native), and cropping is the opposite of that problem: the digits keep
+// every pixel they had, they just arrive without the surrounding noise.
+//
+// BOX GEOMETRY: a wide, short box (4:1-ish), because that's the shape of a
+// real single-row weighbridge display — helpers/gemini.js's own candidate
+// sorting already treats "wide and short" as the display-likeness signal.
+const SCAN_BOX = { widthPct: 0.86, aspect: 3.2 }; // aspect = w/h
+let scanStream = null;
+let scanTarget = null; // { row, roleKey }
+
+function layoutScanBox() {
+  const wrap = $('scanVideoWrap');
+  if (!wrap) return;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (!W || !H) return;
+  const bw = Math.round(W * SCAN_BOX.widthPct);
+  const bh = Math.round(bw / SCAN_BOX.aspect);
+  const bx = Math.round((W - bw) / 2);
+  const by = Math.round((H - bh) / 2);
+  const box = $('scanBox');
+  box.style.left = `${bx}px`; box.style.top = `${by}px`;
+  box.style.width = `${bw}px`; box.style.height = `${bh}px`;
+  // Dim everything outside the box.
+  const set = (el, s) => Object.assign($(el).style, s);
+  set('scanShadeTop',    { left:'0px', top:'0px', width:`${W}px`, height:`${by}px` });
+  set('scanShadeBottom', { left:'0px', top:`${by + bh}px`, width:`${W}px`, height:`${Math.max(0, H - by - bh)}px` });
+  set('scanShadeLeft',   { left:'0px', top:`${by}px`, width:`${bx}px`, height:`${bh}px` });
+  set('scanShadeRight',  { left:`${bx + bw}px`, top:`${by}px`, width:`${Math.max(0, W - bx - bw)}px`, height:`${bh}px` });
+  $('scanHint').style.top = `${by + bh + 14}px`;
+  return { bx, by, bw, bh, W, H };
+}
+
+function closeScanner() {
+  if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+  const v = $('scanVideo');
+  if (v) v.srcObject = null;
+  $('scanOverlay').classList.remove('open');
+  scanTarget = null;
+  window.removeEventListener('resize', layoutScanBox);
+}
+
+// Returns true if the live scanner opened; false if this device/WebView
+// can't give us a camera stream, so the caller can fall back to the
+// existing native-camera path rather than leaving the user stuck.
+async function openScanner(row, roleKey) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+  scanTarget = { row, roleKey };
+  $('scanErr').textContent = '';
+  $('scanShutter').disabled = false;
+  $('scanShutter').textContent = 'Capture weight';
+  $('scanOverlay').classList.add('open');
+  try {
+    // facingMode 'environment' = rear camera. Requested at high resolution
+    // deliberately: the box crop is only a fraction of the frame, so frame
+    // resolution is what determines how many pixels the DIGITS actually
+    // get. Verified with the real mapping math (see cropScanFrame): a
+    // 1920x1080 stream in a portrait viewport yields only a ~478x150px
+    // crop, while a 2560-wide stream yields proportionally more — and
+    // digit pixel count is precisely what OCR accuracy depends on here
+    // (see downscaleToBase64's note: resolution loss was measured to turn
+    // 3/3 correct reads into 0/3). These are `ideal` hints, not hard
+    // constraints, so a device that can't do 2560 returns its best
+    // available instead of failing the request outright.
+    scanStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1440 } },
+      audio: false,
+    });
+  } catch (err) {
+    console.warn('[scanner] getUserMedia failed:', err && err.message);
+    closeScanner();
+    return false;
+  }
+  const v = $('scanVideo');
+  v.srcObject = scanStream;
+  try { await v.play(); } catch (e) { /* autoplay attr usually covers this */ }
+  layoutScanBox();
+  window.addEventListener('resize', layoutScanBox);
+  return true;
+}
+
+// Maps the on-screen box back onto the video's real pixel grid and crops.
+// object-fit:cover means the video is scaled to fill the wrapper and
+// overflow is clipped, so the mapping has to account for that same scale
+// and the centering offset — getting this wrong would crop the wrong
+// region, which is exactly the "digits sliced off" failure mode that
+// caused bad reads before (see helpers/gemini.js's 73600 case).
+function cropScanFrame() {
+  const v = $('scanVideo');
+  const geom = layoutScanBox();
+  const vw = v.videoWidth, vh = v.videoHeight;
+  if (!vw || !vh || !geom) return null;
+  const { bx, by, bw, bh, W, H } = geom;
+  const scale = Math.max(W / vw, H / vh);           // object-fit: cover
+  const dispW = vw * scale, dispH = vh * scale;
+  const offX = (dispW - W) / 2, offY = (dispH - H) / 2; // clipped-off amount
+  const sx = Math.max(0, Math.round((bx + offX) / scale));
+  const sy = Math.max(0, Math.round((by + offY) / scale));
+  const sw = Math.min(vw - sx, Math.round(bw / scale));
+  const sh = Math.min(vh - sy, Math.round(bh / scale));
+  if (sw < 8 || sh < 8) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = sw; canvas.height = sh;
+  canvas.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+  // quality 0.95 to match captureViaNativeCamera — seven-segment digits are
+  // exactly the high-contrast thin-edge content JPEG artifacts damage most
+  // (that finding is documented on the native path; same reasoning here).
+  return { base64: canvas.toDataURL('image/jpeg', 0.95).split(',')[1], w: sw, h: sh };
+}
+
+async function doScanCapture() {
+  if (!scanTarget) return;
+  const { row, roleKey } = scanTarget;
+  const shutter = $('scanShutter');
+  shutter.disabled = true; shutter.textContent = 'Reading…';
+  $('scanErr').textContent = '';
+  const shot = cropScanFrame();
+  if (!shot) {
+    $('scanErr').textContent = 'Camera not ready yet — wait a moment and try again.';
+    shutter.disabled = false; shutter.textContent = 'Capture weight';
+    return;
+  }
+  console.log(`[scanner] cropped ${shot.w}x${shot.h}px, ~${Math.round(shot.base64.length * 3 / 4 / 1024)}KB`);
+  // Low-resolution guard. The crop is a fraction of the frame, so a device
+  // that only gave us a small stream can produce a crop too thin to read
+  // digits from reliably — the mapping math measures ~212x67px off a
+  // 640x480 stream, which is ~40px per digit. Rather than let that become
+  // a confidently-wrong number on a ticket, say so and let the operator
+  // decide. Warn-only, not a hard block: a marginal read that the operator
+  // then verifies against the scale is still more useful than refusing to
+  // capture at all, and the number still has to pass the same downstream
+  // cross-check as any other read.
+  const LOW_CROP_WIDTH = 320;
+  if (shot.w < LOW_CROP_WIDTH) {
+    console.warn(`[scanner] crop is only ${shot.w}px wide (<${LOW_CROP_WIDTH}) — this device's camera stream is low resolution; the read may be less reliable`);
+  }
+  const statusEl = row.querySelector('.ld-item-status');
+  closeScanner(); // release the camera before the network round trip
+  await processWeightImage(row, roleKey, shot.base64, 'image/jpeg', statusEl, { preCropped: true });
+}
+
 // Small floating "Take Photo / Choose File" menu, shown when a row's 📷
 // button is clicked — per Apsara, a single plain file input's OS chooser
 // was surfacing Google Photos ahead of an actual camera option, with no way
@@ -1013,7 +1381,7 @@ function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
   menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
   menu.style.left = `${rect.left + window.scrollX}px`;
   menu.innerHTML = `
-    <button type="button" class="capture-menu-btn" data-action="camera">📷 Take Photo</button>
+    <button type="button" class="capture-menu-btn" data-action="camera">📷 Scan weight</button>
     <button type="button" class="capture-menu-btn" data-action="files">📁 Choose File</button>
   `;
   document.body.appendChild(menu);
@@ -1146,6 +1514,13 @@ function loadCardHtml(l) {
              Apsara 2026-08-17 ("introduce send option once pdf
              generated..."). -->
         ${l.pdf_link ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
+        <!-- Sign — per Apsara 2026-08-17, offered once the PDF exists
+             ("post pdf generation, there should be an option called
+             sign"). Saving a signature regenerates the ticket + receipt
+             so it appears above the "Seller signature" line on both.
+             Label reflects current state so it's obvious at a glance
+             whether this load has been signed. -->
+        ${l.pdf_link ? `<button class="btn btn-sign-load" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">${l.seller_signature ? '✓ Signed — re-sign' : 'Sign'}</button>` : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
@@ -1699,6 +2074,10 @@ function wireDeckEvents() {
     }
     openEditLoadModal(load);
   }));
+  document.querySelectorAll('.btn-sign-load').forEach(btn => btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openSignPad(btn.dataset.id);
+  }));
   document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
@@ -1981,6 +2360,12 @@ async function bootLoads() {
 function loadTab(tab) {
   if (tab === 'loads') return bootLoads();
 }
+
+// Guided scanner controls — static top-level markup, so these wire once at
+// boot rather than being re-bound per item row.
+$('scanShutter').addEventListener('click', doScanCapture);
+$('scanCancel').addEventListener('click', closeScanner);
+wireSignPad();
 
 $('btnLogin').addEventListener('click', doLogin);
 $('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });

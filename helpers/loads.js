@@ -193,6 +193,12 @@ async function addLoad(entry) {
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
         receipt_pdf_drive_id: null, receipt_pdf_link: null,
+        // Seller signature (data URL from the app's signature pad) — per
+        // Apsara 2026-08-17. Reset here alongside the PDF links on an edit:
+        // a signature attests to specific numbers, so once those numbers
+        // change the old signature no longer means anything and must not
+        // silently carry over onto a re-generated ticket.
+        seller_signature: null, seller_signed_at: null,
         status        : 'open',
     };
 
@@ -247,6 +253,12 @@ async function editLoad(id, entry) {
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
         receipt_pdf_drive_id: null, receipt_pdf_link: null,
+        // Seller signature (data URL from the app's signature pad) — per
+        // Apsara 2026-08-17. Reset here alongside the PDF links on an edit:
+        // a signature attests to specific numbers, so once those numbers
+        // change the old signature no longer means anything and must not
+        // silently carry over onto a re-generated ticket.
+        seller_signature: null, seller_signed_at: null,
         status        : 'open',
     };
 

@@ -288,6 +288,54 @@ function drawSummaryBox(doc, rows) {
     doc.y = boxTop + boxH + 18;
 }
 
+// ── Seller signature block ───────────────────────────────────────────────
+// Per Apsara 2026-08-17 ("post pdf generation, there should be an option
+// called sign... it should open a whiteboard where it allows the user to
+// sign. this should get reflected in yard invoice above Seller signature").
+// So: a ruled signature line labelled "Seller signature", with the captured
+// signature drawn IN THE SPACE ABOVE that line — i.e. exactly where a
+// person would sign on paper.
+// load.seller_signature is a data URL (image/png, transparent background)
+// produced by the mobile app's signature pad. When it's absent the block
+// still prints, just empty — the ticket then works as a paper form someone
+// can sign by hand, which is strictly better than the block vanishing and
+// the document silently changing shape depending on signed/unsigned.
+function drawSignatureBlock(doc, load) {
+    const SIG_AREA_H = 46;   // drawing space above the rule
+    const BLOCK_H = SIG_AREA_H + 26;
+    ensureSpace(doc, BLOCK_H + 10);
+    const top = doc.y + 10;
+    const lineY = top + SIG_AREA_H;
+    const lineW = 230;
+
+    if (load.seller_signature) {
+        try {
+            // Data URL -> Buffer. pdfkit accepts a Buffer directly; passing
+            // the data URL string would be treated as a file path and throw.
+            const b64 = String(load.seller_signature).replace(/^data:image\/\w+;base64,/, '');
+            const buf = Buffer.from(b64, 'base64');
+            // fit (not scale) keeps the aspect ratio inside the box and
+            // never overflows the rule below it, whatever the pad's
+            // canvas dimensions were.
+            doc.image(buf, PAGE_L, top, { fit: [lineW, SIG_AREA_H - 4], align: 'left', valign: 'bottom' });
+        } catch (err) {
+            // A corrupt/oversized signature must never take down the whole
+            // ticket — the line still prints, just unsigned.
+            console.error('[pdf] could not render seller signature:', err.message);
+        }
+    }
+
+    doc.moveTo(PAGE_L, lineY).lineTo(PAGE_L + lineW, lineY).lineWidth(0.75).strokeColor(INK).stroke();
+    doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
+        .text('Seller signature', PAGE_L, lineY + 5, { width: lineW, lineBreak: false });
+    if (load.seller_signed_at) {
+        const when = new Date(load.seller_signed_at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
+        doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
+            .text(`Signed ${when} (LA time)`, PAGE_L, lineY + 16, { width: 260, lineBreak: false });
+    }
+    doc.y = lineY + 30;
+}
+
 function drawSectionHeading(doc, text) {
     // Small fixed guard (heading + a little breathing room) so a heading
     // never ends up as the last line on a page with its actual content
@@ -481,6 +529,11 @@ function generateLoadPdf(load, opts = {}) {
             // PDF still carries each item's gross/tare photo links inline on
             // its per-item cards, so nothing is lost — it just isn't
             // duplicated on the document the buyer receives.
+
+            // Signature block last, per Apsara 2026-08-17 — a signature
+            // belongs at the end of the document, under the numbers it's
+            // attesting to.
+            drawSignatureBlock(doc, load);
 
             addFooters(doc, load);
             doc.end();
@@ -765,6 +818,26 @@ function drawReceiptContent(doc, load, contentWidth) {
     line(`Net total: ${load.net_weight != null ? `${load.net_weight} ${unit}` : '—'}`, { size: 9.5, bold: true, gap: 1 });
     line(`Amount total: ${load.amount != null ? `$${load.amount}` : '—'}`, { size: 11, bold: true, gap: 3 });
     divider();
+
+    // Signature — same idea as the full ticket's block (see
+    // drawSignatureBlock), scaled to receipt width. This is the copy the
+    // seller physically takes away, so it's arguably the one that most
+    // needs their signature on it. Prints the ruled line either way so an
+    // unsigned receipt can still be signed by hand on paper.
+    if (load.seller_signature) {
+        try {
+            const b64 = String(load.seller_signature).replace(/^data:image\/\w+;base64,/, '');
+            doc.image(Buffer.from(b64, 'base64'), doc.page.margins.left, doc.y, { fit: [contentWidth, 34], align: 'left', valign: 'bottom' });
+            doc.y += 36;
+        } catch (err) {
+            console.error('[pdf] could not render seller signature on receipt:', err.message);
+        }
+    } else {
+        doc.y += 30; // blank space to sign by hand
+    }
+    doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + contentWidth, doc.y).lineWidth(0.75).strokeColor('#000').stroke();
+    doc.moveDown(0.35);
+    line('Seller signature', { size: 7.5, color: MUTED, gap: 2 });
 
     line(`Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, { size: 6.5, align: 'center', color: MUTED });
 }

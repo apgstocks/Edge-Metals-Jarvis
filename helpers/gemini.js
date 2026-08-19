@@ -1592,8 +1592,19 @@ async function checkPhotoQuality(imageBase64, mimeType = 'image/jpeg') {
     }
 }
 
-async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2) {
+// opts.preCropped — set when the caller has ALREADY isolated the display
+// (the mobile app's guided scanner, added 2026-08-17: the user aligns the
+// display inside an on-screen box and only those pixels are uploaded). The
+// only thing it changes is that the LOCATE stage is skipped: instead of
+// searching this image for a display, the whole image IS treated as the
+// located crop. Everything downstream — the lit-signal render, the dual
+// Vision reads, the corroboration/cross-check logic — runs exactly as it
+// always has, so accuracy behavior is unchanged; what's removed is the
+// stage that costs the most and fails the most (the AI locate fallback
+// alone measures 5.6-9.9s in this file's own logs).
+async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     if (!imageBase64) throw new Error('imageBase64 required');
+    const preCropped = !!opts.preCropped;
     // Normalize EXIF orientation ONCE, up front, before anything else touches
     // this image. Root cause found 2026-08-11: phone cameras commonly store a
     // photo in raw sensor orientation plus an EXIF tag saying how to rotate
@@ -1667,14 +1678,21 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // exactly which stage to fix instead of just "it was slow somewhere."
     const accuratePathPromise = (async () => {
         const tLocateStart = Date.now();
+        // Guided-scanner capture: the client already framed and cropped the
+        // display, so there is nothing to locate — the full frame IS the
+        // box. Expressed as a normal single candidate so every stage below
+        // (crop, lit-signal render, dual Vision reads, cross-check) runs
+        // completely unchanged; only the locate calls are bypassed.
+        let candidates = preCropped
+            ? [{ x_min: 0, y_min: 0, x_max: 1, y_max: 1, reason: 'client-side scanner bounding box' }]
+            : await locateRedDisplayByPixels(imageBase64);
+        let locateSource = preCropped ? 'client scanner bounding box (locate skipped)' : 'red pixel color analysis';
         // Try the fast, deterministic, no-network pixel locates first — red
         // (the overhead weighbridge repeater), then cyan (the "IQ plus 710"
         // indicator, added 2026-08-11). Only fall to the slow AI-based
         // locateDisplayBox (network call, measured 5.6-9.9s on real IQ710
         // photos — enough by itself to blow the whole accurate-path budget)
         // if NEITHER pixel approach can confidently place a box.
-        let candidates = await locateRedDisplayByPixels(imageBase64);
-        let locateSource = 'red pixel color analysis';
         if (!candidates || !candidates.length) {
             // Cyan is tried FIRST, exactly as before this change — that
             // ordering is load-bearing (see getRedSplitRecoveryCandidates'
