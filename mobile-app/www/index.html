@@ -610,18 +610,22 @@ const $ = (id) => document.getElementById(id);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// Minimum 2 decimals for money shown on screen, per Apsara 2026-08-19
-// ("if its 0.60 it should be 0.60 only not 0.6"). A price typed as 0.60 is
-// stored as the number 0.6, so re-opening a load showed 0.6 and the
-// computed Amount showed e.g. 45.5 instead of 45.50.
-// Pads to 2 rather than forcing exactly 2 — real rates here go to 3 places
-// (0.175/lb), and rounding those would change what a seller is paid.
-// Mirrors money() in helpers/pdf.js so screen and printed ticket agree.
-function money2(n) {
+// Two money rules on screen, matching helpers/pdf.js exactly so the form
+// and the printed ticket never disagree (Apsara 2026-08-19).
+//   fmtRate   — a per-unit price: min 2 decimals, never rounded, so
+//               0.6 -> "0.60" but 0.175 stays "0.175". Rounding a rate
+//               would change what the seller is paid per pound.
+//   fmtAmount — a money total: exactly 2 decimals with thousands
+//               separators, so 23768.789 -> "23,768.79".
+function fmtRate(n) {
   if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
   const s = String(n);
   const d = s.includes('.') ? s.split('.')[1].length : 0;
   return d >= 2 ? s : Number(n).toFixed(2);
+}
+function fmtAmount(n) {
+  if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Mirrors helpers/loads.js's normalizeSellerPhone — added 2026-08-17 after
@@ -767,7 +771,7 @@ function recomputeRowTotals(row) {
   row.querySelector('.ld-item-net').value = net != null ? net : '';
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
-  row.querySelector('.ld-item-amount').value = money2(amount);
+  row.querySelector('.ld-item-amount').value = fmtAmount(amount);
 }
 
 function renderItemRows() {
@@ -815,7 +819,7 @@ function renderItemRows() {
       </div>
       <div class="ld-item-net-wrap"><span class="ld-mobile-label">Net</span><input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}"></div>
       <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span><input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}"></div>
-      <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="number" step="any" disabled title="Amount" value="${amount != null ? amount : ''}"></div>
+      <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="text" inputmode="decimal" disabled title="Amount" value="${amount != null ? fmtAmount(amount) : ''}"></div>
       <div class="ld-item-actions">
         <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
         <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
@@ -1576,7 +1580,7 @@ function openEditLoadModal(load) {
     // box — so the default held for new loads and quietly didn't for
     // edits, which is the case she was hitting.
     tare_weight : (it.tare_weight ?? '') === '' ? '0' : it.tare_weight,
-    price: money2(it.price),
+    price: fmtRate(it.price),
     unit : it.unit || '',
     grossPhoto: null, tarePhoto: null,
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
