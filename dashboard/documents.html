@@ -60,7 +60,13 @@ tr:last-child td { border-bottom:none; }
 .subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
 .subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
 .field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
-.field input, .field select, .field textarea { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; font-family:inherit; }
+.field input, .field select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; font-family:inherit; }
+/* Textarea gets its own, more generous treatment — Apsara: "text box is
+   small and ugly". Bigger padding, taller minimum height, roomier line
+   height, and a visible resize handle so it doesn't read as a cramped
+   single input pretending to be a textarea. */
+.field textarea { width:100%; padding:12px 14px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); font-size:13.5px; font-family:inherit; line-height:1.65; min-height:110px; resize:vertical; }
+.field input:focus, .field select:focus, .field textarea:focus { border-color:var(--accent); }
 .field { margin-bottom:12px; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .grid4 { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; }
@@ -73,10 +79,28 @@ tr:last-child td { border-bottom:none; }
 .container-block { border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:10px; }
 .item-row { display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:center; }
 .placeholder-note { padding:40px 20px; text-align:center; color:var(--text-faint); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm); }
+/* Light mode — Apsara: "there should be dark/light option for documents
+   toggle". Same token names, just re-pointed; every rule above already
+   reads colors through var(--...), so redefining the custom properties on
+   body[data-theme="light"] is enough to re-skin the whole page without
+   duplicating a single selector. Defaults to dark (no attribute) since
+   that's the page's original look. */
+body[data-theme="light"] {
+  --bg-base: #F3F5F7; --bg-panel: #FFFFFF;
+  --surface-card: #FFFFFF; --surface-sunken: #F3F5F7; --surface-hover: #E9ECEF;
+  --text-strong: #14181B; --text-body: #2B3239; --text-muted: #57616A; --text-faint: #7E8891;
+  --border-subtle: #E5E9EC; --border-default: #CBD1D6;
+}
 </style>
 </head>
 <body>
 <section style="max-width:1100px; margin:0 auto; padding:38px 40px 80px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <!-- Same "Back to dashboard" pattern as address-book.html / quote-requests.html —
+         this page was missing it (an oversight, not intentional), per Apsara. -->
+    <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);">&larr; Back to dashboard</a>
+    <button id="btnThemeToggle" type="button" class="btn btn-secondary" style="padding:6px 12px; font-size:10px;">&#9789; Light mode</button>
+  </div>
   <div class="eyebrow">// Documents</div>
   <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Invoice · Proforma · Verification</h2>
   <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Generate, save, and re-open Commercial Invoices, Proforma Invoices, and carrier/commission verification checks.</div>
@@ -113,7 +137,7 @@ tr:last-child td { border-bottom:none; }
     <!-- ── Guided entry wizard ─────────────────────────────────────────────── -->
     <div id="pfWizard" class="card" style="padding:20px 22px; margin-bottom:16px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <div id="pfWizStepLabel" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Step 1 of 4</div>
+        <div id="pfWizStepLabel" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Step 1 of 3</div>
         <button id="btnPfWizSkip" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Skip — edit full form directly</button>
       </div>
 
@@ -128,29 +152,19 @@ tr:last-child td { border-bottom:none; }
       </div>
 
       <div id="pfWizStep2" class="hidden">
-        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">What material?</div>
-        <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">
-          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="mixed" style="justify-content:flex-start; padding:12px 16px;">Mixed Combo — 21 MT</button>
-          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="split" style="justify-content:flex-start; padding:12px 16px;">AL Combo + Regular Combo — 13 MT + 8 MT</button>
-          <button type="button" class="btn btn-secondary pfwiz-material-choice" data-choice="custom" style="justify-content:flex-start; padding:12px 16px;">Something else — I'll enter materials manually</button>
-        </div>
-        <div style="display:flex; justify-content:space-between;"><button id="btnPfWiz2Back" type="button" class="btn btn-secondary">Back</button></div>
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Material &amp; quantity</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type in the material(s) for this container — quantity defaults to 21 MT, edit it if this container's different.</div>
+        <div id="pfWizItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>
+        <button id="btnPfWizAddItem" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px; margin-bottom:14px;">+ Add material</button>
+        <div class="field" style="max-width:220px;"><label>How many containers/loads?</label><input id="pfWiz_containerCount" type="number" min="1" value="1"></div>
+        <div style="display:flex; justify-content:space-between; margin-top:10px;"><button id="btnPfWiz2Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz2Next" type="button" class="btn btn-primary">Next</button></div>
       </div>
 
       <div id="pfWizStep3" class="hidden">
-        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Quantity / loads</div>
-        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Standard quantities are pre-filled — edit any of them if this container's different.</div>
-        <div id="pfWizItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>
-        <button id="btnPfWizAddItem" type="button" class="btn btn-secondary hidden" style="padding:5px 10px; font-size:10px; margin-bottom:14px;">+ Add material</button>
-        <div class="field" style="max-width:220px;"><label>How many containers/loads?</label><input id="pfWiz_containerCount" type="number" min="1" value="1"></div>
-        <div style="display:flex; justify-content:space-between; margin-top:10px;"><button id="btnPfWiz3Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz3Next" type="button" class="btn btn-primary">Next</button></div>
-      </div>
-
-      <div id="pfWizStep4" class="hidden">
         <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Price</div>
         <div id="pfWizPriceNote" style="font-size:12px; color:var(--text-muted); margin-bottom:12px;"></div>
         <div id="pfWizPriceEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
-        <div style="display:flex; justify-content:space-between;"><button id="btnPfWiz4Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz4Finish" type="button" class="btn btn-primary">Build proforma</button></div>
+        <div style="display:flex; justify-content:space-between;"><button id="btnPfWiz3Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz3Finish" type="button" class="btn btn-primary">Build proforma</button></div>
       </div>
     </div>
 
@@ -170,7 +184,7 @@ tr:last-child td { border-bottom:none; }
         <div id="pfConsigneeList" class="autocomplete-list hidden"></div>
       </div>
       <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
-        <textarea id="pf_consignee_address" rows="3" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
+        <textarea id="pf_consignee_address" rows="5" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
 
       <div class="section-label">Terms</div>
       <div class="grid4">
@@ -242,6 +256,22 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// ── Dark/light theme toggle ──────────────────────────────────────────────
+// Apsara: "there should be dark/light option for documents toggle". Dark is
+// the original look and stays the default; the choice is remembered per
+// browser (localStorage is fine here — this is real production code, not a
+// sandboxed artifact) so it doesn't reset every visit.
+function applyTheme(theme) {
+  document.body.dataset.theme = theme;
+  $('btnThemeToggle').innerHTML = theme === 'light' ? '&#9789; Dark mode' : '&#9789; Light mode';
+}
+applyTheme(localStorage.getItem('jarvisDocumentsTheme') || 'dark');
+$('btnThemeToggle').addEventListener('click', () => {
+  const next = document.body.dataset.theme === 'light' ? 'dark' : 'light';
+  applyTheme(next);
+  localStorage.setItem('jarvisDocumentsTheme', next);
+});
+
 let currentSubtab = 'proforma';
 function setSubtab(name) {
   currentSubtab = name;
@@ -305,9 +335,21 @@ $('pf_consignee').addEventListener('blur', () => {
 });
 
 // ── Pricing memory auto-fill ──────────────────────────────────────────────
+// Apsara: "if its taewon/Daekwang/Dooin port of discharge South korea" — an
+// editable suggestion like the trade-terms/port auto-fill below, not a
+// lock: only nudges the field when it's still empty, never overwrites
+// something already typed. Runs in lookupPricingMemory() so it fires from
+// every path that sets a consignee (full-form typeahead click, full-form
+// blur, and the wizard's hand-off into the full form).
+function applyPortOfDischargeDefault(customer) {
+  if (/taewon|daekwang|dooin/i.test(customer) && !$('pf_port_discharge').value) {
+    $('pf_port_discharge').value = 'South Korea';
+  }
+}
 async function lookupPricingMemory(customer) {
   $('pfMemoryChip').classList.add('hidden');
   if (!customer) return;
+  applyPortOfDischargeDefault(customer);
   try {
     const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(customer));
     if (!info || !info.canonical_name) return;
@@ -388,12 +430,12 @@ $('btnAddContainer').addEventListener('click', () => addContainer());
 // ── Guided entry wizard ────────────────────────────────────────────────────
 // Added per Apsara: "when i click proforma,it should ask me who is the
 // consignee? then start matching as i type from address book.then
-// material? Quantity/Loads?then price?" Confirmed via follow-up: the 21 MT
-// (Mixed Combo alone) / 13+8 MT (AL Combo + Regular Combo) split is an
-// editable STARTING SUGGESTION, not a locked rule — every number below
-// stays a normal input the user can overwrite — and it's offered as one of
-// two standard container choices up front, not something that only kicks
-// in after both materials happen to get picked.
+// material? Quantity/Loads?then price?" Originally offered two hardcoded
+// preset buttons (Mixed Combo 21 MT / AL+Regular split 13+8 MT); per
+// Apsara's follow-up ("its not mixed combo-21 MT.no matter whatever it is
+// 21 MT just ask user to enter the material") that's gone — now it's one
+// freeform material step defaulting every new row to 21 MT, always
+// editable, no material-specific branching.
 const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount: 1 };
 
 function resetWizard() {
@@ -406,8 +448,8 @@ function resetWizard() {
   showWizStep(1);
 }
 function showWizStep(n) {
-  [1, 2, 3, 4].forEach((i) => $('pfWizStep' + i).classList.toggle('hidden', i !== n));
-  $('pfWizStepLabel').textContent = `Step ${n} of 4`;
+  [1, 2, 3].forEach((i) => $('pfWizStep' + i).classList.toggle('hidden', i !== n));
+  $('pfWizStepLabel').textContent = `Step ${n} of 3`;
 }
 
 // Step 1 — consignee, same address-book typeahead pattern as the full form
@@ -443,26 +485,19 @@ $('btnPfWiz1Next').addEventListener('click', () => {
   const name = $('pfWiz_consignee').value.trim();
   if (!name) return;
   pfWiz.consignee = name;
+  // Material choice used to be two hardcoded preset buttons (Mixed Combo /
+  // AL+Regular split) plus a "something else" escape hatch. Apsara: "its
+  // not mixed combo-21 MT.no matter whatever it is 21 MT just ask user to
+  // enter the material" — so there's no preset/choice step anymore. Every
+  // container starts as one freeform material row defaulting to 21 MT,
+  // typed and edited directly, regardless of what the material turns out
+  // to be.
+  if (!pfWiz.items.length) pfWiz.items = [{ desc: '', qty: 21, rate: 0 }];
+  renderWizItemsEditor();
   showWizStep(2);
 });
 
-// Step 2 — material. The two named buttons pre-fill the standard container
-// split Apsara described; "Something else" drops straight to a blank,
-// freely-editable item list on step 3 (+ a visible "Add material" button
-// there, hidden for the two standard choices since one row already covers
-// them — still addable if a real container turns out to need a third item).
-document.querySelectorAll('.pfwiz-material-choice').forEach((btn) => btn.addEventListener('click', () => {
-  const choice = btn.dataset.choice;
-  if (choice === 'mixed') pfWiz.items = [{ desc: 'Mixed Combo', qty: 21, rate: 0 }];
-  else if (choice === 'split') pfWiz.items = [{ desc: 'AL Combo', qty: 13, rate: 0 }, { desc: 'Regular Combo', qty: 8, rate: 0 }];
-  else pfWiz.items = [{ desc: '', qty: 0, rate: 0 }];
-  renderWizItemsEditor();
-  $('btnPfWizAddItem').classList.toggle('hidden', choice !== 'custom');
-  showWizStep(3);
-}));
-$('btnPfWiz2Back').addEventListener('click', () => showWizStep(1));
-
-// Step 3 — quantity/loads, editable.
+// Step 2 — material & quantity/loads, freeform and editable.
 function renderWizItemsEditor() {
   $('pfWizItemsEditor').innerHTML = pfWiz.items.map((it, i) => `
     <div class="item-row wiz-item-row" style="grid-template-columns:2fr 1fr auto;" data-i="${i}">
@@ -477,11 +512,11 @@ function renderWizItemsEditor() {
   });
 }
 $('btnPfWizAddItem').addEventListener('click', () => {
-  pfWiz.items.push({ desc: '', qty: 0, rate: 0 });
+  pfWiz.items.push({ desc: '', qty: 21, rate: 0 });
   renderWizItemsEditor();
 });
-$('btnPfWiz3Back').addEventListener('click', () => showWizStep(2));
-$('btnPfWiz3Next').addEventListener('click', async () => {
+$('btnPfWiz2Back').addEventListener('click', () => showWizStep(1));
+$('btnPfWiz2Next').addEventListener('click', async () => {
   // read back whatever was edited on this step before moving on
   const rows = Array.from($('pfWizItemsEditor').querySelectorAll('.wiz-item-row'));
   pfWiz.items = rows.map((row) => ({
@@ -492,10 +527,10 @@ $('btnPfWiz3Next').addEventListener('click', async () => {
   if (!pfWiz.items.length) return;
   pfWiz.containerCount = Math.max(1, parseInt($('pfWiz_containerCount').value, 10) || 1);
   await renderWizPriceEditor();
-  showWizStep(4);
+  showWizStep(3);
 });
 
-// Step 4 — price, pre-filled from pricing memory for this consignee where known.
+// Step 3 — price, pre-filled from pricing memory for this consignee where known.
 async function renderWizPriceEditor() {
   $('pfWizPriceNote').textContent = pfWiz.consignee
     ? `Rate applies per ${$('pf_qty_unit') ? $('pf_qty_unit').value : 'MT'} across all ${pfWiz.containerCount} container(s) — checked against ${pfWiz.consignee}'s pricing memory below.`
@@ -514,8 +549,8 @@ async function renderWizPriceEditor() {
   }));
   $('pfWizPriceEditor').innerHTML = rows.join('');
 }
-$('btnPfWiz4Back').addEventListener('click', () => showWizStep(3));
-$('btnPfWiz4Finish').addEventListener('click', () => {
+$('btnPfWiz3Back').addEventListener('click', () => showWizStep(2));
+$('btnPfWiz3Finish').addEventListener('click', () => {
   $('pfWizPriceEditor').querySelectorAll('.pfwiz-item-rate').forEach((inp) => {
     const it = pfWiz.items.find((x) => x.desc === inp.dataset.desc);
     if (it) it.rate = parseFloat(inp.value) || 0;
