@@ -704,9 +704,20 @@ async function refreshCustomItemTypes() {
   try { customItemTypes = await api('/api/item-types'); }
   catch (err) { customItemTypes = []; }
 }
+// Sorted A-Z, per Apsara 2026-08-19 ("rearrange the description list based
+// on asc"). Previously the built-in options came out in hand-written order
+// with any custom "Others…" additions appended after them, so the list had
+// no findable order once it grew past a handful of entries.
+// localeCompare with sensitivity:'base' so the sort ignores case and
+// accents — otherwise a custom entry typed as "battery" would sort into a
+// separate block from "Battery" and look like a duplicate.
+// "Others…" is handled separately by the callers, which append it last —
+// it's an action, not an item type, and must not sort into the middle.
 function itemDescOptions() {
   const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
-  return ITEM_DESC_OPTIONS_BASE.concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())));
+  return ITEM_DESC_OPTIONS_BASE
+    .concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())))
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
 }
 
 // Edge Trading is always the BUYER on every load — per Apsara 2026-08-15
@@ -2756,7 +2767,10 @@ $('btnSaveStaffNextLoadNumber').addEventListener('click', async () => {
 async function loadStaffItemTypeRows() {
   const rows = $('ss_item_type_rows');
   try {
-    const types = await api('/api/item-types');
+    // Sorted A-Z to match the dropdown (Apsara 2026-08-19) — the managed
+    // list and the list people pick from should read the same way.
+    const types = (await api('/api/item-types')).slice()
+        .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
     rows.innerHTML = types.length ? types.map(d => `
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 10px; background:var(--steel-900); border-radius:8px;" data-desc="${esc(d)}">
         <span style="font-size:12.5px; color:var(--steel-100, #fff);">${esc(d)}</span>

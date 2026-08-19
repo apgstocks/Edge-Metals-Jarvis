@@ -1755,7 +1755,10 @@ async function loadItemTypeRows() {
   const rows = $('itemTypeRows');
   if (!rows) return; // panel not mounted (settings re-rendered/left before this resolved)
   try {
-    const types = await api('/api/item-types');
+    // Sorted A-Z to match the dropdown (Apsara 2026-08-19) — the managed
+    // list and the list people pick from should read the same way.
+    const types = (await api('/api/item-types')).slice()
+        .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
     rows.innerHTML = types.length ? types.map(d => `
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-desc="${esc(d)}">
         <span style="font-size:13px; color:var(--text-strong);">${esc(d)}</span>
@@ -2195,9 +2198,15 @@ async function refreshCustomItemTypes() {
 // What renderItemRows actually renders — base list plus any custom ones not
 // already on it (case-insensitive), so a custom entry that happens to match
 // a base option in different casing doesn't show up twice.
+// Sorted A-Z, per Apsara 2026-08-19 ("rearrange the description list based
+// on asc") — mirrors mobile-app/www/index.html's identical change; see its
+// comment for why localeCompare with sensitivity:'base' is used and why
+// "Others…" is deliberately not part of this sort.
 function itemDescOptions() {
   const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
-  return ITEM_DESC_OPTIONS_BASE.concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())));
+  return ITEM_DESC_OPTIONS_BASE
+    .concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())))
+    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
 }
 
 // Live-recomputes ONE row's net weight (gross - tare) and amount (net *
