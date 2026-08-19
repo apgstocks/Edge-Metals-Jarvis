@@ -106,7 +106,7 @@ const PATTERNS = {
 // ambient light is greyish (all channels similar) even when it isn't dark,
 // while a genuinely lit LED is overwhelmingly one colour. A brightness cut
 // alone was tested and let ghosts through under a bright yard light.
-function buildLitMask(data, width, height, channels) {
+function buildLitMask(data, width, height, channels, tune = {}) {
     const n = width * height;
     const lum = new Uint8Array(n);
     const sat = new Uint8Array(n);
@@ -123,12 +123,12 @@ function buildLitMask(data, width, height, channels) {
     // a percentile adapts to whatever this particular photo looks like.
     const hist = new Uint32Array(256);
     for (let i = 0; i < n; i++) hist[lum[i]]++;
-    const LIT_FRACTION = 0.10; // lit segments occupy a small part of a display crop
+    const LIT_FRACTION = tune.litFraction != null ? tune.litFraction : 0.10; // lit segments occupy a small part of a display crop
     let target = Math.floor(n * LIT_FRACTION), acc = 0, lumCut = 255;
     for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= target) { lumCut = v; break; } }
     lumCut = Math.max(lumCut, 60); // never accept near-black as "lit"
 
-    const SAT_CUT = 60; // below this a pixel is effectively grey -> ghost/reflection
+    const SAT_CUT = tune.satCut != null ? tune.satCut : 60; // below this a pixel is effectively grey -> ghost/reflection
     const mask = new Uint8Array(n);
     for (let i = 0; i < n; i++) mask[i] = (lum[i] >= lumCut && sat[i] >= SAT_CUT) ? 1 : 0;
     return mask;
@@ -325,7 +325,9 @@ function fillRatio(mask, width, box, seg) {
 const ON_CUT = 0.42;
 const OFF_CUT = 0.28;
 
-function decodeDigit(mask, width, box, medianDigitWidth, medianCount) {
+function decodeDigit(mask, width, box, medianDigitWidth, medianCount, tune = {}) {
+    const onCut = tune.onCut != null ? tune.onCut : ON_CUT;
+    const offCut = tune.offCut != null ? tune.offCut : OFF_CUT;
     // Narrow OR sparse => "1". Either signal alone is unreliable (see the
     // note at the call site on glow bloom widening a "1"), so both are
     // accepted independently.
@@ -337,8 +339,8 @@ function decodeDigit(mask, width, box, medianDigitWidth, medianCount) {
     const bits = [];
     for (const k of keys) {
         const f = fillRatio(mask, width, box, SEGMENTS[k]);
-        if (f >= ON_CUT) bits.push('1');
-        else if (f <= OFF_CUT) bits.push('0');
+        if (f >= onCut) bits.push('1');
+        else if (f <= offCut) bits.push('0');
         else return null; // ambiguous — refuse rather than guess
     }
     return PATTERNS[bits.join('')] || null;
@@ -364,7 +366,8 @@ async function readSevenSegment(input, opts = {}) {
     const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
     const { width, height, channels } = info;
 
-    const mask = buildLitMask(data, width, height, channels);
+    const tune = opts.tune || {};
+    const mask = buildLitMask(data, width, height, channels, tune);
 
     // Column-segment the WHOLE image, then isolate the digits by vertical
     // alignment rather than by first finding a horizontal band. Band-finding
@@ -418,7 +421,7 @@ async function readSevenSegment(input, opts = {}) {
     const medianCount = med(aligned.map(c => c.count));
     const medianW = med(aligned.map(c => c.w));
 
-    const chars = aligned.map(c => decodeDigit(mask, width, c, medianW, medianCount));
+    const chars = aligned.map(c => decodeDigit(mask, width, c, medianW, medianCount, tune));
 
     const unreadable = chars.filter(c => c === null).length;
     const digits = chars.map(c => (c === null ? '?' : c)).join('');

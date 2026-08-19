@@ -294,7 +294,30 @@ function extractPlausibleWeightFromFullImage(rawText) {
 // treating it as equal-confidence to a direct read.
 function extractWeightNumberFromCrop(rawText) {
     if (!rawText) return null;
-    const matches = rawText.match(/\d+(\.\d+)?/g);
+
+    // REAL BUG, found 2026-08-19 while testing a 10-photo Socome corpus
+    // Apsara supplied. Vision splits a seven-segment reading across a gap in
+    // the display, returning "42 10" for a true 4210 and "38 15" for a true
+    // 3815 — the digit-run regex below then sees "42" and "10" as two
+    // separate numbers, both implausible as weights, so the whole read was
+    // discarded and the photo declined. That is two clean, correct readings
+    // in ten thrown away purely on formatting.
+    // Space-joined digit runs are added as EXTRA candidates rather than
+    // replacing anything: the individual runs are still considered, so this
+    // can only ever recover a reading that was previously lost, never
+    // override one that already worked. Only joins runs separated by a
+    // single space, and only when the join yields 3-6 digits (a real weight)
+    // — deliberately narrow so it can't glue a weight to an unrelated
+    // number elsewhere in the panel text.
+    const spaceJoined = [];
+    const joinRe = /\b(\d{1,5})[ \t](\d{1,5})\b/g;
+    let jm;
+    while ((jm = joinRe.exec(rawText)) !== null) {
+        const joined = jm[1] + jm[2];
+        if (joined.length >= 3 && joined.length <= 6) spaceJoined.push(joined);
+    }
+
+    const matches = [...(rawText.match(/\d+(\.\d+)?/g) || []), ...spaceJoined];
     if (!matches || matches.length === 0) return null;
 
     // Added 2026-08-11 after a real "Fairbanks IQ plus 710" crop returned
