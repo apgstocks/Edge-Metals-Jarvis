@@ -363,6 +363,20 @@ input::placeholder { color:var(--steel-500); }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// Minimum 2 decimals for money shown on screen, per Apsara 2026-08-19
+// ("if its 0.60 it should be 0.60 only not 0.6"). A price typed as 0.60 is
+// stored as the number 0.6, so re-opening a load showed 0.6 and the
+// computed Amount showed e.g. 45.5 instead of 45.50.
+// Pads to 2 rather than forcing exactly 2 — real rates here go to 3 places
+// (0.175/lb), and rounding those would change what a seller is paid.
+// Mirrors money() in helpers/pdf.js so screen and printed ticket agree.
+function money2(n) {
+  if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
+  const s = String(n);
+  const d = s.includes('.') ? s.split('.')[1].length : 0;
+  return d >= 2 ? s : Number(n).toFixed(2);
+}
+
 // Mirrors helpers/loads.js's normalizeSellerPhone / mobile-app/www/index.html's
 // identical helper — see its comment for the full "No LID for user" story.
 function normalizeSellerPhone(raw) {
@@ -2223,7 +2237,7 @@ function recomputeRowTotals(row) {
   row.querySelector('.ld-item-net').value = net != null ? net : '';
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
-  row.querySelector('.ld-item-amount').value = amount != null ? amount : '';
+  row.querySelector('.ld-item-amount').value = money2(amount);
 }
 
 function renderItemRows() {
@@ -2649,7 +2663,7 @@ function openEditLoadModal(load) {
     // box — so the default held for new loads and quietly didn't for
     // edits, which is the case she was hitting.
     tare_weight : (it.tare_weight ?? '') === '' ? '0' : it.tare_weight,
-    price: it.price ?? '',
+    price: money2(it.price),
     unit : it.unit || '',
     grossPhoto: null, tarePhoto: null,
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
