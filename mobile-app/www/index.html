@@ -2158,6 +2158,18 @@ let editUnlockPassword = null;
 // ── App shell (new — replaces the dashboard's sidebar/tab system, which
 // doesn't exist here since this app has exactly one screen) ─────────────
 function showLoginScreen(err) {
+  // Dismiss every overlay first. These are top-level siblings of #appShell,
+  // so hiding #appShell does NOT hide them — without this a session that
+  // expires while a modal is open leaves that modal sitting on top of the
+  // login screen, showing its own local error ("Could not save:
+  // unauthorized") while the real message ("Session expired — sign in
+  // again") is hidden behind it. Reported by Apsara 2026-08-17 against the
+  // signature pad; the same trap applied to every other overlay here.
+  ['loadModal', 'adminSettingsModal', 'staffSettingsModal', 'signOverlay'].forEach(id => {
+    const el = $(id);
+    if (el) { el.classList.add('hidden'); el.style.display = ''; }
+  });
+  if (typeof closeScanner === 'function') closeScanner(); // also releases the camera
   $('loginScreen').classList.remove('hidden');
   $('appShell').classList.add('hidden');
   $('loginErr').textContent = err || '';
