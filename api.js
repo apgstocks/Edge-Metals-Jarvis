@@ -1462,6 +1462,23 @@ function createApi() {
         }
     });
 
+    // Added per Apsara: auto-suggest the next invoice number for a selected
+    // consignee, derived from her REAL historical numbers in the Invoice
+    // Google Sheet (see helpers/nextInvoiceNo.js for the full reasoning —
+    // matching strategy, year-prefix behavior, etc. were confirmed with her
+    // directly against live sheet data, not guessed). Returns {} (not a 404)
+    // when there's no usable history for that consignee, so the client can
+    // fall back to manual entry the same way it always has.
+    app.get('/api/proforma/next-inv-no', async (req, res) => {
+        try {
+            const suggestion = await require('./helpers/nextInvoiceNo').suggestNextInvNo(req.query.consignee || '');
+            res.json(suggestion || {});
+        } catch (e) {
+            console.error('[proforma] next-inv-no lookup failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.get('/api/customer-pricing/list', (req, res) => {
         try { res.json(proformaPricing.listCustomers()); }
         catch (e) { res.status(500).json({ error: e.message }); }

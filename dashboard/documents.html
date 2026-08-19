@@ -181,7 +181,7 @@ body[data-theme="light"] {
     <div id="pfFullForm" class="hidden">
     <div class="card" style="padding:20px 22px;">
       <div class="grid4">
-        <div class="field"><label>Invoice No</label><input id="pf_inv_no" placeholder="e.g. EM-2026-0819"></div>
+        <div class="field"><label>Invoice No <span id="pfInvNoChip" class="pricing-chip hidden"></span></label><input id="pf_inv_no" placeholder="e.g. 260819 26JY105"></div>
         <div class="field"><label>Invoice Date</label><input type="date" id="pf_inv_date"></div>
         <div class="field"><label>Reference #</label><input id="pf_reference" value="Proforma & Email Conf."></div>
         <div class="field"><label>Qty Unit</label><select id="pf_qty_unit"><option>MT</option><option>LBS</option></select></div>
@@ -322,6 +322,24 @@ function searchAddressBook(q) {
   return aliasHits.concat(rawOnlyHits);
 }
 
+// Apsara: "if consignee name is like Joey/Taewon,whatever after / should
+// appear in consignee name". Some address-book entries store a
+// contact-name/company-name pair like "Joey" + "Taewon" as separate
+// aliases (or as one alias written "Joey/Taewon") — "Joey" is a person to
+// search by, not the name that belongs on the actual document. Selecting
+// such an entry used to always fill in the FIRST alias ("Joey"); this
+// takes whatever comes after the last "/" instead, so it's the company
+// name ("Taewon") that lands in the Consignee Name field. If there's no
+// "/" at all, nothing changes — the single alias is used as before.
+function consigneeNameForEntry(entry) {
+  const aliases = entry.aliases || [];
+  const combined = aliases.join('/');
+  if (combined.includes('/')) {
+    const parts = combined.split('/').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return (aliases[0] || '').trim();
+}
 // Shows the aliases as before, plus the first line of the raw address when
 // it's not already one of the aliases — otherwise a match found only via
 // company name (raw text, see searchAddressBook above) would render as
@@ -363,11 +381,11 @@ function renderConsigneeList(matches) {
     e.preventDefault();
     const entry = shown[Number(el.dataset.idx)];
     if (entry) {
-      const firstAlias = (entry.aliases || [])[0] || '';
-      $('pf_consignee').value = firstAlias;
+      const consigneeName = consigneeNameForEntry(entry);
+      $('pf_consignee').value = consigneeName;
       $('pf_consignee_address').value = entry.raw || '';
       box.classList.add('hidden');
-      lookupPricingMemory(firstAlias);
+      lookupPricingMemory(consigneeName);
     }
   }));
 }
@@ -393,10 +411,75 @@ function applyPortOfDischargeDefault(customer) {
     $('pf_port_discharge').value = 'South Korea';
   }
 }
+// Apsara: "in inv.no eg:250315_AP_26MP17...find the highest number for
+// that consignee.increment the number...update this in container
+// incrementally in proforma" — reads her real invoice-number history for
+// this consignee (helpers/nextInvoiceNo.js on the server, backed by the
+// same Invoice Google Sheet invoice_gen.py already reads) and, same
+// editable-suggestion rule as trade terms/port/pricing above, only fills
+// Invoice No when it's still empty. Never fires for a brand-new consignee
+// with no history — that stays exactly as manual as it's always been.
+// Holds the running state for auto-filling each container's "Container #"
+// box with the NEXT number in the sequence (not the same number repeated).
+// null until a consignee with real history has been looked up.
+let pfNextContainerCode = null;
+function formatContainerCode(state, number) {
+  const numStr = state.numberHadLeadingZero ? String(number).padStart(state.numberDigits, '0') : String(number);
+  return `${state.yy}${state.letterCode}${numStr}`;
+}
+function takeNextContainerCode() {
+  if (!pfNextContainerCode) return null;
+  const code = formatContainerCode(pfNextContainerCode, pfNextContainerCode.nextNumber);
+  pfNextContainerCode.nextNumber += 1;
+  return code;
+}
+// Fills any container-number boxes that are still blank right now — used
+// both right after a suggestion comes back (for containers the wizard
+// already built before the async lookup resolved) and is complemented by
+// addContainer() below filling newly-added ones going forward. Never
+// touches a box that already has something in it (e.g. a real shipping
+// container ID someone typed) — same editable-suggestion rule as
+// everywhere else on this page.
+function fillEmptyContainerNumbers() {
+  if (!pfNextContainerCode) return;
+  $('pfContainers').querySelectorAll('.container-no').forEach((input) => {
+    if (!input.value.trim()) input.value = takeNextContainerCode();
+  });
+}
+async function applyNextInvNoSuggestion(customer) {
+  // Bail out BEFORE touching any state if Invoice No is already filled —
+  // lookupPricingMemory() can genuinely run twice for the same selection
+  // (the dropdown's mousedown handler, then a blur that still lands after
+  // it in some browsers despite preventDefault). Resetting pfNextContainerCode
+  // unconditionally here would wipe out a running container-number sequence
+  // that a first, successful call had just set up, right before this
+  // redundant second call returns early — found by testing "Add container"
+  // right after picking a consignee, where the 2nd+ container silently
+  // stayed blank even though the 1st one got a number correctly.
+  if ($('pf_inv_no').value.trim()) return;
+  $('pfInvNoChip').classList.add('hidden');
+  pfNextContainerCode = null;
+  try {
+    const suggestion = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(customer));
+    if (!suggestion || !suggestion.inv_no) return;
+    $('pf_inv_no').value = suggestion.inv_no;
+    $('pfInvNoChip').textContent = `● suggested — last was ${suggestion.highest_existing}`;
+    $('pfInvNoChip').classList.remove('hidden');
+    pfNextContainerCode = {
+      yy: suggestion.year_prefix,
+      letterCode: suggestion.letter_code,
+      nextNumber: suggestion.next_number,
+      numberDigits: suggestion.number_digits,
+      numberHadLeadingZero: suggestion.number_had_leading_zero,
+    };
+    fillEmptyContainerNumbers();
+  } catch (e) { /* sheet unreachable or no history — leave Invoice No for manual entry */ }
+}
 async function lookupPricingMemory(customer) {
   $('pfMemoryChip').classList.add('hidden');
   if (!customer) return;
   applyPortOfDischargeDefault(customer);
+  applyNextInvNoSuggestion(customer);
   try {
     const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(customer));
     if (!info || !info.canonical_name) return;
@@ -466,7 +549,15 @@ function wireItemRow(row) {
 function addContainer(items) {
   const wrap = $('pfContainers');
   wrap.insertAdjacentHTML('beforeend', containerBlockHtml(containerCount++, items));
-  wireContainerBlock(wrap.lastElementChild);
+  const block = wrap.lastElementChild;
+  wireContainerBlock(block);
+  // New container starts blank — give it the next code in the sequence if
+  // one's running (see pfNextContainerCode above). No-op until a consignee
+  // with real history has been looked up.
+  if (pfNextContainerCode) {
+    const containerNoInput = block.querySelector('.container-no');
+    if (containerNoInput && !containerNoInput.value.trim()) containerNoInput.value = takeNextContainerCode();
+  }
 }
 $('btnAddContainer').addEventListener('click', () => addContainer());
 // NOTE: no longer auto-adds a blank container on load — the guided wizard
@@ -487,6 +578,7 @@ const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount
 
 function resetWizard() {
   pfWiz.consignee = null; pfWiz.consigneeEntry = null; pfWiz.items = []; pfWiz.containerCount = 1;
+  pfNextContainerCode = null; // don't carry a previous consignee's number sequence into a new proforma
   $('pfWiz_consignee').value = '';
   $('pfWiz_containerCount').value = '1';
   $('pfWizConsigneeList').classList.add('hidden');
@@ -514,8 +606,7 @@ function renderWizConsigneeList(matches) {
     e.preventDefault();
     const entry = shown[Number(el.dataset.idx)];
     if (entry) {
-      const firstAlias = (entry.aliases || [])[0] || '';
-      $('pfWiz_consignee').value = firstAlias;
+      $('pfWiz_consignee').value = consigneeNameForEntry(entry);
       pfWiz.consigneeEntry = entry;
       box.classList.add('hidden');
     }
