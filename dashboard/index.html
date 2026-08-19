@@ -1673,7 +1673,7 @@ function renderSettings(s) {
         </div>
         <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Load numbering</div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Sets a floor for the next auto-assigned load number (e.g. entering 500 means the next new load is EDGE_500, not the usual next-in-sequence). Every load after that keeps counting up from it automatically — you don't need to touch this again unless you want to jump the sequence forward again. To fix ONE load's number without affecting the sequence, use the Renumber button on that load's card in Yard &gt; Loads instead. Leave blank for normal behavior.</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Sets a floor for the next auto-assigned load number (e.g. entering 500 means the next new load is EDGE_500, not the usual next-in-sequence). Every load after that keeps counting up from it automatically — you don't need to touch this again unless you want to jump the sequence forward again. Leave blank for normal behavior.</div>
           <div class="field" style="margin-bottom:0; max-width:220px;"><label>Next load number</label><input id="s_next_load_number" type="number" min="1" value="${esc(s.next_load_number ?? '')}" placeholder="e.g. 500"></div>
         </div>
         <div class="card" style="padding:22px 24px;">
@@ -2687,13 +2687,14 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <!-- Admin-only, per Apsara 2026-08-17 ("remove renumber option
-             for staff. this option should be there only for admin") —
-             the real gate is server-side (requireAdmin on PUT
-             /api/loads/:id/renumber in api.js, blocks staff AND regular
-             user tier), this just keeps the button from appearing (and
-             403-ing) for anyone who can't use it anyway. -->
-        ${ROLE === 'admin' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
+        <!-- Renumber button REMOVED 2026-08-17 per Apsara ("remove the
+             renumber button in app for both staff and admin access",
+             confirmed "remove it everywhere, no exceptions") — mirrors
+             the identical removal in mobile-app/www/index.html.
+             PUT /api/loads/:id/renumber still exists server-side (still
+             requireAdmin-gated), deliberately left rather than deleted:
+             removing a route is a breaking API change and nothing calls
+             it anymore anyway. -->
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -3272,26 +3273,8 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = 'Delete';
     }
   }));
-  document.querySelectorAll('.btn-renumber-load').forEach(btn => btn.addEventListener('click', async (ev) => {
-    ev.stopPropagation();
-    // Per Apsara 2026-08-15: "there should be a way to adjust the load
-    // number." prompt() (same lightweight-dialog convention as confirm()
-    // elsewhere in this file) pre-filled with the current id so a Cancel or
-    // an unchanged submit is a clean no-op.
-    const oldId = btn.dataset.id;
-    const newId = prompt('New load number:', oldId);
-    if (newId === null) return; // Cancel
-    if (newId.trim() === oldId) return; // unchanged — nothing to do
-    btn.disabled = true; btn.textContent = 'Renumbering…';
-    try {
-      const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId: newId.trim() }) });
-      if (res.warning) alert(res.warning);
-      loadTab('loads');
-    } catch (err) {
-      alert('Renumber failed: ' + err.message);
-      btn.disabled = false; btn.textContent = 'Renumber';
-    }
-  }));
+  // .btn-renumber-load handler removed 2026-08-17 along with the button
+  // itself — see loadCardHtml's comment.
 }
 
 // ── FACTS (admin only) — Jarvis's learned memory, fed into every AI prompt ─

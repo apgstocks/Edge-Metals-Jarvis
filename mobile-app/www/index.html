@@ -353,16 +353,21 @@ body { overflow-y:auto; }
   <div id="viewRoot"></div>
 </div>
 
-<!-- Admin settings modal — per Apsara 2026-08-15: renumber-a-load (the same
-     PUT /api/loads/:id/renumber the per-card Renumber button already uses,
-     just reachable without needing the load's card on screen) and the daily
-     yard report on/off switch (same yard_report_enabled setting the
-     dashboard's Settings > Yard page writes — GET/PUT /api/settings is
-     already requireAdmin-gated server-side in api.js, so this panel can
-     only ever do what an admin session is already allowed to do). Static
-     top-level markup (like #loginScreen/#appShell above), not generated
-     inside a view template, since it's an app-wide overlay, not part of the
-     Loads view specifically. -->
+<!-- Admin settings modal — the daily yard report on/off switch (same
+     yard_report_enabled setting the dashboard's Settings > Yard page
+     writes — GET/PUT /api/settings is already requireAdmin-gated
+     server-side in api.js, so this panel can only ever do what an admin
+     session is already allowed to do) and the next-load-number floor.
+     Static top-level markup (like #loginScreen/#appShell above), not
+     generated inside a view template, since it's an app-wide overlay,
+     not part of the Loads view specifically.
+     The "Renumber a load" section that used to lead this modal was
+     REMOVED 2026-08-17 per Apsara ("remove the renumber button in app
+     for both staff and admin access" + confirmed "remove it everywhere,
+     no exceptions") — renumbering a single load is no longer available
+     from this app to any role. Note the next-load-number floor below is
+     a different thing and stays: it sets where FUTURE auto-assigned
+     numbers start, it doesn't change an existing load's number. -->
 <div id="adminSettingsModal" class="hidden modal-overlay">
   <div class="modal-shell" style="max-width:420px;">
     <div class="modal-stripe"></div>
@@ -371,21 +376,6 @@ body { overflow-y:auto; }
       <button id="btnCloseAdminSettings" class="btn" style="padding:4px 10px;">✕</button>
     </div>
     <div class="modal-body">
-      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Renumber a load</div>
-      <!-- A dropdown, not a free-text field — per Apsara 2026-08-15 ("what
-           is this current load and new load, i want system to generate
-           current load"): typing the exact existing id from memory is
-           error-prone, so the system lists the real current loads instead
-           of asking her to type one. Populated fresh every time the modal
-           opens (see btnAdminSettings's click handler) from /api/loads —
-           always the actual current set, never stale. -->
-      <div class="field"><label>Current load #</label><select id="as_renumber_old"><option value="">Loading loads…</option></select></div>
-      <div class="field" style="margin-top:10px;"><label>New load #</label><input id="as_renumber_new" placeholder="e.g. EDGE_50"></div>
-      <button id="btnDoRenumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Renumber</button>
-      <div id="as_renumber_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
-
-      <div style="height:1px; background:var(--border-subtle); margin:22px 0;"></div>
-
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Daily yard report</div>
       <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Master switch for the 8:00 PM Eastern report (email + WhatsApp) — same setting as the dashboard's Settings &gt; Yard page.</div>
       <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer;">
@@ -402,7 +392,7 @@ body { overflow-y:auto; }
            there for admin access in app"). Same next_load_number setting,
            same floor behavior (see helpers/loads.js's nextLoadId). -->
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Load numbering</div>
-      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number instead, use the Renumber button on its card.</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior.</div>
       <div class="field"><label>Next load number</label><input id="as_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
       <button id="btnSaveNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
       <div id="as_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
@@ -431,7 +421,7 @@ body { overflow-y:auto; }
     </div>
     <div class="modal-body">
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Load numbering</div>
-      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior. To fix ONE load's number, ask an admin — renumbering a single load is admin-only.</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Floor for the next auto-assigned load number — every load after that keeps counting up on its own. Leave blank for normal behavior.</div>
       <div class="field"><label>Next load number</label><input id="ss_next_load_number" type="number" min="1" placeholder="e.g. 500"></div>
       <button id="btnSaveStaffNextLoadNumber" class="btn btn-primary" style="margin-top:10px; width:100%;">Save</button>
       <div id="ss_next_load_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
@@ -1159,13 +1149,16 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <!-- Admin-only, per Apsara 2026-08-17 ("remove renumber option
-             for staff. this option should be there only for admin") —
-             the real gate is server-side (requireAdmin on PUT
-             /api/loads/:id/renumber in api.js, blocks staff AND regular
-             user tier), this just keeps the button from appearing (and
-             404/403-ing) for anyone who can't use it anyway. -->
-        ${ROLE === 'admin' ? `<button class="btn btn-renumber-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Renumber</button>` : ''}
+        <!-- Renumber button REMOVED 2026-08-17 per Apsara ("remove the
+             renumber button in app for both staff and admin access",
+             confirmed "remove it everywhere, no exceptions"). Earlier
+             the same day it had been narrowed to admin-only; now it's
+             gone from this app for every role, along with the
+             Renumber-a-load section that was in the Admin settings
+             modal. PUT /api/loads/:id/renumber still exists server-side
+             (still requireAdmin-gated) — deliberately left there rather
+             than deleted, since removing a route is a breaking API
+             change and nothing in this app calls it anymore anyway. -->
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
       </div>
     </div>`;
@@ -1767,22 +1760,8 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = 'Delete';
     }
   }));
-  document.querySelectorAll('.btn-renumber-load').forEach(btn => btn.addEventListener('click', async (ev) => {
-    ev.stopPropagation();
-    const oldId = btn.dataset.id;
-    const newId = prompt('New load number:', oldId);
-    if (newId === null) return;
-    if (newId.trim() === oldId) return;
-    btn.disabled = true; btn.textContent = 'Renumbering…';
-    try {
-      const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId: newId.trim() }) });
-      if (res.warning) alert(res.warning);
-      loadTab('loads');
-    } catch (err) {
-      alert('Renumber failed: ' + err.message);
-      btn.disabled = false; btn.textContent = 'Renumber';
-    }
-  }));
+  // .btn-renumber-load handler removed 2026-08-17 along with the button
+  // itself — see loadCardHtml's comment.
 }
 
 
@@ -2011,24 +1990,15 @@ $('btnSignout').addEventListener('click', () => {
 });
 
 // ── Admin settings modal ─────────────────────────────────────────────────
-// Per Apsara 2026-08-15. Fetches the current yard_report_enabled value AND
-// the live list of loads (for the renumber dropdown) on EVERY open — not
-// cached — so neither can show something stale if it changed from the
-// dashboard, or a new load was added, since the app was last opened.
+// Fetches the current yard_report_enabled / next_load_number values on
+// EVERY open — not cached — so neither can show something stale if it
+// changed from the dashboard since the app was last opened.
+// The renumber dropdown this used to also populate (and the
+// btnDoRenumber handler that followed) were removed 2026-08-17 per
+// Apsara, along with the markup — see the modal's own comment.
 $('btnAdminSettings').addEventListener('click', async () => {
-  $('as_renumber_new').value = ''; $('as_renumber_msg').textContent = '';
   $('as_report_msg').textContent = '';
   $('adminSettingsModal').classList.remove('hidden');
-  const oldSelect = $('as_renumber_old');
-  oldSelect.innerHTML = '<option value="">Loading loads…</option>';
-  try {
-    const loads = await api('/api/loads');
-    oldSelect.innerHTML = loads.length
-      ? loads.map(l => `<option value="${esc(l.id)}">${esc(l.id)} — ${esc(l.seller || 'Unnamed seller')}${l.date ? ' — ' + esc(l.date) : ''}</option>`).join('')
-      : '<option value="">No loads yet</option>';
-  } catch (err) {
-    oldSelect.innerHTML = '<option value="">Could not load list</option>';
-  }
   try {
     const settings = await api('/api/settings');
     $('as_report_enabled').checked = !!settings.yard_report_enabled;
@@ -2039,37 +2009,6 @@ $('btnAdminSettings').addEventListener('click', async () => {
   }
 });
 $('btnCloseAdminSettings').addEventListener('click', () => $('adminSettingsModal').classList.add('hidden'));
-
-$('btnDoRenumber').addEventListener('click', async () => {
-  const oldId = $('as_renumber_old').value.trim();
-  const newId = $('as_renumber_new').value.trim();
-  const msg = $('as_renumber_msg');
-  msg.style.color = 'var(--status-danger)';
-  if (!oldId || !newId) { msg.textContent = 'Both fields are required.'; return; }
-  const btn = $('btnDoRenumber');
-  btn.disabled = true; btn.textContent = 'Renumbering…';
-  msg.textContent = '';
-  try {
-    const res = await api(`/api/loads/${encodeURIComponent(oldId)}/renumber`, { method: 'PUT', body: JSON.stringify({ newId }) });
-    msg.style.color = 'var(--status-success, #3fae55)';
-    msg.textContent = res.warning ? `Renumbered — ${res.warning}` : `Renumbered ${oldId} → ${newId}.`;
-    $('as_renumber_new').value = '';
-    // Refresh the dropdown — oldId no longer exists under that name, so
-    // re-fetching keeps the list honest instead of leaving a now-wrong
-    // option sitting there.
-    try {
-      const loads = await api('/api/loads');
-      $('as_renumber_old').innerHTML = loads.length
-        ? loads.map(l => `<option value="${esc(l.id)}">${esc(l.id)} — ${esc(l.seller || 'Unnamed seller')}${l.date ? ' — ' + esc(l.date) : ''}</option>`).join('')
-        : '<option value="">No loads yet</option>';
-    } catch {}
-  } catch (err) {
-    msg.style.color = 'var(--status-danger)';
-    msg.textContent = err.message;
-  } finally {
-    btn.disabled = false; btn.textContent = 'Renumber';
-  }
-});
 
 $('btnSaveReportToggle').addEventListener('click', async () => {
   const msg = $('as_report_msg');
