@@ -65,6 +65,10 @@ tr:last-child td { border-bottom:none; }
 </head>
 <body>
 <section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
+  <!-- Same "Back to dashboard" pattern as address-book.html / quote-requests.html
+       / documents.html — this page was the one remaining page missing it, per
+       Apsara: "outbound loads also no back button." -->
+  <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
   <div class="eyebrow">// Outbound Loads</div>
   <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Sales to buyers</h2>
   <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Material sold/shipped OUT to a buyer (Eccomelt or anyone else) — the mirror of the yard Loads tab, which tracks purchases FROM suppliers.</div>

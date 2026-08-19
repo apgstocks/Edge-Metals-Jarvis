@@ -78,6 +78,16 @@ tr:last-child td { border-bottom:none; }
 .autocomplete-item:hover { background:var(--surface-hover); }
 .container-block { border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:10px; }
 .item-row { display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:8px; margin-bottom:6px; align-items:center; }
+/* Apsara: "this text box looks ugly" — the item-desc/item-qty/item-rate
+   inputs (and the wizard's pfwiz-item-* equivalents, which share this same
+   .item-row class) were never actually styled. Every other input on this
+   page gets its look through ".field input" — but these rows are built as
+   raw <input> tags with no ".field" wrapper, so they fell back to unstyled
+   default browser inputs (white background, black text) sitting inside an
+   otherwise all-dark page. This brings them into the same dark theme as
+   everything else, container-number input included. */
+.item-row input, .item-row select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:12.5px; font-family:inherit; }
+.item-row input:focus, .item-row select:focus { border-color:var(--accent); }
 .placeholder-note { padding:40px 20px; text-align:center; color:var(--text-faint); font-size:13px; border:1px dashed var(--border-default); border-radius:var(--radius-sm); }
 /* Light mode — Apsara: "there should be dark/light option for documents
    toggle". Same token names, just re-pointed; every rule above already
@@ -206,6 +216,7 @@ body[data-theme="light"] {
       <button id="btnAddContainer" type="button" class="btn btn-secondary" style="margin-top:4px; padding:6px 12px; font-size:10px;">+ Add container</button>
 
       <div id="pfError" class="hidden" style="margin-top:14px; font-size:12px; color:var(--status-danger);"></div>
+      <div id="pfSuccessMsg" class="hidden" style="margin-top:14px; font-size:12px; color:var(--leaf-400);"></div>
       <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:20px;">
         <button id="btnPfPreview" class="btn btn-secondary">Preview PDF</button>
         <button id="btnPfGenerate" class="btn btn-primary">Generate &amp; Save</button>
@@ -287,11 +298,48 @@ document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('clic
 let addressBook = [];
 api('/api/address-book').then((d) => { addressBook = d || []; }).catch(() => {});
 
+// Apsara: "when i type Joey/Taewon.only Joey coming" — matching used to
+// check ONLY the aliases array (nicknames/contact names), never the raw
+// address block. If a customer's company name (e.g. "Taewon") only appears
+// in their raw address text and isn't itself one of the short aliases
+// (e.g. just "Joey"), typing the company name found nothing — not a typo
+// or a broken filter, just a search that was too narrow. This widens the
+// same search to also match against the raw address text, and ranks
+// alias hits first so a short nickname match still surfaces above a
+// company name found only in the address block.
+// NOTE: I could not verify this against Apsara's real address-book data —
+// her live session had expired (401 on /api/address-book) when I checked,
+// so this is the most likely cause given how the data is shaped, not a
+// confirmed live fix. Worth a quick retest once she's logged back in.
+function searchAddressBook(q) {
+  const aliasHits = [];
+  const rawOnlyHits = [];
+  addressBook.forEach((e) => {
+    const aliasHit = (e.aliases || []).some((a) => a.toLowerCase().includes(q));
+    if (aliasHit) aliasHits.push(e);
+    else if ((e.raw || '').toLowerCase().includes(q)) rawOnlyHits.push(e);
+  });
+  return aliasHits.concat(rawOnlyHits);
+}
+
+// Shows the aliases as before, plus the first line of the raw address when
+// it's not already one of the aliases — otherwise a match found only via
+// company name (raw text, see searchAddressBook above) would render as
+// just an unrelated-looking nickname with no clue why it matched.
+function addressBookEntryLabel(entry) {
+  const aliases = entry.aliases || [];
+  const rawFirstLine = (entry.raw || '').split('\n')[0].trim();
+  const aliasText = aliases.join(' / ');
+  if (rawFirstLine && !aliases.some((a) => a.toLowerCase() === rawFirstLine.toLowerCase())) {
+    return aliasText ? `${aliasText} — ${rawFirstLine}` : rawFirstLine;
+  }
+  return aliasText;
+}
 function renderConsigneeList(matches) {
   const box = $('pfConsigneeList');
   if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const shown = matches.slice(0, 8);
-  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
   box.classList.remove('hidden');
   // 'mousedown' (not 'click'), with preventDefault, on purpose: clicking a
   // div blurs the still-focused #pf_consignee input on mousedown, BEFORE
@@ -326,8 +374,7 @@ function renderConsigneeList(matches) {
 $('pf_consignee').addEventListener('input', () => {
   const q = $('pf_consignee').value.trim().toLowerCase();
   if (!q) { $('pfConsigneeList').classList.add('hidden'); return; }
-  const matches = addressBook.filter((e) => (e.aliases || []).some((a) => a.toLowerCase().includes(q)));
-  renderConsigneeList(matches);
+  renderConsigneeList(searchAddressBook(q));
 });
 $('pf_consignee').addEventListener('blur', () => {
   setTimeout(() => $('pfConsigneeList').classList.add('hidden'), 150);
@@ -461,7 +508,7 @@ function renderWizConsigneeList(matches) {
   const box = $('pfWizConsigneeList');
   if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const shown = matches.slice(0, 8);
-  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
   box.classList.remove('hidden');
   box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
     e.preventDefault();
@@ -478,7 +525,7 @@ $('pfWiz_consignee').addEventListener('input', () => {
   pfWiz.consigneeEntry = null; // typed something new — stale address-book match no longer applies
   const q = $('pfWiz_consignee').value.trim().toLowerCase();
   if (!q) { $('pfWizConsigneeList').classList.add('hidden'); return; }
-  renderWizConsigneeList(addressBook.filter((e) => (e.aliases || []).some((a) => a.toLowerCase().includes(q))));
+  renderWizConsigneeList(searchAddressBook(q));
 });
 $('pfWiz_consignee').addEventListener('blur', () => setTimeout(() => $('pfWizConsigneeList').classList.add('hidden'), 150));
 $('btnPfWiz1Next').addEventListener('click', () => {
@@ -628,8 +675,39 @@ $('btnPfPreview').addEventListener('click', async () => {
     window.open(URL.createObjectURL(blob), '_blank');
   } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
 });
+// Apsara: "when i click generate and save,i want a pdf to be generated,
+// downloaded and show in downloads folder". Before this, "Generate & Save"
+// only ever saved the PDF into the server-side archive
+// (helpers/documentsSaved.js) and returned JSON — the browser never
+// received the actual PDF bytes on that path (only /api/proforma/generate
+// with ?preview=1 sends the PDF binary; the non-preview save response is
+// `{ ok, saved_filename }` only, by api.js design — see the route). The
+// alert("Saved: ...") made it LOOK like something happened, but nothing
+// ever reached the browser's Downloads folder.
+// Fix: after the server confirms the save, immediately re-fetch that exact
+// saved file through the existing, already-tested /api/documents/download
+// route and trigger a real browser download via a Blob + an <a download>
+// click — the same mechanism a normal file download link uses. No backend
+// change needed: this reuses the download route the "Saved proformas" list
+// below already relies on, so it can't regress that or the save/pricing-
+// memory side effects the generate route also does.
+async function downloadSavedProforma(filename) {
+  const res = await fetch('/api/documents/download?kind=proforma&file=' + encodeURIComponent(filename));
+  if (!res.ok) return false;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return true;
+}
 $('btnPfGenerate').addEventListener('click', async () => {
   $('pfError').classList.add('hidden');
+  $('pfSuccessMsg').classList.add('hidden');
   const payload = collectProformaPayload();
   if (!payload.consignee) { $('pfError').textContent = 'Consignee is required.'; $('pfError').classList.remove('hidden'); return; }
   if (!payload.containers.length) { $('pfError').textContent = 'Add at least one container with an item.'; $('pfError').classList.remove('hidden'); return; }
@@ -637,7 +715,12 @@ $('btnPfGenerate').addEventListener('click', async () => {
     const result = await fetchProformaPdfBlob(payload, false);
     loadSavedProformas();
     $('pfError').classList.add('hidden');
-    alert('Saved: ' + (result.saved_filename || 'proforma.pdf'));
+    const filename = result.saved_filename || '';
+    const downloaded = filename ? await downloadSavedProforma(filename) : false;
+    $('pfSuccessMsg').textContent = downloaded
+      ? `Saved and downloaded: ${filename}`
+      : `Saved: ${filename || 'proforma.pdf'} (download didn't start — open it from "Saved proformas" below instead).`;
+    $('pfSuccessMsg').classList.remove('hidden');
   } catch (e) { $('pfError').textContent = e.message; $('pfError').classList.remove('hidden'); }
 });
 
