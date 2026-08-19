@@ -384,12 +384,19 @@ function renderConsigneeList(matches) {
       const consigneeName = consigneeNameForEntry(entry);
       $('pf_consignee').value = consigneeName;
       $('pf_consignee_address').value = entry.raw || '';
+      // Kept separately from pf_consignee's value (which is the split,
+      // after-the-"/" name used on the actual PDF) — the Edge Metals sheet
+      // log (helpers/proformaSheetLog.js) wants the FULL address-book tag
+      // as-is (e.g. "Joey/Taewon"), matching how that column is already
+      // used in the real Invoice sheet.
+      window._pfConsigneeSheetTag = (entry.aliases || []).join('/') || consigneeName;
       box.classList.add('hidden');
       lookupPricingMemory(consigneeName);
     }
   }));
 }
 $('pf_consignee').addEventListener('input', () => {
+  window._pfConsigneeSheetTag = null; // typed something new — stale address-book match no longer applies
   const q = $('pf_consignee').value.trim().toLowerCase();
   if (!q) { $('pfConsigneeList').classList.add('hidden'); return; }
   renderConsigneeList(searchAddressBook(q));
@@ -579,6 +586,7 @@ const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount
 function resetWizard() {
   pfWiz.consignee = null; pfWiz.consigneeEntry = null; pfWiz.items = []; pfWiz.containerCount = 1;
   pfNextContainerCode = null; // don't carry a previous consignee's number sequence into a new proforma
+  window._pfConsigneeSheetTag = null;
   $('pfWiz_consignee').value = '';
   $('pfWiz_containerCount').value = '1';
   $('pfWizConsigneeList').classList.add('hidden');
@@ -699,6 +707,7 @@ $('btnPfWiz3Finish').addEventListener('click', () => {
   // still a normal editable input from here on, nothing locked.
   $('pf_consignee').value = pfWiz.consignee || '';
   $('pf_consignee_address').value = pfWiz.consigneeEntry ? (pfWiz.consigneeEntry.raw || '') : '';
+  window._pfConsigneeSheetTag = pfWiz.consigneeEntry ? ((pfWiz.consigneeEntry.aliases || []).join('/') || pfWiz.consignee) : null;
   $('pfContainers').innerHTML = '';
   for (let i = 0; i < pfWiz.containerCount; i++) addContainer(pfWiz.items.map((it) => ({ ...it })));
   lookupPricingMemory(pfWiz.consignee || '');
@@ -730,6 +739,11 @@ function collectProformaPayload() {
     reference: $('pf_reference').value.trim(),
     qty_unit: $('pf_qty_unit').value,
     consignee: $('pf_consignee').value.trim(),
+    // Full address-book tag (e.g. "Joey/Taewon") for the Edge Metals sheet
+    // log — falls back to the plain consignee name for manually-typed
+    // consignees with no address-book match. See window._pfConsigneeSheetTag
+    // above and helpers/proformaSheetLog.js for why these differ.
+    consignee_sheet_tag: window._pfConsigneeSheetTag || $('pf_consignee').value.trim(),
     consignee_address: $('pf_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
     trade_terms: $('pf_trade_terms').value.trim(),
     port_discharge: $('pf_port_discharge').value.trim(),

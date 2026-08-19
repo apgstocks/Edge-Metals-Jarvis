@@ -1455,6 +1455,19 @@ function createApi() {
                 console.error('[proforma] pricing-memory record failed (non-fatal):', e.message);
             }
 
+            // Added per Apsara: "once proforma generated.i want a new sheet
+            // called Edge Metals should be generated first time..." — logs
+            // this generation into a Google Sheet (see
+            // helpers/proformaSheetLog.js for the full column mapping and
+            // reasoning). Non-fatal like the pricing-memory record above —
+            // a Sheets/Drive hiccup should never block the PDF the person
+            // is actually waiting on.
+            try {
+                await require('./helpers/proformaSheetLog').logProformaToSheet(body);
+            } catch (e) {
+                console.error('[proforma] Edge Metals sheet log failed (non-fatal):', e.message);
+            }
+
             res.json({ ok: true, saved_filename: path.basename(savedPath) });
         } catch (e) {
             console.error('[proforma] generate failed:', e);

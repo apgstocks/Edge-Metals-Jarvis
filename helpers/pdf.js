@@ -28,6 +28,23 @@ function ensureSpace(doc, height) {
     if (doc.y + height > PAGE_BOTTOM) doc.addPage();
 }
 
+// Money formatting, per Apsara 2026-08-19 ("if its 0.60 it should be 0.60
+// only not 0.6"). A price typed as 0.60 is stored as the NUMBER 0.6 —
+// JavaScript has no concept of a trailing zero — so every document was
+// printing "$0.6" where the yard wrote "$0.60".
+//
+// Pads to a MINIMUM of 2 decimals rather than forcing exactly 2: prices
+// here genuinely run to 3+ places (0.175/lb is a real rate in this data),
+// and toFixed(2) would silently round that to 0.18 and change what the
+// seller is paid. So 0.6 -> "0.60", 45 -> "45.00", but 0.175 stays
+// "0.175".
+function money(n) {
+    if (n == null || n === '' || !isFinite(Number(n))) return null;
+    const s = String(n);
+    const decimals = s.includes('.') ? s.split('.')[1].length : 0;
+    return decimals >= 2 ? s : Number(n).toFixed(2);
+}
+
 // The issuing party is not a variable on these documents — every load runs
 // through Edge Trading, so it's part of the letterhead rather than a field
 // that could be left blank or typo'd per load. Per Apsara 2026-08-12: this
@@ -190,7 +207,7 @@ function drawItemTable(doc, items, columns, totalsRow) {
     // columns at all, so it's unaffected).
     const fmt = (n, key) => {
         if (n == null) return '—';
-        return (key === 'price' || key === 'amount') ? `$${n}` : String(n);
+        return (key === 'price' || key === 'amount') ? `$${money(n)}` : String(n);
     };
     const tableW = PAGE_R - PAGE_L;
     const headerH = 24, rowH = 22;
@@ -518,7 +535,7 @@ function generateLoadPdf(load, opts = {}) {
                     { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
                     { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
                     { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
-                    { label: 'Amount total', value: load.amount       != null ? `$${load.amount}`               : '—', emphasize: true },
+                    { label: 'Amount total', value: load.amount       != null ? `$${money(load.amount)}`        : '—', emphasize: true },
                 ]);
             }
 
@@ -674,7 +691,7 @@ function generateInventoryReportPdf(dateKey, todayReport, overallReport) {
             drawSummaryBox(doc, [
                 { label: 'Loads today',  value: String(todayReport.loadCount) },
                 { label: 'Net total',    value: `${todayNet} ${todayReport.unit}`, emphasize: true },
-                { label: 'Amount total', value: `$${todayAmount}`, emphasize: true },
+                { label: 'Amount total', value: `$${money(todayAmount)}`, emphasize: true },
             ]);
 
             drawSectionHeading(doc, `By seller — today`);
@@ -733,7 +750,7 @@ function generateInventoryExportPdf(rangeLabel, report) {
             drawSummaryBox(doc, [
                 { label: 'Loads',        value: String(report.loadCount) },
                 { label: 'Net total',    value: `${net} ${report.unit}`, emphasize: true },
-                { label: 'Amount total', value: `$${amount}`, emphasize: true },
+                { label: 'Amount total', value: `$${money(amount)}`, emphasize: true },
             ]);
 
             drawSectionHeading(doc, 'By seller');
@@ -833,12 +850,12 @@ function drawReceiptContent(doc, load, contentWidth) {
     items.forEach((it, i) => {
         line(it.description || `Item ${i + 1}`, { size: 8.5, bold: true, gap: 0.5 });
         line(`Gross ${it.gross_weight ?? '—'} ${unit}  ·  Tare ${it.tare_weight ?? '—'} ${unit}`, { size: 7.5, color: MUTED, gap: 0.5 });
-        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${it.price ?? '—'}  ·  Amount $${it.amount ?? '—'}`, { size: 7.5, gap: 1.5 });
+        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${money(it.price) ?? '—'}  ·  Amount $${money(it.amount) ?? '—'}`, { size: 7.5, gap: 1.5 });
     });
     divider();
 
     line(`Net total: ${load.net_weight != null ? `${load.net_weight} ${unit}` : '—'}`, { size: 9.5, bold: true, gap: 1 });
-    line(`Amount total: ${load.amount != null ? `$${load.amount}` : '—'}`, { size: 11, bold: true, gap: 3 });
+    line(`Amount total: ${load.amount != null ? `$${money(load.amount)}` : '—'}`, { size: 11, bold: true, gap: 3 });
     divider();
 
     // Signature — same idea as the full ticket's block (see
