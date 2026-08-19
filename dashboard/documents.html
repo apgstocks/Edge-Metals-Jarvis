@@ -260,7 +260,8 @@ api('/api/address-book').then((d) => { addressBook = d || []; }).catch(() => {})
 function renderConsigneeList(matches) {
   const box = $('pfConsigneeList');
   if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  box.innerHTML = matches.slice(0, 8).map((m) => `<div class="autocomplete-item" data-id="${esc(m.id)}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  const shown = matches.slice(0, 8);
+  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
   box.classList.remove('hidden');
   // 'mousedown' (not 'click'), with preventDefault, on purpose: clicking a
   // div blurs the still-focused #pf_consignee input on mousedown, BEFORE
@@ -270,9 +271,19 @@ function renderConsigneeList(matches) {
   // via Apsara: "when i click consignee name, it is not filling up".
   // preventDefault() on mousedown stops the input from blurring in the
   // first place, so there's no race left to lose.
+  //
+  // Selection is matched by INDEX into `shown` (data-idx), NOT by
+  // addressBook.find(e => e.id === ...) — found live on Apsara's actual
+  // server: 27 of her 98 real address-book entries have no `id` at all
+  // (they predate that field being added to the storage schema and were
+  // never backfilled). Matching by id silently failed — and kept failing
+  // silently, no error, just a click that did nothing — for any of those
+  // 27 entries, which is exactly what "consignee not clickable" turned out
+  // to be. Matching by position in the already-rendered list needs no id
+  // at all, so it works regardless of whether the underlying data has one.
   box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const entry = addressBook.find((e) => e.id === el.dataset.id);
+    const entry = shown[Number(el.dataset.idx)];
     if (entry) {
       const firstAlias = (entry.aliases || [])[0] || '';
       $('pf_consignee').value = firstAlias;
@@ -401,15 +412,18 @@ function showWizStep(n) {
 
 // Step 1 — consignee, same address-book typeahead pattern as the full form
 // (including the mousedown/preventDefault fix — see the "when i click
-// consignee name, it is not filling up" bug this mirrors).
+// consignee name, it is not filling up" bug this mirrors, and the
+// match-by-index fix below — see "consignee not clickable", the SAME
+// dropdown pattern here in the wizard had the identical id-lookup bug).
 function renderWizConsigneeList(matches) {
   const box = $('pfWizConsigneeList');
   if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  box.innerHTML = matches.slice(0, 8).map((m) => `<div class="autocomplete-item" data-id="${esc(m.id)}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
+  const shown = matches.slice(0, 8);
+  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc((m.aliases || []).join(' / '))}</div>`).join('');
   box.classList.remove('hidden');
   box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const entry = addressBook.find((x) => x.id === el.dataset.id);
+    const entry = shown[Number(el.dataset.idx)];
     if (entry) {
       const firstAlias = (entry.aliases || [])[0] || '';
       $('pfWiz_consignee').value = firstAlias;
