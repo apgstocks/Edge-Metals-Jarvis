@@ -3275,7 +3275,12 @@ function wireDeckEvents() {
     // The server-side gate in PUT /api/loads/:id is unchanged and still
     // the real boundary; this just stops the form opening on a bad or
     // empty password.
-    if (load.status === 'pdf_generated') {
+    // An admin session is already proof of admin — no prompt (corrected
+    // 2026-08-19 per Apsara). The prompt is how a STAFF or USER session
+    // unlocks a locked load; re-asking an admin for the password they
+    // just signed in with proves nothing. Server agrees: PUT
+    // /api/loads/:id skips the check entirely for req.role === 'admin'.
+    if (load.status === 'pdf_generated' && ROLE !== 'admin') {
       const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
       if (pw === null) return; // cancelled
       if (!pw.trim()) { alert('Admin password is required to edit a load whose PDF has been generated.'); return; }

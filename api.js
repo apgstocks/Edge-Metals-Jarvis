@@ -834,7 +834,15 @@ function createApi() {
             // git checkout) touched this exact file mid-session. If this
             // keeps happening, it's worth checking whether anything else
             // is writing to api.js while I'm mid-edit on it.
-            if (existing.status === 'pdf_generated') {
+            // An ADMIN SESSION IS ALREADY PROOF OF ADMIN — corrected
+            // 2026-08-19 per Apsara ("in admin access, when editing gen pdf,
+            // still asking for password. what the hell?"). She was right:
+            // the password prompt exists so a STAFF or USER session can
+            // unlock a locked load, not to re-challenge someone who already
+            // signed in with that very password. Demanding it again proves
+            // nothing and is pure friction for the person most likely to be
+            // fixing a ticket.
+            if (existing.status === 'pdf_generated' && req.role !== 'admin') {
                 const adminPw = cfg.ADMIN_PASSWORD;
                 const supplied = String(b.admin_password || '');
                 const eq = (a, b2) => { const A = Buffer.from(a), B = Buffer.from(b2); return A.length === B.length && crypto.timingSafeEqual(A, B); };
@@ -1462,13 +1470,14 @@ function createApi() {
             // reasoning). Non-fatal like the pricing-memory record above —
             // a Sheets/Drive hiccup should never block the PDF the person
             // is actually waiting on.
+            let sheetLogResult = null;
             try {
-                await require('./helpers/proformaSheetLog').logProformaToSheet(body);
+                sheetLogResult = await require('./helpers/proformaSheetLog').logProformaToSheet(body);
             } catch (e) {
                 console.error('[proforma] Edge Metals sheet log failed (non-fatal):', e.message);
             }
 
-            res.json({ ok: true, saved_filename: path.basename(savedPath) });
+            res.json({ ok: true, saved_filename: path.basename(savedPath), sheet_log: sheetLogResult });
         } catch (e) {
             console.error('[proforma] generate failed:', e);
             res.status(500).json({ error: e.message });
