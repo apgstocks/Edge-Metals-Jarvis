@@ -1619,6 +1619,47 @@ async function checkPhotoQuality(imageBase64, mimeType = 'image/jpeg') {
 // always has, so accuracy behavior is unchanged; what's removed is the
 // stage that costs the most and fails the most (the AI locate fallback
 // alone measures 5.6-9.9s in this file's own logs).
+// Minimal Gemini read used ONLY by the scanner agreement gate.
+//
+// Deliberately NOT readWeightSinglePass: that function carries the full
+// pipeline prompt, retry logic and metadata extraction, and measured >4.3s
+// in-path — too slow to fit a 5s budget alongside anything else, which is
+// why the gate was timing out and never getting a second opinion. This is
+// one call, one tightly-scoped prompt, no retries: measured ~2.2s.
+//
+// The prompt states the two things about THIS display that a general
+// prompt gets wrong: the reading is exactly 4 digits, and the leading
+// cells are permanently-lit "8.8." placeholders that are not part of the
+// weight (confirmed by inspecting the photos — they are fully lit, not
+// dim, which is why no brightness filter removes them).
+async function leanGeminiWeightRead(imageBase64) {
+    const expected = Number(process.env.EXPECTED_WEIGHT_DIGITS) || null;
+    const digitRule = expected
+        ? `The weight is exactly ${expected} digits.`
+        : 'The weight is normally 3 to 5 digits.';
+    const prompt = [
+        'Close-up of a seven-segment LED weighing indicator.',
+        'Read ONLY the large lit weight digits.',
+        digitRule,
+        "Cells on the LEFT may be permanently lit showing '8.' or '8.8.' — these are NOT part of the weight, ignore them.",
+        'Ignore indicator lamps and labels (NET ZERO AC COUNT STABLE oz lb kg) and any button text.',
+        'Reply with ONLY the digits. No units, no spaces. If unreadable reply UNKNOWN.',
+    ].join('\n');
+    try {
+        const { GoogleGenerativeAI } = require('@google/generative-ai');
+        const model = new GoogleGenerativeAI(cfg.GEMINI_API_KEY)
+            .getGenerativeModel({ model: cfg.GEMINI_MODEL || 'gemini-2.0-flash' });
+        const res = await model.generateContent([prompt, { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }]);
+        const out = (res.response.text() || '').trim();
+        if (!/^\d{3,6}$/.test(out)) return null;
+        const n = parseInt(out, 10);
+        return Number.isFinite(n) ? n : null;
+    } catch (err) {
+        console.warn('[GEMINI] Lean gate read failed:', err.message);
+        return null;
+    }
+}
+
 async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     if (!imageBase64) throw new Error('imageBase64 required');
     const preCropped = !!opts.preCropped;
@@ -1676,7 +1717,11 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
     // compensating for a badly-framed image. Give it a good frame and the
     // compensation isn't needed.
     const TOTAL_BUDGET_MS = Number(process.env.WEIGHT_READ_BUDGET_MS)
-        || (opts.preCropped ? 4500 : 5000);
+        || (opts.preCropped ? 5000 : 5000);
+    // Never returns 0 — a tiny non-zero floor means a Gemini call that is
+    // just about to resolve still gets a chance, instead of the budget
+    // being spent entirely by an unlucky earlier stage.
+    const remainingBudget = () => Math.max(600, TOTAL_BUDGET_MS - (Date.now() - t0));
 
     // ── SCANNER FAST PATH ────────────────────────────────────────────────
     // For a scanner capture the operator has already framed the display, so
@@ -1738,9 +1783,9 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
                     return { weight: ex && ex.weight != null ? ex.weight : null, text: t };
                 }).catch(() => ({ weight: null, text: null }));
             const geminiP = withTimeout(
-                readWeightSinglePass(imageBase64, 'image/jpeg', 1, { isCrop: true }).catch(() => null),
-                Math.min(3500, remainingBudget()), 'Scanner Gemini read',
-            ).then((g) => (g && g.weight != null ? g.weight : null)).catch(() => null);
+                leanGeminiWeightRead(imageBase64),
+                Math.min(4000, remainingBudget()), 'Scanner Gemini read',
+            ).catch(() => null);
 
             const [vis, gem] = await Promise.all([visionP, geminiP]);
             const ms = Date.now() - tFast;
@@ -1776,10 +1821,6 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
             console.warn('[GEMINI] Scanner fast path failed, falling through:', err.message);
         }
     }
-    // Never returns 0 — a tiny non-zero floor means a Gemini call that is
-    // just about to resolve still gets a chance, instead of the budget
-    // being spent entirely by an unlucky earlier stage.
-    const remainingBudget = () => Math.max(600, TOTAL_BUDGET_MS - (Date.now() - t0));
 
     // Added 2026-08-11 to end a genuinely expensive class of confusion: the
     // client (dashboard AND the separately-bundled mobile APK) decides what
@@ -3227,7 +3268,7 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
 // outcome and far better than a wrong weight on a ticket.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     const budget = Number(process.env.WEIGHT_READ_BUDGET_MS)
-        || (opts.preCropped ? 4500 : 5000);
+        || (opts.preCropped ? 5000 : 5000);
     // Small grace on top of the internal budget so the internal logic — which
     // can still return a good flagged answer — normally wins the race, and
     // this backstop only fires when something genuinely overran.
