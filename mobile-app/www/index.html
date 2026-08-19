@@ -1556,7 +1556,12 @@ function openEditLoadModal(load) {
   currentLoadItems = items.map(it => ({
     description: it.description || '',
     gross_weight: it.gross_weight ?? '',
-    tare_weight : it.tare_weight  ?? '',
+    // Blank tare renders as 0, per Apsara 2026-08-19 ("tare should be by
+    // default 0"). New rows already defaulted to '0' via blankLoadItem,
+    // but EDITING a load whose tare was stored null still showed an empty
+    // box — so the default held for new loads and quietly didn't for
+    // edits, which is the case she was hitting.
+    tare_weight : (it.tare_weight ?? '') === '' ? '0' : it.tare_weight,
     price: it.price ?? '',
     unit : it.unit || '',
     grossPhoto: null, tarePhoto: null,
@@ -2040,7 +2045,10 @@ function wireLoadsEvents() {
         .map(it => ({
           description: it.description,
           gross_weight: it.gross_weight || null,
-          tare_weight : it.tare_weight  || null,
+          // Blank -> 0, not null (2026-08-19). '|| null' also turned a
+          // numeric 0 into null, so an explicit zero tare was being
+          // discarded and came back blank on the next edit.
+          tare_weight : (it.tare_weight ?? '') === '' ? 0 : it.tare_weight,
           price: it.price || null,
           unit : it.unit  || null,
           gross_photo_base64: it.grossPhoto ? it.grossPhoto.base64 : null,
