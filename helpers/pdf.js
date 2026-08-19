@@ -780,15 +780,37 @@ function generateInventoryExportPdf(rangeLabel, report) {
 // real document sized to fit that measured height exactly — a real
 // continuous-receipt page, not a multi-page LETTER-style document.
 const RECEIPT_WIDTH_MM = { '58': 58, '80': 80 };
+// Fixed page height, per Apsara 2026-08-19 ("make the pos receipt standard
+// size for printing"). The first version sized every page to its own
+// content, which meant no two receipts had the same page size. That's fine
+// for a raw continuous roll but bad for everything that expects a real
+// page: Android's print dialog and most print drivers map the PDF page onto
+// a selected paper size, and a page whose dimensions change per load gets
+// scaled inconsistently — the same receipt coming out a different size each
+// time. 80x150mm is a conventional receipt page and comfortably fits a
+// typical load; content that genuinely exceeds it flows onto a SECOND PAGE
+// OF THE SAME SIZE rather than stretching the page (see generateLoadReceiptPdf).
+const RECEIPT_HEIGHT_MM = 150;
 function mmToPt(mm) { return (mm / 25.4) * 72; }
 
 function drawReceiptContent(doc, load, contentWidth) {
+    // Page-break guard for the primitives that DON'T paginate themselves.
+    // doc.text() checks the bottom margin and adds a page on its own, but
+    // moveTo/lineTo/image draw at raw coordinates — past the page bottom
+    // they'd render off the page and silently vanish. Now that the page
+    // height is fixed (2026-08-19) that's a reachable case on a long load,
+    // where before the page simply grew to fit.
+    const room = (needed) => {
+        const bottom = doc.page.height - doc.page.margins.bottom;
+        if (doc.y + needed > bottom) doc.addPage();
+    };
     const line = (text, { size = 9, bold = false, align = 'left', gap = 2, color = '#000' } = {}) => {
         doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
             .text(text, doc.page.margins.left, doc.y, { width: contentWidth, align });
         doc.moveDown(gap / size);
     };
     const divider = () => {
+        room(4);
         doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + contentWidth, doc.y)
             .lineWidth(0.75).strokeColor('#000').dash(2, { space: 2 }).stroke().undash();
         doc.moveDown(0.6);
@@ -824,6 +846,7 @@ function drawReceiptContent(doc, load, contentWidth) {
     // seller physically takes away, so it's arguably the one that most
     // needs their signature on it. Prints the ruled line either way so an
     // unsigned receipt can still be signed by hand on paper.
+    room(52); // keep the signature image, its rule and its label together
     if (load.seller_signature) {
         try {
             const b64 = String(load.seller_signature).replace(/^data:image\/\w+;base64,/, '');
@@ -844,24 +867,22 @@ function drawReceiptContent(doc, load, contentWidth) {
 
 // widthMm: '58' or '80' (the two standard thermal roll widths) — defaults
 // to 80mm, the more common size for a business receipt printer.
+// heightMm: defaults to RECEIPT_HEIGHT_MM (150mm). Every page is this exact
+// size, per Apsara 2026-08-19 ("make the pos receipt standard size for
+// printing") — a receipt longer than one page continues onto another page
+// of identical dimensions rather than the page itself growing, so a printer
+// or print dialog always sees one consistent paper size.
 function generateLoadReceiptPdf(load, opts = {}) {
     const widthMm = RECEIPT_WIDTH_MM[String(opts.widthMm)] || 80;
+    const heightMm = Number(opts.heightMm) > 0 ? Number(opts.heightMm) : RECEIPT_HEIGHT_MM;
     const pageWidth = mmToPt(widthMm);
+    const pageHeight = mmToPt(heightMm);
     const margin = 10;
     const contentWidth = pageWidth - margin * 2;
 
     return new Promise((resolve, reject) => {
         try {
-            // Pass 1: scratch document, generously tall, never rendered —
-            // only used to find out where doc.y ends up after drawing
-            // everything, i.e. the exact content height for THIS load.
-            const scratch = new PDFDocument({ size: [pageWidth, 5000], margin });
-            drawReceiptContent(scratch, load, contentWidth);
-            const measuredHeight = scratch.y + margin;
-            scratch.end(); // never piped anywhere — just discarded
-
-            // Pass 2: the real document, sized to fit exactly.
-            const doc = new PDFDocument({ size: [pageWidth, measuredHeight], margin });
+            const doc = new PDFDocument({ size: [pageWidth, pageHeight], margin });
             const chunks = [];
             doc.on('data', (c) => chunks.push(c));
             doc.on('end', () => resolve(Buffer.concat(chunks)));
