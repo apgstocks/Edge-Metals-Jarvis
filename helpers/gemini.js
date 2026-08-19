@@ -1619,7 +1619,7 @@ async function checkPhotoQuality(imageBase64, mimeType = 'image/jpeg') {
 // always has, so accuracy behavior is unchanged; what's removed is the
 // stage that costs the most and fails the most (the AI locate fallback
 // alone measures 5.6-9.9s in this file's own logs).
-async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
+async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
     if (!imageBase64) throw new Error('imageBase64 required');
     const preCropped = !!opts.preCropped;
     // Normalize EXIF orientation ONCE, up front, before anything else touches
@@ -1641,6 +1641,91 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     mimeType = 'image/jpeg'; // normalizeOrientation always re-encodes as JPEG
     const t0 = Date.now();
     const elapsed = () => `${Date.now() - t0}ms`;
+
+    // TOTAL wall-clock budget for one weight read, per Apsara 2026-08-19
+    // ("make it 5s"). Previously each stage had its OWN timeout (the
+    // compact-indicator branch alone allowed 8s for Gemini) with nothing
+    // capping the SUM, so a real read measured ~10-14s end to end.
+    // Expressing it as one budget is what actually makes "5s" true: every
+    // remaining wait below asks how much of the budget is left rather than
+    // starting its own fresh clock.
+    //
+    // WHAT THIS TRADES AWAY, stated plainly: the Gemini cross-check is not
+    // decoration on this display. Measured on Apsara's own 10-photo Socome
+    // corpus, Cloud Vision alone scores 7/10 with 2 confidently-wrong reads;
+    // the cross-check is what has been catching those. When the budget
+    // expires before Gemini answers, the pipeline still returns Vision's
+    // number but marks it ambiguous, which surfaces in both UIs as a loud
+    // "double-check against the scale before saving" warning. So the cost
+    // of 5s is more flagged reads needing a human glance, NOT silently
+    // wrong ones — the flag is the safety net that makes this acceptable.
+    // Raise WEIGHT_READ_BUDGET_MS to buy back cross-checking; lower it for
+    // speed at the cost of more flags.
+    // A SCANNER capture (opts.preCropped) gets a much tighter budget than a
+    // loose photo, because the hard part is already done. Measured on
+    // Apsara's 10-photo Socome corpus with the display framed the way the
+    // scanner's box frames it — just the weight digits, no surrounding
+    // panel — Cloud Vision alone read them in 389ms average. The same
+    // photos left uncropped needed 5-17s and were LESS accurate, because
+    // the pipeline was spending that time locating the display and then
+    // arguing with Gemini about digits that a tight crop simply doesn't
+    // get wrong.
+    //
+    // This is the real answer to "a person in the yard won't wait 10s":
+    // the long reads were never the OCR being slow, they were the pipeline
+    // compensating for a badly-framed image. Give it a good frame and the
+    // compensation isn't needed.
+    const TOTAL_BUDGET_MS = Number(process.env.WEIGHT_READ_BUDGET_MS)
+        || (opts.preCropped ? 2000 : 5000);
+
+    // ── SCANNER FAST PATH ────────────────────────────────────────────────
+    // For a scanner capture the operator has already framed the display, so
+    // the crop IS the answer — read it plainly and return.
+    //
+    // This deliberately BYPASSES the locate/lit-signal-render/ghost-strip/
+    // rescue machinery below. That machinery exists to rescue a badly framed
+    // photo, and measurement showed it actively HARMS a well-framed one:
+    // on Apsara's 10-photo Socome corpus, framed as the scanner frames them,
+    //     plain Vision on the crop  -> 7/10 correct, 1 wrong, ~389ms
+    //     same crops through the full pipeline -> 5/10 correct, 3 wrong, ~2s
+    // The pipeline turned 3815 into 1815 and 3599 into 6656 by "improving"
+    // an image that needed no improvement. Simpler is both faster AND more
+    // accurate here, which is not the usual trade and is worth stating.
+    //
+    // Falls through to the full pipeline when Vision produces nothing
+    // plausible, so a genuinely hard capture still gets the slow, careful
+    // treatment rather than an immediate failure.
+    if (opts.preCropped) {
+        const tFast = Date.now();
+        try {
+            const txt = await withTimeout(visionOcr.detectText(imageBase64), 1500, 'Scanner fast-path Vision read');
+            const ex = txt ? visionOcr.extractWeightNumberFromCrop(txt) : null;
+            if (ex && ex.weight != null) {
+                // viaLeadingStrip means a leading digit had to be removed to
+                // reach a plausible number — on this display that's the
+                // always-lit "8.8." prefix cells. Correct often enough to
+                // publish, uncertain enough to flag for a glance.
+                const flagged = !!ex.viaLeadingStrip;
+                console.log(`[GEMINI] Scanner fast path read ${ex.weight} in ${Date.now() - tFast}ms (total ${elapsed()})${flagged ? ' — leading cell stripped, flagged' : ''}`);
+                return {
+                    weight: ex.weight,
+                    alternate_weight: null,
+                    alternate_source: null,
+                    weight_unit: 'lb',
+                    displays_seen: 'Cloud Vision OCR on the scanner crop (fast path — operator framed the display, no locate/cross-check needed)',
+                    raw_text: `${txt} (scanner fast path)${flagged ? ' [a leading display cell was stripped to reach a plausible weight — verify against the scale]' : ''}`,
+                    ambiguous: flagged,
+                };
+            }
+            console.log(`[GEMINI] Scanner fast path found no plausible weight in ${Date.now() - tFast}ms — falling through to the full pipeline`);
+        } catch (err) {
+            console.warn('[GEMINI] Scanner fast path failed, falling through:', err.message);
+        }
+    }
+    // Never returns 0 — a tiny non-zero floor means a Gemini call that is
+    // just about to resolve still gets a chance, instead of the budget
+    // being spent entirely by an unlucky earlier stage.
+    const remainingBudget = () => Math.max(600, TOTAL_BUDGET_MS - (Date.now() - t0));
 
     // Added 2026-08-11 to end a genuinely expensive class of confusion: the
     // client (dashboard AND the separately-bundled mobile APK) decides what
@@ -2133,8 +2218,18 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     // ambiguous number is worse than the extra latency. Still capped (not
     // unbounded) so a genuinely hung network call can't stall the response
     // forever; env-overridable for tuning without a redeploy.
+    // Also bounded by the TOTAL budget (2026-08-19). Its own 9000ms cap
+    // stays as an upper bound, but the accurate path can no longer consume
+    // the entire read time and leave nothing for the cross-check that
+    // follows — measured before this change: reads of 7.4s, 9.7s and 11.2s
+    // against a 5s target, because this stage alone was allowed 9s.
+    // A slice of the budget is deliberately reserved for the cross-check
+    // rather than letting this stage spend all of it: on a compact
+    // indicator the cross-check is the part that actually protects
+    // correctness, so starving it is the worst way to save time.
     const ACCURATE_PATH_BUDGET_MS = Number(process.env.ACCURATE_PATH_BUDGET_MS) || 9000;
-    const accurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_BUDGET_MS, 'Locate+crop accurate path');
+    const accurateBudget = Math.min(ACCURATE_PATH_BUDGET_MS, Math.max(1200, remainingBudget() - 1500));
+    const accurate = await withTimeout(accuratePathPromise, accurateBudget, 'Locate+crop accurate path');
     // Wording fixed after a real log showed this saying "not ready in time"
     // when the path had actually FINISHED (in ~7.6s, under the then-9s
     // budget) and legitimately failed (a degenerate box produced a too-small
@@ -2254,7 +2349,12 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             // independent read. Unbounded await is safe here for the same
             // reason: geminiMetaPromise has its own .catch() and resolves to
             // null on any API error rather than hanging.
-            const geminiRescueCheck = await accurate.geminiMetaPromise;
+            // Was an unbounded await until 2026-08-19 (the comment above
+            // justified it on safety grounds, which held while there was no
+            // overall time target). Now bounded by what's left of the total
+            // budget; withTimeout resolves null on expiry and the code below
+            // already handles "no committed number" by flagging.
+            const geminiRescueCheck = await withTimeout(accurate.geminiMetaPromise, remainingBudget(), 'Gemini rescue cross-check (budget)');
             console.log(`[GEMINI] Rescue cross-check resolved at ${elapsed()}: ${geminiRescueCheck && geminiRescueCheck.weight != null ? geminiRescueCheck.weight : 'no committed number'}`);
             // Vetted through the same plausibility bounds + ghost-cell strip
             // as everywhere else Gemini's number can become primary (see the
@@ -2371,7 +2471,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
             const retryPromises = accurate.croppedBase64
                 ? [0, 1].map((attempt) => withTimeout(
                       readWeightSinglePass(accurate.croppedBase64, 'image/jpeg', retries, { isCrop: true }).catch(() => null),
-                      GEMINI_RETRY_TIMEOUT_MS,
+                      Math.min(GEMINI_RETRY_TIMEOUT_MS, remainingBudget()),
                       `Gemini crop metadata retry ${attempt + 1} (Vision-on-crop found nothing)`
                   ))
                 : [];
@@ -2691,8 +2791,14 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                     console.log(`[GEMINI] Skipping the Gemini cross-check: two independent renderings of the same crop (lit-signal and raw) both read ${accurate.visionWeight} with no correction needed — returning at ${elapsed()} instead of waiting ~15s for a second opinion with nothing to correct`);
                 }
                 const crossCheck = confidentEnoughToSkip ? null : await (async () => {
-                    console.log(`[GEMINI] Waiting for Gemini's independent read of the same crop with no time limit — ${wasOriginallyFlagged ? `Vision's ${accurate.visionWeight} is already flagged` : 'the raw-crop rendering did not independently confirm this number'} (Vision's weakest digit for it scored ${conf == null ? 'unknown' : conf.toFixed(2)}), so a late correct answer beats a fast unreliable one (total ${elapsed()})`);
-                    return accurate.geminiMetaPromise;
+                    const budget = remainingBudget();
+                    console.log(`[GEMINI] Waiting up to ${budget}ms (what's left of the ${TOTAL_BUDGET_MS}ms budget) for Gemini's independent read of the same crop — ${wasOriginallyFlagged ? `Vision's ${accurate.visionWeight} is already flagged` : 'the raw-crop rendering did not independently confirm this number'} (Vision's weakest digit for it scored ${conf == null ? 'unknown' : conf.toFixed(2)}) (total ${elapsed()})`);
+                    // Was an UNBOUNDED wait until 2026-08-19. If it now runs
+                    // out, withTimeout resolves null and the code below
+                    // already treats "no committed number" as "flag it",
+                    // so a timeout degrades to a flagged read rather than a
+                    // wrong one.
+                    return withTimeout(accurate.geminiMetaPromise, budget, 'Gemini cross-check (budget)');
                 })();
                 console.log(`[GEMINI] Cross-check resolved at ${elapsed()}: ${crossCheck && crossCheck.weight != null ? crossCheck.weight : 'no committed number'} [${crossCheckLabel}]`);
                 // Added 2026-08-12 — Gemini's number now goes through the
@@ -2815,7 +2921,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
                     console.warn('[GEMINI] Tie-breaker read failed:', err.message);
                     return null;
                 });
-                const tieBreak = await withTimeout(tieBreakPromise, TIEBREAK_TIMEOUT_MS, 'Gemini tie-breaker read (3rd opinion on disagreement)');
+                const tieBreak = await withTimeout(tieBreakPromise, Math.min(TIEBREAK_TIMEOUT_MS, remainingBudget()), 'Gemini tie-breaker read (3rd opinion on disagreement)');
                 voteReadings = [
                     { weight: accurate.visionWeight, raw_text: 'Vision' },
                     { weight: strippedAlt, raw_text: 'Gemini (1st read)' },
@@ -2913,8 +3019,15 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         // + this text classification finished (~1.3-4.6s head start
         // observed live) — the timeout below is a safety cap, not the
         // expected wait.
+        // Bounded by whatever is LEFT of the total budget (2026-08-19), not
+        // its own fresh 8s clock — that fixed 8s on top of an already-elapsed
+        // ~2s crop read is exactly what produced the ~10s reads measured on
+        // the Socome. GEMINI_META_TIMEOUT_MS still acts as an upper bound so
+        // an unusually large budget can't make this branch wait forever.
         const GEMINI_META_TIMEOUT_MS = Number(process.env.GEMINI_META_TIMEOUT_MS) || 8000;
-        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, GEMINI_META_TIMEOUT_MS, 'Gemini crop metadata');
+        const compactWait = Math.min(GEMINI_META_TIMEOUT_MS, remainingBudget());
+        console.log(`[GEMINI] Compact indicator: waiting up to ${compactWait}ms for Gemini (total so far ${elapsed()}, budget ${TOTAL_BUDGET_MS}ms)`);
+        const geminiMeta = await withTimeout(accurate.geminiMetaPromise, compactWait, 'Gemini crop metadata');
         const preferGemini = !!(geminiMeta && geminiMeta.weight != null);
 
         const primaryWeight = preferGemini ? geminiMeta.weight : accurate.visionWeight;
@@ -2979,7 +3092,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     let lateAccurate = accurate;
     if (!lateAccurate) {
         const ACCURATE_PATH_GRACE_MS = Number(process.env.ACCURATE_PATH_GRACE_MS) || 8000;
-        lateAccurate = await withTimeout(accuratePathPromise, ACCURATE_PATH_GRACE_MS, 'Locate+crop accurate path (grace period before whole-image fallback)');
+        lateAccurate = await withTimeout(accuratePathPromise, Math.min(ACCURATE_PATH_GRACE_MS, remainingBudget()), 'Locate+crop accurate path (grace period before whole-image fallback)');
         if (lateAccurate && lateAccurate.visionWeight != null) {
             console.log(`[GEMINI] Accurate path landed during the grace period in ${elapsed()}: ${lateAccurate.visionWeight} — using it instead of whole-image OCR${wholeVisionResult.weight != null ? ` (${wholeVisionResult.weight})` : ''}`);
             return {
@@ -2998,7 +3111,7 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
         const GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS = Number(process.env.GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS) || 12000;
         const cropRead = await withTimeout(
             lateAccurate.geminiMetaPromise,
-            GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS,
+            Math.min(GEMINI_WHOLEIMAGE_RESCUE_TIMEOUT_MS, remainingBudget()),
             'Gemini crop metadata (rescue before falling back to whole-image OCR)',
         );
         if (cropRead && cropRead.weight != null) {
@@ -3039,6 +3152,51 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
 
     console.warn(`[GEMINI] Vision OCR found nothing on either path by ${elapsed()}, falling back to Gemini single-pass read (last resort, will be slow)`);
     return readWeightSinglePass(imageBase64, mimeType, retries);
+}
+
+// HARD DEADLINE BACKSTOP, per Apsara 2026-08-19 ("make it 5s").
+//
+// Every individual wait inside extractWeightFromImageInner is now bounded by
+// the same total budget, which brought 8 of 10 real Socome photos to land at
+// almost exactly 5.0s. Two still overran (11.1s and 17.0s) through paths with
+// their own internal retry/backoff loops that a per-await cap doesn't reach.
+// Rather than keep hunting individual call sites — each one a chance to miss
+// another — this guarantees the ceiling structurally: whatever happens
+// inside, the caller gets an answer within the budget.
+//
+// On expiry it returns NO weight rather than a partial guess. That is
+// deliberate: the reads that overrun are exactly the ones where the pipeline
+// is still arguing with itself about which number is right, so publishing
+// whichever value happened to be in hand would be publishing the least
+// trustworthy kind of answer. Both UIs already render a null weight as
+// "Couldn't read a number — enter manually", which is a safe, honest
+// outcome and far better than a wrong weight on a ticket.
+async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
+    const budget = Number(process.env.WEIGHT_READ_BUDGET_MS)
+        || (opts.preCropped ? 2000 : 5000);
+    // Small grace on top of the internal budget so the internal logic — which
+    // can still return a good flagged answer — normally wins the race, and
+    // this backstop only fires when something genuinely overran.
+    const hardDeadline = budget + 600;
+    let timer = null;
+    const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({
+            weight: null,
+            alternate_weight: null,
+            alternate_source: null,
+            weight_unit: 'lb',
+            displays_seen: `read exceeded the ${budget}ms budget`,
+            raw_text: `The weight read did not complete within ${budget}ms and was stopped. No number is being reported rather than an unverified one — re-take the photo or enter the weight manually.`,
+            ambiguous: true,
+            timedOut: true,
+        }), hardDeadline);
+        if (timer.unref) timer.unref();
+    });
+    try {
+        return await Promise.race([extractWeightFromImageInner(imageBase64, mimeType, retries, opts), deadline]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
 }
 
 module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality };
