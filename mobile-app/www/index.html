@@ -134,6 +134,29 @@ input::placeholder { color:var(--steel-500); }
 #scanFoot { padding:16px 20px calc(16px + env(safe-area-inset-bottom, 0px)); background:#0C0E10; display:flex; align-items:center; gap:12px; }
 #scanShutter { flex:1; padding:15px; font-size:14px; font-weight:700; }
 #scanErr { color:var(--status-danger); font-family:var(--font-mono); font-size:11.5px; padding:0 20px 10px; text-align:center; }
+
+/* ── Weight-read progress + result banner — per Apsara 2026-08-19
+   ("show to user if processing, then working on it" / "if flagged, show
+   user"). A weight read takes ~2-6s, and the only feedback before this was
+   a small grey line inside the item row, which is easy to miss entirely on
+   a phone held at arm's length in a yard — especially right after the
+   scanner closes, when the eye is nowhere near that row.
+   Fixed to the top of the viewport so it's visible regardless of scroll
+   position, and colour-coded so "this needs your eyes" reads differently
+   from "done". */
+#weighToast { position:fixed; top:0; left:0; right:0; z-index:300; display:none;
+  padding:calc(12px + env(safe-area-inset-top, 0px)) 16px 12px; font-family:var(--font-sans);
+  font-size:13.5px; font-weight:600; line-height:1.4; box-shadow:0 4px 16px rgba(0,0,0,.35); }
+#weighToast.show { display:block; }
+#weighToast.working { background:var(--steel-800); color:var(--text-strong); border-bottom:2px solid var(--accent); }
+#weighToast.ok      { background:#14351f; color:#b7f0c6; border-bottom:2px solid var(--status-success); }
+#weighToast.warn    { background:#3a2410; color:#ffd9a8; border-bottom:2px solid var(--status-warning); }
+#weighToast.err     { background:#3a1616; color:#ffc2c2; border-bottom:2px solid var(--status-danger); }
+#weighToast .wt-row { display:flex; align-items:center; gap:10px; }
+#weighToast .wt-sub { font-weight:400; font-size:12px; opacity:.92; margin-top:3px; }
+.wt-spin { width:15px; height:15px; flex:none; border:2px solid rgba(255,255,255,.25);
+  border-top-color:var(--accent); border-radius:50%; animation:wtspin .7s linear infinite; }
+@keyframes wtspin { to { transform:rotate(360deg); } }
 .modal-shell { background:var(--surface-card); border-radius:var(--radius-md); width:100%; max-width:760px; box-shadow:var(--shadow-lg); overflow:hidden; }
 .modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
 .modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
@@ -438,6 +461,10 @@ body { overflow-y:auto; }
      ROLE==='admin', so this couldn't be wired up for staff even if it
      were added here; no yard-report toggle — that's genuinely admin
      business. -->
+<!-- Weight-read status banner. Top-level so it can't be clipped by the load
+     modal or the item row's own overflow. -->
+<div id="weighToast"></div>
+
 <!-- Expense entry modal — admin only, per Apsara 2026-08-19. Shown/hidden by
      openExpenseModal/closeExpenseModal; every field maps 1:1 onto the
      expense record in helpers/expenses.js. -->
@@ -888,6 +915,38 @@ function syncItemsFromDom() {
 // field, remembers the photo (per item now, not per load) so it gets
 // archived to Drive on save. `row` is the specific item-row DOM element the
 // photo button lives in — everything is scoped to that one row's fields.
+// ── Weight-read status banner ────────────────────────────────────────────
+// Per Apsara 2026-08-19: "show to user if processing, then working on it"
+// and "if flagged, show user". Three states, deliberately distinct:
+//   working — a read is in flight (2-6s); the operator should wait, not tap
+//   ok      — both engines agreed, the number is in the field
+//   warn    — FLAGGED: the reading is uncertain and must be checked
+// The warn state does NOT auto-dismiss. A flagged weight is the one case
+// where the operator genuinely has to look at the scale and confirm, so it
+// stays until dismissed rather than disappearing while they're still
+// walking back to the display.
+let weighToastTimer = null;
+function showWeighToast(kind, text, sub, autoHideMs) {
+  const el = $('weighToast');
+  if (!el) return;
+  if (weighToastTimer) { clearTimeout(weighToastTimer); weighToastTimer = null; }
+  el.className = 'show ' + kind;
+  el.innerHTML = `
+    <div class="wt-row">${kind === 'working' ? '<span class="wt-spin"></span>' : ''}<span>${esc(text)}</span></div>
+    ${sub ? `<div class="wt-sub">${esc(sub)}</div>` : ''}`;
+  // Tap to dismiss — needed for the flagged state, which never times out.
+  el.onclick = () => { el.className = ''; };
+  if (autoHideMs) {
+    weighToastTimer = setTimeout(() => { el.className = ''; weighToastTimer = null; }, autoHideMs);
+  }
+}
+function hideWeighToast() {
+  const el = $('weighToast');
+  if (!el) return;
+  if (weighToastTimer) { clearTimeout(weighToastTimer); weighToastTimer = null; }
+  el.className = '';
+}
+
 // opts.preCropped — set by the guided scanner (see openScanner), which has
 // already cropped the frame down to just the display. Passed through to the
 // backend so it can skip its own locate stage entirely instead of
@@ -929,6 +988,7 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl, opts = {
         statusEl.style.color = 'var(--status-danger)';
         statusEl.style.fontWeight = '700';
       }
+      showWeighToast('err', 'Photo not clear enough', (quality.message || 'Please retake the photo.') + ' Tap to dismiss.');
       return; // do not attach this photo or spend a real OCR call on it — retake first
     }
   } catch (err) {
@@ -940,6 +1000,7 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl, opts = {
   syncItemsFromDom(); // capture whatever's already typed before we mutate a photo onto it
   if (currentLoadItems[idx]) currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64, mime };
   if (statusEl) { statusEl.style.color = ''; statusEl.style.fontWeight = ''; statusEl.textContent = 'Reading scale…'; }
+  showWeighToast('working', 'Reading the weight…', 'This takes a few seconds — please hold on.');
   try {
     const result = await api('/api/vision/read-weight', {
       method: 'POST',
@@ -977,19 +1038,33 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl, opts = {
           }
           statusEl.style.color = 'var(--status-danger)';
           statusEl.style.fontWeight = '700';
+          // FLAGGED — per Apsara 2026-08-19 ("if flagged, show user"). No
+          // auto-hide: this is precisely the case where the operator must
+          // walk to the display and confirm, so it stays on screen until
+          // they tap it away rather than vanishing mid-walk.
+          showWeighToast('warn',
+            `⚠ CHECK THIS WEIGHT — ${result.weight} ${result.weight_unit || ''}`,
+            result.alternate_weight != null
+              ? `The two checks disagreed (${result.weight} vs ${result.alternate_weight}). Read the scale and correct it if needed. Tap to dismiss.`
+              : 'This reading could not be confirmed. Compare it against the scale before saving. Tap to dismiss.');
         } else {
           statusEl.textContent = `Read: ${result.weight} ${result.weight_unit || ''} — check it matches the scale before saving.`;
           statusEl.style.color = '';
           statusEl.style.fontWeight = '';
+          showWeighToast('ok', `Weight read: ${result.weight} ${result.weight_unit || ''}`, 'Both checks agreed. Confirm it matches the scale.', 4000);
         }
       }
-    } else if (statusEl) {
-      statusEl.style.color = '';
-      statusEl.style.fontWeight = '';
-      statusEl.textContent = "Couldn't read a number — enter manually.";
+    } else {
+      if (statusEl) {
+        statusEl.style.color = '';
+        statusEl.style.fontWeight = '';
+        statusEl.textContent = "Couldn't read a number — enter manually.";
+      }
+      showWeighToast('err', "Couldn't read the weight", 'Type it in by hand, or retake with the display filling the box. Tap to dismiss.');
     }
   } catch (err) {
     if (statusEl) { statusEl.style.color = ''; statusEl.style.fontWeight = ''; statusEl.textContent = 'Read failed: ' + err.message + ' — enter manually.'; }
+    showWeighToast('err', 'Weight read failed', err.message + ' — enter the weight manually. Tap to dismiss.');
   }
 }
 
@@ -2219,6 +2294,7 @@ function showLoginScreen(err) {
     if (el) { el.classList.add('hidden'); el.style.display = ''; }
   });
   if (typeof closeScanner === 'function') closeScanner(); // also releases the camera
+  if (typeof hideWeighToast === 'function') hideWeighToast(); // don't leave a read banner over the login screen
   $('loginScreen').classList.remove('hidden');
   $('appShell').classList.add('hidden');
   $('loginErr').textContent = err || '';
