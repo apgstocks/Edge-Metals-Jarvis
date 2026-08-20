@@ -616,43 +616,61 @@ function retrofitInvNoItemCode() {
   if (itemCode) $('pf_inv_no').value = `${sug.dateStr}_${itemCode}_${sug.codeOnly}`;
 }
 async function applyNextInvNoSuggestion(customer) {
-  // Bail out BEFORE touching any state if Invoice No is already filled —
-  // lookupPricingMemory() can genuinely run twice for the same selection
-  // (the dropdown's mousedown handler, then a blur that still lands after
-  // it in some browsers despite preventDefault). Resetting pfNextContainerCode
-  // unconditionally here would wipe out a running container-number sequence
-  // that a first, successful call had just set up, right before this
-  // redundant second call returns early — found by testing "Add container"
-  // right after picking a consignee, where the 2nd+ container silently
-  // stayed blank even though the 1st one got a number correctly.
-  if ($('pf_inv_no').value.trim()) return;
-  $('pfInvNoChip').classList.add('hidden');
-  pfNextContainerCode = null;
-  window._pfInvNoSuggestion = null;
+  // Only the "fill Invoice No" half bails out when it's already got text in
+  // it (typed by hand, or left over from earlier) — the container-numbering
+  // sequence (pfNextContainerCode) used to be set up ONLY inside that same
+  // early-return, so if Invoice No ever had a value BEFORE this ran (typed
+  // manually, pasted from her old system, or just left over from a previous
+  // pick), pfNextContainerCode was never established and every container
+  // added afterward stayed permanently blank for the rest of that proforma —
+  // Apsara: "in invoice number only [date]_item_26[code][num] gets appended.
+  // in containe # 26[code][num] should come". Fixed by decoupling the two:
+  // Invoice No is only ever set when empty (unchanged behavior), but the
+  // container sequence is (re-)established from the API regardless of
+  // whether Invoice No already had something in it.
+  //
+  // pfNextContainerCode is still only created when it doesn't already exist
+  // (if (!pfNextContainerCode) below) — preserving the ORIGINAL fix this
+  // guard was for: lookupPricingMemory() can genuinely run twice for the
+  // same selection (the dropdown's mousedown handler, then a blur that
+  // still lands after it in some browsers despite preventDefault), and
+  // unconditionally resetting the sequence on that redundant second call
+  // would wipe out a running sequence a first, successful call had just set
+  // up, right before the 2nd+ container silently stayed blank.
+  const invNoAlreadyFilled = $('pf_inv_no').value.trim();
+  if (!invNoAlreadyFilled) {
+    $('pfInvNoChip').classList.add('hidden');
+    window._pfInvNoSuggestion = null;
+  }
   try {
     const suggestion = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(customer));
     if (!suggestion || !suggestion.inv_no) return;
-    // Embed the item code (e.g. "AC") into the suggested Invoice No when a
-    // material is already known at this point — matches her real format
-    // "[date]_[item]_[year][agentcode][number]". If no item is known yet
-    // (e.g. consignee picked before any item row is filled in), this falls
-    // back to the plain "[date] [code]" suggestion — never guesses a code.
-    const dateStr = suggestion.inv_no.split(' ')[0];
-    const firstDesc = $('pfContainers').querySelector('.item-desc') ? $('pfContainers').querySelector('.item-desc').value : '';
-    const itemCode = deriveItemCode(firstDesc);
-    $('pf_inv_no').value = itemCode ? `${dateStr}_${itemCode}_${suggestion.code_only}` : suggestion.inv_no;
-    // Remembered so retrofitInvNoItemCode() can add the item segment in
-    // later if it wasn't known yet at this point (see that function above).
-    window._pfInvNoSuggestion = { dateStr, codeOnly: suggestion.code_only };
-    $('pfInvNoChip').textContent = `● suggested — last was ${suggestion.highest_existing}`;
-    $('pfInvNoChip').classList.remove('hidden');
-    pfNextContainerCode = {
-      yy: suggestion.year_prefix,
-      letterCode: suggestion.letter_code,
-      nextNumber: suggestion.next_number,
-      numberDigits: suggestion.number_digits,
-      numberHadLeadingZero: suggestion.number_had_leading_zero,
-    };
+    if (!invNoAlreadyFilled) {
+      // Embed the item code (e.g. "AC") into the suggested Invoice No when a
+      // material is already known at this point — matches her real format
+      // "[date]_[item]_[year][agentcode][number]". If no item is known yet
+      // (e.g. consignee picked before any item row is filled in), this
+      // falls back to the plain "[date] [code]" suggestion — never guesses
+      // a code.
+      const dateStr = suggestion.inv_no.split(' ')[0];
+      const firstDesc = $('pfContainers').querySelector('.item-desc') ? $('pfContainers').querySelector('.item-desc').value : '';
+      const itemCode = deriveItemCode(firstDesc);
+      $('pf_inv_no').value = itemCode ? `${dateStr}_${itemCode}_${suggestion.code_only}` : suggestion.inv_no;
+      // Remembered so retrofitInvNoItemCode() can add the item segment in
+      // later if it wasn't known yet at this point (see that function above).
+      window._pfInvNoSuggestion = { dateStr, codeOnly: suggestion.code_only };
+      $('pfInvNoChip').textContent = `● suggested — last was ${suggestion.highest_existing}`;
+      $('pfInvNoChip').classList.remove('hidden');
+    }
+    if (!pfNextContainerCode) {
+      pfNextContainerCode = {
+        yy: suggestion.year_prefix,
+        letterCode: suggestion.letter_code,
+        nextNumber: suggestion.next_number,
+        numberDigits: suggestion.number_digits,
+        numberHadLeadingZero: suggestion.number_had_leading_zero,
+      };
+    }
     fillEmptyContainerNumbers();
   } catch (e) { /* sheet unreachable or no history — leave Invoice No for manual entry */ }
 }

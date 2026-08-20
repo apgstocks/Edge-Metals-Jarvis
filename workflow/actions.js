@@ -974,7 +974,7 @@ async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerR
     return { action_taken: 'dual_role_assigned' };
 }
 
-async function resolvePending(chatId, pending, answer, selection) {
+async function resolvePending(chatId, pending, answer, selection, cancelText = null) {
 // Handled BEFORE the generic 'no' branch below — unlike every other pending
 // type, "no" here does NOT mean "cancel and stop." It means "don't save the
 // cc pattern, but still draft the email I originally asked for" — the cc
@@ -1004,6 +1004,43 @@ if (answer === 'no') {
     // pattern's trust streak — only these two types are trust-eligible.
     if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
     if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
+
+    // 2026-08-20: an explicit cancel whose WORDING claims a wider scope than
+    // the pending it actually cancelled ("cancel all the quote requests"
+    // — live, while only a cargo-details question was open) used to get the
+    // same bare "Cancelled." as everything else. That reads as "yes, I
+    // cancelled all your quote requests" when in fact only the one unanswered
+    // QUESTION was dropped and every already-dispatched request is still
+    // sitting in truckers' chats awaiting a price. There is no bulk-recall
+    // feature at all, so silently implying one ran is the worst option here —
+    // say plainly what was and wasn't cancelled instead.
+    const widerScope = cancelText && /\b(all|every|everything|quote\s*requests?|quotes)\b/i.test(cancelText);
+    if (widerScope) {
+        let activeNote = '';
+        try {
+            const { loadQuoteRequests } = require('../helpers/quoteRequests');
+            const active = loadQuoteRequests().filter((r) => r.status === 'active');
+            const awaiting = active.reduce((n, r) => n + r.legs.filter((l) => l.status === 'awaiting_reply').length, 0);
+            if (awaiting > 0) {
+                const lanes = active
+                    .filter((r) => r.legs.some((l) => l.status === 'awaiting_reply'))
+                    // Field names verified against createQuoteRequest in
+                    // helpers/quoteRequests.js — snake_case on the stored
+                    // record, NOT the camelCase names its function argument
+                    // uses. Getting this wrong renders a silent "? → ?".
+                    .map((r) => `${r.origin_query || '?'} → ${r.destination_query || '?'}`);
+                activeNote = `\n\nStill live and NOT cancelled: ${awaiting} quote ${awaiting === 1 ? 'leg' : 'legs'} already sent out${lanes.length ? ` (${[...new Set(lanes)].join('; ')})` : ''}. I can't recall those — I'd have to message each trucker to disregard. Want me to?`;
+            } else {
+                activeNote = `\n\nNothing else is outstanding — no quote requests are currently awaiting a reply.`;
+            }
+        } catch (err) {
+            console.warn('[ACTIONS] cancel scope check failed:', err.message);
+            activeNote = `\n\nNote: that only cancelled the question above — any quote requests already sent to truckers are untouched.`;
+        }
+        await _send(chatId, `Cancelled the pending question${pending.state?.originQuery && pending.state?.destinationQuery ? ` for ${pending.state.originQuery} → ${pending.state.destinationQuery}` : ''}.${activeNote}`);
+        return { action_taken: 'cancelled_pending' };
+    }
+
     await _send(chatId, 'Cancelled.');
     return { action_taken: 'cancelled_pending' };
 }

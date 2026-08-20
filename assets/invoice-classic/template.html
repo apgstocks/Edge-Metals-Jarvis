@@ -165,14 +165,14 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
     <table>
       <thead>
         <tr style="background:var(--light-blue);height:12mm;">
-          <th style="width:5%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">S. No</th>
-          <th style="width:14%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Booking #</th>
-          <th style="width:15%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container #</th>
-          <th style="width:11%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Seal #</th>
-          <th style="width:16%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Description</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Quantity<br>MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Rate<br>US$/MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Amount<br>US$</th>
+          <th style="width:5%;padding:0.5mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">S. No</th>
+          <th style="width:14%;padding:0.5mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Booking #</th>
+          <th style="width:15%;padding:0.5mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container #</th>
+          <th style="width:11%;padding:0.5mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Seal #</th>
+          <th style="width:16%;padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">Description</th>
+          <th style="width:13%;padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">Quantity<br>MT</th>
+          <th style="width:13%;padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">Rate<br>US$/MT</th>
+          <th style="width:13%;padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">Amount<br>US$</th>
         </tr>
       </thead>
       <tbody>
@@ -181,17 +181,10 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
 {{efs_row}}
         <tr style="background:var(--light-blue);height:10.5mm;">
           <td colspan="4" style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;vertical-align:middle;border:1pt solid black;border-right:none;">TOTAL</td>
-          <!-- Quantity + Rate columns are blank in this row — merged into
-               one border:none cell (was two separate bordered boxes around
-               nothing) so it reads as open space, not two empty outlined
-               boxes. border-right:none on TOTAL and border-left:none on
-               Amount above/below suppress the shared edges too, since
-               border-collapse would otherwise still draw THEIR side of the
-               line even with this cell's own border removed. Apsara: "for
-               invoice notes, remove the line on quantity and rate". -->
-          <td colspan="2" style="padding:2mm 1mm;border:none;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;vertical-align:middle;border:1pt solid black;border-left:none;">${{final_amount_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:11.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
+          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
+          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:11.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">${{final_amount_fmt}}</td>
         </tr>
       </tbody>
     </table>
@@ -204,27 +197,27 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
     <table class="seam">
       <thead>
         <tr style="background:var(--light-orange);height:15mm;">
-          <th style="width:15%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Truck<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container<br>Tare (lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Chassis<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Boxes<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
+          <th style="width:15%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
+          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
+          <th style="width:11%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Truck<br>(lbs)</th>
+          <th style="width:12%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container<br>Tare (lbs)</th>
+          <th style="width:11%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Chassis<br>(lbs)</th>
+          <th style="width:12%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Boxes<br>(lbs)</th>
+          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
+          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
         </tr>
       </thead>
       <tbody>
 {{packing_rows}}
         <tr style="background:var(--light-orange);height:15mm;">
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_lbs_fmt}}</td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_mt_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_lbs_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_mt_fmt}}</td>
         </tr>
       </tbody>
     </table>
