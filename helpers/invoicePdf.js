@@ -107,16 +107,27 @@ function buildInvoiceClassicHtml(data) {
         // ID strings narrower than Chromium's Helvetica-substitute font
         // does, so at the reference's own 9pt they were overflowing the
         // narrow ID columns and visually running into the neighboring cell.
-        const idCell = (val) => `<td style="padding:0.5mm;font-size:8pt;text-align:center;white-space:nowrap;overflow:hidden;">${escapeHtml(val)}</td>`;
+        const idCell = (val) => `<td style="padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;white-space:nowrap;overflow:hidden;">${escapeHtml(val)}</td>`;
+        // Description always wraps (word-wrap/overflow-wrap:break-word,
+        // white-space:normal) regardless of length — a long unbroken item
+        // description no longer overflows into the Quantity column now
+        // that table-layout:fixed enforces the column width, it just wraps
+        // and the row grows taller instead. Every cell is both
+        // horizontally (text-align:center) AND vertically
+        // (vertical-align:middle) centered — global td{vertical-align:top}
+        // in the template's CSS would otherwise pin short cells (S.No,
+        // Quantity) to the top of a row that a wrapped Description has
+        // made much taller. Apsara: "make the text in center aligned. also
+        // wrap description always." / "mid center alignment."
         return `        <tr style="height:8mm;">
           ${idCell(i + 1)}
           ${idCell(data.booking_no)}
           ${idCell(data.container_no)}
           ${idCell(data.seal_no)}
-          <td style="padding:1mm;font-size:9pt;">${escapeHtml(item.item_desc)}</td>
-          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatQtyMt(qty)}</td>
-          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatRate(rate)}</td>
-          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatMoney2(amount)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${escapeHtml(item.item_desc)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;">${formatQtyMt(qty)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;">${formatRate(rate)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;">${formatMoney2(amount)}</td>
         </tr>`;
     });
 
@@ -127,10 +138,10 @@ function buildInvoiceClassicHtml(data) {
     let freightRowHtml = '';
     if (freight > 0) {
         freightRowHtml = `        <tr style="height:8mm;">
-          <td colspan="5" style="padding:1mm;font-size:9pt;text-align:right;font-style:italic;">Less: Freight Charges</td>
+          <td colspan="5" style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;font-style:italic;">Less: Freight Charges</td>
           <td style="padding:1mm;"></td>
           <td style="padding:1mm;"></td>
-          <td style="padding:1mm;font-size:9pt;text-align:right;">-${formatMoney2(freight)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;">-${formatMoney2(freight)}</td>
         </tr>`;
     }
     // No real EFS column exists on the live sheet (checked directly — see

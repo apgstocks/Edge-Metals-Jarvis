@@ -57,51 +57,57 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
             <div style="font-size:9pt;">FAX: (425) 940-9408</div>
           </div>
         </td>
-        <td style="width:50%;padding:0;border:none;">
-          <!-- This nested table's own left border used to sit directly on
-               top of the Exporter cell's right border (two independent
-               1pt borders from two different <table> elements, since the
-               outer <td> above is border:none and doesn't merge with a
-               child table's border) — rendering as one extra-thick/dark
-               line "inside right side of exporter". border-left:none on
-               every first-column cell below leaves Exporter's own right
-               border as the single line at that seam. -->
-          <table>
-            <tr>
-              <td style="width:65%;border-left:none;">
-                <div class="lbl">Invoice No &amp; Items</div>
-                <div class="val" style="min-height:15mm;">
-                  <div style="font-weight:700;font-size:9pt;">{{inv_no}}</div>
-                  <div style="font-size:8.5pt;margin-top:1mm;">{{item_label}}</div>
-                </div>
-              </td>
-              <td style="width:35%;">
-                <div class="lbl">DATE</div>
-                <div class="val" style="min-height:15mm;font-weight:700;">{{inv_date}}</div>
-              </td>
-            </tr>
-            <tr>
-              <td colspan="2" style="border-left:none;">
-                <div class="lbl">Other Reference(s)</div>
-                <div class="val" style="min-height:12mm;">{{other_ref}}</div>
-              </td>
-            </tr>
-          </table>
+        <td style="width:50%;padding:0;">
+          <!-- Was a nested <table>: a separate border-collapse domain from
+               the outer Row 1 table, so every border it shared with the
+               Exporter cell (top, the vertical divider, and the bottom)
+               was independently laid out by two different table engines
+               and landed 1-2px apart — rendering as doubled/thick lines
+               above "Invoice No & Items/DATE" and below Exporter, not just
+               the one corner first suspected. Rebuilt with plain divs
+               (same pattern as Row 2's right column, which has never had
+               this problem) so this cell is a genuine single td of the
+               outer table: its top/bottom/left borders are resolved once,
+               by one border-collapse pass, guaranteed pixel-exact against
+               Exporter's own borders. -->
+          <div style="display:flex;">
+            <div style="width:65%;border-right:1pt solid var(--black);border-bottom:1pt solid var(--black);">
+              <div class="lbl">Invoice No &amp; Items</div>
+              <div class="val" style="min-height:15mm;">
+                <div style="font-weight:700;font-size:9pt;">{{inv_no}}</div>
+                <div style="font-size:8.5pt;margin-top:1mm;">{{item_label}}</div>
+              </div>
+            </div>
+            <div style="width:35%;border-bottom:1pt solid var(--black);">
+              <div class="lbl">DATE</div>
+              <div class="val" style="min-height:15mm;font-weight:700;">{{inv_date}}</div>
+            </div>
+          </div>
+          <div>
+            <div class="lbl">Other Reference(s)</div>
+            <div class="val" style="min-height:12mm;">{{other_ref}}</div>
+          </div>
         </td>
       </tr>
     </table>
 
-    <!-- Row 2: Buyer | Terms / Vessel / Payment Terms -->
-    <table class="seam">
+    <!-- Row 2: Buyer | Terms / Vessel / Payment Terms. border-top:none on
+         both cells (not the .seam margin-overlap trick, which only
+         collapses cleanly when a fractional 1pt border and a fractional
+         1pt negative margin happen to round to the same pixel count —
+         confirmed by pixel scan they usually don't, leaving a ~5-6px
+         doubled band). Row 1's own bottom border is left as the single
+         line at this seam. -->
+    <table>
       <tr>
-        <td style="width:50%;">
+        <td style="width:50%;border-top:none;">
           <div class="lbl">Buyer</div>
           <div class="val" style="min-height:42mm;">
             <div style="font-weight:700;font-size:12pt;">{{buyer_name}}</div>
             <div style="font-size:9pt;margin-top:1mm;line-height:1.7;">{{buyer_address_lines}}</div>
           </div>
         </td>
-        <td style="width:50%;padding:0;">
+        <td style="width:50%;padding:0;border-top:none;">
           <div class="lbl" style="border-bottom:1pt solid var(--black);">Terms</div>
           <div class="val" style="min-height:9mm;border-bottom:1pt solid var(--black);">{{terms}}</div>
           <div class="lbl" style="border-bottom:1pt solid var(--black);">Vessel / Flight No</div>
@@ -112,25 +118,27 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       </tr>
     </table>
 
-    <!-- Row 3: 4 port cells. No border-bottom, per Apsara's "there should
-         not be a line between y-table and above containing country of
-         origin" — this row now reads as one continuous block with the item
-         table directly below it. -->
-    <table class="seam">
+    <!-- Row 3: 4 port cells. border-top:none (same fix as Row 2 above — Row
+         2's own bottom border is the single line here, not an overlap
+         trick) plus border-bottom:none, per Apsara's "there should not be
+         a line between y-table and above containing country of origin" —
+         this row reads as one continuous block with the item table
+         directly below it. -->
+    <table>
       <tr>
-        <td style="width:25%;border-bottom:none;">
+        <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Country of Origin</div>
           <div class="val" style="min-height:10.5mm;">{{country_of_origin}}</div>
         </td>
-        <td style="width:25%;border-bottom:none;">
+        <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Place of Receipt by Carrier</div>
           <div class="val" style="min-height:10.5mm;">{{place_of_receipt}}</div>
         </td>
-        <td style="width:25%;border-bottom:none;">
+        <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Port of Loading</div>
           <div class="val" style="min-height:10.5mm;">{{port_loading}}</div>
         </td>
-        <td style="width:25%;border-bottom:none;">
+        <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Port of Discharge</div>
           <div class="val" style="min-height:10.5mm;">{{port_discharge}}</div>
         </td>
@@ -144,14 +152,14 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
     <table>
       <thead>
         <tr style="background:var(--light-blue);height:12mm;">
-          <th style="width:5%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">S. No</th>
-          <th style="width:14%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Booking #</th>
-          <th style="width:15%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Container #</th>
-          <th style="width:11%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Seal #</th>
-          <th style="width:16%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Description</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Quantity<br>MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Rate<br>US$/MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Amount<br>US$</th>
+          <th style="width:5%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">S. No</th>
+          <th style="width:14%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Booking #</th>
+          <th style="width:15%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container #</th>
+          <th style="width:11%;padding:0.5mm;font-size:8pt;text-align:center;vertical-align:middle;border:1pt solid black;">Seal #</th>
+          <th style="width:16%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Description</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Quantity<br>MT</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Rate<br>US$/MT</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">Amount<br>US$</th>
         </tr>
       </thead>
       <tbody>
@@ -160,10 +168,10 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
 {{efs_row}}
         <tr style="background:var(--light-blue);height:10.5mm;">
           <td colspan="4" style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;border:1pt solid black;">TOTAL</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;border:1pt solid black;">${{final_amount_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:10.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">${{final_amount_fmt}}</td>
         </tr>
       </tbody>
     </table>

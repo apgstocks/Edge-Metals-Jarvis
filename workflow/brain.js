@@ -159,6 +159,63 @@ function parseContactQuoteCommand(rawText) {
     if (!m) return null;
     return { recipientQuery: m[1].trim(), details: m[2].trim().replace(/[.?!]+$/, '') };
 }
+
+// ── Fresh-command carve-out — 2026-08-20, per Apsara: "Answer fresh query.
+// after finishing that. show that pending queries." Live incident that
+// forced this: a cargo-details pending was open, and she sent "Send quote
+// request from Junk car to Eccomelt" (a brand new, well-formed command) —
+// Jarvis just re-showed the stale cargo question instead of ever
+// acknowledging the new one.
+//
+// Before this, only TWO pending types (await_manual_email_address,
+// await_quote_truckers) had their own hand-written carve-out for this exact
+// situation. Apsara's explicit answer when asked to scope this was "every
+// pending, always" — so this is now checked ONCE, at the very top of
+// policyDecide, for ANY open pending on a manager/team chat, instead of
+// being scattered per pending type.
+//
+// Deliberately narrow: only the two existing, precise, regex-backed command
+// grammars count as "fresh" (parseGetQuoteCommand / parseContactQuoteCommand)
+// — NOT the full, much looser Section B command grammar (menu digits,
+// "status", "assign", "recall", etc.), which was never designed to be
+// checked against arbitrary pending-answer text and risks false-positiving
+// against a verbatim capture (e.g. a corrected trucker name, a container
+// number, a cargo description). These two parsers require a very specific
+// leading shape ("get/send/request/obtain ... quote(s) ... from X to Y" or
+// "quote to X for Y") that a real answer to a pending question essentially
+// never accidentally matches — same reasoning already proven out in the two
+// pre-existing carve-outs this replaces.
+//
+// What happens next depends entirely on the existing setPending
+// never-overwrite rule (see actions.js): if the pending this interrupts is
+// itself part of the SAME quote flow (await_manual_email_address,
+// await_quote_truckers), the two original carve-outs' clear-then-replace
+// behavior in route() still applies unchanged. For every OTHER pending type,
+// the old pending is left alone, the fresh command's own flow immediately
+// queues behind it (setPending returns queued:true) and its own message
+// ("Ready to start on X, but you have a pending Y to answer first...")
+// already tells her both things she asked for: that the fresh query was
+// heard, and that the old one is still open. See the reminder-tail's
+// "_queued" suffix check further down for why that doesn't ALSO trigger a
+// redundant second reminder right after.
+function detectFreshCommand(ctx) {
+    const parsedQuote = parseGetQuoteCommand(ctx.text);
+    if (parsedQuote) {
+        return {
+            intent: 'get_quote', resolvedBy: 'policy',
+            data: { origin: parsedQuote.origin, destination: parsedQuote.destination, names_text: parsedQuote.namesText, emails: parsedQuote.emails },
+        };
+    }
+    const parsedContactQuote = parseContactQuoteCommand(ctx.text);
+    if (parsedContactQuote) {
+        return {
+            intent: 'get_contact_quote', resolvedBy: 'policy',
+            data: { recipient_query: parsedContactQuote.recipientQuery, details: parsedContactQuote.details },
+        };
+    }
+    return null;
+}
+
 const { matchTruckerByChat }                       = require('./truckers');
 const { matchSupplierByChat }                      = require('./suppliers');
 const { matchContactByChat }                       = require('../helpers/contacts');
@@ -360,6 +417,17 @@ function fuzzyCorrectKeywords(text) {
 function policyDecide(ctx) {
     const t = fuzzyCorrectKeywords(ctx.textLower);
 
+    // ── A(-1). Fresh well-formed command jumps ANY open pending — see
+    // detectFreshCommand's own comment above for the full reasoning. Checked
+    // before every pending-type-specific block below (A0 onward), so it
+    // applies uniformly regardless of which pending is active. Only fires
+    // for the manager/team — a supplier's ready-check yes/no or a trucker's
+    // own reply never goes through this path. ─────────────────────────────
+    if (ctx.isManagerOrTeam && ctx.pendingAction) {
+        const fresh = detectFreshCommand(ctx);
+        if (fresh) return fresh;
+    }
+
     // ── A0. Ready-check pending — applies to whoever the question was sent to
     // (the supplier), not just manager/team. Runs before everything else so a
     // supplier's yes/no/date reply is never mis-routed to the keyword grammar
@@ -412,23 +480,14 @@ function policyDecide(ctx) {
         // the OLD draft_email/ask_contact classifier, and staged THIS
         // pending. Every message after that — including a perfectly-typed
         // "get quote from LA to Richmond email apg0596@gmail.com" on the
-        // NEXT try — got swallowed as "the address I asked for" instead of
-        // ever reaching the get_quote regex below, since this check runs
-        // first and (by design, for good reason in its original context)
-        // treats ANY next message as the answer, no reclassification. A
-        // fresh, clearly-recognizable "get quote from X to Y" command is
-        // clearly NOT an email address and clearly NOT answering this
-        // pending — same "let a distinctly different, well-formed command
-        // jump the pending queue" reasoning as the 'await_email_confirm' +
-        // "schedule" carve-out above. route() clears this stale pending
-        // when it sees this intent (search for this comment there).
-        const parsed = parseGetQuoteCommand(ctx.text);
-        if (parsed) {
-            return {
-                intent: 'get_quote', resolvedBy: 'policy',
-                data: { origin: parsed.origin, destination: parsed.destination, names_text: parsed.namesText, emails: parsed.emails },
-            };
-        }
+        // NEXT try — got swallowed as "the address I asked for". This used
+        // to have its own inline parseGetQuoteCommand carve-out right here;
+        // as of 2026-08-20 that check now happens ONCE, generically, at the
+        // very top of policyDecide (see "A(-1)" / detectFreshCommand) for
+        // every pending type, so a fresh get_quote command never reaches
+        // this line at all — it's caught before this. route() still clears
+        // this stale pending specifically when that happens (search for
+        // "await_manual_email_address" there) — that part is unchanged.
         return { intent: 'manual_email_address_received', resolvedBy: 'policy', data: { address_text: ctx.text.trim() } };
     }
 
@@ -501,26 +560,19 @@ function policyDecide(ctx) {
     if (ctx.pendingAction?.type === 'await_quote_truckers') {
         // REAL BUG (found 2026-08-18, live — Apsara: "request quote
         // NTG,TQL,Matthew from Junk car to Eccomelt", sent again after
-        // getting the "who should I ask?" prompt): same carve-out reasoning
-        // as A0d's await_manual_email_address check above. A fresh,
-        // well-formed "request/get/send quote ... from X to Y" command is
-        // clearly NOT an answer to "who should I ask" — it's a brand new
-        // request, possibly a corrected retry of the very command that
-        // triggered this pending. Without this check, the whole message got
-        // fed through the comma-split multi-select matcher below, which only
-        // manages to fuzzy-match whichever ONE token happens to exactly equal
-        // a listed name (here "TQL", since it was also in the option list) —
-        // silently dropping "NTG" and "Matthew" with no error at all, and
-        // mangling the origin/destination the new command specified. route()
-        // clears this stale pending when it sees this reclassification —
-        // search for this comment there.
-        const parsedFresh = parseGetQuoteCommand(ctx.text);
-        if (parsedFresh) {
-            return {
-                intent: 'get_quote', resolvedBy: 'policy',
-                data: { origin: parsedFresh.origin, destination: parsedFresh.destination, names_text: parsedFresh.namesText, emails: parsedFresh.emails },
-            };
-        }
+        // getting the "who should I ask?" prompt): a fresh, well-formed
+        // "request/get/send quote ... from X to Y" command got fed through
+        // the comma-split multi-select matcher below, which only manages to
+        // fuzzy-match whichever ONE token happens to exactly equal a listed
+        // name (here "TQL") — silently dropping "NTG" and "Matthew" with no
+        // error at all, and mangling the origin/destination the new command
+        // specified. This used to have its own inline parseGetQuoteCommand
+        // carve-out right here; as of 2026-08-20 that check now happens
+        // ONCE, generically, at the top of policyDecide (see "A(-1)" /
+        // detectFreshCommand) for every pending type, so a fresh get_quote
+        // command never reaches this line — it's caught before this.
+        // route() still clears this stale pending specifically when that
+        // happens (search for "await_quote_truckers" there) — unchanged.
         const p = ctx.pendingAction;
         const tt = ctx.text.trim();
         if (/^(no|none|cancel)$/i.test(tt)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
@@ -1617,6 +1669,45 @@ function pendingFullReminder(p) {
     if (p.type === 'await_quote_trucker_retry') {
         return `(Still waiting — couldn't find a saved trucker named "${(p.unresolvedNames || []).join(', ')}". Reply with the correct name, or their email address, or "cancel".)`;
     }
+    // The five quote-flow cases below (2026-08-20, per Apsara: "Tell user
+    // about the request that you requested quote from A to B. but you
+    // didn't give this. so now my question") — restate WHAT the original
+    // quote request was for, not just a bare "reply yes/no"/generic prompt,
+    // now that a fresh unrelated command can interrupt any of these
+    // mid-flow (see detectFreshCommand above).
+    if (p.type === 'await_quote_cargo_details') {
+        const { originQuery, destinationQuery } = p.state || {};
+        const lane = originQuery && destinationQuery ? ` for the ${originQuery} → ${destinationQuery} quote` : '';
+        return `(Still waiting on cargo details${lane} — what's the cargo? Description, weight, and value; both weight AND value are required.)`;
+    }
+    if (p.type === 'await_quote_scale_tickets') {
+        const { originQuery, destinationQuery } = p.state || {};
+        const lane = originQuery && destinationQuery ? ` for the ${originQuery} → ${destinationQuery} quote` : '';
+        return `(Still waiting on one thing${lane} — do you need scale tickets for this haul? Reply yes or no.)`;
+    }
+    if (p.type === 'await_quote_truckers') {
+        const { originQuery, destinationQuery } = p.state || {};
+        const lane = originQuery && destinationQuery ? `${originQuery} → ${destinationQuery}` : 'that quote';
+        const listText = (p.options || []).map((o, i) => `${i + 1}. ${o}`).join('\n');
+        return `(Still waiting — who should I ask for ${lane}?\n${listText}\n\nReply with names or numbers, comma-separated for more than one, or "cancel".)`;
+    }
+    if (p.type === 'confirm_quote_lane') {
+        const { originQuery, destinationQuery } = p.state || {};
+        const lane = originQuery && destinationQuery ? `${originQuery} → ${destinationQuery}` : 'that quote';
+        const listText = (p.options || []).map((o, i) => `${i + 1}. ${o}`).join('\n');
+        return `(Still waiting on ${lane} — "${p.field === 'origin' ? originQuery : destinationQuery}" matched more than one saved address. Which one?\n${listText}\n\nReply with the number.)`;
+    }
+    if (p.type === 'confirm_quote_trucker') {
+        const { originQuery, destinationQuery } = p.state || {};
+        const lane = originQuery && destinationQuery ? ` for ${originQuery} → ${destinationQuery}` : '';
+        const listText = (p.options || []).map((o, i) => `${i + 1}. ${o}`).join('\n');
+        return `(Still waiting${lane} — more than one saved trucker matched. Which one?\n${listText}\n\nReply with the number.)`;
+    }
+    if (p.type === 'await_contact_quote_recipient_retry') {
+        const { recipientQuery, details } = p.state || {};
+        const forWhat = details ? ` about "${details}"` : '';
+        return `(Still waiting — couldn't find a saved contact named "${recipientQuery || '(unknown)'}"${forWhat}. Reply with the correct name, or "cancel".)`;
+    }
     return null; // no type-specific text — use the generic template
 }
 
@@ -1668,38 +1759,39 @@ async function process(rawEvent, sendMessage) {
     // ask X" sent while an earlier quote-request pending was ALREADY
     // unresolved on that chat gets queued behind it (setPending's own
     // never-overwrite rule) — pauseForLaneAmbiguity/pauseForTruckerAmbiguity/
-    // askWhichTruckers already say so explicitly ("...but you have a pending
-    // X to answer first"). Without this exclusion, THIS generic tail fires
-    // right after that same message and re-prints the still-active pending's
-    // full question again — a redundant second message describing the exact
-    // same thing the first one just said. The three *_queued outcomes below
-    // are the only action_taken values those three functions return when
-    // setPending reports queued:true — excluding them here doesn't touch any
-    // other pending type's reminder-tail behavior.
-    if (inbound.isManagerOrTeam && pending &&
-        !['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled',
-          'quote_lane_ambiguous_queued', 'quote_trucker_ambiguous_queued', 'quote_awaiting_truckers_queued',
-          // Missed when the cargo-details question shipped 2026-08-06 —
-          // askForCargoDetails returns this exact action_taken when its own
-          // setPending reports queued:true, same as the three above it.
-          // Without it, the generic reminder-tail re-prints the still-active
-          // earlier pending's full question again right after
-          // askForCargoDetails already said "you have a pending X first."
-          'quote_awaiting_cargo_queued',
-          // Same pattern again for pauseForUnresolvedTrucker, added
-          // alongside it 2026-08-06.
-          'quote_trucker_unresolved_queued',
+    // askWhichTruckers/askForCargoDetails/askForScaleTickets/pauseForContactQuoteRetry
+    // etc. already say so explicitly ("...but you have a pending X to answer
+    // first"). Without an exclusion, THIS generic tail fires right after
+    // that same message and re-prints the still-active pending's full
+    // question again — a redundant second message describing the exact same
+    // thing the first one just said.
+    //
+    // Originally this was a hand-maintained list of exact action_taken
+    // values, extended one bug fix at a time as each new *_queued outcome
+    // was discovered live (2026-08-05, 2026-08-06 x2, 2026-08-20). 2026-08-20:
+    // generalized to a naming-convention check instead — EVERY *_queued
+    // action_taken across actions.js (grep confirms ~15 of them, all
+    // following this exact same "setPending saw queued:true, already told
+    // the manager, don't repeat it" pattern) is now covered by one rule
+    // instead of needing its own entry added by hand each time a new one is
+    // found. This matters more now that detectFreshCommand (see brain.js's
+    // "A(-1)") can trigger a *_queued outcome from many more starting
+    // pendings than before.
+    const alreadyExplainedPending = /_queued$/.test(result?.action_taken || '') ||
+        // Non-"_queued" outcomes that also already say everything needed —
+        // unchanged from before.
+        ['confirmed_pending', 'cancelled_pending', 'forwarded', 'assigned', 'recalled',
           // 2026-08-20: resumeQuoteWithCargoDetails's mandatory weight/value
-          // retry (added same day) deliberately leaves the SAME pending
-          // active when the reply has no number in it, so the next reply
-          // routes back to the same handler — but that made this generic
-          // tail see "pending still active" and append a mismatched
-          // "reply yes/no" hint (pendingHint has no case for
-          // await_quote_cargo_details) right after the retry message
-          // already explained exactly what's needed. Real bug, live
+          // retry deliberately leaves the SAME pending active when the reply
+          // has no number in it, so the next reply routes back to the same
+          // handler — but that made this generic tail see "pending still
+          // active" and append a mismatched "reply yes/no" hint (pendingHint
+          // has no case for await_quote_cargo_details) right after the retry
+          // message already explained exactly what's needed. Real bug, live
           // 2026-08-20 ("Weight and value are required..." immediately
           // followed by a nonsensical "reply yes/no" tail).
-          'quote_cargo_details_retry'].includes(result?.action_taken)) {
+          'quote_cargo_details_retry'].includes(result?.action_taken);
+    if (inbound.isManagerOrTeam && pending && !alreadyExplainedPending) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
             const fullReminder = pendingFullReminder(fresh);
