@@ -47,9 +47,37 @@ _pushAlert     = pushAlert || (() => {});
 // meant for the trucker wizard could instead confirm sending a drafted email.
 // Fix: never overwrite an unresolved pending. Queue the new one; it goes
 // live automatically the moment the current one resolves (see clearPending).
+// Two pendings are "the same question" if they're the same type AND (when
+// they carry a quote lane) about the same lane. Used to stop the queue
+// stacking identical copies — see the dedupe in setPending below.
+function isSamePendingQuestion(a, b) {
+    if (!a || !b || a.type !== b.type) return false;
+    const al = a.state || {}, bl = b.state || {};
+    const aLane = `${al.originQuery || ''}|${al.destinationQuery || ''}`;
+    const bLane = `${bl.originQuery || ''}|${bl.destinationQuery || ''}`;
+    return aLane === bLane;
+}
 async function setPending(chatId, action) {
 const existing = getPending(chatId);
 if (existing) {
+    // REAL BUG (found 2026-08-20, live): Apsara re-sent "Send quote request
+    // from Junk car to Eccomelt" repeatedly while an earlier cargo-details
+    // question was stuck unanswered. Each retry queued ANOTHER identical
+    // cargo-details pending behind it — silently, with no cap. She ended up
+    // in an endless "cancel" → "Cancelled." → "(Next up...)" → same question
+    // loop, because each cancel popped one copy off a queue several deep.
+    // Nobody wants to be asked the identical question N times; a repeat of
+    // a question already waiting is the SAME request, not a new one. Drop
+    // the duplicate instead of stacking it. Scoped to genuinely identical
+    // questions (same type, same lane) — a different lane, or a different
+    // pending type, still queues normally as before.
+    const queuedAlready = (loadBrain().pending_queue[chatId] || []);
+    const dupOfActive = isSamePendingQuestion(existing, action);
+    const dupOfQueued = queuedAlready.some((q) => isSamePendingQuestion(q, action));
+    if (dupOfActive || dupOfQueued) {
+        console.warn(`[ACTIONS] ${chatId}: '${action.type}' is a duplicate of a pending already ${dupOfActive ? 'active' : 'queued'} — dropped instead of stacking`);
+        return { queued: true, blockedBy: existing.type, duplicate: true };
+    }
     await mutateBrain(b => {
         b.pending_queue[chatId] = b.pending_queue[chatId] || [];
         b.pending_queue[chatId].push(action);
@@ -78,6 +106,23 @@ await mutateBrain(b => { delete b.pending_actions[chatId]; });
 }
 function getPending(chatId) {
 return loadBrain().pending_actions[chatId] || null;
+}
+function getQueuedPendings(chatId) {
+return loadBrain().pending_queue[chatId] || [];
+}
+// Wipes the active pending AND everything queued behind it, in one shot.
+// Added 2026-08-20 for the "cancel all" escape — see resolvePending. Plain
+// clearPending only drops the ACTIVE one, which left Apsara in an endless
+// cancel loop against a queue several deep.
+async function clearAllPending(chatId) {
+    const active = getPending(chatId);
+    const queued = getQueuedPendings(chatId);
+    const count = (active ? 1 : 0) + queued.length;
+    await mutateBrain(b => {
+        delete b.pending_actions[chatId];
+        delete b.pending_queue[chatId];
+    });
+    return { count, active, queued };
 }
 
 // Called once per inbound message, after it's been fully routed (brain.js's
@@ -974,6 +1019,35 @@ async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerR
     return { action_taken: 'dual_role_assigned' };
 }
 
+// Honest reporting of quote requests ALREADY DISPATCHED to truckers —
+// cancelling a pending question never recalls those, and there is no
+// bulk-recall feature at all, so a bare "Cancelled." in reply to "cancel all
+// the quote requests" would imply one ran. Says plainly what's still live.
+function outstandingQuoteNote() {
+    try {
+        const { loadQuoteRequests } = require('../helpers/quoteRequests');
+        const active = loadQuoteRequests().filter((r) => r.status === 'active');
+        const awaiting = active.reduce((n, r) => n + r.legs.filter((l) => l.status === 'awaiting_reply').length, 0);
+        if (!awaiting) return `\n\nNothing else is outstanding — no quote requests are currently awaiting a reply.`;
+        const lanes = active
+            .filter((r) => r.legs.some((l) => l.status === 'awaiting_reply'))
+            // Field names verified against createQuoteRequest in
+            // helpers/quoteRequests.js — snake_case on the stored record,
+            // NOT the camelCase names its function argument uses. Getting
+            // this wrong renders a silent "? → ?".
+            .map((r) => `${r.origin_query || '?'} → ${r.destination_query || '?'}`);
+        return `\n\nStill live and NOT cancelled: ${awaiting} quote ${awaiting === 1 ? 'leg' : 'legs'} already sent out${lanes.length ? ` (${[...new Set(lanes)].join('; ')})` : ''}. I can't recall those — I'd have to message each trucker to disregard. Want me to?`;
+    } catch (err) {
+        console.warn('[ACTIONS] outstanding-quote check failed:', err.message);
+        return `\n\nNote: that only cancelled the question — any quote requests already sent to truckers are untouched.`;
+    }
+}
+// How many questions are still stacked behind the one just cancelled.
+function queueDepthNote(chatId) {
+    const n = getQueuedPendings(chatId).length;
+    if (!n) return '';
+    return `\n\n(${n} more question${n === 1 ? '' : 's'} still queued on this chat — reply "cancel all" to drop ${n === 1 ? 'it' : 'them all'}.)`;
+}
 async function resolvePending(chatId, pending, answer, selection, cancelText = null) {
 // Handled BEFORE the generic 'no' branch below — unlike every other pending
 // type, "no" here does NOT mean "cancel and stop." It means "don't save the
@@ -999,6 +1073,24 @@ if (pending.type === 'await_cc_pattern_confirm') {
 }
 
 if (answer === 'no') {
+    // ── "cancel all" / "cancel everything" — drain the WHOLE queue ────────
+    // REAL BUG (found 2026-08-20, live): plain clearPending only drops the
+    // ACTIVE pending, then brain.js's promoteQueued immediately promotes the
+    // next one off the queue and asks it. With a queue several deep (see the
+    // duplicate-stacking bug fixed in setPending above), Apsara hit an
+    // endless "cancel" → "Cancelled." → "(Next up...)" → same question loop
+    // with no way to get out. When she says "cancel ALL", she means all of
+    // them — drain the queue too, and say how many went.
+    const wantsAll = cancelText && /\b(all|everything)\b/i.test(cancelText);
+    if (wantsAll) {
+        if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
+        if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
+        const { count } = await clearAllPending(chatId);
+        const dropped = count === 1 ? 'the open question' : `all ${count} open questions`;
+        await _send(chatId, `Cancelled ${dropped}.${outstandingQuoteNote()}`);
+        return { action_taken: 'cancelled_pending' };
+    }
+
     await clearPending(chatId);
     // A rejection on a forward/assign confirmation resets that specific
     // pattern's trust streak — only these two types are trust-eligible.
@@ -1016,32 +1108,14 @@ if (answer === 'no') {
     // say plainly what was and wasn't cancelled instead.
     const widerScope = cancelText && /\b(all|every|everything|quote\s*requests?|quotes)\b/i.test(cancelText);
     if (widerScope) {
-        let activeNote = '';
-        try {
-            const { loadQuoteRequests } = require('../helpers/quoteRequests');
-            const active = loadQuoteRequests().filter((r) => r.status === 'active');
-            const awaiting = active.reduce((n, r) => n + r.legs.filter((l) => l.status === 'awaiting_reply').length, 0);
-            if (awaiting > 0) {
-                const lanes = active
-                    .filter((r) => r.legs.some((l) => l.status === 'awaiting_reply'))
-                    // Field names verified against createQuoteRequest in
-                    // helpers/quoteRequests.js — snake_case on the stored
-                    // record, NOT the camelCase names its function argument
-                    // uses. Getting this wrong renders a silent "? → ?".
-                    .map((r) => `${r.origin_query || '?'} → ${r.destination_query || '?'}`);
-                activeNote = `\n\nStill live and NOT cancelled: ${awaiting} quote ${awaiting === 1 ? 'leg' : 'legs'} already sent out${lanes.length ? ` (${[...new Set(lanes)].join('; ')})` : ''}. I can't recall those — I'd have to message each trucker to disregard. Want me to?`;
-            } else {
-                activeNote = `\n\nNothing else is outstanding — no quote requests are currently awaiting a reply.`;
-            }
-        } catch (err) {
-            console.warn('[ACTIONS] cancel scope check failed:', err.message);
-            activeNote = `\n\nNote: that only cancelled the question above — any quote requests already sent to truckers are untouched.`;
-        }
-        await _send(chatId, `Cancelled the pending question${pending.state?.originQuery && pending.state?.destinationQuery ? ` for ${pending.state.originQuery} → ${pending.state.destinationQuery}` : ''}.${activeNote}`);
+        await _send(chatId, `Cancelled the pending question${pending.state?.originQuery && pending.state?.destinationQuery ? ` for ${pending.state.originQuery} → ${pending.state.destinationQuery}` : ''}.${outstandingQuoteNote()}${queueDepthNote(chatId)}`);
         return { action_taken: 'cancelled_pending' };
     }
 
-    await _send(chatId, 'Cancelled.');
+    // Plain "cancel" — tell her if more are stacked behind this one, so she
+    // isn't surprised by a "(Next up...)" she has no context for, and knows
+    // "cancel all" exists. Added 2026-08-20 alongside the loop fix above.
+    await _send(chatId, `Cancelled.${queueDepthNote(chatId)}`);
     return { action_taken: 'cancelled_pending' };
 }
 
@@ -3648,7 +3722,7 @@ async function handleContactQuoteLegReply(chatId, text) {
 
 module.exports = {
 init,
-setPending, clearPending, getPending, resolvePending, promoteQueued,
+setPending, clearPending, clearAllPending, getPending, getQueuedPendings, resolvePending, promoteQueued,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
