@@ -1720,7 +1720,9 @@ function loadCardHtml(l) {
              printer without a dedicated printer SDK, which wasn't asked
              for here. -->
         ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
-        ${!l.pdf_link ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>` : ''}
+        ${!l.pdf_link
+          ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
+          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
         <!-- Send to seller — only once a PDF exists (nothing to forward
              before that). Shown even without a phone on file so the
              button's own click handler can surface that as a clear error
@@ -2262,13 +2264,17 @@ function wireDeckEvents() {
     // Per Apsara 2026-08-15: the Summary section (item-type breakdown +
     // totals box) is no longer decided automatically — ask each time.
     const includeSummary = await askYesNo('Include the Summary section (totals + item-type breakdown) on this PDF?');
+    const originalLabel = btn.textContent;
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
       await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
       loadTab('loads');
     } catch (err) {
       alert('PDF generation failed: ' + err.message);
-      btn.disabled = false; btn.textContent = 'Generate PDF';
+      // Restore whichever label this button started with — the same
+      // handler now serves both 'Generate PDF' and 'Regenerate PDF',
+      // and hardcoding one relabels the other on failure.
+      btn.disabled = false; btn.textContent = originalLabel;
     }
   }));
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {

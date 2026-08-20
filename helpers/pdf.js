@@ -580,6 +580,14 @@ function generateLoadPdf(load, opts = {}) {
             const photoItems = items
                 .map((it, i) => ({ it, i }))
                 .filter(({ it }) => it.gross_photo_link || it.tare_photo_link);
+            // Diagnostic, added 2026-08-20: Apsara reported photos present in
+            // Drive and on the weights PDF but absent from the invoice, on
+            // confirmed-latest code. This section is unconditional, so the
+            // only way it can be skipped is an empty photoItems — i.e. the
+            // LOAD RECORD carries no *_photo_link, whatever exists in Drive.
+            // Printing the per-item link state turns that from a guess into
+            // a fact visible in pm2 logs on the very next PDF generated.
+            console.log(`[pdf] ${load.id} scale-photo links: ${items.length ? items.map((it, i) => `${i + 1}:${it.gross_photo_link ? 'G' : '-'}${it.tare_photo_link ? 'T' : '-'}`).join(' ') : '(no items)'} -> ${photoItems.length} item(s) with photos`);
             if (photoItems.length) {
                 drawSectionHeading(doc, 'Scale Photos');
                 doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
