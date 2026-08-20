@@ -201,16 +201,23 @@ async function _runOnce() {
                 await appendAuditLog({ source: 'email_watcher', intent: 'no_booking_number', resolvedBy: 'ai', confidence: null, actionTaken: 'skipped', subject, messageId: m.id });
                 continue;
             }
-            // Body text can carry ERD/cutoff even when the PDF doesn't, or when a
-            // carrier sends a cutoff/ERD change as email text rather than a fresh
-            // PDF. Body wins for these two fields only; everything else (identity:
-            // booking_number, carrier, ports, vessel, containers) stays PDF-sourced —
-            // that's still the more reliable structured source for those.
+            // Body text can carry ERD/cutoff even when the PDF doesn't. Originally
+            // this OVERRODE the PDF's value unconditionally, which caused a real
+            // bug (found 2026-08-20, live — DALA62677900): a "Fwd:" email's body
+            // includes the quoted original thread below the new content, and body
+            // extraction picked up a STALE cutoff mention from that quoted history
+            // instead of the fresh line the sender actually added. That stale
+            // value happened to match what was already on file, so it silently
+            // no-opped — nothing for the forward-only date guard to even catch,
+            // since there was no difference to compare. Fix: body is now a
+            // FALLBACK only — it fills a field the PDF left null, it never
+            // overwrites a value the PDF (the more reliable, structured source)
+            // already found. Everything else stays PDF-sourced as before.
             if (body && body.trim()) {
                 try {
                     const bodyFields = await extractBookingFieldsFromText(body);
-                    if (bodyFields?.erd_date)    fields.erd_date    = bodyFields.erd_date;
-                    if (bodyFields?.cutoff_date) fields.cutoff_date = bodyFields.cutoff_date;
+                    if (bodyFields?.erd_date    && !fields.erd_date)    fields.erd_date    = bodyFields.erd_date;
+                    if (bodyFields?.cutoff_date && !fields.cutoff_date) fields.cutoff_date = bodyFields.cutoff_date;
                 } catch (err) {
                     console.error(`[${AGENT}] Body extraction failed ("${subject.slice(0, 60)}"):`, err.message);
                 }
