@@ -104,48 +104,46 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       </tr>
     </table>
 
-    <!-- Row 3: 4 port cells -->
+    <!-- Row 3: 4 port cells. No border-bottom, per Apsara's "there should
+         not be a line between y-table and above containing country of
+         origin" — this row now reads as one continuous block with the item
+         table directly below it. -->
     <table class="seam">
       <tr>
-        <td style="width:25%;">
+        <td style="width:25%;border-bottom:none;">
           <div class="lbl">Country of Origin</div>
           <div class="val" style="min-height:10.5mm;">{{country_of_origin}}</div>
         </td>
-        <td style="width:25%;">
+        <td style="width:25%;border-bottom:none;">
           <div class="lbl">Place of Receipt by Carrier</div>
           <div class="val" style="min-height:10.5mm;">{{place_of_receipt}}</div>
         </td>
-        <td style="width:25%;">
+        <td style="width:25%;border-bottom:none;">
           <div class="lbl">Port of Loading</div>
           <div class="val" style="min-height:10.5mm;">{{port_loading}}</div>
         </td>
-        <td style="width:25%;">
+        <td style="width:25%;border-bottom:none;">
           <div class="lbl">Port of Discharge</div>
           <div class="val" style="min-height:10.5mm;">{{port_discharge}}</div>
         </td>
       </tr>
     </table>
 
-    <!-- Spacer (matches the old tool's thin bordered gap between Row 3 and
-         the item table) -->
-    <div class="seam" style="height:3mm;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);"></div>
-
-    <!-- Item table — header row and TOTAL row measured at 12mm/10.5mm from
-         the real reference PDF (both 1.5x the stale script's 8mm/7mm); the
-         per-item data row itself measured unchanged at 8mm. Fonts measured
-         via cap-height against the real PDF: 9pt body/labels, 10.5pt bold
-         emphasis — not the stale script's 7-8pt. -->
-    <table class="seam">
+    <!-- Item table — no line between this and Row 3 above it, per Apsara's
+         explicit "it looks ugly" feedback: the old bordered spacer gap is
+         gone, and the header row's top border is suppressed so Row 3's
+         Country of Origin row and this table read as one continuous block. -->
+    <table>
       <thead>
         <tr style="background:var(--light-blue);height:12mm;">
-          <th style="width:5%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">S. No</th>
-          <th style="width:14%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Booking #</th>
-          <th style="width:15%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Container #</th>
-          <th style="width:11%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;">Seal #</th>
-          <th style="width:16%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Description</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Quantity<br>MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Rate<br>US$/MT</th>
-          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;">Amount<br>US$</th>
+          <th style="width:5%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;border-top:none;">S. No</th>
+          <th style="width:14%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;border-top:none;">Booking #</th>
+          <th style="width:15%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;border-top:none;">Container #</th>
+          <th style="width:11%;padding:0.5mm;font-size:8pt;text-align:center;border:1pt solid black;border-top:none;">Seal #</th>
+          <th style="width:16%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;border-top:none;">Description</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;border-top:none;">Quantity<br>MT</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;border-top:none;">Rate<br>US$/MT</th>
+          <th style="width:13%;padding:1mm;font-size:9pt;text-align:center;border:1pt solid black;border-top:none;">Amount<br>US$</th>
         </tr>
       </thead>
       <tbody>
