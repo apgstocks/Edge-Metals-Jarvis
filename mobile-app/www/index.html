@@ -1419,7 +1419,7 @@ function wireSignPad() {
 // so four of them plus gaps is about 2.4 times as wide as it is tall.
 // Also cheaper — a smaller crop is fewer pixels to upload, on a yard's
 // mobile connection.
-const SCAN_BOX = { widthPct: 0.60, aspect: 2.4 }; // aspect = w/h
+const SCAN_BOX = { widthPct: 0.60, aspect: 2.4, maxWidthPx: 440 }; // aspect = w/h
 let scanStream = null;
 let scanTarget = null; // { row, roleKey }
 
@@ -1428,7 +1428,24 @@ function layoutScanBox() {
   if (!wrap) return;
   const W = wrap.clientWidth, H = wrap.clientHeight;
   if (!W || !H) return;
-  const bw = Math.round(W * SCAN_BOX.widthPct);
+  // Box size is CAPPED in absolute pixels, not purely proportional — per
+  // Apsara 2026-08-19 ("when i use ipad/tablet, this camera bounding box use
+  // more length").
+  //
+  // A percentage alone scales with the screen, which is wrong here: the box
+  // has to match the apparent size of a scale display held at arm's length,
+  // and that doesn't grow just because the device did. At 0.60 the box was
+  // ~247px on a phone but ~614px on a tablet — two and a half times larger,
+  // so the operator had to stand back far enough that the digits shrank,
+  // which is the opposite of what the tight box is for.
+  // Capped so a tablet gets a box a similar PHYSICAL size to a phone's, and
+  // also bounded by height so a short landscape viewport can't produce a box
+  // taller than the screen.
+  const bw = Math.min(
+      Math.round(W * SCAN_BOX.widthPct),
+      SCAN_BOX.maxWidthPx,
+      Math.round(H * 0.72 * SCAN_BOX.aspect), // keep bh <= 72% of viewport height
+  );
   const bh = Math.round(bw / SCAN_BOX.aspect);
   const bx = Math.round((W - bw) / 2);
   const by = Math.round((H - bh) / 2);
