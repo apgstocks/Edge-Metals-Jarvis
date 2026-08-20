@@ -544,11 +544,22 @@ const ITEM_CODE_RULES = [
   ['RD', ['ROTOR', 'DRUM']],
   ['MC', ['MIXED COMBO']],
 ];
+// Strips everything but letters before comparing — "AUTOCAST" (no space),
+// "AUTO-CAST", "AUTO_CAST" all normalize to "AUTOCAST" and match the same
+// "AUTO CAST" rule that only literally matched the spaced form before.
+// Apsara: "i typed autocast" (didn't get recognized, since 'AUTOCAST' has
+// no space and the old check was a literal substring match against 'AUTO
+// CAST' with one). Fixed at the root rather than adding one more literal
+// keyword — the same gap existed for every other rule too (e.g. "AL COMBO"
+// typed as "ALCOMBO"), not just this one material.
+function normalizeForItemMatch(s) {
+  return (s || '').toUpperCase().replace(/[^A-Z]/g, '');
+}
 function deriveItemCode(desc) {
-  const norm = (desc || '').trim().toUpperCase();
+  const norm = normalizeForItemMatch(desc);
   if (!norm) return null;
   for (const [code, keywords] of ITEM_CODE_RULES) {
-    if (keywords.some((k) => norm.includes(k))) return code;
+    if (keywords.some((k) => norm.includes(normalizeForItemMatch(k)))) return code;
   }
   return null;
 }
