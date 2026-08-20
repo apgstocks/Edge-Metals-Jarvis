@@ -3282,6 +3282,27 @@ async function askForCargoDetails(chatId, state) {
 // discarding what was already given each time it re-asks.
 const WEIGHT_RE = /\d[\d,]*\s*(lbs?|pounds?|kgs?|kilograms?|tons?)\b/i;
 const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
+// REAL BUG (found 2026-08-20, live — Apsara: "NO. IT DIDNT ASK FOR
+// DESCRIPTION"): the opening prompt explicitly asks for "description,
+// weight, AND value", but this function only ever checked weight and
+// value — description was never validated at all. "42000 lbs, $5000" with
+// zero cargo description sailed through as "complete" and got sent to
+// truckers with no idea what the cargo actually IS. Fixed by requiring a
+// real description too: strip every recognized number/unit/currency token
+// out of the combined reply, then check whether any meaningful word (3+
+// letters, not a unit word or a filler/ack word like "ok"/"yes"/"the")
+// is left over. This is a heuristic, same spirit as the weight/value
+// number-counting logic above — it can't verify the description is
+// SENSIBLE, only that something beyond bare numbers and units was typed.
+const UNIT_OR_CURRENCY_WORDS = new Set(['lbs', 'lb', 'pounds', 'pound', 'kgs', 'kg', 'kilograms', 'kilogram', 'tons', 'ton', 'dollars', 'dollar', 'usd']);
+const FILLER_WORDS = new Set(['ok', 'okay', 'yes', 'yeah', 'yep', 'sure', 'please', 'here', 'its', 'it', 'is', 'are', 'the', 'a', 'an', 'and', 'for', 'of', 'to', 'about', 'approx', 'around']);
+function hasCargoDescription(text) {
+    const stripped = String(text || '')
+        .replace(/\$\s?[\d,]+(\.\d+)?/g, ' ')
+        .replace(/\d[\d,]*(\.\d+)?/g, ' ');
+    const words = stripped.split(/[^a-zA-Z']+/).map((w) => w.toLowerCase()).filter(Boolean);
+    return words.some((w) => w.length >= 3 && !UNIT_OR_CURRENCY_WORDS.has(w) && !FILLER_WORDS.has(w));
+}
 // REAL BUG (found 2026-08-20, live, right after the previous fix shipped):
 // requiring an EXPLICIT unit for weight ("lbs"/"kg"/"tons") and an EXPLICIT
 // currency marker for value ("$"/"dollars"/"usd") meant two bare numbers
@@ -3294,24 +3315,43 @@ const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
 // each, regardless of order or units. Only when there's exactly one bare
 // number with no unit at all is it genuinely ambiguous which field it's
 // for — that's the one case that still needs a specific follow-up.
+// REAL BUG (found 2026-08-20, live, caught while testing the description
+// fix above — never actually seen live yet, but confirmed reproducible):
+// this used to match numbers with `\d[\d,]*`, which lets the comma-eating
+// character class glue two DIFFERENT numbers together when there's no
+// space after the comma — "40000,42000" (no space) matched as the SINGLE
+// token "40000,42000", undercounting to 1 and silently reintroducing the
+// exact infinite-loop bug the numCount>=2 rule above was built to fix
+// (that bug was only ever tested/confirmed with a space: "40000, 42000").
+// Fixed by only treating a comma as part of ONE number when it's really a
+// thousands separator (a comma immediately followed by exactly 3 digits,
+// e.g. "40,000") — any other comma-adjacent digit run is read as two
+// separate numbers, spaced or not.
+const NUMBER_RE = /\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g;
 function analyzeCargoNumbers(text) {
     const hasWeightUnit = WEIGHT_RE.test(text);
     const hasValueMarker = VALUE_RE.test(text);
-    const numCount = (text.match(/\d[\d,]*(\.\d+)?/g) || []).length;
-    if (numCount >= 2) return { hasWeight: true, hasValue: true };
-    return { hasWeight: hasWeightUnit, hasValue: hasValueMarker };
+    const numCount = (text.match(NUMBER_RE) || []).length;
+    const hasWeight = numCount >= 2 ? true : hasWeightUnit;
+    const hasValue = numCount >= 2 ? true : hasValueMarker;
+    return { hasWeight, hasValue, hasDescription: hasCargoDescription(text) };
 }
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
     const clean = String(cargoText || '').trim();
     const combined = [pending.state.cargoSoFar, clean].filter(Boolean).join(', ');
-    const { hasWeight, hasValue } = analyzeCargoNumbers(combined);
-    if (!hasWeight || !hasValue) {
+    const { hasWeight, hasValue, hasDescription } = analyzeCargoNumbers(combined);
+    if (!hasWeight || !hasValue || !hasDescription) {
         await setPending(chatId, { type: 'await_quote_cargo_details', state: { ...pending.state, cargoSoFar: combined } });
-        const question = !hasWeight && !hasValue
-            ? `Still need a weight and a value — both are required for every quote. What are they?`
-            : !hasWeight
-                ? `Got the value — still need a weight. What's the weight?`
-                : `Got the weight — still need a value. What's the value?`;
+        const missing = [];
+        if (!hasDescription) missing.push('a description');
+        if (!hasWeight) missing.push('a weight');
+        if (!hasValue) missing.push('a value');
+        const missingList = missing.length === 1
+            ? missing[0]
+            : missing.length === 2
+                ? `${missing[0]} and ${missing[1]}`
+                : `${missing[0]}, ${missing[1]}, and ${missing[2]}`;
+        const question = `Still need ${missingList} — description, weight, and value are all required for every quote. What ${missing.length > 1 ? 'are they' : 'is it'}?`;
         await _send(chatId, question);
         return { action_taken: 'quote_cargo_details_retry' };
     }

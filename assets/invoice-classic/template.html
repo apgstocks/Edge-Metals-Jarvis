@@ -49,12 +49,20 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       <tr>
         <td style="width:50%;">
           <div class="lbl">Exporter</div>
-          <div class="val" style="min-height:15mm;">
+          <!-- One shared line-height on the container, inherited by every
+               line below (name included) and no per-line margin, so the
+               gap between every pair of lines — name-to-address as well as
+               address-to-address — is identical instead of the old mix of
+               a 1mm margin on one line and 0 on the rest. break-word so a
+               long line wraps inside the 50%-width cell instead of
+               overflowing it. Apsara: "auto wrapped and spacing should be
+               even". -->
+          <div class="val" style="min-height:15mm;font-size:9pt;line-height:1.6;overflow-wrap:break-word;word-wrap:break-word;">
             <div style="font-weight:700;font-size:10.5pt;">EDGE METALS INC</div>
-            <div style="font-size:9pt;margin-top:1mm;">14750 DEVONSHIRE LN, FRISCO, TX 75035</div>
-            <div style="font-size:9pt;">TAX-ID: 26-3269514</div>
-            <div style="font-size:9pt;">TEL: (310) 938-2525</div>
-            <div style="font-size:9pt;">FAX: (425) 940-9408</div>
+            <div>14750 DEVONSHIRE LN, FRISCO, TX 75035</div>
+            <div>TAX-ID: 26-3269514</div>
+            <div>TEL: (310) 938-2525</div>
+            <div>FAX: (425) 940-9408</div>
           </div>
         </td>
         <td style="width:50%;padding:0;">
@@ -80,12 +88,12 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
             </div>
             <div style="width:35%;border-bottom:1pt solid var(--black);">
               <div class="lbl">DATE</div>
-              <div class="val" style="min-height:15mm;font-weight:700;">{{inv_date}}</div>
+              <div class="val" style="min-height:15mm;font-weight:700;display:flex;align-items:center;justify-content:center;text-align:center;">{{inv_date}}</div>
             </div>
           </div>
           <div>
             <div class="lbl">Other Reference(s)</div>
-            <div class="val" style="min-height:12mm;">{{other_ref}}</div>
+            <div class="val" style="min-height:12mm;display:flex;align-items:center;justify-content:center;text-align:center;overflow-wrap:break-word;word-wrap:break-word;">{{other_ref}}</div>
           </div>
         </td>
       </tr>
@@ -102,9 +110,14 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       <tr>
         <td style="width:50%;border-top:none;">
           <div class="lbl">Buyer</div>
-          <div class="val" style="min-height:42mm;">
+          <!-- Same fix as Exporter: one shared line-height on the
+               container (inherited by the bold name line too) and no
+               per-line margin, so name-to-address spacing matches
+               address-to-address spacing exactly, plus break-word so a
+               long address line wraps inside the cell. -->
+          <div class="val" style="min-height:42mm;font-size:9pt;line-height:1.6;overflow-wrap:break-word;word-wrap:break-word;">
             <div style="font-weight:700;font-size:12pt;">{{buyer_name}}</div>
-            <div style="font-size:9pt;margin-top:1mm;line-height:1.7;">{{buyer_address_lines}}</div>
+            <div>{{buyer_address_lines}}</div>
           </div>
         </td>
         <td style="width:50%;padding:0;border-top:none;">
@@ -128,19 +141,19 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       <tr>
         <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Country of Origin</div>
-          <div class="val" style="min-height:10.5mm;">{{country_of_origin}}</div>
+          <div class="val" style="min-height:10.5mm;display:flex;align-items:center;justify-content:center;text-align:center;">{{country_of_origin}}</div>
         </td>
         <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Place of Receipt by Carrier</div>
-          <div class="val" style="min-height:10.5mm;">{{place_of_receipt}}</div>
+          <div class="val" style="min-height:10.5mm;display:flex;align-items:center;justify-content:center;text-align:center;">{{place_of_receipt}}</div>
         </td>
         <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Port of Loading</div>
-          <div class="val" style="min-height:10.5mm;">{{port_loading}}</div>
+          <div class="val" style="min-height:10.5mm;display:flex;align-items:center;justify-content:center;text-align:center;">{{port_loading}}</div>
         </td>
         <td style="width:25%;border-top:none;border-bottom:none;">
           <div class="lbl">Port of Discharge</div>
-          <div class="val" style="min-height:10.5mm;">{{port_discharge}}</div>
+          <div class="val" style="min-height:10.5mm;display:flex;align-items:center;justify-content:center;text-align:center;">{{port_discharge}}</div>
         </td>
       </tr>
     </table>
@@ -184,27 +197,27 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
     <table class="seam">
       <thead>
         <tr style="background:var(--light-orange);height:15mm;">
-          <th style="width:15%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Container</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Gross Weight<br>(lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Truck<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Container<br>Tare (lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Chassis<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Boxes<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Net Weight<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;border:1pt solid black;">Net Weight<br>(MT)</th>
+          <th style="width:15%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
+          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
+          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Truck<br>(lbs)</th>
+          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container<br>Tare (lbs)</th>
+          <th style="width:11%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Chassis<br>(lbs)</th>
+          <th style="width:12%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Boxes<br>(lbs)</th>
+          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
+          <th style="width:13%;padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
         </tr>
       </thead>
       <tbody>
 {{packing_rows}}
         <tr style="background:var(--light-orange);height:15mm;">
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;border:1pt solid black;">TOTAL</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;border:1pt solid black;">{{total_net_lbs_fmt}}</td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;border:1pt solid black;">{{total_net_mt_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_lbs_fmt}}</td>
+          <td style="padding:2mm 1mm;font-weight:700;font-size:9pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_mt_fmt}}</td>
         </tr>
       </tbody>
     </table>

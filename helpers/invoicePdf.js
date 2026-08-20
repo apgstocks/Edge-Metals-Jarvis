@@ -172,14 +172,14 @@ function buildInvoiceClassicHtml(data) {
         totalNetMt += netMt;
         totalNetLbs += netLbs;
         return `        <tr style="height:10mm;">
-          <td style="padding:1mm;font-size:8.5pt;text-align:center;">${escapeHtml(data.container_no)}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.truck_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.container_tare_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.chassis_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.boxes_weight_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
-          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${netMt.toFixed(3)}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(data.container_no)}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.truck_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.container_tare_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.chassis_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.boxes_weight_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;vertical-align:middle;">${netMt.toFixed(3)}</td>
         </tr>`;
     });
 
