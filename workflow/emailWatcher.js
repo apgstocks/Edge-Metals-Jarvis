@@ -6,9 +6,17 @@
 // booking or fills gaps on an existing one.
 //
 // DESIGN DECISIONS — confirm these match intent before trusting this in prod:
-//   1. Existing bookings: only NULL/empty fields get filled. A value already
-//      on the record (manager-entered OR from an earlier email) is never
-//      overwritten. If two emails disagree, the first one wins silently.
+//   1. Existing bookings: split into two buckets.
+//      - STABLE fields (booking_number, carrier, ports, shipper, consignee,
+//        buyer, container_size, container_number) only fill in if currently
+//        empty — never overwritten once set.
+//      - DATE fields (cutoff_date, erd_date, etd) auto-update ONLY if the new
+//        date is LATER than what's on file — carriers push these back
+//        constantly, so a forward move is trusted; an earlier/tied/
+//        unparseable one is flagged for manual review instead of applied
+//        (see DATE_FIELDS below for the full reasoning).
+//      - vessel_voyage always takes the newest value (not a date, "later"
+//        doesn't apply — a reassignment is a reassignment).
 //   2. New bookings: created directly into bookings.json, no pre-approval
 //      gate. Manager gets a WhatsApp notice after the fact, not a confirm
 //      prompt. brain.js already has a pending_confirmations mechanism for
@@ -34,10 +42,29 @@ const { extractPdfFields, extractBookingFieldsFromText, classifyDocument } = req
 const { appendAuditLog } = require('../helpers/auditlog');
 const { uploadPdfToDrive } = require('../helpers/drive');
 const { loadJson, saveJson, mutateJson, loadBookings, updateWorkflow } = require('../helpers/json');
+const { parseUSDate } = require('../helpers/time');
 const cfg = require('../config');
 const { syncBookingToSheet } = require('../helpers/bookingTracker');
 const { pushAlert } = require('../alerts');
 const AGENT = 'EMAIL';
+
+// REAL BUG (found 2026-08-20, live — Apsara: "cut off and erd are not proper
+// ... still jarvis booking hold old data"): the existing-booking merge below
+// only ever filled a field if it was CURRENTLY EMPTY. That's correct for
+// identity fields (booking_number, carrier, ports) but wrong for cutoff/ERD/
+// ETD/vessel — carriers amend those constantly (vessel rolls, port
+// congestion), so a real amendment email was being silently ignored because
+// the booking already had a (now-stale) value on file.
+// Fix, per Apsara: only auto-apply a date change when the new date is LATER
+// than what's on file — carriers push dates back, they essentially never
+// pull them earlier, so a "later" email is trustworthy and an "earlier or
+// unparseable" one is more likely a stale/misextracted email than a real
+// correction. Rejected dates are flagged for a manual look instead of
+// silently applied OR silently dropped.
+const DATE_FIELDS = new Set(['cutoff_date', 'erd_date', 'etd']);
+// vessel_voyage also changes over a booking's life (reassignment) but isn't a
+// date — "later" doesn't apply, so it always takes the newest value.
+const VOLATILE_NON_DATE_FIELDS = new Set(['vessel_voyage']);
 
 let _sendToManager = async () => {};
 function init({ sendToManager }) {
@@ -112,7 +139,7 @@ async function _runOnce() {
     // live: two different-carrier PDFs both extracted the same number), the
     // second hit must see the first hit's result, not stale pre-run data.
     const bookings = loadBookings();
-    const created = [], updated = [], skipped = [], flagged = [];
+    const created = [], updated = [], skipped = [], flagged = [], rescheduled = [];
     const seenThisRun = new Set();
 
     for (const m of newMessages) {
@@ -209,15 +236,48 @@ async function _runOnce() {
             // that was created/changed by someone else in the meantime.
             let actuallyCreated = false;
             let appliedFields = null;
+            let dateChanges = [];   // [{field, from, to}] — forward date/vessel moves, ACCEPTED
+            let dateRejections = []; // [{field, from, to}] — not a forward move, REJECTED (flagged instead)
             const finalAll = await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
                 if (all[bkg]) {
                     const fillable = {};
+                    const changed = {};
+                    const changes = [];
+                    const rejected = [];
+                    const cur = all[bkg];
                     for (const [k, v] of Object.entries(fields)) {
                         if (k === 'booking_number') continue;
-                        if (v != null && v !== '' && (all[bkg][k] == null || all[bkg][k] === '')) fillable[k] = v;
+                        if (v == null || v === '') continue;
+
+                        if (DATE_FIELDS.has(k)) {
+                            if (cur[k] == null || cur[k] === '') { fillable[k] = v; continue; }
+                            if (cur[k] === v) continue; // identical, nothing to do
+                            const oldDate = parseUSDate(cur[k]);
+                            const newDate = parseUSDate(v);
+                            if (oldDate && newDate && newDate.getTime() > oldDate.getTime()) {
+                                changes.push({ field: k, from: cur[k], to: v });
+                                changed[k] = v;
+                            } else {
+                                rejected.push({ field: k, from: cur[k], to: v });
+                            }
+                            continue;
+                        }
+
+                        if (VOLATILE_NON_DATE_FIELDS.has(k)) {
+                            if (cur[k] !== v) {
+                                changes.push({ field: k, from: cur[k] ?? '—', to: v });
+                                changed[k] = v;
+                            }
+                            continue;
+                        }
+
+                        if (cur[k] == null || cur[k] === '') fillable[k] = v;
                     }
-                    if (Object.keys(fillable).length) Object.assign(all[bkg], fillable);
+                    const patch = { ...fillable, ...changed };
+                    if (Object.keys(patch).length) Object.assign(all[bkg], patch);
                     appliedFields = fillable;
+                    dateChanges = changes;
+                    dateRejections = rejected;
                 } else {
                     actuallyCreated = true;
                     all[bkg] = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
@@ -255,9 +315,32 @@ async function _runOnce() {
                         severity: 'info',
                     });
                 }
+                if (dateChanges.length) {
+                    const summary = dateChanges.map(c => `${c.field} ${c.from} → ${c.to}`).join(', ');
+                    console.log(`[${AGENT}] ${bkg} rescheduled: ${summary} (from "${subject.slice(0, 60)}")`);
+                    rescheduled.push(`${bkg}: ${summary}`);
+                    await syncBookingToSheet(bkg);
+                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'booking_rescheduled', resolvedBy: 'ai', confidence: null, actionTaken: 'updated', subject, fields: Object.fromEntries(dateChanges.map(c => [c.field, c.to])) });
+                    await pushAlert({
+                        type: 'booking_rescheduled_email', bkgNo: bkg,
+                        message: `Booking ${bkg} rescheduled by carrier: ${summary}`,
+                        severity: 'warning',
+                    });
+                }
+                if (dateRejections.length) {
+                    const summary = dateRejections.map(c => `${c.field} email says ${c.to} vs current ${c.from}`).join(', ');
+                    console.warn(`[${AGENT}] ${bkg} date not a forward move — NOT auto-applying: ${summary} (from "${subject.slice(0, 60)}")`);
+                    flagged.push(`${bkg}: ${summary} — verify manually`);
+                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'date_rejected_not_forward', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject, note: summary });
+                    await pushAlert({
+                        type: 'booking_flagged_email', bkgNo: bkg,
+                        message: `Booking ${bkg} — email date not later than current, not applied: ${summary}`,
+                        severity: 'warning',
+                    });
+                }
                 if (duplicateThisRun) {
                     console.warn(`[${AGENT}] ${bkg} matched a SECOND email in this run ("${subject.slice(0, 60)}") — not touching its Drive PDF, flagging for review`);
-                    flagged.push(bkg);
+                    flagged.push(`${bkg}: same booking number matched a second email — verify manually`);
                     await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'duplicate_flagged', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject });
                     await pushAlert({
                         type: 'booking_flagged_email', bkgNo: bkg,
@@ -294,11 +377,12 @@ async function _runOnce() {
 
     await saveProcessed(processed);
 
-    if (created.length || updated.length || flagged.length) {
+    if (created.length || updated.length || rescheduled.length || flagged.length) {
         const lines = ['Email watcher — auto-detected from Gmail:'];
-        if (created.length) lines.push(`New: ${created.join(', ')} — verify details on the dashboard.`);
-        if (updated.length) lines.push(`Filled in missing fields: ${updated.join(', ')}`);
-        if (flagged.length) lines.push(`Flagged — same booking number matched a second email, verify manually: ${[...new Set(flagged)].join(', ')}`);
+        if (created.length)     lines.push(`New: ${created.join(', ')} — verify details on the dashboard.`);
+        if (updated.length)     lines.push(`Filled in missing fields: ${updated.join(', ')}`);
+        if (rescheduled.length) lines.push(`Rescheduled by carrier:\n${rescheduled.map(r => `  ${r}`).join('\n')}`);
+        if (flagged.length)     lines.push(`Flagged for manual review:\n${[...new Set(flagged)].map(f => `  ${f}`).join('\n')}`);
         await _sendToManager(lines.join('\n'));
     }
     if (skipped.length) {
