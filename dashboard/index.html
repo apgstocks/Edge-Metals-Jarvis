@@ -2378,17 +2378,17 @@ function renderItemRows() {
     } else {
       otherInput.classList.add('hidden');
       otherInput.value = '';
-      // Prefill the price from the last invoice that used this item type.
-      // Only when the price box is EMPTY — never overwrite a figure someone
-      // has already typed, since today's price may well differ from the
-      // last one and silently replacing it would be worse than not helping.
+      // Always take the last price for this item type — per Apsara
+      // 2026-08-19 ("just take the last price"), overriding the earlier
+      // fill-only-if-empty version. Changing the description means you're
+      // pricing a different item, so whatever was in the box belonged to
+      // the previous one and should not survive. Still fully editable
+      // afterwards; this only sets the starting figure.
       const priceInput = row.querySelector('.ld-item-price');
-      if (priceInput && !String(priceInput.value).trim()) {
+      if (priceInput) {
         const last = lastPriceForDescription(sel.value);
-        if (last != null) {
-          priceInput.value = fmtRate(last);
-          recomputeRowTotals(row);
-        }
+        priceInput.value = last != null ? fmtRate(last) : '';
+        recomputeRowTotals(row);
       }
     }
     syncItemsFromDom();
