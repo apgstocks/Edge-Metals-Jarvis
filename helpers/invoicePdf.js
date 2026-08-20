@@ -40,7 +40,7 @@ function escapeHtml(s) {
 // between the two document types. amountInWords is not used by this classic
 // layout (the old reportlab tool didn't print it either), so it's not
 // imported here.
-const { formatDate, formatRate, formatQty } = require('./proformaPdf');
+const { formatDate, formatRate } = require('./proformaPdf');
 const { ITEM_CODE_MAP } = require('./invoiceSheet');
 
 function formatMoney2(value) {
@@ -48,6 +48,14 @@ function formatMoney2(value) {
 }
 function formatInt(value) {
     return Math.round(Number(value) || 0).toLocaleString('en-US');
+}
+// invoice_gen.py's qty_display used f"{weight:.3f}" for MT quantities (3
+// decimals — confirmed against the real reference PDF: "22.680", not
+// "22.68"). Proforma's own formatQty() is fixed at 2 decimals for its own
+// document, so it's not reused here — a local 3-decimal formatter matches
+// this specific document's real historical output instead.
+function formatQtyMt(value) {
+    return Number(value || 0).toFixed(3);
 }
 
 // "AC-AUTO CAST" style label — mirrors invoice_gen.py's get_item_label().
@@ -68,9 +76,14 @@ function getItemCode(itemDesc, invNo) {
     }
     return '';
 }
+// Matches invoice_gen.py's get_item_label() exactly: the label is
+// CODE-CANONICAL_NAME (e.g. "AL-ALUMINIUM COMBO"), always from
+// ITEM_CODE_MAP's own value — NOT the sheet row's raw item_desc text (which
+// can be lowercase/abbreviated, like "Al combo" in a real sample invoice).
 function itemLabel(itemDesc, invNo) {
     const code = getItemCode(itemDesc, invNo);
-    return code ? `${code}-${itemDesc}` : (itemDesc || '');
+    if (code && ITEM_CODE_MAP[code]) return `${code}-${ITEM_CODE_MAP[code]}`;
+    return '';
 }
 
 function buildInvoiceClassicHtml(data) {
@@ -95,7 +108,7 @@ function buildInvoiceClassicHtml(data) {
           <td style="padding:5px 4px;font-size:8px;text-align:center;">${escapeHtml(data.container_no)}</td>
           <td style="padding:5px 4px;font-size:8px;text-align:center;">${escapeHtml(data.seal_no)}</td>
           <td style="padding:5px 4px;font-size:8px;">${escapeHtml(item.item_desc)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatQty(qty)}</td>
+          <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatQtyMt(qty)}</td>
           <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatRate(rate)}</td>
           <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatMoney2(amount)}</td>
         </tr>`;

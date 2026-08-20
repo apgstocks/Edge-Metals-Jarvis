@@ -3248,20 +3248,36 @@ async function askForCargoDetails(chatId, state) {
         await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask for cargo details once that's resolved.`);
         return { action_taken: 'quote_awaiting_cargo_queued' };
     }
-    await _send(chatId, `What's the cargo — description and value? (e.g. "Aluminum scrap, approx $5,000") Reply "skip" to send without it.`);
+    // 2026-08-20, per Apsara: "when you get quote request from manager, just
+    // like description, ask do you need scale tickets before hand" — folded
+    // into this SAME question rather than a separate follow-up round-trip,
+    // so it's answered once alongside cargo details, not as an extra step.
+    // Weight/value are MANDATORY (per Apsara, same day: "its mandatory for
+    // every quote. just ask manager") — no "skip" escape hatch anymore, see
+    // resumeQuoteWithCargoDetails below.
+    await _send(chatId, `What's the cargo — description, weight, and value? (required — e.g. "Aluminum scrap, 40,000 lbs, approx $5,000") Also, do you need scale tickets for this haul?`);
     return { action_taken: 'quote_awaiting_cargo' };
 }
 
-// Verbatim capture, same "no fixed format to validate against" reasoning as
-// the other single-shot quote-request prompts — "skip"/"none"/"n/a" (any
-// casing) sends without cargo info; anything else is used as-is in the
-// outbound message.
+// Weight/value are mandatory (2026-08-20, per Apsara — see askForCargoDetails
+// above). No "skip" bypass anymore: a reply with no digit in it at all (no
+// weight, no dollar value) is re-asked, every time, until a real number is
+// given — not just once. REAL BUG this replaced (found 2026-08-20, live):
+// the prompt explicitly asks for description AND weight AND value, but
+// nothing ever checked the reply actually had either — a bare "Al" sailed
+// straight through as the final cargo details. There's no reliable way to
+// parse "is this a real weight/value" from free text, so the practical
+// check is: does the reply contain ANY digit at all? A genuine weight or
+// dollar value always has one; a bare description like "Al" never does.
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
-    await clearPending(chatId);
     const clean = String(cargoText || '').trim();
-    const skipped = /^(skip|none|no|n\/a|na)$/i.test(clean);
+    if (!/\d/.test(clean)) {
+        await _send(chatId, `Weight and value are required for every quote — I don't see either in that. What's the weight and value? (and let me know if you need scale tickets)`);
+        return { action_taken: 'quote_cargo_details_retry' };
+    }
+    await clearPending(chatId);
     const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails } = pending.state;
-    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, skipped ? null : clean);
+    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, clean);
 }
 
 // Everything's resolved — actually send. Truckers with no usable channel
