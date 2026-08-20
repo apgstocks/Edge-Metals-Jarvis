@@ -562,6 +562,54 @@ function generateLoadPdf(load, opts = {}) {
             // its per-item cards, so nothing is lost — it just isn't
             // duplicated on the document the buyer receives.
 
+            // Scale photo links — per Apsara 2026-08-19 ("i want weight
+            // photo link in generated invoice pdf").
+            //
+            // This partially reverses the 2026-08-12 decision to keep weight
+            // evidence on the separate weights PDF only. The difference is
+            // what's being added: that removal was of a full page of photo
+            // links appended to the ticket, whereas this is a compact list
+            // of clickable links, so the ticket still ends on the Summary
+            // and signature rather than trailing off into evidence.
+            // The weights PDF is unchanged and still carries the same links
+            // inline on its per-item cards — this doesn't replace it, it
+            // just means the invoice alone is enough to reach the photos.
+            //
+            // Skipped entirely when no photos were captured, so a load
+            // weighed without photos doesn't get an empty heading.
+            const photoItems = items
+                .map((it, i) => ({ it, i }))
+                .filter(({ it }) => it.gross_photo_link || it.tare_photo_link);
+            if (photoItems.length) {
+                drawSectionHeading(doc, 'Scale Photos');
+                doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
+                    .text('Tap a link to open the scale photo backing each weight.', PAGE_L, doc.y);
+                doc.moveDown(0.5);
+                for (const { it, i } of photoItems) {
+                    // Guard each row against straddling a page break — the
+                    // label and its links must not end up on separate pages.
+                    ensureSpace(doc, 28);
+                    const y = doc.y;
+                    doc.font('Helvetica-Bold').fontSize(9).fillColor(INK)
+                        .text(`${i + 1}. ${it.description || 'Item ' + (i + 1)}`, PAGE_L, y, { width: 200, lineBreak: false });
+                    // Links are placed at explicit x positions on the same
+                    // line rather than flowed, so a long description can't
+                    // push them onto the next line and split the row.
+                    let lx = PAGE_L + 210;
+                    if (it.gross_photo_link) {
+                        doc.font('Helvetica').fontSize(9).fillColor('#1a5fb4')
+                            .text('Gross photo', lx, y, { link: it.gross_photo_link, underline: true, width: 90, lineBreak: false });
+                        lx += 100;
+                    }
+                    if (it.tare_photo_link) {
+                        doc.font('Helvetica').fontSize(9).fillColor('#1a5fb4')
+                            .text('Tare photo', lx, y, { link: it.tare_photo_link, underline: true, width: 90, lineBreak: false });
+                    }
+                    doc.y = y + 15;
+                }
+                doc.moveDown(0.6);
+            }
+
             // Signature block last, per Apsara 2026-08-17 — a signature
             // belongs at the end of the document, under the numbers it's
             // attesting to.
