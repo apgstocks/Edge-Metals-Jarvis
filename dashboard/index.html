@@ -2220,6 +2220,34 @@ async function refreshCustomItemTypes() {
 // on asc") — mirrors mobile-app/www/index.html's identical change; see its
 // comment for why localeCompare with sensitivity:'base' is used and why
 // "Others…" is deliberately not part of this sort.
+// Most recent price used for an item description, per Apsara 2026-08-19
+// ("based on last invoice generated, when i add new load, price should get
+// updated as soon as i add that description").
+//
+// Read straight from loadsCache — the deck already fetched every load, and
+// helpers/loads.js unshifts new loads onto the front, so the array is
+// newest-first and the FIRST match is by definition the most recent
+// invoice that used this description. No API call, so the price appears
+// the instant the description is picked.
+//
+// Matching is case/whitespace-insensitive for the same reason
+// groupItemsByDescription normalises: "Battery" and "battery " are the
+// same item type to a yard, and a price typed against one should apply to
+// the other.
+function lastPriceForDescription(desc) {
+  const key = String(desc || '').trim().toLowerCase();
+  if (!key) return null;
+  for (const load of (loadsCache || [])) {
+    for (const it of (load.items || [])) {
+      if (String(it.description || '').trim().toLowerCase() === key
+          && it.price != null && it.price !== '') {
+        return it.price;
+      }
+    }
+  }
+  return null;
+}
+
 function itemDescOptions() {
   const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
   return ITEM_DESC_OPTIONS_BASE
@@ -2350,6 +2378,18 @@ function renderItemRows() {
     } else {
       otherInput.classList.add('hidden');
       otherInput.value = '';
+      // Prefill the price from the last invoice that used this item type.
+      // Only when the price box is EMPTY — never overwrite a figure someone
+      // has already typed, since today's price may well differ from the
+      // last one and silently replacing it would be worse than not helping.
+      const priceInput = row.querySelector('.ld-item-price');
+      if (priceInput && !String(priceInput.value).trim()) {
+        const last = lastPriceForDescription(sel.value);
+        if (last != null) {
+          priceInput.value = fmtRate(last);
+          recomputeRowTotals(row);
+        }
+      }
     }
     syncItemsFromDom();
   }));
@@ -2635,8 +2675,8 @@ function resetLoadModal() {
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
   if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Add new load';
-  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save load';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Create invoice';
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Create invoice';
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
@@ -2986,7 +3026,7 @@ function renderLoads(loads) {
           <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
           <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
         </div>
-        <button id="btnAddLoad" class="btn btn-primary">+ Add new load</button>
+        <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
@@ -2996,7 +3036,7 @@ function renderLoads(loads) {
       <div class="modal-shell">
         <div class="modal-stripe"></div>
         <div class="modal-head">
-          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add new load</div>
+          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Create invoice</div>
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
@@ -3035,7 +3075,7 @@ function renderLoads(loads) {
         </div>
         <div class="modal-foot">
           <button id="btnCancelLoad" class="btn">Cancel</button>
-          <button id="btnSaveLoad" class="btn btn-primary">Save load</button>
+          <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
         </div>
       </div>
     </div>`;
@@ -3224,7 +3264,7 @@ function wireLoadsEvents() {
       // silently resubmitting the same rejected password on a retry.
       editUnlockPassword = null;
     } finally {
-      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Save load';
+      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Create invoice';
     }
   });
 
