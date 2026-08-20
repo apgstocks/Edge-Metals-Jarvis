@@ -1,0 +1,356 @@
+// ── helpers/invoiceSheet.js — Commercial Invoice generation, sourced from
+// the real Invoice Google Sheet ─────────────────────────────────────────────
+// Added per Apsara: "build invoice now.similar to proforma ask me who is the
+// buyer.then follow python anywhere invoice flow" — this ports the DATA/
+// CALCULATION logic of her old PythonAnywhere Flask tool (invoice_gen.py /
+// app.py, both saved in the Jarvis project docs) into Jarvis itself, reading
+// the SAME Google Sheet (cfg.INVOICE_SHEET_ID) that tool already read.
+//
+// One deliberate UX change from the old tool, per Apsara's explicit
+// instruction: the old app searched by CONTAINER NUMBER first. This asks
+// "who is the buyer" first (matching the Proforma flow's own address-book-
+// first UX), then shows every container/shipment on record for that buyer
+// so she can pick which one to invoice — more natural when she's starting
+// from "I need to invoice Taewon" rather than already knowing a container ID.
+//
+// IMPORTANT — column mapping is resolved BY HEADER NAME at fetch time, not
+// by the old script's hardcoded numeric column indices. Checked directly:
+// invoice_gen.py's COLUMNS dict (e.g. port_discharge: 23, efs: 25) does NOT
+// line up with the real sheet's current header row fetched live in this
+// session — the sheet's columns have shifted since that script was last
+// used. Trusting stale hardcoded indices on a real financial document is
+// exactly the kind of silent-wrong-data risk worth refusing outright, so
+// every field below is located by matching the header text instead — same
+// "fail loud on a header rename" contract helpers/nextInvoiceNo.js already
+// uses for this same sheet. Fields with no matching real header (that
+// script's "port_discharge"/"efs" columns) are left for manual entry in the
+// editable preview rather than silently pulled from the wrong column.
+
+const cfg = require('../config');
+const { parseCsv } = require('./nextInvoiceNo');
+
+let cache = null; // { at, headers, rows: string[][] }
+const CACHE_MS = 3 * 60 * 1000;
+
+async function fetchRawSheet() {
+    if (cache && (Date.now() - cache.at) < CACHE_MS) return cache;
+    if (!cfg.INVOICE_SHEET_ID) throw new Error('INVOICE_SHEET_ID not configured');
+    const url = `https://docs.google.com/spreadsheets/d/${cfg.INVOICE_SHEET_ID}/export?format=csv&gid=${cfg.INVOICE_MAIN_GID}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Could not read invoice sheet (${res.status})`);
+    const text = await res.text();
+    const table = parseCsv(text);
+    if (!table.length) throw new Error('Invoice sheet is empty');
+    const headers = table[0].map((h) => String(h || '').trim().toLowerCase());
+    const rows = table.slice(1).filter((r) => r && r.some((c) => String(c || '').trim()));
+    cache = { at: Date.now(), headers, rows };
+    return cache;
+}
+
+// Finds a column index by exact header match first, then by "startsWith" —
+// mirrors nextInvoiceNo.js's own `h.startsWith('inv no')` pattern. Returns
+// -1 (not -Infinity/undefined) when nothing matches, same as Array.indexOf,
+// so callers can check `=== -1` uniformly.
+function findCol(headers, exact, startsWith) {
+    let idx = headers.indexOf(exact);
+    if (idx !== -1) return idx;
+    if (startsWith) {
+        idx = headers.findIndex((h) => h.startsWith(startsWith));
+        if (idx !== -1) return idx;
+    }
+    return -1;
+}
+
+function buildColumnMap(headers) {
+    return {
+        consignee: findCol(headers, 'consignee'),
+        inv_no: findCol(headers, 'inv no.', 'inv no'),
+        inv_date: findCol(headers, 'inv date'),
+        hbl_no: findCol(headers, 'hbl  no.', 'hbl'),
+        booking_no: findCol(headers, 'booking  no.', 'booking'),
+        container_no: findCol(headers, 'container no.', 'container'),
+        seal_no: findCol(headers, 'seal no.', 'seal'),
+        supplier: findCol(headers, 'supplier'),
+        terms: findCol(headers, 'terms'),
+        customer: findCol(headers, 'customer'),
+        proforma_date: findCol(headers, 'proforma date'),
+        reference: findCol(headers, 'reference'),
+        item_desc: findCol(headers, 'item description', 'item desc'),
+        weight: findCol(headers, 'weight'),
+        inv_price: findCol(headers, 'inv price'),
+        freight_charge: findCol(headers, 'freight charge'),
+        eta: findCol(headers, 'eta'),
+    };
+}
+
+function safeStr(v) { return v == null ? '' : String(v).trim(); }
+function safeFloat(v) {
+    const n = parseFloat(String(v || '').replace(/,/g, '').replace(/\$/g, ''));
+    return Number.isFinite(n) ? n : 0;
+}
+// Freight Charge cells sometimes hold an arithmetic expression like
+// "70+35+50" (confirmed in real rows) rather than a plain number — same
+// "eval a restricted +-*/ expression" behavior as invoice_gen.py's
+// eval_freight(), but without Python's eval(): a regex whitelist first,
+// then a small hand-rolled evaluator (+ and - only, matching every real
+// example seen — no * or / has shown up in this column in practice).
+function evalFreight(expr) {
+    const s = String(expr || '').replace(/,/g, '').replace(/\$/g, '').trim();
+    if (!s) return 0;
+    if (/^[\d.]+$/.test(s)) return parseFloat(s) || 0;
+    if (/^[\d.\s+\-]+$/.test(s)) {
+        const parts = s.split(/(?=[+\-])/).map((p) => p.trim()).filter(Boolean);
+        let total = 0;
+        for (const p of parts) {
+            const n = parseFloat(p);
+            if (Number.isFinite(n)) total += n;
+        }
+        return total;
+    }
+    return parseFloat(s) || 0;
+}
+
+// ITEM_CODE_MAP — Apsara's own list, same as dashboard/documents.html's
+// client-side copy (kept in sync manually; both are small, static, and
+// change together only when she adds a new material code).
+const ITEM_CODE_MAP = {
+    AL: 'ALUMINIUM COMBO', AP: 'SCRAP AUTO PARTS', RC: 'REGULAR COMBO', BT: 'BATTERY',
+    AW: 'ALUMINIUM WHEELS', CW: 'CHROME WHEELS', HW: 'HARNESS WIRE', TT: 'TAINT TABOUR',
+    AC: 'AUTO CAST', ML: 'MIXED LOAD', SU: 'SEALED UNITS', MM: 'MIXED MOTORS',
+    RD: 'ROTORS AND DRUMS', MC: 'MIXED COMBO',
+};
+// If a row's own Item Description cell is blank, fall back to extracting
+// the 2-letter code from the Inv No. (e.g. "260819_AC_26JY19" -> AC ->
+// "AUTO CAST") — same fallback invoice_gen.py's resolve_item_desc() used.
+function resolveItemDesc(itemDesc, invNo) {
+    const d = safeStr(itemDesc);
+    if (d) return d.replace(/^[A-Z]{2}-/, '').trim();
+    const tokens = safeStr(invNo).split(/[\s_]+/);
+    for (const t of tokens) {
+        const code = t.toUpperCase();
+        if (ITEM_CODE_MAP[code]) return ITEM_CODE_MAP[code];
+    }
+    return d || 'SCRAP METALS';
+}
+
+function rowToDict(row, colMap) {
+    const d = {};
+    for (const [key, idx] of Object.entries(colMap)) {
+        d[key] = idx === -1 ? '' : safeStr(row[idx]);
+    }
+    return d;
+}
+
+// Loose match — same either-direction substring rule the rest of Jarvis
+// uses for consignee search (NOT the agent-prefix grouping
+// helpers/nextInvoiceNo.js uses for numbering; that's a different concern
+// specific to sequencing invoice numbers, not buyer lookup here).
+function looseMatch(cell, query) {
+    const c = cell.toLowerCase().trim();
+    const q = query.toLowerCase().trim();
+    if (!c || !q) return false;
+    return c.includes(q) || q.includes(c);
+}
+
+// Returns every distinct container on record for a buyer, most recent
+// first (by sheet order — the real sheet is appended chronologically),
+// each with a short summary so the UI can show a pick-list before loading
+// the full editable preview.
+async function findContainersForBuyer(buyerQuery) {
+    const { headers, rows } = await fetchRawSheet();
+    const colMap = buildColumnMap(headers);
+    if (colMap.consignee === -1 || colMap.container_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected "Consignee" and "Container No." columns');
+    }
+    const query = safeStr(buyerQuery);
+    if (!query) return [];
+
+    const groups = new Map(); // container_no -> rows[]
+    for (const row of rows) {
+        const consignee = safeStr(row[colMap.consignee]);
+        if (!consignee || !looseMatch(consignee, query)) continue;
+        const containerNo = safeStr(row[colMap.container_no]).toUpperCase();
+        if (!containerNo) continue;
+        if (!groups.has(containerNo)) groups.set(containerNo, []);
+        groups.get(containerNo).push(row);
+    }
+
+    const out = [];
+    for (const [containerNo, containerRows] of groups.entries()) {
+        const first = rowToDict(containerRows[0], colMap);
+        out.push({
+            container_no: containerNo,
+            consignee: first.consignee,
+            inv_no: first.inv_no,
+            inv_date: first.inv_date,
+            item_count: containerRows.length,
+        });
+    }
+    // Most recently added rows tend to sort later in the sheet — reverse so
+    // the newest shipment shows first, matching "what do I need to invoice
+    // right now" more often than the oldest.
+    out.reverse();
+    return out;
+}
+
+// Builds the full computed invoice/packing data for one container — mirrors
+// invoice_gen.py's rows_to_invoice_data() + resolve_item_desc() +
+// eval_freight(), minus the fields that don't have a matching real column
+// (port_discharge, efs, place_of_receipt, port_loading, hbl/booking/seal —
+// present as columns but often blank in practice) — those stay blank here
+// for manual entry in the editable preview, never guessed.
+async function buildContainerInvoiceData(containerNo) {
+    const { headers, rows } = await fetchRawSheet();
+    const colMap = buildColumnMap(headers);
+    if (colMap.container_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected a "Container No." column');
+    }
+    const target = safeStr(containerNo).toUpperCase();
+    const containerRows = rows.filter((r) => safeStr(r[colMap.container_no]).toUpperCase() === target);
+    if (!containerRows.length) return null;
+
+    const first = rowToDict(containerRows[0], colMap);
+    const packingLookup = await fetchPackingLookup();
+    const packing = packingLookup.get(target) || null;
+
+    let freight = 0;
+    const lineItems = containerRows.map((row) => {
+        const d = rowToDict(row, colMap);
+        const weight = safeFloat(d.weight);
+        const rate = safeFloat(d.inv_price);
+        const amount = weight * rate;
+        if (!freight) {
+            const fv = evalFreight(d.freight_charge);
+            if (fv > 0) freight = fv;
+        }
+        const itemDesc = resolveItemDesc(d.item_desc, first.inv_no);
+        const weightLbs = Math.round(weight * 2204.62);
+        const pr = packing ? findPackingRow(packing.rows, itemDesc) : null;
+        return {
+            item_desc: itemDesc,
+            weight,
+            rate,
+            amount,
+            packing: {
+                gross_weight_lbs: (pr && pr.gross_weight_lbs) || '',
+                truck_lbs: (pr && pr.truck_lbs) || '',
+                container_tare_lbs: (pr && pr.container_tare_lbs) || '',
+                chassis_lbs: (pr && pr.chassis_lbs) || '',
+                boxes_weight_lbs: (pr && pr.boxes_weight_lbs) || '',
+                net_weight_lbs: (pr && pr.net_weight_lbs) || String(weightLbs),
+                net_weight_mt: (pr && pr.net_weight_mt) || weight.toFixed(3),
+            },
+        };
+    });
+
+    const subtotal = lineItems.reduce((s, it) => s + it.amount, 0);
+
+    return {
+        container_no: target,
+        consignee: first.consignee,
+        inv_no: first.inv_no,
+        inv_date: first.inv_date,
+        hbl_no: first.hbl_no,
+        booking_no: first.booking_no,
+        seal_no: first.seal_no,
+        terms: first.terms,
+        reference: first.reference,
+        proforma_date: first.proforma_date,
+        eta: first.eta,
+        port_loading: packing ? packing.port_loading : 'LOS ANGELES',
+        port_discharge: packing ? packing.port_discharge : 'TO BE ADVISED',
+        place_of_receipt: packing ? packing.place_of_receipt : '',
+        freight,
+        subtotal,
+        final_amount: subtotal - freight,
+        line_items: lineItems,
+    };
+}
+
+// ── Packing List sheet (cfg.INVOICE_PACKING_GID) ────────────────────────────
+// Unlike the main Invoice sheet, this one's numeric column positions were
+// checked directly against 5 real live rows and DO still match
+// invoice_gen.py's hardcoded PACKING_COLUMNS (carrier:0, container_no:8,
+// gross:11, truck:12, tare:13, chassis:14, boxes:15, net_lbs:17, net_mt:18)
+// — this sheet hasn't drifted the way the main one had, so those indices
+// are used as-is rather than resolved by header name (its header row is
+// itself malformed — column A is literally labeled "g").
+let packingCache = null;
+const PACKING_CACHE_MS = 3 * 60 * 1000;
+
+const PORT_ALIASES = {
+    LA: 'LOS ANGELES', LAX: 'LOS ANGELES', LB: 'LONG BEACH',
+    NY: 'NEW YORK', CHI: 'CHICAGO', HOU: 'HOUSTON', SAV: 'SAVANNAH', OAK: 'OAKLAND',
+};
+function expandPort(v) {
+    const s = safeStr(v).toUpperCase();
+    return PORT_ALIASES[s] || safeStr(v);
+}
+
+async function fetchPackingLookup() {
+    if (packingCache && (Date.now() - packingCache.at) < PACKING_CACHE_MS) return packingCache.lookup;
+    if (!cfg.INVOICE_PACKING_GID) return new Map();
+    const url = `https://docs.google.com/spreadsheets/d/${cfg.INVOICE_SHEET_ID}/export?format=csv&gid=${cfg.INVOICE_PACKING_GID}`;
+    const res = await fetch(url);
+    if (!res.ok) return new Map();
+    const text = await res.text();
+    const table = parseCsv(text);
+    const lookup = new Map(); // container_no -> { port_loading, port_discharge, place_of_receipt, rows: [...] }
+
+    for (const row of table.slice(1)) {
+        const containerNo = safeStr(row[8]).toUpperCase();
+        if (!containerNo) continue;
+        if (!lookup.has(containerNo)) {
+            const carrierRaw = safeStr(row[0]);
+            let placeOfReceipt = '', portLoading = '', portDischarge = '';
+            if (carrierRaw.includes('/')) {
+                const parts = carrierRaw.split('/').map((p) => p.trim());
+                if (parts.length >= 3) { [placeOfReceipt, portLoading, portDischarge] = parts; }
+                else { portLoading = parts[0] || ''; portDischarge = parts[1] || ''; }
+            } else {
+                portLoading = carrierRaw;
+            }
+            lookup.set(containerNo, {
+                port_loading: expandPort(portLoading) || 'LOS ANGELES',
+                port_discharge: expandPort(portDischarge) || 'TO BE ADVISED',
+                place_of_receipt: expandPort(placeOfReceipt),
+                rows: [],
+            });
+        }
+        lookup.get(containerNo).rows.push({
+            item_desc: safeStr(row[10]),
+            gross_weight_lbs: safeStr(row[11]),
+            truck_lbs: safeStr(row[12]),
+            container_tare_lbs: safeStr(row[13]),
+            chassis_lbs: safeStr(row[14]),
+            boxes_weight_lbs: safeStr(row[15]),
+            net_weight_lbs: safeStr(row[17]),
+            net_weight_mt: safeStr(row[18]),
+        });
+    }
+    packingCache = { at: Date.now(), lookup };
+    return lookup;
+}
+
+// Matches a packing row to a line item by description (either-direction
+// substring, same as invoice_gen.py's find_packing_row) — falls back to the
+// first packing row for the container if nothing matches by description.
+function findPackingRow(packingRows, itemDesc) {
+    if (!packingRows || !packingRows.length) return null;
+    const key = itemDesc.trim().toUpperCase();
+    for (const row of packingRows) {
+        const rowDesc = row.item_desc.trim().toUpperCase();
+        if (rowDesc && (rowDesc.includes(key) || key.includes(rowDesc))) return row;
+    }
+    return packingRows[0];
+}
+
+module.exports = {
+    findContainersForBuyer,
+    buildContainerInvoiceData,
+    fetchPackingLookup,
+    findPackingRow,
+    resolveItemDesc,
+    evalFreight,
+    ITEM_CODE_MAP,
+};

@@ -6,7 +6,6 @@
 
 const express = require('express');
 const path    = require('path');
-const fs      = require('fs');
 const crypto  = require('crypto');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
@@ -20,101 +19,20 @@ const cfg = require('./config');
 // Keys are random 32-byte hex; issued on /login, checked on every non-public
 // route via the sid cookie. Restart wipes sessions — acceptable, users just
 // log in again. Real auth (users, roles, hashed passwords) is Pass 3+.
-// ── Sessions ────────────────────────────────────────────────────────────────
-// Rewritten 2026-08-19 per Apsara: "session should never die. may be after
-// 11 pm it can but should be available around 7am."
-//
-// TWO separate things were logging people out, and fixing only one wouldn't
-// have helped:
-//   1. A 12h rolling TTL — a 7am login died at 7pm, mid-evening shift.
-//   2. The sessions Map lived in memory ONLY, so every pm2 restart (i.e.
-//      every deploy) silently invalidated every logged-in device. That's
-//      what produced the "could not save: unauthorised" report earlier
-//      today — the app looked broken when it had simply been logged out.
-//
-// Now: sessions PERSIST TO DISK so a restart doesn't touch them, and they
-// expire on a NIGHTLY BOUNDARY rather than N hours after login. Expiring at
-// a fixed hour is what makes "available at 7am" true — a rolling TTL can
-// always land mid-shift, whereas a boundary at 3am never does. 3am, not
-// 11pm: her 11pm was the earliest acceptable moment to expire, but a
-// session cut at 11pm is gone for anyone still finishing up, and one cut at
-// 3am is comfortably clear of both ends of the day.
-//
-// A session issued at any point during a day therefore stays valid until
-// 3am after the FOLLOWING night — i.e. someone logging in Monday morning is
-// still signed in all day Monday and all day Tuesday. Nobody signing in
-// during working hours is ever logged out during working hours.
-// Sessions use a SLIDING window: every request refreshes the expiry, so a
-// device that gets used never logs out. Only a genuinely idle one expires.
-//
-// A fixed nightly boundary was tried first and is wrong: with a 3am cutoff,
-// a Monday 07:00 login expires Tuesday 03:00, so staff arriving Tuesday
-// morning are logged out — exactly what "should be available around 7am"
-// rules out. Sliding is the only shape where daily use never hits a wall.
-//
-// The idle window is deliberately long (14 days). It is not a security
-// control — the app is password-gated per role, and a shorter window buys
-// nothing except logging out the yard. It exists so a phone that is lost or
-// left in a drawer eventually stops being a valid session.
-const SESSION_IDLE_MS = (Number(process.env.SESSION_IDLE_DAYS) || 14) * 24 * 60 * 60 * 1000;
-const sessions = new Map(); // sid → { issued: ms, expires: ms, ip, role }
-
-// Persisted to disk so a pm2 restart — i.e. every deploy — doesn't
-// invalidate every logged-in device. That was the second half of this
-// problem and the cause of today's "could not save: unauthorised" report:
-// the app looked broken when it had simply been logged out by a restart.
-const SESSIONS_FILE = path.join(cfg.DATA_DIR, 'sessions.json');
-function loadSessionsFromDisk() {
-    try {
-        if (!fs.existsSync(SESSIONS_FILE)) return;
-        const raw = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
-        const now = Date.now();
-        let restored = 0;
-        for (const [sid, sess] of Object.entries(raw || {})) {
-            if (sess && sess.expires > now) { sessions.set(sid, sess); restored += 1; }
-        }
-        if (restored) console.log(`[AUTH] Restored ${restored} session(s) — a restart no longer logs anyone out`);
-    } catch (err) {
-        // A corrupt session file must never stop the server booting; the
-        // worst case is that everyone signs in once more.
-        console.warn('[AUTH] Could not restore sessions:', err.message);
-    }
-}
-let sessionSaveTimer = null;
-function persistSessions() {
-    // Debounced — a sliding window touches the session on EVERY request, and
-    // that must not mean a disk write per request.
-    if (sessionSaveTimer) return;
-    sessionSaveTimer = setTimeout(() => {
-        sessionSaveTimer = null;
-        try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions)), 'utf8'); }
-        catch (err) { console.warn('[AUTH] Could not persist sessions:', err.message); }
-    }, 5000);
-    if (sessionSaveTimer.unref) sessionSaveTimer.unref();
-}
-loadSessionsFromDisk();
+const sessions = new Map(); // sid → { issued: ms, ip, role: 'user' | 'admin' }
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 
 function issueSession(ip, role) {
     const sid = crypto.randomBytes(32).toString('hex');
-    const now = Date.now();
-    sessions.set(sid, { issued: now, expires: now + SESSION_IDLE_MS, ip, role });
-    persistSessions();
+    sessions.set(sid, { issued: Date.now(), ip, role });
     return sid;
 }
 function getSession(sid) {
     if (!sid) return null;
-    const sess = sessions.get(sid);
-    if (!sess) return null;
-    const now = Date.now();
-    // Sessions written by the old 12h-TTL build carry no `expires` — don't
-    // log those users out on the very deploy that fixes this.
-    if (!sess.expires) sess.expires = now + SESSION_IDLE_MS;
-    if (now > sess.expires) { sessions.delete(sid); persistSessions(); return null; }
-    // Slide. Only rewrite (and schedule a save) when it moves meaningfully,
-    // so a busy request loop doesn't thrash the file.
-    const next = now + SESSION_IDLE_MS;
-    if (next - sess.expires > 60 * 60 * 1000) { sess.expires = next; persistSessions(); }
-    return sess;
+    const s = sessions.get(sid);
+    if (!s) return null;
+    if (Date.now() - s.issued > SESSION_TTL_MS) { sessions.delete(sid); return null; }
+    return s;
 }
 function validSession(sid) { return !!getSession(sid); }
 function parseCookie(header, name) {
@@ -294,10 +212,7 @@ function createApi() {
 
         const sid = issueSession(req.ip, role);
         res.setHeader('Set-Cookie',
-            // Cookie lifetime matches the session's idle window, so the
-            // browser cookie and the server session expire together
-            // rather than one silently outliving the other.
-            `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_IDLE_MS / 1000)}`);
+            `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
         // sid is ALSO returned in the JSON body now, not just the cookie —
         // added for the Loads mobile app. Its fetch() calls to this API are
         // cross-origin, and SameSite=Strict cookies are never attached to
@@ -919,15 +834,7 @@ function createApi() {
             // git checkout) touched this exact file mid-session. If this
             // keeps happening, it's worth checking whether anything else
             // is writing to api.js while I'm mid-edit on it.
-            // An ADMIN SESSION IS ALREADY PROOF OF ADMIN — corrected
-            // 2026-08-19 per Apsara ("in admin access, when editing gen pdf,
-            // still asking for password. what the hell?"). She was right:
-            // the password prompt exists so a STAFF or USER session can
-            // unlock a locked load, not to re-challenge someone who already
-            // signed in with that very password. Demanding it again proves
-            // nothing and is pure friction for the person most likely to be
-            // fixing a ticket.
-            if (existing.status === 'pdf_generated' && req.role !== 'admin') {
+            if (existing.status === 'pdf_generated') {
                 const adminPw = cfg.ADMIN_PASSWORD;
                 const supplied = String(b.admin_password || '');
                 const eq = (a, b2) => { const A = Buffer.from(a), B = Buffer.from(b2); return A.length === B.length && crypto.timingSafeEqual(A, B); };
@@ -1582,6 +1489,69 @@ function createApi() {
             res.json(suggestion || {});
         } catch (e) {
             console.error('[proforma] next-inv-no lookup failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ── Commercial Invoice ────────────────────────────────────────────────
+    // Added per Apsara: "build invoice now.similar to proforma ask me who is
+    // the buyer.then follow python anywhere invoice flow" — see
+    // helpers/invoiceSheet.js for the sourcing/mapping notes (including the
+    // stale-column-index caveat found while building this) and
+    // helpers/invoicePdf.js for the PDF itself. Same deny-by-default
+    // staff gate as everything else in this Documents block — not added to
+    // STAFF_ALLOWED_PATH_PREFIXES.
+    const invoiceSheet = require('./helpers/invoiceSheet');
+
+    // Step 1 of the buyer-first flow: every container on record for a buyer,
+    // most recent first, so she can pick which shipment to invoice.
+    app.get('/api/invoice/by-buyer', async (req, res) => {
+        try {
+            const containers = await invoiceSheet.findContainersForBuyer(req.query.buyer || '');
+            res.json({ containers });
+        } catch (e) {
+            console.error('[invoice] by-buyer lookup failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Step 2: full computed preview for one chosen container — every field
+    // editable client-side before generating, same "never send a real
+    // invoice without a human look" principle the old Flask tool's
+    // generate.html already used.
+    app.get('/api/invoice/preview', async (req, res) => {
+        try {
+            const data = await invoiceSheet.buildContainerInvoiceData(req.query.container || '');
+            if (!data) return res.status(404).json({ error: `Container '${req.query.container}' not found in the Invoice sheet.` });
+            res.json(data);
+        } catch (e) {
+            console.error('[invoice] preview failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Step 3: generate + save the PDF from the (possibly hand-edited)
+    // preview data the client sends back. preview=1 returns the PDF inline
+    // without archiving a copy, same convention as /api/proforma/generate.
+    app.post('/api/invoice/generate', async (req, res) => {
+        try {
+            const body = req.body || {};
+            const { generateInvoiceClassicPdf } = require('./helpers/invoicePdf');
+            const pdf = await generateInvoiceClassicPdf(body);
+
+            if (req.query.preview === '1') {
+                res.set('Content-Type', 'application/pdf');
+                res.set('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
+                return res.send(pdf);
+            }
+
+            const safeInv = documentsSaved.safeName(body.inv_no || body.container_no || 'INVOICE').replace(/_+/g, '_');
+            const filename = `${safeInv}.pdf`;
+            const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
+
+            res.json({ ok: true, saved_filename: path.basename(savedPath) });
+        } catch (e) {
+            console.error('[invoice] generate failed:', e);
             res.status(500).json({ error: e.message });
         }
     });

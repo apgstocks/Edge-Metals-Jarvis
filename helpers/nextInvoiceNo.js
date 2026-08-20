@@ -216,4 +216,4 @@ async function suggestNextInvNo(consigneeQuery) {
     };
 }
 
-module.exports = { suggestNextInvNo, parseInvNoToken, matchesConsignee, agentPrefix, fetchInvoiceSheetRows };
+module.exports = { suggestNextInvNo, parseInvNoToken, matchesConsignee, agentPrefix, fetchInvoiceSheetRows, parseCsv };

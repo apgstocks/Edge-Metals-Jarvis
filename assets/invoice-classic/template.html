@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family:'Helvetica'; src: local('Helvetica'), local('Arial'); }
+:root{
+  --blue:#2E6DA4;
+  --light-blue:#D9E8F5;
+  --black:#000000;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Helvetica,Arial,sans-serif;color:var(--black);width:794px;}
+@page{size:794px 1250px;margin:0}
+.box{border:1px solid var(--black);}
+.lbl{background:var(--light-blue);font-weight:700;font-size:8.5px;padding:3px 6px;}
+.val{padding:5px 6px;font-size:9px;}
+table{border-collapse:collapse;width:100%;}
+td,th{border:1px solid var(--black);vertical-align:top;}
+</style>
+</head>
+<body>
+<div style="width:794px;background:#fff;padding:14px;">
+
+  <!-- Outer border wraps the whole invoice + packing list -->
+  <div class="box" style="padding:0;">
+
+    <!-- Header bar -->
+    <div style="background:var(--blue);color:var(--light-blue);text-align:center;font-weight:700;font-size:15px;padding:9px 0;">Commercial Invoice</div>
+
+    <!-- Row 1: Exporter | Invoice No & Items / Date / Other Reference -->
+    <table>
+      <tr>
+        <td style="width:50%;padding:0;">
+          <div class="lbl">Exporter</div>
+          <div class="val" style="min-height:70px;">
+            <div style="font-weight:700;font-size:9.5px;">EDGE METALS INC</div>
+            <div style="font-size:8.5px;margin-top:4px;">14750 DEVONSHIRE LN, FRISCO, TX 75035</div>
+            <div style="font-size:8.5px;">TEL: (310) 938-2525</div>
+            <div style="font-size:8.5px;">FAX: (425) 940-9408</div>
+          </div>
+        </td>
+        <td style="width:50%;padding:0;">
+          <table style="border:none;">
+            <tr>
+              <td style="width:65%;border:none;border-right:1px solid var(--black);padding:0;">
+                <div class="lbl" style="border-bottom:1px solid var(--black);">Invoice No &amp; Items</div>
+                <div class="val" style="min-height:30px;border-bottom:1px solid var(--black);">
+                  <div style="font-weight:700;font-size:9px;">{{inv_no}}</div>
+                  <div style="font-size:8px;margin-top:3px;">{{item_label}}</div>
+                </div>
+              </td>
+              <td style="width:35%;border:none;padding:0;">
+                <div class="lbl" style="border-bottom:1px solid var(--black);">Date</div>
+                <div class="val" style="min-height:30px;border-bottom:1px solid var(--black);font-weight:700;">{{inv_date}}</div>
+              </td>
+            </tr>
+            <tr>
+              <td colspan="2" style="border:none;padding:0;">
+                <div class="lbl">Other Reference(s)</div>
+                <div class="val" style="min-height:20px;">{{other_ref}}</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Row 2: Buyer | Terms / Vessel / Comments -->
+    <table>
+      <tr>
+        <td style="width:50%;padding:0;">
+          <div class="lbl">Buyer</div>
+          <div class="val" style="min-height:78px;">
+            <div style="font-weight:700;font-size:10px;">{{buyer_name}}</div>
+            <div style="font-size:8.5px;margin-top:4px;line-height:1.5;">{{buyer_address_lines}}</div>
+          </div>
+        </td>
+        <td style="width:50%;padding:0;">
+          <div class="lbl">Terms</div>
+          <div class="val" style="min-height:16px;">{{terms}}</div>
+          <div class="lbl">Vessel / Flight No</div>
+          <div class="val" style="min-height:16px;">{{vessel}}</div>
+          <div class="lbl">Comments</div>
+          <div class="val" style="min-height:16px;">&nbsp;</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Row 3: 4 port cells -->
+    <table>
+      <tr>
+        <td style="width:25%;padding:0;">
+          <div class="lbl">Country of Origin</div>
+          <div class="val" style="min-height:19px;">{{country_of_origin}}</div>
+        </td>
+        <td style="width:25%;padding:0;">
+          <div class="lbl">Place of Receipt by Carrier</div>
+          <div class="val" style="min-height:19px;">{{place_of_receipt}}</div>
+        </td>
+        <td style="width:25%;padding:0;">
+          <div class="lbl">Port of Loading</div>
+          <div class="val" style="min-height:19px;">{{port_loading}}</div>
+        </td>
+        <td style="width:25%;padding:0;">
+          <div class="lbl">Port of Discharge</div>
+          <div class="val" style="min-height:19px;">{{port_discharge}}</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- Item table -->
+    <table>
+      <thead>
+        <tr style="background:var(--light-blue);">
+          <th style="width:5%;padding:5px 4px;font-size:8px;text-align:center;">S. No</th>
+          <th style="width:12%;padding:5px 4px;font-size:8px;text-align:center;">Booking #</th>
+          <th style="width:14%;padding:5px 4px;font-size:8px;text-align:center;">Container #</th>
+          <th style="width:10%;padding:5px 4px;font-size:8px;text-align:center;">Seal #</th>
+          <th style="width:20%;padding:5px 4px;font-size:8px;text-align:center;">Description</th>
+          <th style="width:13%;padding:5px 4px;font-size:8px;text-align:center;">Quantity<br>MT</th>
+          <th style="width:13%;padding:5px 4px;font-size:8px;text-align:center;">Rate<br>US$/MT</th>
+          <th style="width:13%;padding:5px 4px;font-size:8px;text-align:center;">Amount<br>US$</th>
+        </tr>
+      </thead>
+      <tbody>
+{{item_rows}}
+{{freight_row}}
+{{efs_row}}
+        <tr style="background:var(--light-blue);">
+          <td colspan="4" style="padding:5px 4px;"></td>
+          <td style="padding:5px 4px;font-weight:700;font-size:9px;text-align:center;">TOTAL</td>
+          <td style="padding:5px 4px;"></td>
+          <td style="padding:5px 4px;"></td>
+          <td style="padding:5px 4px;font-weight:700;font-size:9.5px;text-align:center;">${{final_amount_fmt}}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Packing list -->
+    <div style="background:var(--blue);color:var(--light-blue);text-align:center;font-weight:700;font-size:13px;padding:7px 0;">Packing List</div>
+    <table>
+      <thead>
+        <tr style="background:var(--light-blue);">
+          <th style="width:16%;padding:5px 3px;font-size:7.5px;text-align:center;">Container</th>
+          <th style="width:13%;padding:5px 3px;font-size:7.5px;text-align:center;">Gross Weight<br>(lbs)</th>
+          <th style="width:11%;padding:5px 3px;font-size:7.5px;text-align:center;">Truck<br>(lbs)</th>
+          <th style="width:12%;padding:5px 3px;font-size:7.5px;text-align:center;">Container<br>Tare (lbs)</th>
+          <th style="width:11%;padding:5px 3px;font-size:7.5px;text-align:center;">Chassis<br>(lbs)</th>
+          <th style="width:12%;padding:5px 3px;font-size:7.5px;text-align:center;">Boxes<br>(lbs)</th>
+          <th style="width:13%;padding:5px 3px;font-size:7.5px;text-align:center;">Net Weight<br>(lbs)</th>
+          <th style="width:12%;padding:5px 3px;font-size:7.5px;text-align:center;">Net Weight<br>(MT)</th>
+        </tr>
+      </thead>
+      <tbody>
+{{packing_rows}}
+        <tr style="background:var(--light-blue);">
+          <td style="padding:5px 3px;font-weight:700;font-size:8px;text-align:center;">TOTAL</td>
+          <td style="padding:5px 3px;"></td>
+          <td style="padding:5px 3px;"></td>
+          <td style="padding:5px 3px;"></td>
+          <td style="padding:5px 3px;"></td>
+          <td style="padding:5px 3px;"></td>
+          <td style="padding:5px 3px;font-weight:700;font-size:8.5px;text-align:center;">{{total_net_lbs_fmt}}</td>
+          <td style="padding:5px 3px;font-weight:700;font-size:8.5px;text-align:center;">{{total_net_mt_fmt}}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Footer -->
+    <table>
+      <tr>
+        <td style="width:50%;padding:8px 10px;font-size:8px;">
+          We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
+        </td>
+        <td style="width:50%;padding:8px 10px;text-align:center;">
+          <div style="font-weight:700;font-size:9px;">Authorised Signatory</div>
+          <div style="height:22px;"></div>
+          <div style="font-size:8.5px;">for Edge Metals Inc</div>
+        </td>
+      </tr>
+    </table>
+
+  </div>
+</div>
+</body>
+</html>

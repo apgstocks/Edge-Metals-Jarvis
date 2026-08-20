@@ -133,11 +133,70 @@ body[data-theme="light"] {
     <button class="subtab-btn" data-subtab="verification">Verification</button>
   </div>
 
-  <!-- ── Invoice (not yet built) ─────────────────────────────────────────── -->
+  <!-- ── Invoice ──────────────────────────────────────────────────────────── -->
+  <!-- Added per Apsara: "build invoice now.similar to proforma ask me who is
+       the buyer.then follow python anywhere invoice flow" — 3-step flow
+       matching the Proforma wizard's shape (buyer first, not container
+       number first like the old PythonAnywhere tool), sourced from the same
+       real Invoice Google Sheet. See helpers/invoiceSheet.js /
+       helpers/invoicePdf.js for the server-side logic and reasoning. -->
   <div id="panelInvoice" class="hidden">
-    <div class="placeholder-note">
-      Commercial Invoice generation isn't built here yet — this tab is a placeholder.<br>
-      <span style="font-size:11px;">The Proforma tab (below) is fully working. Invoice is next.</span>
+    <div class="card" style="padding:20px 22px; margin-bottom:16px;">
+      <div id="invStep1">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Who is the buyer?</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type a customer name — every container on record for them comes from the real Invoice sheet.</div>
+        <div class="field" style="position:relative; max-width:420px;">
+          <label>Buyer name</label>
+          <input id="inv_buyer" placeholder="e.g. Taewon, Rad Metal, Joey/Daekwang">
+          <div id="invBuyerList" class="autocomplete-list hidden"></div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvStep1Next" type="button" class="btn btn-primary">Find containers</button></div>
+      </div>
+    </div>
+
+    <div id="invStep2" class="card hidden" style="padding:20px 22px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Which shipment?</div>
+        <button id="btnInvStep2Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
+      </div>
+      <div id="invContainerList" style="display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="invContainerListEmpty" class="placeholder-note hidden">No containers found for this buyer in the Invoice sheet — check the name/spelling, or the shipment may not be logged there yet.</div>
+    </div>
+
+    <div id="invStep3" class="card hidden" style="padding:20px 22px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Review &amp; generate — every field below is editable before you download.</div>
+        <button id="btnInvStep3Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
+      </div>
+
+      <div class="grid4">
+        <div class="field"><label>Invoice No</label><input id="inv_no"></div>
+        <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
+        <div class="field"><label>Reference #</label><input id="inv_reference"></div>
+        <div class="field"><label>Terms</label><input id="inv_terms"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>Container #</label><input id="inv_container"></div>
+        <div class="field"><label>Booking #</label><input id="inv_booking"></div>
+        <div class="field"><label>Seal #</label><input id="inv_seal"></div>
+        <div class="field"><label>HBL #</label><input id="inv_hbl"></div>
+      </div>
+      <div class="grid4">
+        <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
+        <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
+        <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
+        <div class="field"><label>Freight Deduction</label><input id="inv_freight" type="number" step="any"></div>
+      </div>
+
+      <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
+        <textarea id="inv_consignee_address" rows="4" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
+
+      <div id="invItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin:14px 0;"></div>
+
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+        <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
+        <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
+      </div>
     </div>
   </div>
 
@@ -1051,6 +1110,231 @@ $('pmSave').addEventListener('click', async () => {
     $('pricingModalOverlay').classList.add('hidden');
     lookupPricingMemory($('pf_consignee').value.trim());
   } catch (e) { $('pmError').textContent = e.message; $('pmError').classList.remove('hidden'); }
+});
+
+// ── Invoice tab ──────────────────────────────────────────────────────────
+// Added per Apsara: "build invoice now.similar to proforma ask me who is
+// the buyer.then follow python anywhere invoice flow". Step 1 reuses the
+// SAME address-book search component the Proforma wizard uses
+// (searchAddressBook/addressBookEntryLabel), for the "similar to proforma"
+// consistency she explicitly asked for — this is a genuinely different
+// lookup underneath (the real Invoice sheet, not the address book itself)
+// but the typing/picking experience should feel identical.
+let invSelectedBuyer = null; // the address-book tag or freeform text used to query the sheet
+let invCurrentData = null;   // the /api/invoice/preview response currently loaded into Step 3
+
+function renderInvBuyerList(matches) {
+  const box = $('invBuyerList');
+  if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const shown = matches.slice(0, 8);
+  box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
+  box.classList.remove('hidden');
+  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const entry = shown[Number(el.dataset.idx)];
+    if (entry) {
+      $('inv_buyer').value = consigneeNameForEntry(entry);
+      // Query the sheet with the FULL tag (e.g. "Joey/Taewon"), same reason
+      // as Proforma's next-inv-no lookup — the sheet's Consignee column
+      // stores the full agent/company tag, not the split display name.
+      invSelectedBuyer = (entry.aliases || []).join('/') || consigneeNameForEntry(entry);
+      box.classList.add('hidden');
+    }
+  }));
+}
+$('inv_buyer').addEventListener('input', () => {
+  invSelectedBuyer = null;
+  const q = $('inv_buyer').value.trim().toLowerCase();
+  if (!q) { $('invBuyerList').classList.add('hidden'); return; }
+  renderInvBuyerList(searchAddressBook(q));
+});
+$('inv_buyer').addEventListener('blur', () => setTimeout(() => $('invBuyerList').classList.add('hidden'), 150));
+
+function showInvStep(n) {
+  $('invStep1').closest('.card').classList.toggle('hidden', n !== 1);
+  $('invStep2').classList.toggle('hidden', n !== 2);
+  $('invStep3').classList.toggle('hidden', n !== 3);
+}
+
+$('btnInvStep1Next').addEventListener('click', async () => {
+  const buyer = invSelectedBuyer || $('inv_buyer').value.trim();
+  if (!buyer) return;
+  const btn = $('btnInvStep1Next');
+  setButtonLoading(btn, true, 'Searching…');
+  try {
+    const { containers } = await api('/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer));
+    $('invContainerList').innerHTML = (containers || []).map((c, i) => `
+      <div class="autocomplete-item inv-container-pick" data-idx="${i}" style="cursor:pointer; padding:12px 14px; border:1px solid var(--border-default); border-radius:var(--radius-xs); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.container_no)}</div>
+          <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(c.consignee)} &middot; ${c.item_count} item row${c.item_count === 1 ? '' : 's'}</div>
+        </div>
+        <div style="text-align:right; font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">
+          <div>${esc(c.inv_no || '—')}</div>
+          <div>${esc(c.inv_date || '')}</div>
+        </div>
+      </div>`).join('');
+    $('invContainerList').querySelectorAll('.inv-container-pick').forEach((el, i) => el.addEventListener('click', () => loadInvoicePreview(containers[i].container_no)));
+    $('invContainerListEmpty').classList.toggle('hidden', !!(containers || []).length);
+    showInvStep(2);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+$('btnInvStep2Back').addEventListener('click', () => showInvStep(1));
+$('btnInvStep3Back').addEventListener('click', () => showInvStep(2));
+
+function invItemRowHtml(item, i) {
+  const p = item.packing || {};
+  return `<div class="item-row inv-item-row" data-i="${i}" style="border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:10px 12px; display:flex; flex-direction:column; gap:6px;">
+    <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:8px;">
+      <input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}">
+      <input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}">
+      <input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}">
+      <input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}" style="background:var(--surface-sunken); color:var(--text-faint);">
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px;">
+      <input class="inv-p-gross" placeholder="gross lbs" value="${esc(p.gross_weight_lbs || '')}" style="font-size:11px;">
+      <input class="inv-p-truck" placeholder="truck lbs" value="${esc(p.truck_lbs || '')}" style="font-size:11px;">
+      <input class="inv-p-tare" placeholder="tare lbs" value="${esc(p.container_tare_lbs || '')}" style="font-size:11px;">
+      <input class="inv-p-chassis" placeholder="chassis lbs" value="${esc(p.chassis_lbs || '')}" style="font-size:11px;">
+      <input class="inv-p-boxes" placeholder="boxes lbs" value="${esc(p.boxes_weight_lbs || '')}" style="font-size:11px;">
+      <input class="inv-p-net" placeholder="net lbs" value="${esc(p.net_weight_lbs || '')}" style="font-size:11px;">
+    </div>
+  </div>`;
+}
+function wireInvItemRow(row) {
+  const recalc = () => {
+    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
+    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    row.querySelector('.inv-item-amount').value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  row.querySelector('.inv-item-weight').addEventListener('input', recalc);
+  row.querySelector('.inv-item-rate').addEventListener('input', recalc);
+}
+
+async function loadInvoicePreview(containerNo) {
+  try {
+    const data = await api('/api/invoice/preview?container=' + encodeURIComponent(containerNo));
+    invCurrentData = data;
+    $('inv_no').value = data.inv_no || '';
+    $('inv_date').value = data.inv_date || '';
+    $('inv_reference').value = data.reference || '';
+    $('inv_terms').value = data.terms || '';
+    $('inv_container').value = data.container_no || '';
+    $('inv_booking').value = data.booking_no || '';
+    $('inv_seal').value = data.seal_no || '';
+    $('inv_hbl').value = data.hbl_no || '';
+    $('inv_receipt').value = data.place_of_receipt || '';
+    $('inv_pol').value = data.port_loading || '';
+    $('inv_pod').value = data.port_discharge || '';
+    $('inv_freight').value = data.freight || '';
+
+    // Buyer address — same address-book lookup Proforma uses, keyed off the
+    // sheet's own Consignee text for this container so it's pre-filled
+    // without asking her to re-pick the buyer a second time. Searched by
+    // the LAST "/"-separated part (e.g. "Taewon" out of "Joey/Taewon") since
+    // searchAddressBook matches against individual aliases, not a joined
+    // "Joey/Taewon" string that wouldn't literally appear anywhere in the
+    // address book — then the full joined tag is preferred among results
+    // so a same-agent, different-company match doesn't win by accident.
+    const consigneeTag = data.consignee || '';
+    const consigneeParts = consigneeTag.split('/').map((s) => s.trim()).filter(Boolean);
+    const searchTerm = (consigneeParts[consigneeParts.length - 1] || consigneeTag).toLowerCase();
+    const entries = searchTerm ? searchAddressBook(searchTerm) : [];
+    const match = entries.find((e) => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
+    $('inv_consignee_address').value = match ? (match.raw || '') : consigneeTag;
+
+    $('invItemsEditor').innerHTML = (data.line_items || []).map(invItemRowHtml).join('');
+    $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
+
+    $('invSuccessMsg').textContent = '';
+    showInvStep(3);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function collectInvoicePayload() {
+  const items = Array.from($('invItemsEditor').querySelectorAll('.inv-item-row')).map((row) => {
+    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
+    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    return {
+      item_desc: row.querySelector('.inv-item-desc').value.trim(),
+      weight, rate, amount: weight * rate,
+      packing: {
+        gross_weight_lbs: row.querySelector('.inv-p-gross').value.trim(),
+        truck_lbs: row.querySelector('.inv-p-truck').value.trim(),
+        container_tare_lbs: row.querySelector('.inv-p-tare').value.trim(),
+        chassis_lbs: row.querySelector('.inv-p-chassis').value.trim(),
+        boxes_weight_lbs: row.querySelector('.inv-p-boxes').value.trim(),
+        net_weight_lbs: row.querySelector('.inv-p-net').value.trim(),
+        net_weight_mt: weight ? weight.toFixed(3) : '',
+      },
+    };
+  }).filter((it) => it.item_desc);
+
+  const subtotal = items.reduce((s, it) => s + it.amount, 0);
+  const freight = parseFloat($('inv_freight').value) || 0;
+
+  return {
+    inv_no: $('inv_no').value.trim(),
+    inv_date: $('inv_date').value.trim(),
+    reference: $('inv_reference').value.trim(),
+    terms: $('inv_terms').value.trim(),
+    container_no: $('inv_container').value.trim(),
+    booking_no: $('inv_booking').value.trim(),
+    seal_no: $('inv_seal').value.trim(),
+    hbl_no: $('inv_hbl').value.trim(),
+    place_of_receipt: $('inv_receipt').value.trim(),
+    port_loading: $('inv_pol').value.trim(),
+    port_discharge: $('inv_pod').value.trim(),
+    consignee: (invCurrentData && invCurrentData.consignee) || '',
+    consignee_address: $('inv_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
+    proforma_date: (invCurrentData && invCurrentData.proforma_date) || '',
+    freight,
+    subtotal,
+    final_amount: subtotal - freight,
+    line_items: items,
+  };
+}
+
+// Same real-download fix already applied to Proforma's Generate & Save —
+// the non-preview /api/invoice/generate route only returns JSON
+// ({ok, saved_filename}), so the PDF is re-fetched through the existing
+// /api/documents/download route and forced into a real browser download.
+async function downloadSavedInvoice(filename, containerNo) {
+  const today = new Date().toISOString().slice(0, 10);
+  const res = await fetch('/api/documents/download?kind=invoice&file=' + encodeURIComponent(filename) + '&date=' + today + '&container=' + encodeURIComponent(containerNo));
+  if (!res.ok) return false;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  return true;
+}
+
+$('btnInvGenerate').addEventListener('click', async () => {
+  const payload = collectInvoicePayload();
+  if (!payload.inv_no || !payload.line_items.length) { alert('Invoice No and at least one item are required.'); return; }
+  const btn = $('btnInvGenerate');
+  setButtonLoading(btn, true, 'Generating…');
+  $('invSuccessMsg').textContent = '';
+  try {
+    const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+    if (result.saved_filename) {
+      const ok = await downloadSavedInvoice(result.saved_filename, payload.container_no);
+      $('invSuccessMsg').textContent = ok ? '✓ Saved and downloaded.' : '✓ Saved — download failed, check Saved documents.';
+    }
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
 });
 
 setSubtab('proforma');

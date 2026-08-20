@@ -218,6 +218,27 @@ async function normalize(raw) {
     const contact  = (!trucker && !supplier) ? matchContactByChat(raw.chatId, raw.senderNumber) : null;
     const isRegisteredGroupChat = (trucker && trucker.group_id === raw.chatId) || (supplier && supplier.group_id === raw.chatId) || (contact && contact.group_id === raw.chatId);
 
+    // TEMPORARY DIAGNOSTIC (2026-08-18/20) — remove once the NTG/TQL group_id
+    // mismatch mystery is resolved. Apsara confirmed the group_id shown on
+    // the dashboard for NTG/TQL visually matches this chat's ID exactly, yet
+    // matchTruckerByChat keeps returning null for it (role resolves to
+    // 'manager', not 'trucker') — meaning either the actual stored value
+    // isn't byte-identical to what's displayed (invisible whitespace/
+    // encoding), or a different record than expected is being checked. This
+    // logs the raw incoming chatId plus every trucker's own group_id so the
+    // next live reproduction shows the real values Node is comparing,
+    // instead of guessing further from a UI screenshot.
+    if (!trucker && !supplier && !contact) {
+        try {
+            const { loadTruckers, loadSuppliers } = require('../helpers/json');
+            const allT = await loadTruckers();
+            const allS = await loadSuppliers();
+            console.log(`[DIAG] unmatched chatId=${JSON.stringify(raw.chatId)} (len ${String(raw.chatId).length})`);
+            console.log('[DIAG] trucker group_ids:', allT.map(t => `${t.name}=${JSON.stringify(t.group_id)}`).join(' | '));
+            console.log('[DIAG] supplier group_ids:', allS.map(s => `${s.name}=${JSON.stringify(s.group_id)}`).join(' | '));
+        } catch (e) { console.log('[DIAG] failed:', e.message); }
+    }
+
     // 2026-08-18, per Apsara ("it should talk only relevant to TQL not
     // answering generically, only in internal group and manager chat
     // personal it can answer all generic queries") — distinct from
