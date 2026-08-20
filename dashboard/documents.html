@@ -187,6 +187,19 @@ body[data-theme="light"] {
         <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
         <div class="field"><label>Freight Deduction</label><input id="inv_freight" type="number" step="any"></div>
       </div>
+      <!-- Vessel/Flight No and Country of Origin print directly on the PDF
+           (assets/invoice-classic/template.html's {{vessel}} and
+           {{country_of_origin}}) but had no input anywhere on this review
+           screen — there's no sheet column either, so they always came
+           through blank on the generated invoice with no way to fix that
+           before download. Apsara: "make this template in website
+           mimicking pythonanywhere Review & generate — every field below
+           is editable before you download" — every printed field needs a
+           box here, not just the ones the sheet happens to auto-fill. -->
+      <div class="grid4">
+        <div class="field"><label>Vessel / Flight No</label><input id="inv_vessel"></div>
+        <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
+      </div>
 
       <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
         <textarea id="inv_consignee_address" rows="4" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
@@ -933,6 +946,22 @@ $('btnPfWizSkip').addEventListener('click', () => {
 });
 
 function collectProformaPayload() {
+  // Safety net, run right before every read of pf_inv_no / container-no:
+  // retrofitInvNoItemCode()/retrofitContainerItemCode() are normally
+  // triggered by an item-desc field's blur event (see wireItemRow above),
+  // but the wizard flow's own material step never wires that — it relies
+  // entirely on the item description already being in the DOM by the time
+  // applyNextInvNoSuggestion() reads it at wizard-finish. That's correct
+  // for the common case, but leaves no second chance if the material gets
+  // typed/edited afterward and its field is never blurred before Preview/
+  // Generate is clicked (e.g. Enter, or a browser autofill that skips the
+  // blur event) — Apsara: "invoice no coming as 260820 26JY95 i want it to
+  // be 260820_AC_26JY95 if its auto casting/auto casting tense". Running
+  // both retrofits here, unconditionally, right before the values are
+  // actually read for the PDF, closes that gap regardless of which input
+  // event sequence got the form into its current state.
+  retrofitInvNoItemCode();
+  $('pfContainers').querySelectorAll('.container-block').forEach((block) => retrofitContainerItemCode(block));
   const containers = Array.from($('pfContainers').children).map((block) => ({
     container_no: block.querySelector('.container-no').value.trim(),
     items: Array.from(block.querySelectorAll('.item-row')).map((row) => ({
@@ -1249,6 +1278,10 @@ async function loadInvoicePreview(containerNo) {
     $('inv_pol').value = data.port_loading || '';
     $('inv_pod').value = data.port_discharge || '';
     $('inv_freight').value = data.freight || '';
+    // No sheet column backs either of these (see comment above the fields)
+    // — always starts blank/default, purely manual entry before download.
+    $('inv_vessel').value = data.vessel || '';
+    $('inv_country_of_origin').value = data.country_of_origin || 'USA';
 
     // Buyer address — same address-book lookup Proforma uses, keyed off the
     // sheet's own Consignee text for this container so it's pre-filled
@@ -1309,6 +1342,8 @@ function collectInvoicePayload() {
     place_of_receipt: $('inv_receipt').value.trim(),
     port_loading: $('inv_pol').value.trim(),
     port_discharge: $('inv_pod').value.trim(),
+    vessel: $('inv_vessel').value.trim(),
+    country_of_origin: $('inv_country_of_origin').value.trim(),
     consignee: (invCurrentData && invCurrentData.consignee) || '',
     consignee_address: $('inv_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
     proforma_date: (invCurrentData && invCurrentData.proforma_date) || '',
