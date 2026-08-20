@@ -3282,15 +3282,37 @@ async function askForCargoDetails(chatId, state) {
 // discarding what was already given each time it re-asks.
 const WEIGHT_RE = /\d[\d,]*\s*(lbs?|pounds?|kgs?|kilograms?|tons?)\b/i;
 const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
+// REAL BUG (found 2026-08-20, live, right after the previous fix shipped):
+// requiring an EXPLICIT unit for weight ("lbs"/"kg"/"tons") and an EXPLICIT
+// currency marker for value ("$"/"dollars"/"usd") meant two bare numbers
+// with no units at all ("40000,42000") could never satisfy either check —
+// an unresolvable infinite retry loop, worse than the bug it replaced.
+// Units are ONE way to prove a number is a weight or a value, not the
+// ONLY way — the other reliable signal is simply: did two DISTINCT numbers
+// show up at all? Nobody types the same fact twice, so two different
+// numbers in a reply to "weight AND value" overwhelmingly means one of
+// each, regardless of order or units. Only when there's exactly one bare
+// number with no unit at all is it genuinely ambiguous which field it's
+// for — that's the one case that still needs a specific follow-up.
+function analyzeCargoNumbers(text) {
+    const hasWeightUnit = WEIGHT_RE.test(text);
+    const hasValueMarker = VALUE_RE.test(text);
+    const numCount = (text.match(/\d[\d,]*(\.\d+)?/g) || []).length;
+    if (numCount >= 2) return { hasWeight: true, hasValue: true };
+    return { hasWeight: hasWeightUnit, hasValue: hasValueMarker };
+}
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
     const clean = String(cargoText || '').trim();
     const combined = [pending.state.cargoSoFar, clean].filter(Boolean).join(', ');
-    const hasWeight = WEIGHT_RE.test(combined);
-    const hasValue  = VALUE_RE.test(combined);
+    const { hasWeight, hasValue } = analyzeCargoNumbers(combined);
     if (!hasWeight || !hasValue) {
-        const missing = !hasWeight && !hasValue ? 'a weight and a value' : !hasWeight ? 'a weight' : 'a value';
         await setPending(chatId, { type: 'await_quote_cargo_details', state: { ...pending.state, cargoSoFar: combined } });
-        await _send(chatId, `Still need ${missing} — both are required for every quote. What's the ${missing}?`);
+        const question = !hasWeight && !hasValue
+            ? `Still need a weight and a value — both are required for every quote. What are they?`
+            : !hasWeight
+                ? `Got the value — still need a weight. What's the weight?`
+                : `Got the weight — still need a value. What's the value?`;
+        await _send(chatId, question);
         return { action_taken: 'quote_cargo_details_retry' };
     }
     await clearPending(chatId);
