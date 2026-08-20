@@ -39,6 +39,50 @@ const NEW_TASK_DEFAULTS = {
     created_by   : 'web',
 };
 
+// ── Recurring tasks ─────────────────────────────────────────────────────────
+// Added 2026-08-19. Tasks were one-shot: fire once, then archive. A standing
+// instruction like "remind Bose to update the price list every day" needs
+// the task to re-arm itself instead of disappearing after the first send.
+//
+// Shape: task.repeat = { daily_at: 'HH:MM' } (local time). Deliberately
+// just daily for now — that's what was actually asked for, and inventing a
+// cron-expression field nobody uses would be more surface to get wrong.
+//
+// Re-arming computes the NEXT occurrence from now rather than adding 24h to
+// the previous fire_at. Adding 24h drifts: if the runner is late, or the
+// server was down over a fire window, the task would keep firing at a
+// slightly later time each day, or fire repeatedly to "catch up" on a
+// backlog it should simply have skipped.
+function nextDailyOccurrence(hhmm, from = new Date()) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+    if (!m) return null;
+    const hour = Number(m[1]), minute = Number(m[2]);
+    if (hour > 23 || minute > 59) return null;
+    const next = new Date(from);
+    next.setHours(hour, minute, 0, 0);
+    // Strictly in the future — a task firing AT its own time must not
+    // immediately re-arm for the same instant and fire again in a loop.
+    if (next.getTime() <= from.getTime()) next.setDate(next.getDate() + 1);
+    return next;
+}
+
+// Re-arm a recurring task for its next run instead of archiving it.
+// Returns the new fire_at ISO string, or null if the task isn't recurring
+// (in which case the caller should archive as normal).
+async function rearmRecurring(taskId) {
+    const task = loadTasks().find(t => t.id === taskId);
+    if (!task || !task.repeat || !task.repeat.daily_at) return null;
+    const next = nextDailyOccurrence(task.repeat.daily_at);
+    if (!next) return null;
+    await updateTask(taskId, {
+        fire_at: next.toISOString(),
+        status: 'pending',
+        tries: 0,
+        last_fired_at: new Date().toISOString(),
+    });
+    return next.toISOString();
+}
+
 function newId() {
     return 't_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
@@ -206,6 +250,7 @@ function evaluateCondition(task) {
 }
 
 module.exports = {
+    nextDailyOccurrence, rearmRecurring,
     loadTasks, loadHistory,
     enqueue, dueTasks, archive, updateTask, cancel, cancelMatching, evaluateCondition,
     newId,

@@ -601,8 +601,17 @@ async function taskRunner() {
             }
             const ok = await _sendMessage(chatId, msg);
             if (ok) {
-                await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
-                console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);
+                // Recurring tasks RE-ARM instead of being archived — a
+                // standing "remind X every day" must survive its own first
+                // send. rearmRecurring returns null for a one-shot task, so
+                // existing behaviour is untouched.
+                const rearmed = await tasks.rearmRecurring(task.id);
+                if (rearmed) {
+                    console.log(`[TASK] Fired recurring ${task.id} → ${chatId}, next run ${rearmed}`);
+                } else {
+                    await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
+                    console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);
+                }
             } else {
                 const nextTries = (task.tries || 0) + 1;
                 if (nextTries >= (task.max_tries || 3)) {

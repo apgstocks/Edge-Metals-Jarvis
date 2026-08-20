@@ -433,6 +433,47 @@ function fuzzyCorrectKeywords(text) {
 function policyDecide(ctx) {
     const t = fuzzyCorrectKeywords(ctx.textLower);
 
+    // ── A(-2). UNIVERSAL CANCEL ESCAPE HATCH — REAL BUG (found 2026-08-20,
+    // live — Apsara typed "cancel all the quote requests" while a
+    // cargo-details pending was open and got the cargo question AGAIN).
+    //
+    // Root cause: the verbatim-capture pendings (cargo details, scale
+    // tickets, container number, manual email address, domain-learn name,
+    // trucker retry) each pass ANY text straight through as "the answer",
+    // with no cancel check anywhere. There was literally NO WAY OUT of
+    // those pendings except answering them — worse, several of their own
+    // reminder messages explicitly promise 'or reply "cancel"'
+    // (pendingFullReminder's await_manual_email_address /
+    // await_domain_learn_name / await_quote_trucker_retry / the two quote
+    // pickers all say it), a promise the code never actually kept. A
+    // trapped pending also blocks every later flow behind it, since
+    // setPending queues rather than overwrites.
+    //
+    // Routed to the SAME generic path a "no" answer already takes
+    // (resolve_pending / answer:'no'), which clears the pending and replies
+    // "Cancelled." — see actions.js's resolvePending. Nothing new invented.
+    //
+    // Anchored to the START of the message so it can only ever fire on a
+    // message that OPENS with a cancel word — a cargo description or relay
+    // reply that merely contains "cancel" somewhere mid-sentence is
+    // untouched. Deliberately does NOT include "scrap that": "scrap" is
+    // this business's actual cargo (scrap metal), far too dangerous a word
+    // to treat as a control keyword.
+    //
+    // await_relay_reply is EXCLUDED on purpose: that pending captures a
+    // reply to be relayed verbatim to whoever asked the question, so
+    // "cancel the pickup" is plausibly real message CONTENT there, not a
+    // control command. Cancelling that flow via this hatch would silently
+    // swallow a message someone is waiting on. Every other pending type's
+    // expected answer (a weight, a container number, an email address, a
+    // name, a yes/no) is never legitimately a sentence starting with
+    // "cancel"/"never mind"/"forget it".
+    if (ctx.isManagerOrTeam && ctx.pendingAction && ctx.pendingAction.type !== 'await_relay_reply') {
+        if (/^\s*(cancel|nevermind|never mind|forget it|forget that|abort|drop it)\b/i.test(ctx.text)) {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no', cancelText: ctx.text.trim() } };
+        }
+    }
+
     // ── A(-1). Fresh well-formed command jumps ANY open pending — see
     // detectFreshCommand's own comment above for the full reasoning. Checked
     // before every pending-type-specific block below (A0 onward), so it
@@ -1491,7 +1532,12 @@ async function route(decision, ctx, sendMessage) {
     }
 
     switch (decision.intent) {
-        case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection);
+        // d.cancelText is only set by the A(-2) universal cancel escape
+        // hatch — lets resolvePending tell the difference between a plain
+        // "no" and an explicit cancel whose wording implies a WIDER scope
+        // than the pending itself ("cancel all the quote requests"), so it
+        // can be honest about what it did and didn't actually cancel.
+        case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection, d.cancelText);
         case 'reschedule_pending_email': return actions.reschedulePendingEmail(chatId, ctx.pendingAction, d.send_at_text);
         case 'resolve_fact_batch':     return actions.resolveFactBatch(chatId, ctx.pendingAction, d.selection);
         case 'show_menu':              return actions.showMenu(chatId);
@@ -1727,6 +1773,61 @@ function pendingFullReminder(p) {
     return null; // no type-specific text — use the generic template
 }
 
+
+// ── Standing reminders + price-sheet link, set from chat (2026-08-19) ────────
+// Added after a real transcript where Jarvis got BOTH of these wrong:
+//   "Please use this <sheets link>"        -> "I have noted the link" (it had
+//                                             not; PRICE_SHEET_ID is env-only,
+//                                             so nothing was stored at all)
+//   "remind Bose to update price list"     -> "I can't directly remind users"
+//                                             (it can: helpers/tasks.js plus a
+//                                             taskRunner cron already exist)
+// The first was a false claim of action, which is worse than refusing. The
+// second was a refusal of a capability the app already had — the AI simply
+// had no action exposed for it.
+//
+// Parsed deterministically here rather than left to the model: a standing
+// instruction that silently doesn't get created is exactly the failure above,
+// and a regex either matches or it doesn't.
+
+// "remind Bose to update the price list every day at 9am"
+// "remind @Bose to update prices daily at 09:00"
+function parseReminderCommand(text) {
+    const t = String(text || '').trim();
+    if (!/^\s*(please\s+)?remind\b/i.test(t)) return null;
+    // Time: "at 9am" / "at 9:30 pm" / "at 21:00". Defaults to 09:00 when a
+    // recurrence is clearly asked for but no time is given.
+    let hh = null, mm = 0;
+    const tm = t.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (tm) {
+        hh = Number(tm[1]);
+        mm = tm[2] ? Number(tm[2]) : 0;
+        const ap = (tm[3] || '').toLowerCase();
+        if (ap === 'pm' && hh < 12) hh += 12;
+        if (ap === 'am' && hh === 12) hh = 0;
+    }
+    const daily = /\b(every\s*day|everyday|daily|each\s*day)\b/i.test(t);
+    if (hh == null) { if (!daily) return null; hh = 9; }
+    if (hh > 23 || mm > 59) return null;
+
+    // Who: "remind <who> to <what>"
+    const who = t.match(/remind\s+@?([^\s].*?)\s+to\s+/i);
+    const targetName = who ? who[1].replace(/[@\u2068\u2069]/g, '').trim() : null;
+    // What: everything after "to ", minus the trailing schedule phrase.
+    let what = t.replace(/^.*?\bto\s+/i, '');
+    what = what.replace(/\b(every\s*day|everyday|daily|each\s*day)\b/ig, '')
+               .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(am|pm)?/ig, '')
+               .replace(/\s{2,}/g, ' ').trim().replace(/[.,]+$/, '');
+    if (!what) return null;
+    return { targetName, what, hhmm: `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`, daily: true };
+}
+
+// Any Google Sheets URL in the message.
+function parseSheetLink(text) {
+    const m = String(text || '').match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
+    return m ? m[1] : null;
+}
+
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
     const inbound = await normalize(rawEvent);
@@ -1744,6 +1845,71 @@ async function process(rawEvent, sendMessage) {
     // own chat (awaiting yes/no, then possibly a date).
     const pending = actions.getPending(inbound.chatId);
     const ctx     = await buildContext(inbound, pending);
+
+    // ── Deterministic command intercepts, before the AI sees the message ──
+    // Both of these were previously either refused or falsely confirmed; see
+    // parseReminderCommand's note above.
+    if (!pending) {
+        // Price-sheet link — MANAGER ONLY. Anyone in the yard group could
+        // otherwise repoint the price list the whole business quotes from,
+        // which is a bigger lever than it looks.
+        const sheetId = parseSheetLink(inbound.text);
+        if (sheetId) {
+            if (inbound.role !== 'manager') {
+                await sendMessage(inbound.chatId, "I can only change the price sheet when the request comes from the manager's number — ask Apsara to send that link.");
+                return;
+            }
+            const { loadSettings, saveSettings } = require('../helpers/json');
+            await saveSettings({ ...loadSettings(), price_sheet_id: sheetId });
+            await sendMessage(inbound.chatId, `Saved. I'll read the price list from that sheet from now on (id ending ...${sheetId.slice(-6)}). Previous sheet is no longer used.`);
+            return;
+        }
+
+        // "cancel reminders" / "stop reminders" — the way out. A standing
+        // instruction with no off switch is a trap.
+        if (/^\s*(cancel|stop|remove)\s+(all\s+)?reminders?\b/i.test(inbound.text || '')) {
+            const tasks = require('../helpers/tasks');
+            const mine = tasks.loadTasks().filter(t => t.status === 'pending' && t.repeat && t.target_chat === inbound.chatId);
+            for (const t of mine) await tasks.cancel(t.id, 'cancelled_from_chat');
+            await sendMessage(inbound.chatId, mine.length
+                ? `Cancelled ${mine.length} standing reminder${mine.length === 1 ? '' : 's'} for this chat.`
+                : 'There are no standing reminders set for this chat.');
+            return;
+        }
+
+        // Standing reminder — allowed from manager/team/yard, per Apsara
+        // 2026-08-19 ("anyone in the yard group").
+        const rem = parseReminderCommand(inbound.text);
+        if (rem) {
+            if (!['manager', 'team', 'yard'].includes(inbound.role)) {
+                await sendMessage(inbound.chatId, "Reminders can only be set from the yard or team group, or by the manager.");
+                return;
+            }
+            const tasks = require('../helpers/tasks');
+            const fireAt = tasks.nextDailyOccurrence(rem.hhmm);
+            if (!fireAt) {
+                await sendMessage(inbound.chatId, "I couldn't read a time from that — try \"remind Bose to update the price list every day at 9am\".");
+                return;
+            }
+            // Delivered back into THIS chat rather than DM'ing the named
+            // person: Jarvis can't reliably resolve "@Bose" to a phone
+            // number, and a reminder that lands in the group everyone
+            // already watches is more likely to be acted on anyway. The
+            // @name is kept in the text so it still pings them.
+            const who = rem.targetName ? `@${rem.targetName} ` : '';
+            await tasks.enqueue({
+                type: 'generic_message',
+                target_kind: 'chat',
+                target_chat: inbound.chatId,
+                message: `Reminder: ${who}${rem.what}`,
+                fire_at: fireAt.toISOString(),
+                repeat: { daily_at: rem.hhmm },
+                created_by: `chat:${inbound.role}`,
+            });
+            await sendMessage(inbound.chatId, `Done — I'll post "${rem.what}" here every day at ${rem.hhmm}, starting ${fireAt.toLocaleString('en-US', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Say "cancel reminders" to stop.`);
+            return;
+        }
+    }
 
     let decision = policyDecide(ctx);
     if (decision.needsAI) {

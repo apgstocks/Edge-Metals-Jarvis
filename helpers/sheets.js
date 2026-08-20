@@ -54,11 +54,17 @@ function parseRows(rows) {
 // Throws if PRICE_SHEET_ID isn't configured or the sheet/tabs aren't reachable —
 // caller decides whether to fail soft (webhook) or surface the error (API route).
 async function readPriceSheet() {
-    if (!cfg.PRICE_SHEET_ID) throw new Error('PRICE_SHEET_ID not configured');
+    // Runtime-saved id wins over the env var — set by pasting a Sheets link
+    // to Jarvis (manager only; see workflow/brain.js). Without this lookup
+    // the "Saved" confirmation would be as hollow as the "I have noted the
+    // link" reply that prompted this whole change.
+    const settings = (cfg.getSettings ? cfg.getSettings() : {}) || {};
+    const sheetId = settings.price_sheet_id || cfg.PRICE_SHEET_ID;
+    if (!sheetId) throw new Error('PRICE_SHEET_ID not configured');
     const sheets = getSheets();
 
     const res = await sheets.spreadsheets.values.batchGet({
-        spreadsheetId: cfg.PRICE_SHEET_ID,
+        spreadsheetId: sheetId,
         ranges: PRICE_TABS.map(t => `'${t}'!A:B`),
     });
 
