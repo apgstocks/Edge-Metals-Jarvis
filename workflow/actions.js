@@ -3295,13 +3295,28 @@ const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
 // number-counting logic above — it can't verify the description is
 // SENSIBLE, only that something beyond bare numbers and units was typed.
 const UNIT_OR_CURRENCY_WORDS = new Set(['lbs', 'lb', 'pounds', 'pound', 'kgs', 'kg', 'kilograms', 'kilogram', 'tons', 'ton', 'dollars', 'dollar', 'usd']);
-const FILLER_WORDS = new Set(['ok', 'okay', 'yes', 'yeah', 'yep', 'sure', 'please', 'here', 'its', 'it', 'is', 'are', 'the', 'a', 'an', 'and', 'for', 'of', 'to', 'about', 'approx', 'around']);
+// Deliberately includes every common 2-letter English filler/preposition, NOT
+// just the obvious acks — see the 2-char minimum in hasCargoDescription below
+// for why 2-letter words have to be allowed through in the first place.
+const FILLER_WORDS = new Set(['ok', 'okay', 'yes', 'yeah', 'yep', 'sure', 'please', 'here', 'its', 'it', 'is', 'are', 'the', 'a', 'an', 'and', 'for', 'of', 'to', 'about', 'approx', 'around',
+    'hi', 'no', 'up', 'at', 'in', 'on', 'so', 'my', 'we', 'be', 'do', 'go', 'me', 'as', 'by', 'or', 'if', 'am', 'us', 'he', 'ok.', 'nope', 'yup', 'thx', 'pls']);
+// Minimum 2 letters, not 3 — REAL domain issue caught while building the
+// combination test matrix 2026-08-20 (not seen live, but it would have been
+// an unresolvable infinite loop the first time it happened): "Al" is standard
+// scrap-metal shorthand for aluminum, as are "Cu" (copper), "Fe" (iron),
+// "Zn" (zinc), "SS" (stainless), "Pb" (lead). A 3-letter minimum rejected
+// every one of them as "not a description" while the manager had in fact
+// already typed a perfectly valid one, and the retry would have kept asking
+// for a description forever. 2 letters is the real floor for this business —
+// the FILLER_WORDS list above absorbs the 2-letter English words that would
+// otherwise slip through ("ok", "no", "it", "is", ...), which is the tradeoff
+// that makes the lower bound safe.
 function hasCargoDescription(text) {
     const stripped = String(text || '')
         .replace(/\$\s?[\d,]+(\.\d+)?/g, ' ')
         .replace(/\d[\d,]*(\.\d+)?/g, ' ');
     const words = stripped.split(/[^a-zA-Z']+/).map((w) => w.toLowerCase()).filter(Boolean);
-    return words.some((w) => w.length >= 3 && !UNIT_OR_CURRENCY_WORDS.has(w) && !FILLER_WORDS.has(w));
+    return words.some((w) => w.length >= 2 && !UNIT_OR_CURRENCY_WORDS.has(w) && !FILLER_WORDS.has(w));
 }
 // REAL BUG (found 2026-08-20, live, right after the previous fix shipped):
 // requiring an EXPLICIT unit for weight ("lbs"/"kg"/"tons") and an EXPLICIT

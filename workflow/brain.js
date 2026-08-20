@@ -103,16 +103,27 @@ function parseGetQuoteCommand(rawText) {
     // instead of discarded; used as namesText below UNLESS a more explicit
     // post-destination "ask"/"email" clause is also present, in which case
     // that (already-working) explicit clause wins, same priority as before.
-    // Strip an accidental leading digit glued onto the verb (e.g.
-    // "1request quote..."). REAL incident 2026-08-18: typing straight into a
-    // numbered "who should I ask?" list prompt left a stray leading "1" on
-    // her actual retry command, which broke this anchored match entirely and
-    // let the whole message fall through to the (separately fixed) stale
-    // await_quote_truckers multi-select pending instead of ever being read
-    // as the fresh command it was. Lookahead keeps this narrow — only strips
-    // when what follows really is one of this parser's own verbs, so it
-    // can't eat a leading digit that's part of something else entirely.
-    const cleaned = String(rawText || '').trim().replace(/^\d+[.)]?\s*(?=(?:get|send|request|obtain)\b)/i, '');
+    // Strip accidental leading garbage glued directly onto the verb, with NO
+    // space in between — e.g. "1request quote..." (a stray leading digit,
+    // REAL incident 2026-08-18: typing straight into a numbered "who should
+    // I ask?" list prompt left a stray leading "1" on her actual retry
+    // command) or "XFSend quote request..." (REAL incident 2026-08-20 — a
+    // fresh command got typo'd/autocorrected with a stray "XF" glued onto
+    // "Send", broke this match entirely, and the whole message fell through
+    // to the cargo-details pending's verbatim capture instead of ever being
+    // read as the fresh command it was — polluting the cargo description
+    // with the failed command text). Used to only strip a leading digit;
+    // widened to any short (≤6 char) run of glued characters, found via a
+    // non-greedy lookahead that only commits once what follows really is one
+    // of this parser's own verbs at a real word boundary — so it can't eat
+    // part of an unrelated word, and the strict shape check right after
+    // (`base`, below) still has to match in full either way. A GENUINE
+    // preceding sentence with a space before the verb ("please send quote
+    // from...") is deliberately NOT covered by this — that's a different,
+    // wider-blast-radius problem (unanchoring the whole match) not seen live
+    // yet; this only fixes glued-with-no-space debris, the pattern actually
+    // seen twice now.
+    const cleaned = String(rawText || '').trim().replace(/^.{0,6}?(?=(?:get|send|request|obtain)\b)/i, '');
     const base = cleaned.match(/^(?:get|send|request|obtain)\s+(?:a\s+)?quotes?(?:\s+requests?)?\b(.*?)\bfrom\s+(.+?)\s+to\s+(.+)$/i);
     if (!base) return null;
     // Strip a leading "to " connector too — "quote request TO X from Y to Z"
@@ -155,7 +166,12 @@ function parseGetQuoteCommand(rawText) {
 // above (checked first), and vice versa. Returns null if the text isn't a
 // "quote to X for Y" command at all.
 function parseContactQuoteCommand(rawText) {
-    const m = String(rawText || '').trim().match(/^(?:send|request)?\s*(?:a\s+)?quote(?:\s+request)?\s+to\s+(.+?)\s+for\s+(.+)$/i);
+    // Same glued-prefix strip as parseGetQuoteCommand above (2026-08-20) —
+    // this parser's leading verb is optional ("(?:send|request)?"), but
+    // "quote" itself is not, so "XFquote to X for Y" would break this match
+    // exactly the same way "XFSend quote..." broke the other parser.
+    const cleaned = String(rawText || '').trim().replace(/^.{0,6}?(?=(?:send|request)?\s*(?:a\s+)?quote\b)/i, '');
+    const m = cleaned.match(/^(?:send|request)?\s*(?:a\s+)?quote(?:\s+request)?\s+to\s+(.+?)\s+for\s+(.+)$/i);
     if (!m) return null;
     return { recipientQuery: m[1].trim(), details: m[2].trim().replace(/[.?!]+$/, '') };
 }
