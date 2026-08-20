@@ -455,6 +455,18 @@ function policyDecide(ctx) {
         return { intent: 'quote_cargo_details_received', resolvedBy: 'policy', data: { cargo_text: ctx.text.trim() } };
     }
 
+    // ── A0f-0b. Scale-tickets prompt (2026-08-20, per Apsara: "ask do you
+    // need scale tickets before hand" / "why didn't it ask... at the start
+    // of convo") — now asked as its OWN question at the very start of the
+    // quote-request flow, before recipients or cargo details, instead of
+    // being folded into the cargo-details sentence (where it went
+    // unenforced and got silently skipped — a real bug). Same verbatim
+    // pass-through pattern as the cargo prompt above; actions.js's
+    // resumeQuoteWithScaleTickets does the yes/no interpretation.
+    if (ctx.pendingAction?.type === 'await_quote_scale_tickets') {
+        return { intent: 'quote_scale_tickets_received', resolvedBy: 'policy', data: { scale_text: ctx.text.trim() } };
+    }
+
     // ── A0f-1. Reply to "couldn't find a trucker named X — correct name or
     // email?" (pauseForUnresolvedTrucker, 2026-08-06). Same verbatim-capture
     // reasoning — whatever she sends next is either "cancel", a corrected
@@ -1436,6 +1448,7 @@ async function route(decision, ctx, sendMessage) {
         case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());
         case 'quote_truckers_selected': return actions.resumeQuoteWithTruckerNames(chatId, ctx.pendingAction, d.names);
         case 'quote_cargo_details_received': return actions.resumeQuoteWithCargoDetails(chatId, ctx.pendingAction, d.cargo_text);
+        case 'quote_scale_tickets_received': return actions.resumeQuoteWithScaleTickets(chatId, ctx.pendingAction, d.scale_text);
         case 'quote_trucker_retry_received':  return actions.resumeQuoteWithTruckerRetry(chatId, ctx.pendingAction, d.retry_text);
         case 'quote_leg_reply_received': return actions.handleQuoteLegReply(chatId, ctx.text.trim());
         case 'contact_quote_leg_reply_received': return actions.handleContactQuoteLegReply(chatId, ctx.text.trim());
@@ -1675,7 +1688,18 @@ async function process(rawEvent, sendMessage) {
           'quote_awaiting_cargo_queued',
           // Same pattern again for pauseForUnresolvedTrucker, added
           // alongside it 2026-08-06.
-          'quote_trucker_unresolved_queued'].includes(result?.action_taken)) {
+          'quote_trucker_unresolved_queued',
+          // 2026-08-20: resumeQuoteWithCargoDetails's mandatory weight/value
+          // retry (added same day) deliberately leaves the SAME pending
+          // active when the reply has no number in it, so the next reply
+          // routes back to the same handler — but that made this generic
+          // tail see "pending still active" and append a mismatched
+          // "reply yes/no" hint (pendingHint has no case for
+          // await_quote_cargo_details) right after the retry message
+          // already explained exactly what's needed. Real bug, live
+          // 2026-08-20 ("Weight and value are required..." immediately
+          // followed by a nonsensical "reply yes/no" tail).
+          'quote_cargo_details_retry'].includes(result?.action_taken)) {
         const fresh = actions.getPending(inbound.chatId);
         if (fresh && fresh.created_at === pending.created_at) {
             const fullReminder = pendingFullReminder(fresh);

@@ -102,15 +102,21 @@ function buildInvoiceClassicHtml(data) {
         const qty = Number(item.weight) || 0;
         const rate = Number(item.rate) || 0;
         const amount = Number(item.amount != null ? item.amount : qty * rate);
-        return `        <tr>
-          <td style="padding:5px 4px;font-size:8px;text-align:center;">${i + 1}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:center;">${escapeHtml(data.booking_no)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:center;">${escapeHtml(data.container_no)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:center;">${escapeHtml(data.seal_no)}</td>
-          <td style="padding:5px 4px;font-size:8px;">${escapeHtml(item.item_desc)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatQtyMt(qty)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatRate(rate)}</td>
-          <td style="padding:5px 4px;font-size:8px;text-align:right;">${formatMoney2(amount)}</td>
+        // Booking#/Container#/Seal# use a smaller 8pt + tighter padding and
+        // nowrap+hidden-overflow — real Helvetica (reportlab) renders these
+        // ID strings narrower than Chromium's Helvetica-substitute font
+        // does, so at the reference's own 9pt they were overflowing the
+        // narrow ID columns and visually running into the neighboring cell.
+        const idCell = (val) => `<td style="padding:0.5mm;font-size:8pt;text-align:center;white-space:nowrap;overflow:hidden;">${escapeHtml(val)}</td>`;
+        return `        <tr style="height:8mm;">
+          ${idCell(i + 1)}
+          ${idCell(data.booking_no)}
+          ${idCell(data.container_no)}
+          ${idCell(data.seal_no)}
+          <td style="padding:1mm;font-size:9pt;">${escapeHtml(item.item_desc)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatQtyMt(qty)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatRate(rate)}</td>
+          <td style="padding:1mm;font-size:9pt;text-align:right;">${formatMoney2(amount)}</td>
         </tr>`;
     });
 
@@ -120,11 +126,11 @@ function buildInvoiceClassicHtml(data) {
     // actually found on the sheet for this container.
     let freightRowHtml = '';
     if (freight > 0) {
-        freightRowHtml = `        <tr>
-          <td colspan="5" style="padding:5px 4px;font-size:8px;text-align:right;font-style:italic;">Less: Freight Charges</td>
-          <td style="padding:5px 4px;"></td>
-          <td style="padding:5px 4px;"></td>
-          <td style="padding:5px 4px;font-size:8px;text-align:right;">-${formatMoney2(freight)}</td>
+        freightRowHtml = `        <tr style="height:8mm;">
+          <td colspan="5" style="padding:1mm;font-size:9pt;text-align:right;font-style:italic;">Less: Freight Charges</td>
+          <td style="padding:1mm;"></td>
+          <td style="padding:1mm;"></td>
+          <td style="padding:1mm;font-size:9pt;text-align:right;">-${formatMoney2(freight)}</td>
         </tr>`;
     }
     // No real EFS column exists on the live sheet (checked directly — see
@@ -154,15 +160,15 @@ function buildInvoiceClassicHtml(data) {
         const netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, '')) || Math.round(netMt * 2204.62);
         totalNetMt += netMt;
         totalNetLbs += netLbs;
-        return `        <tr>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:center;">${escapeHtml(data.container_no)}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.truck_lbs || '-')}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.container_tare_lbs || '-')}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.chassis_lbs || '-')}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.boxes_weight_lbs || '-')}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
-          <td style="padding:5px 3px;font-size:7.5px;text-align:right;">${netMt.toFixed(3)}</td>
+        return `        <tr style="height:10mm;">
+          <td style="padding:1mm;font-size:8.5pt;text-align:center;">${escapeHtml(data.container_no)}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.truck_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.container_tare_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.chassis_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.boxes_weight_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
+          <td style="padding:1mm;font-size:8.5pt;text-align:right;">${netMt.toFixed(3)}</td>
         </tr>`;
     });
 

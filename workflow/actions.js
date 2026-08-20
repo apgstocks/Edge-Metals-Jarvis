@@ -3064,7 +3064,7 @@ async function continueQuoteFlow(chatId, state) {
         if (contactsHelper.getContactsByName(state.destinationQuery).length) {
             return startContactQuoteRequestFlow(chatId, state.destinationQuery, state.originQuery);
         }
-        return askWhichTruckers(chatId, { originQuery: state.originQuery, destinationQuery: state.destinationQuery });
+        return askWhichTruckers(chatId, { originQuery: state.originQuery, destinationQuery: state.destinationQuery, scaleTicketsNeeded: state.scaleTicketsNeeded });
     }
 
     let allResolved = state.resolvedSoFar || [];
@@ -3078,7 +3078,7 @@ async function continueQuoteFlow(chatId, state) {
         if (ambiguous.length) {
             return pauseForTruckerAmbiguity(
                 chatId, ambiguous[0],
-                { originQuery: state.originQuery, destinationQuery: state.destinationQuery, directEmails: state.directEmails || null },
+                { originQuery: state.originQuery, destinationQuery: state.destinationQuery, directEmails: state.directEmails || null, scaleTicketsNeeded: state.scaleTicketsNeeded },
                 allResolved,
                 [...ambiguous.slice(1).map((a) => a.query), ...unresolved],
             );
@@ -3098,6 +3098,7 @@ async function continueQuoteFlow(chatId, state) {
             return pauseForUnresolvedTrucker(chatId, unresolved, {
                 originQuery: state.originQuery, destinationQuery: state.destinationQuery,
                 resolvedSoFar: allResolved, directEmails: state.directEmails || null,
+                scaleTicketsNeeded: state.scaleTicketsNeeded,
             });
         }
     }
@@ -3114,17 +3115,25 @@ async function continueQuoteFlow(chatId, state) {
         return askForCargoDetails(chatId, {
             originQuery: state.originQuery, destinationQuery: state.destinationQuery,
             resolvedTruckers: allResolved, unresolvedNames: unresolved, directEmails: state.directEmails || [],
+            scaleTicketsNeeded: state.scaleTicketsNeeded,
         });
     }
 
-    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved, state.directEmails || [], state.cargoDetails);
+    // Fold the upfront scale-tickets answer into the same "Cargo: ..." line
+    // rather than adding a whole new field through createQuoteRequest/
+    // buildQuoteMessage's schema — keeps this a small, contained change.
+    const scaleLine = state.scaleTicketsNeeded === true ? 'scale tickets needed'
+        : state.scaleTicketsNeeded === false ? 'scale tickets not needed' : null;
+    const finalCargoDetails = [state.cargoDetails, scaleLine].filter(Boolean).join(' | ') || null;
+
+    return dispatchQuoteToTruckers(chatId, state.originQuery, state.destinationQuery, allResolved, unresolved, state.directEmails || [], finalCargoDetails);
 }
 
 async function pauseForLaneAmbiguity(chatId, field, matches, state) {
     const staged = await setPending(chatId, {
         type: 'confirm_quote_lane', field, matches,
         options: matches.map((e) => e.aliases[0]),
-        state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [], directEmails: state.directEmails || null },
+        state: { originQuery: state.originQuery, destinationQuery: state.destinationQuery, names: state.names || null, resolvedSoFar: state.resolvedSoFar || [], directEmails: state.directEmails || null, scaleTicketsNeeded: state.scaleTicketsNeeded },
     });
     const query = field === 'origin' ? state.originQuery : state.destinationQuery;
     const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
@@ -3209,7 +3218,7 @@ async function askWhichTruckers(chatId, state) {
 // policyDecide rather than the generic single-pick p.options handling.
 async function resumeQuoteWithTruckerNames(chatId, pending, names) {
     await clearPending(chatId);
-    return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [], directEmails: pending.state.directEmails || null });
+    return continueQuoteFlow(chatId, { originQuery: pending.state.originQuery, destinationQuery: pending.state.destinationQuery, names, resolvedSoFar: [], directEmails: pending.state.directEmails || null, scaleTicketsNeeded: pending.state.scaleTicketsNeeded });
 }
 
 // Reply to pauseForUnresolvedTrucker's "couldn't find X — correct name or
@@ -3224,16 +3233,16 @@ async function resumeQuoteWithTruckerRetry(chatId, pending, text) {
         await _send(chatId, 'Cancelled — quote request not sent.');
         return { action_taken: 'quote_cancelled' };
     }
-    const { originQuery, destinationQuery, resolvedSoFar, directEmails } = pending.state;
+    const { originQuery, destinationQuery, resolvedSoFar, directEmails, scaleTicketsNeeded } = pending.state;
     if (/^[\w.+-]+@[\w.-]+\.[a-z]{2,}$/i.test(clean)) {
         return continueQuoteFlow(chatId, {
             originQuery, destinationQuery, names: null, resolvedSoFar: resolvedSoFar || [],
-            directEmails: [...(directEmails || []), clean],
+            directEmails: [...(directEmails || []), clean], scaleTicketsNeeded,
         });
     }
     return continueQuoteFlow(chatId, {
         originQuery, destinationQuery, names: splitQuoteNames(clean), resolvedSoFar: resolvedSoFar || [],
-        directEmails: directEmails || null,
+        directEmails: directEmails || null, scaleTicketsNeeded,
     });
 }
 
@@ -3248,36 +3257,47 @@ async function askForCargoDetails(chatId, state) {
         await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask for cargo details once that's resolved.`);
         return { action_taken: 'quote_awaiting_cargo_queued' };
     }
-    // 2026-08-20, per Apsara: "when you get quote request from manager, just
-    // like description, ask do you need scale tickets before hand" — folded
-    // into this SAME question rather than a separate follow-up round-trip,
-    // so it's answered once alongside cargo details, not as an extra step.
-    // Weight/value are MANDATORY (per Apsara, same day: "its mandatory for
-    // every quote. just ask manager") — no "skip" escape hatch anymore, see
-    // resumeQuoteWithCargoDetails below.
-    await _send(chatId, `What's the cargo — description, weight, and value? (required — e.g. "Aluminum scrap, 40,000 lbs, approx $5,000") Also, do you need scale tickets for this haul?`);
+    // Scale tickets is now asked separately, upfront, BEFORE this question
+    // (2026-08-20, per Apsara: "why didn't it ask... at the start of
+    // convo") — no longer folded in here. Weight AND value are BOTH
+    // mandatory (per Apsara, same day: "its mandatory for every quote. just
+    // ask manager") — no "skip" escape hatch, see resumeQuoteWithCargoDetails.
+    await _send(chatId, `What's the cargo — description, weight, and value? Both weight AND value are required (e.g. "Aluminum scrap, 40,000 lbs, approx $5,000").`);
     return { action_taken: 'quote_awaiting_cargo' };
 }
 
-// Weight/value are mandatory (2026-08-20, per Apsara — see askForCargoDetails
-// above). No "skip" bypass anymore: a reply with no digit in it at all (no
-// weight, no dollar value) is re-asked, every time, until a real number is
-// given — not just once. REAL BUG this replaced (found 2026-08-20, live):
-// the prompt explicitly asks for description AND weight AND value, but
-// nothing ever checked the reply actually had either — a bare "Al" sailed
-// straight through as the final cargo details. There's no reliable way to
-// parse "is this a real weight/value" from free text, so the practical
-// check is: does the reply contain ANY digit at all? A genuine weight or
-// dollar value always has one; a bare description like "Al" never does.
+// Weight AND value are BOTH mandatory (2026-08-20, per Apsara). Two real
+// bugs this replaced, both live the same day:
+//   1. "Al" (no numbers at all) sailed through as final cargo details —
+//      nothing checked the reply had anything resembling a weight or value.
+//   2. The first fix for #1 only checked for ANY digit — which let "42000
+//      lbs" (a real weight, but no dollar value at all) through as
+//      "complete," when the prompt explicitly asks for both. Apsara caught
+//      this immediately: "manager typed only 42000 lbs not the cargo
+//      value. but jarvis ignored that."
+// Now checks for weight and value SEPARATELY (a number next to
+// lbs/kg/tons for weight, a $ sign or a number next to dollars/usd for
+// value) and asks specifically for whichever is still missing — accepting
+// partial answers across turns (pending.state.cargoSoFar) rather than
+// discarding what was already given each time it re-asks.
+const WEIGHT_RE = /\d[\d,]*\s*(lbs?|pounds?|kgs?|kilograms?|tons?)\b/i;
+const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
     const clean = String(cargoText || '').trim();
-    if (!/\d/.test(clean)) {
-        await _send(chatId, `Weight and value are required for every quote — I don't see either in that. What's the weight and value? (and let me know if you need scale tickets)`);
+    const combined = [pending.state.cargoSoFar, clean].filter(Boolean).join(', ');
+    const hasWeight = WEIGHT_RE.test(combined);
+    const hasValue  = VALUE_RE.test(combined);
+    if (!hasWeight || !hasValue) {
+        const missing = !hasWeight && !hasValue ? 'a weight and a value' : !hasWeight ? 'a weight' : 'a value';
+        await setPending(chatId, { type: 'await_quote_cargo_details', state: { ...pending.state, cargoSoFar: combined } });
+        await _send(chatId, `Still need ${missing} — both are required for every quote. What's the ${missing}?`);
         return { action_taken: 'quote_cargo_details_retry' };
     }
     await clearPending(chatId);
-    const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails } = pending.state;
-    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, clean);
+    const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, scaleTicketsNeeded } = pending.state;
+    const scaleLine = scaleTicketsNeeded === true ? 'scale tickets needed' : scaleTicketsNeeded === false ? 'scale tickets not needed' : null;
+    const finalCargoDetails = [combined, scaleLine].filter(Boolean).join(' | ');
+    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, finalCargoDetails);
 }
 
 // Everything's resolved — actually send. Truckers with no usable channel
@@ -3323,12 +3343,47 @@ async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, re
 // Entry point from brain.js's 'get_quote' intent. emails is an optional
 // array of one-off recipients parsed out of an "...email addr[, addr2]"
 // clause — independent of (and combinable with) names/"ask ___".
+//
+// 2026-08-20, per Apsara ("why didn't it ask from manager whether scale
+// ticket needed at the start of convo"): scale-tickets used to be folded
+// into the LATER cargo-details question as an afterthought sentence
+// ("...also, do you need scale tickets?") — it was never actually
+// enforced, so a reply that only answered the cargo part (e.g. "42000
+// lbs") silently dispatched with no scale-ticket answer captured at all.
+// Now asked as its own mandatory question FIRST, before recipients or
+// cargo details — this is the actual start of the flow now, not a
+// sub-clause buried later.
 async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, namesText, emails) {
-    return continueQuoteFlow(chatId, {
+    return askForScaleTickets(chatId, {
         originQuery, destinationQuery,
         names: namesText ? splitQuoteNames(namesText) : null,
         directEmails: emails && emails.length ? emails : null,
     });
+}
+
+async function askForScaleTickets(chatId, state) {
+    const staged = await setPending(chatId, { type: 'await_quote_scale_tickets', state });
+    if (staged.queued) {
+        await _send(chatId, `Ready to start on ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask about scale tickets once that's resolved.`);
+        return { action_taken: 'quote_awaiting_scale_tickets_queued' };
+    }
+    await _send(chatId, `Do you need scale tickets for this haul? (yes/no)`);
+    return { action_taken: 'quote_awaiting_scale_tickets' };
+}
+
+// Mandatory yes/no — re-asks on anything that isn't recognizably a yes/no,
+// same "don't silently let an unanswered required field through" principle
+// as the cargo weight/value fix (resumeQuoteWithCargoDetails below).
+async function resumeQuoteWithScaleTickets(chatId, pending, scaleText) {
+    const clean = String(scaleText || '').trim().toLowerCase();
+    const isYes = /^(y|yes|yeah|yep|need|needed)$/i.test(clean);
+    const isNo  = /^(n|no|nope|not needed|don'?t need)$/i.test(clean);
+    if (!isYes && !isNo) {
+        await _send(chatId, `Just need a yes or no — do you need scale tickets for this haul?`);
+        return { action_taken: 'quote_scale_tickets_retry' };
+    }
+    await clearPending(chatId);
+    return continueQuoteFlow(chatId, { ...pending.state, scaleTicketsNeeded: isYes });
 }
 
 // Entry point from brain.js's 'quote_leg_reply_received' intent — a message
