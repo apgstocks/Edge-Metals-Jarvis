@@ -6,6 +6,7 @@
 
 const express = require('express');
 const path    = require('path');
+const fs      = require('fs');
 const crypto  = require('crypto');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
@@ -19,20 +20,101 @@ const cfg = require('./config');
 // Keys are random 32-byte hex; issued on /login, checked on every non-public
 // route via the sid cookie. Restart wipes sessions — acceptable, users just
 // log in again. Real auth (users, roles, hashed passwords) is Pass 3+.
-const sessions = new Map(); // sid → { issued: ms, ip, role: 'user' | 'admin' }
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+// ── Sessions ────────────────────────────────────────────────────────────────
+// Rewritten 2026-08-19 per Apsara: "session should never die. may be after
+// 11 pm it can but should be available around 7am."
+//
+// TWO separate things were logging people out, and fixing only one wouldn't
+// have helped:
+//   1. A 12h rolling TTL — a 7am login died at 7pm, mid-evening shift.
+//   2. The sessions Map lived in memory ONLY, so every pm2 restart (i.e.
+//      every deploy) silently invalidated every logged-in device. That's
+//      what produced the "could not save: unauthorised" report earlier
+//      today — the app looked broken when it had simply been logged out.
+//
+// Now: sessions PERSIST TO DISK so a restart doesn't touch them, and they
+// expire on a NIGHTLY BOUNDARY rather than N hours after login. Expiring at
+// a fixed hour is what makes "available at 7am" true — a rolling TTL can
+// always land mid-shift, whereas a boundary at 3am never does. 3am, not
+// 11pm: her 11pm was the earliest acceptable moment to expire, but a
+// session cut at 11pm is gone for anyone still finishing up, and one cut at
+// 3am is comfortably clear of both ends of the day.
+//
+// A session issued at any point during a day therefore stays valid until
+// 3am after the FOLLOWING night — i.e. someone logging in Monday morning is
+// still signed in all day Monday and all day Tuesday. Nobody signing in
+// during working hours is ever logged out during working hours.
+// Sessions use a SLIDING window: every request refreshes the expiry, so a
+// device that gets used never logs out. Only a genuinely idle one expires.
+//
+// A fixed nightly boundary was tried first and is wrong: with a 3am cutoff,
+// a Monday 07:00 login expires Tuesday 03:00, so staff arriving Tuesday
+// morning are logged out — exactly what "should be available around 7am"
+// rules out. Sliding is the only shape where daily use never hits a wall.
+//
+// The idle window is deliberately long (14 days). It is not a security
+// control — the app is password-gated per role, and a shorter window buys
+// nothing except logging out the yard. It exists so a phone that is lost or
+// left in a drawer eventually stops being a valid session.
+const SESSION_IDLE_MS = (Number(process.env.SESSION_IDLE_DAYS) || 14) * 24 * 60 * 60 * 1000;
+const sessions = new Map(); // sid → { issued: ms, expires: ms, ip, role }
+
+// Persisted to disk so a pm2 restart — i.e. every deploy — doesn't
+// invalidate every logged-in device. That was the second half of this
+// problem and the cause of today's "could not save: unauthorised" report:
+// the app looked broken when it had simply been logged out by a restart.
+const SESSIONS_FILE = path.join(cfg.DATA_DIR, 'sessions.json');
+function loadSessionsFromDisk() {
+    try {
+        if (!fs.existsSync(SESSIONS_FILE)) return;
+        const raw = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8'));
+        const now = Date.now();
+        let restored = 0;
+        for (const [sid, sess] of Object.entries(raw || {})) {
+            if (sess && sess.expires > now) { sessions.set(sid, sess); restored += 1; }
+        }
+        if (restored) console.log(`[AUTH] Restored ${restored} session(s) — a restart no longer logs anyone out`);
+    } catch (err) {
+        // A corrupt session file must never stop the server booting; the
+        // worst case is that everyone signs in once more.
+        console.warn('[AUTH] Could not restore sessions:', err.message);
+    }
+}
+let sessionSaveTimer = null;
+function persistSessions() {
+    // Debounced — a sliding window touches the session on EVERY request, and
+    // that must not mean a disk write per request.
+    if (sessionSaveTimer) return;
+    sessionSaveTimer = setTimeout(() => {
+        sessionSaveTimer = null;
+        try { fs.writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions)), 'utf8'); }
+        catch (err) { console.warn('[AUTH] Could not persist sessions:', err.message); }
+    }, 5000);
+    if (sessionSaveTimer.unref) sessionSaveTimer.unref();
+}
+loadSessionsFromDisk();
 
 function issueSession(ip, role) {
     const sid = crypto.randomBytes(32).toString('hex');
-    sessions.set(sid, { issued: Date.now(), ip, role });
+    const now = Date.now();
+    sessions.set(sid, { issued: now, expires: now + SESSION_IDLE_MS, ip, role });
+    persistSessions();
     return sid;
 }
 function getSession(sid) {
     if (!sid) return null;
-    const s = sessions.get(sid);
-    if (!s) return null;
-    if (Date.now() - s.issued > SESSION_TTL_MS) { sessions.delete(sid); return null; }
-    return s;
+    const sess = sessions.get(sid);
+    if (!sess) return null;
+    const now = Date.now();
+    // Sessions written by the old 12h-TTL build carry no `expires` — don't
+    // log those users out on the very deploy that fixes this.
+    if (!sess.expires) sess.expires = now + SESSION_IDLE_MS;
+    if (now > sess.expires) { sessions.delete(sid); persistSessions(); return null; }
+    // Slide. Only rewrite (and schedule a save) when it moves meaningfully,
+    // so a busy request loop doesn't thrash the file.
+    const next = now + SESSION_IDLE_MS;
+    if (next - sess.expires > 60 * 60 * 1000) { sess.expires = next; persistSessions(); }
+    return sess;
 }
 function validSession(sid) { return !!getSession(sid); }
 function parseCookie(header, name) {
@@ -212,7 +294,10 @@ function createApi() {
 
         const sid = issueSession(req.ip, role);
         res.setHeader('Set-Cookie',
-            `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+            // Cookie lifetime matches the session's idle window, so the
+            // browser cookie and the server session expire together
+            // rather than one silently outliving the other.
+            `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_IDLE_MS / 1000)}`);
         // sid is ALSO returned in the JSON body now, not just the cookie —
         // added for the Loads mobile app. Its fetch() calls to this API are
         // cross-origin, and SameSite=Strict cookies are never attached to
