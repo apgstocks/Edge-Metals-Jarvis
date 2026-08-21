@@ -113,6 +113,15 @@ these two SEPARATELY, by label, and do not guess:
   port_cutoff_date/doc_cutoff_date are what actually get used, so get THOSE
   right even if you're unsure about this one.
 
+erd_date (Earliest Return Date — the earliest date the container can be
+delivered/received at the terminal): carriers label this many different
+ways — match by MEANING, not by the literal text "ERD": "ERD", "Earliest
+Return Date", "Earliest Receiving Date", "Port 1st Receiving Date", "1st
+Receiving Date", "First Receiving Date", "Port Receiving Date", "Earliest
+Delivery Date", "Empty Pickup Date", "Earliest Empty Pickup", "Container
+Availability Date", "Cargo Receiving Date". If a receiving window/range is
+shown, use the EARLIEST (opening) date, never the cutoff/closing date.
+
 Convert all dates to MM/DD/YYYY. Port fields must be city names only. Return the JSON object and nothing else.
 
 Email body:
@@ -213,7 +222,7 @@ async function extractPdfFields(pdfBase64, retries = 2) {
   "cutoff_date": null,      // MM/DD/YYYY — your best single guess, kept as a fallback only. port_cutoff_date/doc_cutoff_date below are what actually get used — get those right even if unsure about this one.
   "port_cutoff_date": null, // MM/DD/YYYY — the date next to a label CONTAINING "Port" (e.g. "Port", "Port Cutoff", "CY Cutoff", "Terminal Cutoff", "Gate Cutoff") — when the container must physically be at the terminal. Many carrier documents show a CUT-OFF DATE table with several rows: "Port Open", "Port", "Rail", "Warehouse", "Doc", "VGM" — use ONLY the "Port" row's value, never "Port Open", "Doc", or "VGM". If the document has just ONE cutoff with no such table, put that single value here instead.
   "doc_cutoff_date": null,  // MM/DD/YYYY — the date next to a label CONTAINING "Doc" (e.g. "Doc", "Document Cutoff", "SI Cutoff", "VGM Cutoff") — a paperwork deadline, usually earlier than port_cutoff_date. Leave null if the document doesn't separately call this out. Never copy this value into port_cutoff_date.
-  "erd_date": null,         // MM/DD/YYYY format — Earliest Return Date
+  "erd_date": null,         // MM/DD/YYYY — Earliest Return Date: the earliest date the container can be delivered/received at the terminal. Carriers label this MANY different ways — match by MEANING, not by the literal text "ERD": "ERD", "Earliest Return Date", "Earliest Receiving Date", "Port 1st Receiving Date", "1st Receiving Date", "First Receiving Date", "Port Receiving Date", "Earliest Delivery Date", "Empty Pickup Date", "Earliest Empty Pickup", "Container Availability Date", "Cargo Receiving Date". If a table shows a receiving window/range, use the EARLIEST (opening) date, never the cutoff/closing date.
   "etd": null,              // MM/DD/YYYY — Estimated Time of Departure
   "eta": null,              // MM/DD/YYYY — Estimated Time of Arrival (different date than etd — don't conflate)
   "vessel_voyage": null,    // e.g. "MSC AURORA 226E"
