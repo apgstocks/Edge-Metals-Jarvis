@@ -1595,8 +1595,10 @@ function fillEmptyContainerNumbers() {
   $('pfContainers').querySelectorAll('.container-block').forEach((block) => {
     const input = block.querySelector('.container-no');
     if (!input || input.value.trim()) return;
-    const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
-    const result = takeNextContainerCode(deriveItemCode(firstDesc));
+    // No item code — Container # is bare "26JY52" (2026-08-22, per Apsara).
+    // See retrofitContainerItemCode()'s comment for where the item code DOES
+    // still appear (Invoice No, and the sheet's Inv No. column).
+    const result = takeNextContainerCode(null);
     if (!result) return;
     input.value = result.code;
     input.dataset.autoRaw = JSON.stringify(result.raw);
@@ -1608,17 +1610,25 @@ function fillEmptyContainerNumbers() {
 // material to another). Only touches the field if it's still exactly the
 // auto-generated value with no item code yet appended — a real shipping
 // container ID or anything else the user typed is left completely alone.
-function retrofitContainerItemCode(block) {
-  if (!block) return;
-  const input = block.querySelector('.container-no');
-  if (!input || !input.dataset.autoRaw) return;
-  const raw = JSON.parse(input.dataset.autoRaw);
-  const bareCode = formatContainerCode(raw, raw.number);
-  if (input.value.trim() !== bareCode) return; // already has an item code, or user edited it — leave alone
-  const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
-  const itemCode = deriveItemCode(firstDesc);
-  if (itemCode) input.value = formatContainerCode(raw, raw.number, itemCode);
-}
+// RETIRED 2026-08-22, per Apsara: "in proforma-container#, IT SHOULD JUST BE
+// 26JY52 SAY., it should not be AC_26JY52". The Container # box now stays
+// BARE — no item-code prefix, ever. Deliberately kept as a no-op rather than
+// deleted, because this is the SECOND time the container-vs-invoice split has
+// been specified and it keeps getting conflated; leaving the note here means
+// the next person to touch this reads why the field is bare on purpose
+// instead of "fixing" it back.
+//
+// The item code is NOT lost — it still appears in:
+//   - the top-level Invoice No field ("260819_AC_26JY19"), via
+//     retrofitInvNoItemCode() / applyNextInvNoSuggestion(), unchanged
+//   - the Edge Metals sheet's "Inv No." column, now via a separate per-
+//     container `item_code` field on the payload (see collectProformaPayload)
+//     instead of being glued into container_no
+//
+// Her original statement of the rule, recorded when the invoice half was
+// fixed: "in invoice number only [date]_item_26[code][num] gets appended. in
+// containe # 26[code][num] should come".
+function retrofitContainerItemCode(/* block */) { /* intentionally a no-op — see above */ }
 // Same idea as retrofitContainerItemCode(), but for the top-level Invoice
 // No field — set from window._pfInvNoSuggestion (stashed by
 // applyNextInvNoSuggestion below) rather than a dataset attribute, since
@@ -1792,8 +1802,8 @@ function addContainer(items) {
   if (pfNextContainerCode) {
     const containerNoInput = block.querySelector('.container-no');
     if (containerNoInput && !containerNoInput.value.trim()) {
-      const firstDesc = (items && items[0] && items[0].desc) || '';
-      const result = takeNextContainerCode(deriveItemCode(firstDesc));
+      // No item code — Container # is bare "26JY52" (2026-08-22, per Apsara).
+      const result = takeNextContainerCode(null);
       if (result) {
         containerNoInput.value = result.code;
         containerNoInput.dataset.autoRaw = JSON.stringify(result.raw);
@@ -1973,16 +1983,29 @@ function collectProformaPayload() {
   // actually read for the PDF, closes that gap regardless of which input
   // event sequence got the form into its current state.
   retrofitInvNoItemCode();
-  $('pfContainers').querySelectorAll('.container-block').forEach((block) => retrofitContainerItemCode(block));
-  const containers = Array.from($('pfContainers').children).map((block) => ({
-    container_no: block.querySelector('.container-no').value.trim(),
-    items: Array.from(block.querySelectorAll('.item-row')).map((row) => ({
-      desc: row.querySelector('.item-desc').value.trim(),
-      qty: parseFloat(row.querySelector('.item-qty').value) || 0,
-      rate: parseFloat(row.querySelector('.item-rate').value) || 0,
-      unit: $('pf_qty_unit').value,
-    })).filter((it) => it.desc),
-  })).filter((c) => c.container_no && c.items.length);
+  // retrofitContainerItemCode() deliberately NOT called any more — as of
+  // 2026-08-22 the Container # box stays BARE ("26JY52"), see that function's
+  // own comment. The item code still reaches the Edge Metals sheet, but as a
+  // separate item_code field below rather than glued into container_no.
+  const containers = Array.from($('pfContainers').children).map((block) => {
+    const firstDesc = block.querySelector('.item-desc') ? block.querySelector('.item-desc').value : '';
+    return {
+      container_no: block.querySelector('.container-no').value.trim(),
+      // Sent alongside (NOT inside) container_no so helpers/proformaSheetLog.js
+      // can still build its "Inv No." as [date]_[item]_[code]
+      // ("260819_AC_26JY19") even though the Container # itself is now bare.
+      // Derived per-container from that container's own first item, exactly as
+      // the old glued-in version was — containers in one shipment aren't
+      // guaranteed to hold the same material.
+      item_code: deriveItemCode(firstDesc) || null,
+      items: Array.from(block.querySelectorAll('.item-row')).map((row) => ({
+        desc: row.querySelector('.item-desc').value.trim(),
+        qty: parseFloat(row.querySelector('.item-qty').value) || 0,
+        rate: parseFloat(row.querySelector('.item-rate').value) || 0,
+        unit: $('pf_qty_unit').value,
+      })).filter((it) => it.desc),
+    };
+  }).filter((c) => c.container_no && c.items.length);
 
   return {
     inv_no: $('pf_inv_no').value.trim(),
@@ -2078,6 +2101,43 @@ async function downloadSavedProforma(filename) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
   return true;
 }
+// Auto-saves a consignee that isn't in the address book yet, on Generate
+// (2026-08-22, per Apsara: "When i type something which is not in Address
+// Book, upload it automatically to address book on generate").
+//
+// The signal for "this is new" is already maintained by the form:
+// window._pfConsigneeSheetTag is set ONLY when a real address-book entry was
+// picked from the dropdown, and is cleared the moment she types something
+// different (see the #pf_consignee 'input' handler). So a filled-in consignee
+// with a null tag is, by construction, a name the book doesn't have.
+//
+// Deliberately conservative, because this writes to a store she relies on:
+//   - runs only when BOTH the name and the address block have content — an
+//     entry with no address is worse than no entry
+//   - re-checks the live book by name first, so a race (or a name she added
+//     from the Address Book page mid-form) can never create a duplicate
+//   - saved UNLOCKED (locked=false), so the Google-Doc sync can still
+//     reconcile/overwrite it later rather than this pinning a hand-typed
+//     version forever
+//   - never blocks or fails the actual proforma: any error here is reported
+//     as a note on the success message, because the PDF is the thing she
+//     actually asked for and it has already been generated by then
+async function autoSaveNewConsignee(payload) {
+  const name = (payload.consignee || '').trim();
+  const raw = (Array.isArray(payload.consignee_address) ? payload.consignee_address.join('\n') : (payload.consignee_address || '')).trim();
+  if (!name || !raw) return null;
+  if (window._pfConsigneeSheetTag) return null; // came from an existing entry
+  const existing = await api('/api/address-book');
+  const already = (existing || []).some((e) =>
+    (e.aliases || []).some((a) => String(a).trim().toLowerCase() === name.toLowerCase()));
+  if (already) return null;
+  await api('/api/address-book', {
+    method: 'POST',
+    body: JSON.stringify({ aliases: [name], raw, locked: false, mobile: null, tags: [] }),
+  });
+  return name;
+}
+
 $('btnPfGenerate').addEventListener('click', async () => {
   $('pfError').classList.add('hidden');
   $('pfSuccessMsg').classList.add('hidden');
@@ -2102,6 +2162,16 @@ $('btnPfGenerate').addEventListener('click', async () => {
     // silently drift apart without you knowing.
     if (result.sheet_log && result.sheet_log.duplicates_bumped && result.sheet_log.duplicates_bumped.length) {
       msg += ` — note: ${result.sheet_log.duplicates_bumped.length} Inv No. already existed in the Edge Metals sheet and were logged with a bumped number instead (check console/server log for exact numbers).`;
+    }
+    // Runs AFTER the PDF is safely generated and saved, never before — see
+    // autoSaveNewConsignee's comment. A failure here is a note, not an error:
+    // the proforma itself is already done and must not be reported as failed
+    // because a convenience write didn't land.
+    try {
+      const added = await autoSaveNewConsignee(payload);
+      if (added) msg += ` — "${added}" wasn't in the Address Book, so I added it (unlocked, so a Doc sync can still update it).`;
+    } catch (e) {
+      msg += ` — note: couldn't auto-add "${payload.consignee}" to the Address Book (${e.message}); add it manually if you want it saved.`;
     }
     $('pfSuccessMsg').textContent = msg;
     $('pfSuccessMsg').classList.remove('hidden');
