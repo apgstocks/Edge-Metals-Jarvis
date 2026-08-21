@@ -147,4 +147,115 @@ async function crossCheckZimexRecords(pdfRecords, period) {
     return { matched, sheet_only: sheetOnly };
 }
 
-module.exports = { buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE };
+// ── Commission → Pan Metal ────────────────────────────────────────────────
+// Added per Apsara's worked example against a real file ("Comm. Debit Note
+// Edge_260804.pdf"): Pan Metal's debit note bills commission per ORDER NO.
+// (e.g. "26MT10"), which doesn't appear as its own sheet column — it's
+// embedded as the LAST underscore-separated segment of Inv No., e.g.
+// "260528_AC_26MT10" → "26MT10". Confirmed against the real sheet for all
+// four orders on the sample debit note (26MT10-13, consignee "Pan
+// Metal/HK"): weight(ours) × commission_rate(ours, col 15 "Commissions")
+// reproduces the debit note's stated Commission dollar amount EXACTLY in
+// all four cases (e.g. 21.301 × $10 = $213.01) — that's the verification.
+//
+// "start with 26" is Apsara's own rule, tied to 2026 order numbers being
+// live right now — not a hardcoded year, just the actual prefix on today's
+// orders. Whenever order numbering rolls to "27..." this rule needs
+// updating to match (or generalizing to "2 digits then letters+digits"),
+// same kind of drift risk flagged elsewhere in this file for hardcoded
+// sheet assumptions.
+function extractOrderNoFromInvNo(invNo) {
+    const parts = safeStr(invNo).split('_');
+    const last = parts[parts.length - 1].trim().toUpperCase();
+    return last.startsWith('26') ? last : null;
+}
+
+// One entry per distinct order code — same "first row that actually has a
+// value wins" pattern as buildSheetFreightIndex, since weight/commission
+// are recorded once per order, not repeated on every line.
+async function buildSheetOrderIndex() {
+    const { headers, rows } = await invoiceSheet.fetchRawSheet();
+    const colMap = invoiceSheet.buildColumnMap(headers);
+    const byOrder = new Map();
+    for (const row of rows) {
+        const d = invoiceSheet.rowToDict(row, colMap);
+        const orderNo = extractOrderNoFromInvNo(d.inv_no);
+        if (!orderNo) continue;
+        const weight = safeMoney(d.weight);
+        const existing = byOrder.get(orderNo);
+        if (existing && existing.weight != null) continue;
+        if (weight == null && existing) continue;
+        byOrder.set(orderNo, {
+            order_no: orderNo,
+            inv_no: safeStr(d.inv_no),
+            consignee: safeStr(d.consignee),
+            container_no: safeStr(d.container_no),
+            weight,
+            commission_rate: safeMoney(d.commission_rate),
+            commission_amt: safeMoney(d.commission_amt),
+        });
+    }
+    return byOrder;
+}
+
+// pdfRecords: [{ order_no, customer, item, weight, comm_per_mt, commission, source_file, ... }]
+// (the shape helpers/gemini.js's extractCommissionDebitNoteRecords returns,
+// one array entry per source_file already attached by the API route).
+//
+// Calculation, per Apsara: "weight*commission should be calculated and it
+// should be same as commission in uploaded sheet" — weight comes from OUR
+// sheet (not the debit note's own weight column), multiplied by OUR
+// commission RATE (col 15). "if in my excel,if commission is empty,use the
+// commission column in uploaded sheet" — when OUR rate is blank for that
+// order, fall back to the debit note's own Comm./MT rate instead so a
+// blank rate cell doesn't just silently produce no answer. Either way the
+// result is compared against the debit note's own stated Commission dollar
+// figure for that order — a discrepancy there is what she wants surfaced.
+const COMMISSION_TOLERANCE = 0.05; // absorbs cent-level rounding, not a real miss
+
+async function crossCheckPanMetalRecords(pdfRecords) {
+    const orderIndex = await buildSheetOrderIndex();
+
+    const matched = (pdfRecords || []).map((rec) => {
+        const orderNo = safeStr(rec.order_no).toUpperCase();
+        const stated = safeMoney(rec.commission);
+        if (!orderNo) {
+            return { ...rec, status: 'no_order_no_on_pdf', sheet: null, rate_used: null, rate_source: null, calculated: null, delta: null };
+        }
+        const sheetRow = orderIndex.get(orderNo);
+        if (!sheetRow) {
+            return { ...rec, status: 'not_in_sheet', sheet: null, rate_used: null, rate_source: null, calculated: null, delta: null };
+        }
+        if (sheetRow.weight == null) {
+            return { ...rec, status: 'sheet_weight_blank', sheet: sheetRow, rate_used: null, rate_source: null, calculated: null, delta: null };
+        }
+        // Fallback: our rate blank → use the debit note's own Comm./MT.
+        const pdfRate = safeMoney(rec.comm_per_mt);
+        const rateUsed = sheetRow.commission_rate != null ? sheetRow.commission_rate : pdfRate;
+        const rateSource = sheetRow.commission_rate != null ? 'sheet' : (pdfRate != null ? 'pdf_fallback' : null);
+        if (rateUsed == null) {
+            return { ...rec, status: 'no_rate_available', sheet: sheetRow, rate_used: null, rate_source: null, calculated: null, delta: null };
+        }
+        if (stated == null) {
+            return { ...rec, status: 'pdf_commission_unreadable', sheet: sheetRow, rate_used: rateUsed, rate_source: rateSource, calculated: null, delta: null };
+        }
+        const calculated = Math.round(sheetRow.weight * rateUsed * 100) / 100;
+        const delta = Math.round((stated - calculated) * 100) / 100;
+        return {
+            ...rec,
+            status: Math.abs(delta) <= COMMISSION_TOLERANCE ? 'match' : 'mismatch',
+            sheet: sheetRow,
+            rate_used: rateUsed,
+            rate_source: rateSource,
+            calculated,
+            delta,
+        };
+    });
+
+    return { matched };
+}
+
+module.exports = {
+    buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE,
+    buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
+};

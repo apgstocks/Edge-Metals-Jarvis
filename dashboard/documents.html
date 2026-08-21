@@ -464,7 +464,37 @@ body[data-theme="light"] {
         <div class="placeholder-note">Joey commission verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">The Invoice sheet's Commission columns are already mapped (helpers/invoiceSheet.js) — tell me what should be cross-checked against them and I'll build it.</span></div>
       </div>
       <div id="verifyPanelPanMetal" class="hidden">
-        <div class="placeholder-note">Pan Metal commission verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">The Invoice sheet's Commission columns are already mapped (helpers/invoiceSheet.js) — tell me what should be cross-checked against them and I'll build it.</span></div>
+        <div class="section-label" style="margin-top:0;">Upload Pan Metal commission debit note</div>
+        <label id="panMetalDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="panMetalPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">⇪</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="panMetalDropLabel">Drop Pan Metal commission debit note PDFs here — multiple files supported</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis reads each order's Order No., matches it against the Invoice sheet's Inv No. (the part after the last underscore), and checks weight × commission rate against the billed commission</div>
+          </div>
+        </label>
+        <div id="panMetalFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+        <div style="margin-top:14px;">
+          <button id="btnPanMetalVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+
+        <div id="panMetalLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the debit note and cross-checking against the Invoice sheet…
+        </div>
+
+        <div id="panMetalSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <div id="panMetalResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">Debit note orders vs. Invoice sheet</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="panMetalResultsTable">
+              <thead>
+                <tr><th>Order No.</th><th>Inv No.</th><th>Consignee</th><th>Weight (MT)</th><th>Rate Used</th><th>Calculated</th><th>Debit Note Commission</th><th>Difference</th><th>Status</th></tr>
+              </thead>
+              <tbody id="panMetalResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -780,6 +810,97 @@ $('btnZimexVerify').addEventListener('click', async () => {
   } finally {
     setButtonLoading(btn, false);
     $('zimexLoading').classList.add('hidden');
+  }
+});
+
+let panMetalFiles = []; // [{ name, base64 }]
+function renderPanMetalFileList() {
+  $('panMetalFileList').innerHTML = panMetalFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:11px; font-family:var(--font-mono); color:var(--text-body);">
+      📄 ${esc(f.name)}
+      <button type="button" class="panmetal-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('panMetalFileList').querySelectorAll('.panmetal-file-remove').forEach((el) => el.addEventListener('click', () => {
+    panMetalFiles.splice(Number(el.dataset.i), 1);
+    renderPanMetalFileList();
+  }));
+  $('panMetalDropLabel').textContent = panMetalFiles.length
+    ? `${panMetalFiles.length} file${panMetalFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop Pan Metal commission debit note PDFs here — multiple files supported';
+}
+function handlePanMetalFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      panMetalFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderPanMetalFileList();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+$('panMetalDropZone').addEventListener('click', () => $('panMetalPdfInput').click());
+$('panMetalPdfInput').addEventListener('change', () => { handlePanMetalFiles($('panMetalPdfInput').files); $('panMetalPdfInput').value = ''; });
+$('panMetalDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('panMetalDropZone').addEventListener('drop', (e) => { e.preventDefault(); handlePanMetalFiles(e.dataTransfer.files); });
+
+const PANMETAL_STATUS_BADGE = {
+  match: { label: 'Match', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  mismatch: { label: 'Mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_order_no_on_pdf: { label: 'No order no. read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  sheet_weight_blank: { label: 'Sheet weight blank', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  no_rate_available: { label: 'No rate available', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  pdf_commission_unreadable: { label: 'PDF commission unreadable', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function panMetalBadge(status) {
+  const b = PANMETAL_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+
+function renderPanMetalResults(result) {
+  const matched = result.matched || [];
+
+  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const summaryChips = [
+    { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
+    { key: 'not_in_sheet', label: 'Not on sheet' },
+  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  $('panMetalSummary').innerHTML = summaryChips;
+  $('panMetalSummary').classList.remove('hidden');
+
+  $('panMetalResultsBody').innerHTML = matched.map((r) => `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.order_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.sheet ? r.sheet.inv_no : '')}</td>
+      <td>${esc(r.sheet ? r.sheet.consignee : '')}</td>
+      <td>${r.sheet && r.sheet.weight != null ? r.sheet.weight : '—'}</td>
+      <td>${r.rate_used == null ? '—' : fmtMoney(r.rate_used) + (r.rate_source === 'pdf_fallback' ? ' (from PDF)' : '')}</td>
+      <td>${fmtMoney(r.calculated)}</td>
+      <td>${fmtMoney(r.commission)}</td>
+      <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
+      <td>${panMetalBadge(r.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No orders extracted.</td></tr>`;
+  $('panMetalResultsWrap').classList.remove('hidden');
+}
+
+$('btnPanMetalVerify').addEventListener('click', async () => {
+  if (!panMetalFiles.length) { alert('Drop at least one Pan Metal commission debit note PDF first.'); return; }
+  const btn = $('btnPanMetalVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('panMetalLoading').classList.remove('hidden');
+  $('panMetalSummary').classList.add('hidden');
+  $('panMetalResultsWrap').classList.add('hidden');
+  try {
+    const body = { pdfs: panMetalFiles };
+    const result = await api('/api/verify/panmetal', { method: 'POST', body: JSON.stringify(body) });
+    renderPanMetalResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('panMetalLoading').classList.add('hidden');
   }
 });
 

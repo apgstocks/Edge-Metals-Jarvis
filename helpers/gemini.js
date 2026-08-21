@@ -332,6 +332,77 @@ If the same HBL appears on multiple lines (e.g. separate freight + THC charges),
     if (lastErr) throw lastErr;
     return null;
 }
+
+// ── Multimodal: extract line items from a Commission Debit Note PDF ──────────
+// Used by the Verification tab's Commission → Pan Metal sub-tab. Per Apsara's
+// worked example (real file: "Comm. Debit Note Edge_260804.pdf" from Pan
+// Metal Co., Ltd): one PDF, one table, one row per order — Date, Order No.
+// (e.g. "26MT10"), Customer, Item, Weight, Actual Price, Invoice Price,
+// Comm./MT (the per-MT rate), Commission (the computed dollar amount),
+// Vessel Arrival, Payment Date. helpers/invoiceVerify.js's
+// crossCheckPanMetalRecords() is what actually recomputes weight×rate from
+// OUR OWN sheet and compares it against this PDF's stated Commission — this
+// function only extracts what's printed on the page.
+async function extractCommissionDebitNoteRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are a freight/commission billing expert. This PDF is a "Commission Debit Note" — a table billing commission on several orders, one row per order. Extract every row. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "records": [
+    {
+      "order_no": null,      // e.g. "26MT10" — the short order code, NOT a full invoice number
+      "date": null,          // MM/DD/YYYY
+      "customer": null,      // e.g. "HAEKWANG"
+      "item": null,          // e.g. "TENSE"
+      "weight": 0,           // in MT, as a plain number (e.g. 21.301) — strip the "MT" unit
+      "actual_price": 0,     // plain number, no $ or commas
+      "invoice_price": 0,    // plain number, no $ or commas
+      "comm_per_mt": 0,      // the "Comm./MT" or "Commission/MT" rate, plain number
+      "commission": 0,       // the billed commission dollar amount for this row, plain number
+      "vessel_arrival": null,  // MM/DD/YYYY if shown
+      "payment_date": null     // MM/DD/YYYY if shown
+    }
+  ],
+  "company": null,       // the billing company's name, e.g. "Pan Metal Co., Ltd"
+  "note_date": null,     // MM/DD/YYYY — the debit note's own date, usually near the bottom
+  "total_commission": 0  // the grand total commission shown at the bottom, if any, plain number
+}
+
+Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.records)) {
+                console.log(`[GEMINI] Commission debit note extraction: ${parsed.records.length} record(s), company=${parsed.company || '?'}`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Commission debit note extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Commission debit note extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
 // NOTE: callGeminiText() was removed here (2026-07-16 cleanup). It had been
 // declared TWICE in this file — once above returning a trimmed string, once
 // down here returning raw JSON text with its own separate GoogleGenerativeAI
@@ -3365,4 +3436,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords };
