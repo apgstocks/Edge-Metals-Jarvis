@@ -83,6 +83,28 @@ tr:last-child td { border-bottom:none; }
    all inputs on the same baseline whether or not a chip is showing. */
 .grid4 .field label { min-height:28px; display:flex; align-items:flex-start; flex-wrap:wrap; }
 .section-label { font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px; }
+/* Review & Generate's 3-column grouped layout (Invoice Details / Shipment
+   Details / Buyer + Vessel) — per Apsara's mockup, replacing the flat
+   grid4-row-after-grid4-row layout where fields weren't grouped by what
+   they mean. Each column is its own vertical stack, so a column with 4
+   short fields and a column with a tall textarea both look intentional
+   instead of the whole row stretching to match the tallest field. */
+.review-columns { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; align-items:start; }
+.review-columns .field { margin-bottom:10px; }
+@media (max-width:900px) { .review-columns { grid-template-columns:1fr; } }
+/* Unified Line Items & Packing Weights table — one row per item combining
+   both the sale fields (description/qty/rate/amount) and the packing-list
+   fields (gross/truck/tare/chassis/boxes/net lbs) that used to be a second
+   stacked row underneath. Horizontally scrollable on narrow screens rather
+   than compressing 11 columns unreadably. */
+.inv-line-table-wrap { overflow-x:auto; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); margin:10px 0; }
+.inv-line-table { width:100%; border-collapse:collapse; min-width:1080px; }
+.inv-line-table th { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); text-align:left; padding:8px 6px; background:var(--surface-sunken); border-bottom:1px solid var(--border-default); white-space:nowrap; }
+.inv-line-table td { padding:5px 6px; border-bottom:1px solid var(--border-subtle); vertical-align:middle; }
+.inv-line-table input { width:100%; min-width:70px; padding:6px 8px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:12px; font-family:inherit; }
+.inv-line-table input:focus { border-color:var(--accent); }
+.inv-line-table .inv-item-desc { min-width:150px; }
+.inv-line-table .inv-item-amount { color:var(--text-faint); }
 .pricing-chip { display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10px; color:var(--leaf-400); margin-left:8px; }
 .autocomplete-box { position:relative; }
 .autocomplete-list { position:absolute; top:100%; left:0; right:0; z-index:20; background:var(--surface-card); border:1px solid var(--border-default); border-top:none; max-height:220px; overflow-y:auto; }
@@ -151,16 +173,46 @@ body[data-theme="light"] {
           <div id="invBuyerList" class="autocomplete-list hidden"></div>
         </div>
         <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvStep1Next" type="button" class="btn btn-primary">Find containers</button></div>
+
+        <!-- Direct container-number search — the ONLY lookup her original
+             PythonAnywhere tool had (invoice_gen.py's --container flag).
+             Kept as a second path alongside the buyer-first flow above
+             rather than replacing it, per Apsara: "search by container
+             number" — for when she already knows the container ID and
+             doesn't want to type/pick a buyer first. -->
+        <div style="display:flex; align-items:center; gap:10px; margin:18px 0 10px;">
+          <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);">or</span>
+          <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+        </div>
+        <div class="field" style="max-width:420px;">
+          <label>Search by container #</label>
+          <input id="inv_container_search" placeholder="e.g. KOCU4877967" autocomplete="off">
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvContainerSearch" type="button" class="btn btn-primary">Find by container #</button></div>
       </div>
     </div>
 
     <div id="invStep2" class="card hidden" style="padding:20px 22px; margin-bottom:16px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Which shipment?</div>
+        <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Which shipment? <span style="font-weight:400; font-size:11px; color:var(--text-muted);">— pick one to review, or check several and generate them together</span></div>
         <button id="btnInvStep2Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
       </div>
       <div id="invContainerList" style="display:flex; flex-direction:column; gap:8px;"></div>
-      <div id="invContainerListEmpty" class="placeholder-note hidden">No containers found for this buyer in the Invoice sheet — check the name/spelling, or the shipment may not be logged there yet.</div>
+      <div id="invContainerListEmpty" class="placeholder-note hidden">No containers found — check the name/number/spelling, or the shipment may not be logged in the Invoice sheet yet.</div>
+
+      <!-- Multi-container batch generate — matches her original tool's
+           --all behavior (loop over containers, one PDF each, no per-field
+           review) rather than the single-container flow's "load into Step 3
+           and review every field first" — see loadInvoicePreview()/
+           generateInvoicePreviewPayload() below for why the two paths build
+           the PDF payload differently. Hidden until at least one checkbox
+           is ticked. -->
+      <div id="invBulkBar" class="hidden" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:10px 14px; margin-top:12px;">
+        <span id="invBulkCountLabel" style="font-size:12px; color:var(--text-muted);"></span>
+        <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Generate selected</button>
+      </div>
+      <div id="invBulkProgress" class="hidden" style="margin-top:10px; font-size:12px; color:var(--text-muted); white-space:pre-line;"></div>
     </div>
 
     <div id="invStep3" class="card hidden" style="padding:20px 22px;">
@@ -182,42 +234,59 @@ body[data-theme="light"] {
         </span>
       </div>
 
-      <div class="grid4">
-        <div class="field"><label>Invoice No</label><input id="inv_no"></div>
-        <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
-        <div class="field"><label>Reference #</label><input id="inv_reference"></div>
-        <div class="field"><label>Terms</label><input id="inv_terms"></div>
-      </div>
-      <div class="grid4">
-        <div class="field"><label>Container #</label><input id="inv_container"></div>
-        <div class="field"><label>Booking #</label><input id="inv_booking"></div>
-        <div class="field"><label>Seal #</label><input id="inv_seal"></div>
-        <div class="field"><label>HBL #</label><input id="inv_hbl"></div>
-      </div>
-      <div class="grid4">
-        <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
-        <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
-        <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
-        <div class="field"></div>
-      </div>
-      <!-- Vessel/Flight No and Country of Origin print directly on the PDF
-           (assets/invoice-classic/template.html's {{vessel}} and
-           {{country_of_origin}}) but had no input anywhere on this review
-           screen — there's no sheet column either, so they always came
-           through blank on the generated invoice with no way to fix that
-           before download. Apsara: "make this template in website
-           mimicking pythonanywhere Review & generate — every field below
-           is editable before you download" — every printed field needs a
-           box here, not just the ones the sheet happens to auto-fill. -->
-      <div class="grid4">
-        <div class="field"><label>Vessel / Flight No</label><input id="inv_vessel"></div>
-        <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
+      <!-- 3-column grouped layout, per Apsara's mockup: fields grouped by
+           what they mean (invoice paperwork / physical shipment / who it's
+           going to + how) instead of 4 unrelated fields per row in sheet
+           order. Vessel/Flight No and Country of Origin print directly on
+           the PDF (template.html's {{vessel}}/{{country_of_origin}}) but
+           have no sheet column — always blank until typed here, same as
+           before, just relocated into the Buyer + Vessel column. -->
+      <div class="review-columns">
+        <div>
+          <div class="section-label">Invoice Details</div>
+          <div class="field"><label>Invoice No</label><input id="inv_no"></div>
+          <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
+          <div class="field"><label>Reference #</label><input id="inv_reference"></div>
+          <div class="field"><label>Terms</label><input id="inv_terms"></div>
+        </div>
+        <div>
+          <div class="section-label">Shipment Details</div>
+          <div class="field"><label>Container #</label><input id="inv_container"></div>
+          <div class="field"><label>Booking #</label><input id="inv_booking"></div>
+          <div class="field"><label>Seal #</label><input id="inv_seal"></div>
+          <div class="field"><label>HBL #</label><input id="inv_hbl"></div>
+          <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
+          <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
+          <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
+          <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
+        </div>
+        <div>
+          <div class="section-label">Buyer + Vessel</div>
+          <div class="field"><label>Vessel / Flight No</label><input id="inv_vessel"></div>
+          <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
+            <textarea id="inv_consignee_address" rows="7" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
+        </div>
       </div>
 
-      <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
-        <textarea id="inv_consignee_address" rows="4" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
-
-      <div id="invItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin:14px 0;"></div>
+      <div class="section-label">Line Items &amp; Packing Weights — all cells editable</div>
+      <!-- The sheet auto-populates one row per material already logged for
+           this container (helpers/invoiceSheet.js's buildContainerInvoiceData
+           groups sheet rows by container number, same as her original
+           invoice_gen.py's group_rows_by_container). "+ Add Item" is for a
+           material that isn't in the sheet yet — same pattern as Proforma's
+           "+ Add material" button, just missing here until now. -->
+      <div class="inv-line-table-wrap">
+        <table class="inv-line-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Description</th><th>Qty MT</th><th>Rate</th><th>Amount</th>
+              <th>Gross lbs</th><th>Truck lbs</th><th>Tare lbs</th><th>Chassis lbs</th><th>Boxes lbs</th><th>Net lbs</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="invItemsEditor"></tbody>
+        </table>
+      </div>
+      <button id="btnInvAddItem" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px; margin:8px 0 4px;">+ Add Item</button>
 
       <!-- Invoice Notes — replaces the old single hardcoded Freight
            Deduction field. Each note is a labeled, signed adjustment row
@@ -1249,15 +1318,17 @@ function showInvStep(n) {
   $('invStep3').classList.toggle('hidden', n !== 3);
 }
 
-$('btnInvStep1Next').addEventListener('click', async () => {
-  const buyer = invSelectedBuyer || $('inv_buyer').value.trim();
-  if (!buyer) return;
-  const btn = $('btnInvStep1Next');
-  setButtonLoading(btn, true, 'Searching…');
-  try {
-    const { containers } = await api('/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer));
-    $('invContainerList').innerHTML = (containers || []).map((c, i) => `
-      <div class="autocomplete-item inv-container-pick" data-idx="${i}" style="cursor:pointer; padding:12px 14px; border:1px solid var(--border-default); border-radius:var(--radius-xs); display:flex; justify-content:space-between; align-items:center;">
+// Shared render for both search paths (buyer-first and direct
+// container-number search) — same row shape, same checkbox-for-batch
+// behavior either way. Clicking the row text loads it into the full
+// Step 3 review; the checkbox is only for the bulk-generate path below
+// and deliberately does NOT navigate anywhere, so ticking several boxes
+// doesn't fight with picking one to review.
+function renderInvContainerList(containers) {
+  $('invContainerList').innerHTML = (containers || []).map((c, i) => `
+    <div class="autocomplete-item inv-container-pick" data-idx="${i}" style="padding:12px 14px; border:1px solid var(--border-default); border-radius:var(--radius-xs); display:flex; align-items:center; gap:10px;">
+      <input type="checkbox" class="inv-container-check" data-idx="${i}" style="width:16px; height:16px; flex-shrink:0; cursor:pointer;">
+      <div style="flex:1; cursor:pointer; display:flex; justify-content:space-between; align-items:center;" class="inv-container-open" data-idx="${i}">
         <div>
           <div style="font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--text-strong);">${esc(c.container_no)}</div>
           <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(c.consignee)} &middot; ${c.item_count} item row${c.item_count === 1 ? '' : 's'}</div>
@@ -1266,37 +1337,147 @@ $('btnInvStep1Next').addEventListener('click', async () => {
           <div>${esc(c.inv_no || '—')}</div>
           <div>${esc(c.inv_date || '')}</div>
         </div>
-      </div>`).join('');
-    $('invContainerList').querySelectorAll('.inv-container-pick').forEach((el, i) => el.addEventListener('click', () => loadInvoicePreview(containers[i].container_no)));
-    $('invContainerListEmpty').classList.toggle('hidden', !!(containers || []).length);
-    showInvStep(2);
+      </div>
+    </div>`).join('');
+  $('invContainerList').querySelectorAll('.inv-container-open').forEach((el, i) => el.addEventListener('click', () => loadInvoicePreview(containers[i].container_no)));
+  $('invContainerList').querySelectorAll('.inv-container-check').forEach((el, i) => el.addEventListener('change', () => updateInvBulkBar(containers)));
+  $('invContainerListEmpty').classList.toggle('hidden', !!(containers || []).length);
+  updateInvBulkBar(containers);
+  showInvStep(2);
+}
+
+function updateInvBulkBar(containers) {
+  const checked = Array.from($('invContainerList').querySelectorAll('.inv-container-check:checked'));
+  const n = checked.length;
+  $('invBulkBar').classList.toggle('hidden', n === 0);
+  if (n > 0) $('invBulkCountLabel').textContent = `${n} container${n === 1 ? '' : 's'} selected`;
+  $('btnInvBulkGenerate').onclick = () => runInvBulkGenerate(checked.map((el) => containers[Number(el.dataset.idx)]));
+}
+
+$('btnInvStep1Next').addEventListener('click', async () => {
+  const buyer = invSelectedBuyer || $('inv_buyer').value.trim();
+  if (!buyer) return;
+  const btn = $('btnInvStep1Next');
+  setButtonLoading(btn, true, 'Searching…');
+  try {
+    const { containers } = await api('/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer));
+    renderInvContainerList(containers);
   } catch (e) {
     alert(e.message);
   } finally {
     setButtonLoading(btn, false);
   }
 });
+
+// Direct container-number search — the ONLY lookup her original
+// PythonAnywhere tool had. See helpers/invoiceSheet.js's
+// findContainersByNumber() / api.js's GET /api/invoice/by-container.
+$('btnInvContainerSearch').addEventListener('click', async () => {
+  const q = $('inv_container_search').value.trim();
+  if (!q) return;
+  const btn = $('btnInvContainerSearch');
+  setButtonLoading(btn, true, 'Searching…');
+  try {
+    const { containers } = await api('/api/invoice/by-container?q=' + encodeURIComponent(q));
+    renderInvContainerList(containers);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+$('inv_container_search').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvContainerSearch').click(); });
+
 $('btnInvStep2Back').addEventListener('click', () => showInvStep(1));
 $('btnInvStep3Back').addEventListener('click', () => showInvStep(2));
 
+// ── Bulk generate — matches her original tool's --all behavior: one PDF
+// per selected container, straight from the sheet's computed data, no
+// per-field manual review screen in between (that's what the single-
+// container Step 3 flow is for). Each container still goes through the
+// same generateInvoiceClassicPdf/saveInvoiceCopy/saveInvoiceVersion path
+// server-side as the reviewed single-container flow — this only skips
+// showing the editable form for each one before generating.
+function invoicePayloadFromPreviewData(data) {
+  const items = (data.line_items || []).map((item) => ({
+    item_desc: item.item_desc, weight: Number(item.weight) || 0, rate: Number(item.rate) || 0,
+    amount: Number(item.amount) || (Number(item.weight) || 0) * (Number(item.rate) || 0),
+    packing: item.packing || {},
+  }));
+  const subtotal = items.reduce((s, it) => s + it.amount, 0);
+  const notes = Number(data.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(data.freight) }] : [];
+  const notesTotal = notes.reduce((s, n) => s + n.amount, 0);
+
+  // Same address-book lookup loadInvoicePreview() uses for the reviewed
+  // single-container path — without it, a bulk-generated PDF's buyer block
+  // would print blank below the company name (the current live sheet has
+  // no address columns at all), which is exactly the kind of quality gap a
+  // real financial document can't skip just because there's no review step.
+  const consigneeTag = data.consignee || '';
+  const consigneeParts = consigneeTag.split('/').map((s) => s.trim()).filter(Boolean);
+  const searchTerm = (consigneeParts[consigneeParts.length - 1] || consigneeTag).toLowerCase();
+  const entries = searchTerm ? searchAddressBook(searchTerm) : [];
+  const match = entries.find((e) => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
+  const addressLines = match ? (match.raw || '').split('\n').map((l) => l.trim()).filter(Boolean) : (consigneeTag ? [consigneeTag] : []);
+
+  return {
+    inv_no: data.inv_no || '', inv_date: data.inv_date || '', reference: data.reference || '',
+    terms: data.terms || '', container_no: data.container_no || '', booking_no: data.booking_no || '',
+    seal_no: data.seal_no || '', hbl_no: data.hbl_no || '', place_of_receipt: data.place_of_receipt || '',
+    port_loading: data.port_loading || '', port_discharge: data.port_discharge || '',
+    vessel: data.vessel || '', country_of_origin: data.country_of_origin || 'USA',
+    consignee: consigneeTag, consignee_address: addressLines, proforma_date: data.proforma_date || '',
+    notes, subtotal, final_amount: subtotal + notesTotal, line_items: items,
+  };
+}
+async function runInvBulkGenerate(containers) {
+  if (!containers.length) return;
+  const btn = $('btnInvBulkGenerate');
+  setButtonLoading(btn, true, 'Generating…');
+  $('invBulkProgress').classList.remove('hidden');
+  const lines = containers.map((c) => `${c.container_no} — queued`);
+  $('invBulkProgress').textContent = lines.join('\n');
+  let okCount = 0;
+  for (let i = 0; i < containers.length; i++) {
+    const c = containers[i];
+    try {
+      const data = await api('/api/invoice/preview?container=' + encodeURIComponent(c.container_no));
+      const payload = invoicePayloadFromPreviewData(data);
+      const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+      if (result.saved_filename) await downloadSavedInvoice(result.saved_filename, c.container_no);
+      lines[i] = `${c.container_no} — ✓ generated`;
+      okCount++;
+    } catch (e) {
+      lines[i] = `${c.container_no} — ✗ ${e.message}`;
+    }
+    $('invBulkProgress').textContent = lines.join('\n');
+  }
+  setButtonLoading(btn, false);
+  lines.push(`Done — ${okCount}/${containers.length} generated.`);
+  $('invBulkProgress').textContent = lines.join('\n');
+}
+
+// Unified Line Items & Packing Weights row — one <tr> combining what used
+// to be two stacked rows (sale fields, then a separate packing-fields row
+// underneath) per Apsara's mockup. Same field set, same classes (so
+// wireInvItemRow/collectInvoicePayload/invItemsSubtotal don't need to know
+// this moved from <div> to <tr>), just laid out as real table cells.
 function invItemRowHtml(item, i) {
   const p = item.packing || {};
-  return `<div class="item-row inv-item-row" data-i="${i}" style="border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:10px 12px; display:flex; flex-direction:column; gap:6px;">
-    <div style="display:grid; grid-template-columns:2fr 1fr 1fr 1fr; gap:8px;">
-      <input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}">
-      <input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}">
-      <input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}">
-      <input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}" style="background:var(--surface-sunken); color:var(--text-faint);">
-    </div>
-    <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:6px;">
-      <input class="inv-p-gross" placeholder="gross lbs" value="${esc(p.gross_weight_lbs || '')}" style="font-size:11px;">
-      <input class="inv-p-truck" placeholder="truck lbs" value="${esc(p.truck_lbs || '')}" style="font-size:11px;">
-      <input class="inv-p-tare" placeholder="tare lbs" value="${esc(p.container_tare_lbs || '')}" style="font-size:11px;">
-      <input class="inv-p-chassis" placeholder="chassis lbs" value="${esc(p.chassis_lbs || '')}" style="font-size:11px;">
-      <input class="inv-p-boxes" placeholder="boxes lbs" value="${esc(p.boxes_weight_lbs || '')}" style="font-size:11px;">
-      <input class="inv-p-net" placeholder="net lbs" value="${esc(p.net_weight_lbs || '')}" style="font-size:11px;">
-    </div>
-  </div>`;
+  return `<tr class="inv-item-row" data-i="${i}">
+    <td>${i + 1}</td>
+    <td><input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}"></td>
+    <td><input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}"></td>
+    <td><input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}"></td>
+    <td><input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}"></td>
+    <td><input class="inv-p-gross" placeholder="gross lbs" value="${esc(p.gross_weight_lbs || '')}"></td>
+    <td><input class="inv-p-truck" placeholder="truck lbs" value="${esc(p.truck_lbs || '')}"></td>
+    <td><input class="inv-p-tare" placeholder="tare lbs" value="${esc(p.container_tare_lbs || '')}"></td>
+    <td><input class="inv-p-chassis" placeholder="chassis lbs" value="${esc(p.chassis_lbs || '')}"></td>
+    <td><input class="inv-p-boxes" placeholder="boxes lbs" value="${esc(p.boxes_weight_lbs || '')}"></td>
+    <td><input class="inv-p-net" placeholder="net lbs" value="${esc(p.net_weight_lbs || '')}"></td>
+    <td><button type="button" class="btn btn-secondary inv-item-remove" style="padding:4px 8px; font-size:10px;">Remove</button></td>
+  </tr>`;
 }
 function wireInvItemRow(row) {
   const recalc = () => {
@@ -1305,6 +1486,7 @@ function wireInvItemRow(row) {
     row.querySelector('.inv-item-amount').value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     recalcInvFinalAmount();
   };
+  row.querySelector('.inv-item-remove').addEventListener('click', () => { row.remove(); recalcInvFinalAmount(); });
   row.querySelector('.inv-item-weight').addEventListener('input', recalc);
   row.querySelector('.inv-item-rate').addEventListener('input', recalc);
 }
@@ -1352,6 +1534,15 @@ $('btnInvAddNote').addEventListener('click', () => {
   const i = $('invNotesEditor').querySelectorAll('.inv-note-row').length;
   $('invNotesEditor').insertAdjacentHTML('beforeend', invNoteRowHtml({ label: '', amount: '' }, i));
   wireInvNoteRow($('invNotesEditor').lastElementChild);
+});
+// A material not yet logged in the Invoice sheet for this container — same
+// gap Proforma's "+ Add material" already covers, just missing here until
+// now. New row starts blank; row numbers (#) are display-only and don't
+// need renumbering after a remove, since nothing downstream reads them.
+$('btnInvAddItem').addEventListener('click', () => {
+  const i = $('invItemsEditor').querySelectorAll('.inv-item-row').length;
+  $('invItemsEditor').insertAdjacentHTML('beforeend', invItemRowHtml({}, i));
+  wireInvItemRow($('invItemsEditor').lastElementChild);
 });
 
 // ── "Load previous edits" version-history banner ────────────────────────────

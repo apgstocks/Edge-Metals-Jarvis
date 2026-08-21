@@ -193,6 +193,44 @@ async function findContainersForBuyer(buyerQuery) {
     return out;
 }
 
+// Returns every distinct container whose Container No. loosely matches a
+// query, regardless of buyer — the "search by container number" path
+// Apsara's old PythonAnywhere tool used as its ONLY lookup (--container
+// flag, see invoice_gen.py's main()) before Jarvis added the buyer-first
+// flow above. Same summary shape as findContainersForBuyer so the UI can
+// reuse one render function for either search path.
+async function findContainersByNumber(containerQuery) {
+    const { headers, rows } = await fetchRawSheet();
+    const colMap = buildColumnMap(headers);
+    if (colMap.consignee === -1 || colMap.container_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected "Consignee" and "Container No." columns');
+    }
+    const query = safeStr(containerQuery).toUpperCase();
+    if (!query) return [];
+
+    const groups = new Map(); // container_no -> rows[]
+    for (const row of rows) {
+        const containerNo = safeStr(row[colMap.container_no]).toUpperCase();
+        if (!containerNo || !containerNo.includes(query)) continue;
+        if (!groups.has(containerNo)) groups.set(containerNo, []);
+        groups.get(containerNo).push(row);
+    }
+
+    const out = [];
+    for (const [containerNo, containerRows] of groups.entries()) {
+        const first = rowToDict(containerRows[0], colMap);
+        out.push({
+            container_no: containerNo,
+            consignee: first.consignee,
+            inv_no: first.inv_no,
+            inv_date: first.inv_date,
+            item_count: containerRows.length,
+        });
+    }
+    out.reverse(); // newest shipment first, same rationale as findContainersForBuyer
+    return out;
+}
+
 // Builds the full computed invoice/packing data for one container — mirrors
 // invoice_gen.py's rows_to_invoice_data() + resolve_item_desc() +
 // eval_freight(), minus the fields that don't have a matching real column
@@ -347,6 +385,7 @@ function findPackingRow(packingRows, itemDesc) {
 
 module.exports = {
     findContainersForBuyer,
+    findContainersByNumber,
     buildContainerInvoiceData,
     fetchPackingLookup,
     findPackingRow,

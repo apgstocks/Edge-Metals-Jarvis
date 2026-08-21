@@ -1621,6 +1621,21 @@ function createApi() {
         }
     });
 
+    // Search by container number directly — the ONLY lookup her original
+    // PythonAnywhere tool had (invoice_gen.py's --container flag), added
+    // back here as a second path alongside the buyer-first flow above, per
+    // Apsara: "search by container number". Same summary shape as
+    // by-buyer so the Step 2 pick-list renders identically either way.
+    app.get('/api/invoice/by-container', async (req, res) => {
+        try {
+            const containers = await invoiceSheet.findContainersByNumber(req.query.q || '');
+            res.json({ containers });
+        } catch (e) {
+            console.error('[invoice] by-container lookup failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Step 2: full computed preview for one chosen container — every field
     // editable client-side before generating, same "never send a real
     // invoice without a human look" principle the old Flask tool's
