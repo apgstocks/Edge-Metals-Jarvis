@@ -297,6 +297,22 @@ body[data-theme="light"] {
       </div>
       <button id="btnInvAddItem" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px; margin:8px 0 4px;">+ Add Item</button>
 
+      <!-- Manually combine a SECOND container's real sheet items into the
+           invoice she's already editing here — separate from the automatic
+           booking-based merge on Step 2 (that only fires when both
+           containers already share a Booking # on the sheet). Per Apsara:
+           "i want both of them to be generated in same invoice... append
+           the second container in item detail" — this covers the case
+           where she's already mid-edit on one container (adjusting Terms,
+           etc.) and just wants to pull a second container's real line
+           items into the SAME invoice, whether or not their booking #s
+           match. See appendContainerItemsToInvoice() below. -->
+      <div style="display:flex; align-items:center; gap:8px; margin:4px 0 4px; flex-wrap:wrap;">
+        <input id="inv_append_container" placeholder="container # to append (e.g. TCLU7789012)" autocomplete="off" style="max-width:260px; padding:6px 9px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:11px; font-family:inherit;">
+        <button id="btnInvAppendContainer" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">+ Append container's items</button>
+        <span id="invAppendMsg" style="font-size:11px; color:var(--text-muted);"></span>
+      </div>
+
       <!-- Invoice Notes — replaces the old single hardcoded Freight
            Deduction field. Each note is a labeled, signed adjustment row
            printed on the invoice merged through the Rate column (same
@@ -1572,6 +1588,54 @@ $('btnInvAddItem').addEventListener('click', () => {
   const i = $('invItemsEditor').querySelectorAll('.inv-item-row').length;
   $('invItemsEditor').insertAdjacentHTML('beforeend', invItemRowHtml({}, i));
   wireInvItemRow($('invItemsEditor').lastElementChild);
+});
+
+// Manually pulls a SECOND container's real sheet items into the invoice
+// already open here (Terms/Reference/etc. she's editing stay untouched) —
+// per Apsara: "i want both of them to be generated in same invoice...
+// append the second container in item detail". Deliberately independent
+// of the automatic booking-merge on Step 2, which only fires when both
+// containers already share a Booking # on the sheet — this covers any two
+// containers, matching booking or not, once she's already mid-edit.
+// Reuses normalizeInvItemsForForm() so each appended row carries ITS OWN
+// container_no/seal_no (falling back to the fetched container's own
+// header fields), same fallback helpers/invoicePdf.js's renderer expects.
+$('btnInvAppendContainer').addEventListener('click', async () => {
+  const containerNo = $('inv_append_container').value.trim();
+  if (!containerNo) return;
+  const btn = $('btnInvAppendContainer');
+  setButtonLoading(btn, true, 'Adding…');
+  $('invAppendMsg').textContent = '';
+  try {
+    const data = await api('/api/invoice/preview?container=' + encodeURIComponent(containerNo));
+    const items = normalizeInvItemsForForm(data);
+    if (!items.length) {
+      $('invAppendMsg').textContent = `${containerNo}: no line items found on the sheet.`;
+      return;
+    }
+    let i = $('invItemsEditor').querySelectorAll('.inv-item-row').length;
+    for (const item of items) {
+      $('invItemsEditor').insertAdjacentHTML('beforeend', invItemRowHtml(item, i++));
+      wireInvItemRow($('invItemsEditor').lastElementChild);
+    }
+    recalcInvFinalAmount();
+
+    // Reflect the combined shipment in the header Container # field, same
+    // '+'-joined convention the automatic booking-merge uses (see
+    // helpers/invoiceSheet.js's buildMultiContainerInvoiceData) — so the
+    // saved PDF filename/version-history key and the printed header both
+    // cover both containers, not just the one Step 3 started on.
+    const existing = $('inv_container').value.split('+').map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (!existing.includes(containerNo.toUpperCase())) existing.push(containerNo.toUpperCase());
+    $('inv_container').value = existing.join('+');
+
+    $('inv_append_container').value = '';
+    $('invAppendMsg').textContent = `✓ Added ${items.length} item${items.length === 1 ? '' : 's'} from ${containerNo}.`;
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
 });
 
 // ── "Load previous edits" version-history banner ────────────────────────────
