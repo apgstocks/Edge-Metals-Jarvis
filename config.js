@@ -44,6 +44,13 @@ const FILES = {
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
     TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),
+    // Review & Generate screen's edit-state history, per container — NOT
+    // the saved PDF archive (see helpers/documentsSaved.js for that, a
+    // different thing: the finished file vs. the form fields that produced
+    // it). Added per Apsara's "Load previous edits" mockup — every real
+    // Generate & Download saves the full form state here so a returning
+    // visit to the same container can restore it instead of starting blank.
+    INVOICE_VERSIONS_FILE: path.join(DATA_DIR, 'invoice_versions.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
     MEMORY_EMBEDDINGS_FILE: path.join(MEMORY_DIR, 'embeddings.json'),

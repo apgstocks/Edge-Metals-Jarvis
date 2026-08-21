@@ -86,11 +86,35 @@ function itemLabel(itemDesc, invNo) {
     return '';
 }
 
+// Normalizes whatever the client sent into a flat [{label, amount}, ...]
+// list. Apsara's redesign ("Invoice Notes" — replaces the old dedicated
+// Freight Deduction field) lets her add arbitrary labeled adjustment rows,
+// each signed: negative deducts from the total, positive adds to it (her
+// own words on the mockup). Freight and EFS are no longer special-cased
+// fields — they're just the first couple of notes, still shown as friendly
+// labeled inputs in the UI, but structurally identical to any other note.
+//
+// Backward compatible with the OLD single-freight payload shape
+// (data.freight, a positive number meaning "deduct this much") for any
+// already-saved version-history entries or in-flight requests from a
+// not-yet-updated client — synthesized into one negative-amount note so old
+// and new payloads render identically.
+function normalizeNotes(data) {
+    if (Array.isArray(data.notes)) {
+        return data.notes
+            .map((n) => ({ label: String((n && n.label) || '').trim(), amount: Number(n && n.amount) || 0 }))
+            .filter((n) => n.label && n.amount !== 0);
+    }
+    const legacyFreight = Number(data.freight) || 0;
+    return legacyFreight > 0 ? [{ label: 'Less: Freight Charges', amount: -legacyFreight }] : [];
+}
+
 function buildInvoiceClassicHtml(data) {
     const lineItems = data.line_items || [];
     const subtotal = data.subtotal != null ? Number(data.subtotal) : lineItems.reduce((s, it) => s + (Number(it.amount) || 0), 0);
-    const freight = Number(data.freight) || 0;
-    const finalAmount = data.final_amount != null ? Number(data.final_amount) : subtotal - freight;
+    const notes = normalizeNotes(data);
+    const notesTotal = notes.reduce((s, n) => s + n.amount, 0);
+    const finalAmount = data.final_amount != null ? Number(data.final_amount) : subtotal + notesTotal;
 
     // Item table — S.No / Booking# / Container# / Seal# / Description /
     // Quantity MT / Rate US$/MT / Amount US$. Booking/Container/Seal are the
@@ -134,29 +158,22 @@ function buildInvoiceClassicHtml(data) {
         </tr>`;
     });
 
-    // Freight is a DEDUCTION off the buyer's invoice total (matches
-    // invoice_gen.py's behavior — freight the buyer already paid/arranged
-    // gets subtracted, not added). Only rendered when a freight figure was
-    // actually found on the sheet for this container.
-    let freightRowHtml = '';
-    if (freight > 0) {
-        // Label cell's own colspan now extends through Rate (7 columns:
-        // S.No/Booking/Container/Seal/Description/Quantity/Rate) instead
-        // of stopping at Description and leaving a separate blank Qty+Rate
-        // cell next to it — one real merged cell, not label-cell-plus-an-
-        // empty-spacer-cell. Only Amount stays a separate column. Apsara:
-        // "no till rate only merge" — merge through Rate only, not a
-        // second blank cell after the label.
-        freightRowHtml = `        <tr style="height:8mm;">
-          <td colspan="7" style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;font-style:italic;">Less: Freight Charges</td>
-          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">-${formatMoney2(freight)}</td>
+    // One merged-through-Rate italic row per note (same visual pattern the
+    // old single hardcoded freight row used — label cell's own colspan
+    // extends through Rate, 7 columns: S.No/Booking/Container/Seal/
+    // Description/Quantity/Rate, only Amount stays a separate column.
+    // Apsara: "no till rate only merge" — merge through Rate only, not a
+    // second blank cell after the label). A negative amount prints with its
+    // sign and reads as a deduction; a positive amount prints with a "+"
+    // so it's visually obvious it's adding to the total, not a stray
+    // positive line item.
+    const notesRowsHtml = notes.map((n) => {
+        const sign = n.amount < 0 ? '-' : '+';
+        return `        <tr style="height:8mm;">
+          <td colspan="7" style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;font-style:italic;">${escapeHtml(n.label)}</td>
+          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${sign}${formatMoney2(Math.abs(n.amount))}</td>
         </tr>`;
-    }
-    // No real EFS column exists on the live sheet (checked directly — see
-    // helpers/invoiceSheet.js's header comment), so this stays blank rather
-    // than guessed. Left as an explicit token so a real EFS source can be
-    // wired in later without touching the template again.
-    const efsRowHtml = '';
+    }).join('\n');
 
     const addr = data.consignee_address || [];
     const buyerName = addr.length ? addr[0] : (data.consignee || '');
@@ -206,8 +223,7 @@ function buildInvoiceClassicHtml(data) {
         port_loading: escapeHtml(data.port_loading || ''),
         port_discharge: escapeHtml(data.port_discharge || ''),
         item_rows: itemRowsHtml.join('\n'),
-        freight_row: freightRowHtml,
-        efs_row: efsRowHtml,
+        notes_rows: notesRowsHtml,
         final_amount_fmt: formatMoney2(finalAmount),
         packing_rows: packingRowsHtml.join('\n'),
         total_net_lbs_fmt: formatInt(totalNetLbs),
@@ -216,7 +232,7 @@ function buildInvoiceClassicHtml(data) {
     for (const [key, val] of Object.entries(subs)) {
         html = html.split(`{{${key}}}`).join(val);
     }
-    return { html, subtotal, freight, finalAmount };
+    return { html, subtotal, notes, finalAmount };
 }
 
 async function generateInvoiceClassicPdf(data, opts = {}) {

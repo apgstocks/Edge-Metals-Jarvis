@@ -169,6 +169,19 @@ body[data-theme="light"] {
         <button id="btnInvStep3Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
       </div>
 
+      <!-- "You last generated this container on [date] — N versions saved"
+           banner, backed by the REAL GET /api/invoice/versions endpoint
+           (helpers/invoiceVersions.js) — not just a visual mockup. Hidden
+           by default; loadInvoicePreview() shows it only when this
+           container has at least one prior real (non-preview) generate. -->
+      <div id="invVersionBanner" class="hidden" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#fff7ed; border:1px solid #fdba74; border-radius:8px; padding:9px 14px; margin-bottom:14px; font-size:12px; color:#7c2d12;">
+        <span id="invVersionBannerText"></span>
+        <span style="display:flex; gap:8px; flex-shrink:0;">
+          <button id="btnInvVersionLoad" type="button" class="btn btn-secondary" style="padding:4px 9px; font-size:10px;">Load previous edits</button>
+          <button id="btnInvVersionDismiss" type="button" class="btn btn-secondary" style="padding:4px 9px; font-size:10px;">Dismiss</button>
+        </span>
+      </div>
+
       <div class="grid4">
         <div class="field"><label>Invoice No</label><input id="inv_no"></div>
         <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
@@ -185,7 +198,7 @@ body[data-theme="light"] {
         <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
         <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
         <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
-        <div class="field"><label>Freight Deduction</label><input id="inv_freight" type="number" step="any"></div>
+        <div class="field"></div>
       </div>
       <!-- Vessel/Flight No and Country of Origin print directly on the PDF
            (assets/invoice-classic/template.html's {{vessel}} and
@@ -205,6 +218,20 @@ body[data-theme="light"] {
         <textarea id="inv_consignee_address" rows="4" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
 
       <div id="invItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin:14px 0;"></div>
+
+      <!-- Invoice Notes — replaces the old single hardcoded Freight
+           Deduction field. Each note is a labeled, signed adjustment row
+           printed on the invoice merged through the Rate column (same
+           style the freight row always used) — negative amount deducts
+           from the total, positive amount adds to it. Freight and EFS are
+           no longer special fields; they're just the first two notes by
+           default so the common case still looks like simple labeled
+           inputs. See helpers/invoicePdf.js's normalizeNotes(). -->
+      <div style="font-size:12px; font-weight:700; color:var(--text-strong); margin:14px 0 4px;">Invoice Notes <span style="font-weight:400; color:var(--text-muted); font-size:11px;">— extra rows on the invoice table · negative amount deducts from total, positive adds</span></div>
+      <div id="invNotesEditor" style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>
+      <button id="btnInvAddNote" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px; margin-bottom:10px;">+ Add Note</button>
+
+      <div style="text-align:right; font-size:13px; color:var(--text-strong); margin-bottom:6px;">Final Amount: <strong id="invFinalAmountDisplay">$0.00</strong></div>
 
       <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
         <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
@@ -773,9 +800,17 @@ function wireItemRow(row) {
   });
   row.querySelector('.item-desc').addEventListener('blur', () => {
     tryFillItemRate(row);
-    // Backfills the item-code segment into this container's code and the
-    // top Invoice No if either was auto-filled before this item's material
-    // was known — see retrofitContainerItemCode()/retrofitInvNoItemCode().
+  });
+  // Backfills the item-code segment into this container's code and the top
+  // Invoice No the moment enough of the material name is typed to match a
+  // rule — was blur-only (only fired after clicking to another field), so
+  // watching the screen right after typing looked broken even when the
+  // retrofit itself was working correctly; this is confirmed correct in
+  // isolation (deriveItemCode('autocast') -> 'AC'). 'input' fires on every
+  // keystroke, so the code segment appears live instead of waiting for a
+  // blur that may not have been the actual problem. See
+  // retrofitContainerItemCode()/retrofitInvNoItemCode() above.
+  row.querySelector('.item-desc').addEventListener('input', () => {
     retrofitContainerItemCode(row.closest('.container-block'));
     retrofitInvNoItemCode();
   });
@@ -1268,9 +1303,112 @@ function wireInvItemRow(row) {
     const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
     const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
     row.querySelector('.inv-item-amount').value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    recalcInvFinalAmount();
   };
   row.querySelector('.inv-item-weight').addEventListener('input', recalc);
   row.querySelector('.inv-item-rate').addEventListener('input', recalc);
+}
+
+// ── Invoice Notes editor (replaces the old single Freight Deduction field) ──
+// Each note is {label, amount} — amount signed: negative deducts from the
+// invoice total, positive adds to it. Rendered client-side identically to
+// how helpers/invoicePdf.js's normalizeNotes()/notesRowsHtml render them
+// server-side, so what she sees here matches the PDF.
+function invNoteRowHtml(note, i) {
+  return `<div class="inv-note-row" data-i="${i}" style="display:grid; grid-template-columns:2fr 1fr auto; gap:8px; align-items:center;">
+    <input class="inv-note-label" placeholder="label (e.g. Freight Deduction, EFS Fee)" value="${esc((note && note.label) || '')}">
+    <input class="inv-note-amount" type="number" step="any" placeholder="amount (+/-)" value="${note && note.amount != null ? note.amount : ''}">
+    <button type="button" class="btn btn-secondary inv-note-remove" style="padding:4px 8px; font-size:10px;">Remove</button>
+  </div>`;
+}
+function wireInvNoteRow(row) {
+  row.querySelector('.inv-note-amount').addEventListener('input', recalcInvFinalAmount);
+  row.querySelector('.inv-note-remove').addEventListener('click', () => { row.remove(); recalcInvFinalAmount(); });
+}
+function renderInvoiceNotes(notes) {
+  $('invNotesEditor').innerHTML = (notes || []).map(invNoteRowHtml).join('');
+  $('invNotesEditor').querySelectorAll('.inv-note-row').forEach(wireInvNoteRow);
+  recalcInvFinalAmount();
+}
+function collectInvoiceNotes() {
+  return Array.from($('invNotesEditor').querySelectorAll('.inv-note-row')).map((row) => ({
+    label: row.querySelector('.inv-note-label').value.trim(),
+    amount: parseFloat(row.querySelector('.inv-note-amount').value) || 0,
+  })).filter((n) => n.label && n.amount !== 0);
+}
+function invItemsSubtotal() {
+  return Array.from($('invItemsEditor').querySelectorAll('.inv-item-row')).reduce((s, row) => {
+    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
+    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    return s + weight * rate;
+  }, 0);
+}
+function recalcInvFinalAmount() {
+  const subtotal = invItemsSubtotal();
+  const notesTotal = collectInvoiceNotes().reduce((s, n) => s + n.amount, 0);
+  $('invFinalAmountDisplay').textContent = '$' + (subtotal + notesTotal).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+$('btnInvAddNote').addEventListener('click', () => {
+  const i = $('invNotesEditor').querySelectorAll('.inv-note-row').length;
+  $('invNotesEditor').insertAdjacentHTML('beforeend', invNoteRowHtml({ label: '', amount: '' }, i));
+  wireInvNoteRow($('invNotesEditor').lastElementChild);
+});
+
+// ── "Load previous edits" version-history banner ────────────────────────────
+let invVersionLatest = null; // full payload of the most recent real generate for the currently loaded container, or null
+async function refreshInvVersionBanner(containerNo) {
+  $('invVersionBanner').classList.add('hidden');
+  invVersionLatest = null;
+  if (!containerNo) return;
+  try {
+    const summary = await api('/api/invoice/versions?container=' + encodeURIComponent(containerNo));
+    if (!summary || !summary.count) return;
+    invVersionLatest = summary.latest;
+    const when = summary.saved_at ? new Date(summary.saved_at).toLocaleString() : 'previously';
+    $('invVersionBannerText').textContent = `You last generated this container on ${when} — ${summary.count} version${summary.count === 1 ? '' : 's'} saved.`;
+    $('invVersionBanner').classList.remove('hidden');
+  } catch (e) {
+    // Version history is a convenience, not load-bearing — a lookup failure
+    // (e.g. brand-new container) should never block the review screen.
+  }
+}
+$('btnInvVersionDismiss').addEventListener('click', () => $('invVersionBanner').classList.add('hidden'));
+$('btnInvVersionLoad').addEventListener('click', () => {
+  if (!invVersionLatest) return;
+  applyInvoiceDataToForm(invVersionLatest);
+  $('invVersionBanner').classList.add('hidden');
+});
+
+// Pours a full invoice payload (either a fresh /api/invoice/preview response
+// or a saved version-history payload — same shape) into every field on the
+// review screen. Factored out of loadInvoicePreview() so "Load previous
+// edits" can reuse it without re-fetching from the sheet.
+function applyInvoiceDataToForm(data) {
+  $('inv_no').value = data.inv_no || '';
+  $('inv_date').value = data.inv_date || '';
+  $('inv_reference').value = data.reference || '';
+  $('inv_terms').value = data.terms || '';
+  $('inv_container').value = data.container_no || '';
+  $('inv_booking').value = data.booking_no || '';
+  $('inv_seal').value = data.seal_no || '';
+  $('inv_hbl').value = data.hbl_no || '';
+  $('inv_receipt').value = data.place_of_receipt || '';
+  $('inv_pol').value = data.port_loading || '';
+  $('inv_pod').value = data.port_discharge || '';
+  $('inv_vessel').value = data.vessel || '';
+  $('inv_country_of_origin').value = data.country_of_origin || 'USA';
+  $('inv_consignee_address').value = (data.consignee_address || []).join('\n');
+
+  $('invItemsEditor').innerHTML = (data.line_items || []).map(invItemRowHtml).join('');
+  $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
+
+  // Legacy single-freight payloads (older sheet data / older saved
+  // versions) become one note; the new client always sends data.notes
+  // directly — see helpers/invoicePdf.js's normalizeNotes() for the same
+  // fallback applied server-side.
+  const notes = Array.isArray(data.notes) ? data.notes
+    : (Number(data.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(data.freight) }] : []);
+  renderInvoiceNotes(notes);
 }
 
 async function loadInvoicePreview(containerNo) {
@@ -1288,11 +1426,16 @@ async function loadInvoicePreview(containerNo) {
     $('inv_receipt').value = data.place_of_receipt || '';
     $('inv_pol').value = data.port_loading || '';
     $('inv_pod').value = data.port_discharge || '';
-    $('inv_freight').value = data.freight || '';
+    // Fresh sheet data only ever carries the old single freight number
+    // (there's no notes column on the sheet) — one starter note, same as
+    // the PDF side's legacy fallback. "+Add Note" covers EFS/anything else.
+    renderInvoiceNotes(Number(data.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(data.freight) }] : []);
     // No sheet column backs either of these (see comment above the fields)
     // — always starts blank/default, purely manual entry before download.
     $('inv_vessel').value = data.vessel || '';
     $('inv_country_of_origin').value = data.country_of_origin || 'USA';
+
+    refreshInvVersionBanner(data.container_no || containerNo);
 
     // Buyer address — same address-book lookup Proforma uses, keyed off the
     // sheet's own Consignee text for this container so it's pre-filled
@@ -1311,6 +1454,7 @@ async function loadInvoicePreview(containerNo) {
 
     $('invItemsEditor').innerHTML = (data.line_items || []).map(invItemRowHtml).join('');
     $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
+    recalcInvFinalAmount();
 
     $('invSuccessMsg').textContent = '';
     showInvStep(3);
@@ -1339,7 +1483,8 @@ function collectInvoicePayload() {
   }).filter((it) => it.item_desc);
 
   const subtotal = items.reduce((s, it) => s + it.amount, 0);
-  const freight = parseFloat($('inv_freight').value) || 0;
+  const notes = collectInvoiceNotes();
+  const notesTotal = notes.reduce((s, n) => s + n.amount, 0);
 
   return {
     inv_no: $('inv_no').value.trim(),
@@ -1358,9 +1503,9 @@ function collectInvoicePayload() {
     consignee: (invCurrentData && invCurrentData.consignee) || '',
     consignee_address: $('inv_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
     proforma_date: (invCurrentData && invCurrentData.proforma_date) || '',
-    freight,
+    notes,
     subtotal,
-    final_amount: subtotal - freight,
+    final_amount: subtotal + notesTotal,
     line_items: items,
   };
 }
