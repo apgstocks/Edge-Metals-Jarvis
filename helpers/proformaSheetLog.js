@@ -258,6 +258,30 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
     }
 }
 
+// A deliberate, narrow exception to ensureTab's "never touch an existing
+// header cell" rule above — for the rare case a column needs relabeling
+// in place, not just a new trailing column appended. Per Apsara's AJ
+// Transport column list ("...Rate, Line Haul, Others, Dry Run, Extra
+// Scale, Total amount"): the column that used to say "Amount" is now
+// "Line Haul" — same column, same underlying figures, purely a label
+// change, so unlike inserting/reordering a column this can't misalign any
+// row already logged under it. Still guarded: only fires if the cell
+// currently holds EXACTLY `expectedOldLabel` — if it holds anything else
+// (already renamed, or something unexpected), it's left untouched and
+// `renamed: false` comes back so the caller can decide whether that's
+// worth surfacing, rather than this silently overwriting a cell that
+// might not be what the caller assumed it was.
+async function renameHeaderCellIfMatches(sheets, spreadsheetId, tabName, colLetter, expectedOldLabel, newLabel) {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!${colLetter}1` });
+    const current = (res.data.values && res.data.values[0] && res.data.values[0][0]) || '';
+    if (current !== expectedOldLabel) return { renamed: false, current };
+    await sheets.spreadsheets.values.update({
+        spreadsheetId, range: `${tabName}!${colLetter}1`, valueInputOption: 'RAW',
+        requestBody: { values: [[newLabel]] },
+    });
+    return { renamed: true, current: newLabel };
+}
+
 // Shared by the verification-log modules (Pan Metal, Jio, Sher, AJ
 // Transport) — NOT used by Proforma logging above, which has its own
 // deliberately different dedupe rule (bump a colliding Inv No. to a new
@@ -465,5 +489,5 @@ async function logProformaToSheet(body) {
 
 module.exports = {
     logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
-    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey,
+    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches,
 };

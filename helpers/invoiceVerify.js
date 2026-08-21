@@ -489,9 +489,18 @@ async function crossCheckAjTransportRecords(pdfRecords) {
         const dryRunCharge = safeMoney(rec.dry_run_charge) || 0;
         const extraScaleCharge = safeMoney(rec.extra_scale_charge) || 0;
         const otherCharge = safeMoney(rec.other_charge) || 0;
+        // "Line Haul" is this container's own AMOUNT column value straight off
+        // the invoice (same figure the sheet used to just call "Amount") —
+        // per Apsara's column list, "Total amount" is the actual grand total
+        // owed for this container once every attributed charge is folded in:
+        // Line Haul + Others + Dry Run + Extra Scale. Computed here, not
+        // extracted, since no single field on the invoice states this sum.
+        const lineHaul = safeMoney(rec.amount) || 0;
+        const totalAmount = lineHaul + otherCharge + dryRunCharge + extraScaleCharge;
         const base = {
             ...rec, container_no: containerNo, booking_no: bookingNo,
             dry_run_charge: dryRunCharge, extra_scale_charge: extraScaleCharge, other_charge: otherCharge,
+            total_amount: totalAmount,
         };
         if (!containerNo) {
             return { ...base, status: 'no_container_on_pdf', sheet: null };

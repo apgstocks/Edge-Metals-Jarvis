@@ -469,7 +469,7 @@ body[data-theme="light"] {
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="ajResultsTable">
               <thead>
-                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Dry Run</th><th>Extra Scale</th><th>Others</th><th>Status</th></tr>
+                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Line Haul</th><th>Others</th><th>Dry Run</th><th>Extra Scale</th><th>Total amount</th><th>Status</th></tr>
               </thead>
               <tbody id="ajResultsBody"></tbody>
             </table>
@@ -1342,11 +1342,12 @@ function renderAjResults(result) {
       <td>${esc(r.pickup_date || '')}</td>
       <td>${fmtMoney(r.rate)}</td>
       <td>${fmtMoney(r.amount)}</td>
+      <td>${r.other_charge ? fmtMoney(r.other_charge) : '—'}</td>
       <td>${r.dry_run_charge ? fmtMoney(r.dry_run_charge) : '—'}</td>
       <td>${r.extra_scale_charge ? fmtMoney(r.extra_scale_charge) : '—'}</td>
-      <td>${r.other_charge ? fmtMoney(r.other_charge) : '—'}</td>
+      <td>${fmtMoney(r.total_amount)}</td>
       <td>${ajBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="12" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="13" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
   $('ajResultsWrap').classList.remove('hidden');
 }
 

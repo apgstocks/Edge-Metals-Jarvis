@@ -34,12 +34,20 @@
 // hasn't been seen on a real invoice yet still lands somewhere instead of
 // silently vanishing the way DRY RUN CHARGE/EXTRA SCALE did before.
 
-const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
+const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches } = require('./proformaSheetLog');
 
 const TAB_NAME = 'AJ Transport';
+// Per Apsara's column list ("...Rate, Line Haul, Others, Dry Run, Extra
+// Scale, Total amount. others should come before total amount"): column H
+// ("Amount") is relabeled "Line Haul" in place (same figures, see
+// renameHeaderCellIfMatches call below — never touches a header cell that
+// doesn't already say exactly "Amount"), and "Total amount" is appended as
+// a brand new trailing column — Line Haul + Others + Dry Run + Extra
+// Scale, computed in invoiceVerify.js's crossCheckAjTransportRecords since
+// no single field on the invoice states this sum outright.
 const HEADER_ROW = [
-    'Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Amount',
-    'Others', 'Dry Run', 'Extra Scale',
+    'Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Line Haul',
+    'Others', 'Dry Run', 'Extra Scale', 'Total amount',
 ];
 
 function safeNum(n) {
@@ -65,6 +73,7 @@ async function logAjTransportVerification(matchedRows) {
                 safeNum(r.other_charge),
                 safeNum(r.dry_run_charge),
                 safeNum(r.extra_scale_charge),
+                safeNum(r.total_amount),
             ],
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row
@@ -74,6 +83,10 @@ async function logAjTransportVerification(matchedRows) {
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
+    // Runs AFTER ensureTab so the tab/header definitely exists first; a
+    // no-op every time after the first successful rename since the cell no
+    // longer says "Amount" afterward.
+    await renameHeaderCellIfMatches(sheets, spreadsheetId, TAB_NAME, 'H', 'Amount', 'Line Haul');
 
     const candidates = candidateRows.map((c) => ({ key: c.container, row: c.row }));
     const { logged, updated } = await upsertRowsByKey(
