@@ -35,7 +35,7 @@
 //                  (the figure being verified).
 //   Verified On <- today's server date, when this verification ran.
 
-const { getOrCreateSpreadsheetId, getSheets, ensureTab } = require('./proformaSheetLog');
+const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
 
 const TAB_NAME = 'Pan metal';
 const HEADER_ROW = ['Inv No.', 'Weight', 'Comm/MT', 'Commission', 'Verified On'];
@@ -47,14 +47,6 @@ function todayStr() {
 
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
-}
-
-// Reads every existing "Inv No." (column A) already in the Pan metal tab —
-// per Apsara: "no duplicate on invoice no."
-async function getExistingInvNos(sheets, spreadsheetId) {
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!A2:A` });
-    const values = res.data.values || [];
-    return new Set(values.map((r) => (r[0] || '').trim()).filter(Boolean));
 }
 
 // matchedRows: the `matched` array crossCheckPanMetalRecords() returns —
@@ -87,29 +79,19 @@ async function logPanMetalVerification(matchedRows) {
             };
         }).filter((c) => c.invNo); // nothing to key a dedupe check on without an Inv No. — skip rather than log a blank row
 
-    if (!candidateRows.length) return { logged: 0, skipped_duplicates: 0 };
+    if (!candidateRows.length) return { logged: 0, updated: 0 };
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 
-    const existing = await getExistingInvNos(sheets, spreadsheetId);
-    const rows = [];
-    let skipped = 0;
-    for (const c of candidateRows) {
-        if (existing.has(c.invNo)) { skipped++; continue; }
-        rows.push(c.row);
-        existing.add(c.invNo); // also guards against duplicates WITHIN this same batch (e.g. same order appearing twice on one PDF)
-    }
-
-    if (!rows.length) return { logged: 0, skipped_duplicates: skipped, spreadsheetId };
-
-    await sheets.spreadsheets.values.append({
-        spreadsheetId, range: `${TAB_NAME}!A:A`,
-        valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: rows },
-    });
-    return { logged: rows.length, skipped_duplicates: skipped, spreadsheetId };
+    // Per Apsara: "when we rerun verification,why it is rows/columns not
+    // getting updated?" — an Inv No. already on the sheet now gets that
+    // row overwritten with the latest figures, instead of silently
+    // skipped forever. Inv No. is column A here.
+    const candidates = candidateRows.map((c) => ({ key: c.invNo, row: c.row }));
+    const { logged, updated } = await upsertRowsByKey(sheets, spreadsheetId, TAB_NAME, 'A', candidates);
+    return { logged, updated, spreadsheetId };
 }
 
 module.exports = { logPanMetalVerification, TAB_NAME, HEADER_ROW };

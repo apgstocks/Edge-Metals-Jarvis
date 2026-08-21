@@ -469,7 +469,7 @@ body[data-theme="light"] {
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="ajResultsTable">
               <thead>
-                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Others</th><th>Status</th></tr>
+                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Dry Run</th><th>Extra Scale</th><th>Others</th><th>Status</th></tr>
               </thead>
               <tbody id="ajResultsBody"></tbody>
             </table>
@@ -1016,7 +1016,7 @@ function renderPanMetalResults(result) {
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
-    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Pan metal" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Pan metal" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong> new${log.updated ? `, <strong style="color:var(--text-strong);">${log.updated}</strong> updated` : ''}</span>`;
   $('panMetalSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('panMetalSummary').classList.remove('hidden');
 
@@ -1122,7 +1122,7 @@ function renderJioResults(result) {
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
-    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Jio" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Jio" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong> new${log.updated ? `, <strong style="color:var(--text-strong);">${log.updated}</strong> updated` : ''}</span>`;
   $('jioSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('jioSummary').classList.remove('hidden');
 
@@ -1226,7 +1226,7 @@ function renderSherResults(result) {
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
-    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Sher" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Sher" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong> new${log.updated ? `, <strong style="color:var(--text-strong);">${log.updated}</strong> updated` : ''}</span>`;
   $('sherSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('sherSummary').classList.remove('hidden');
 
@@ -1328,7 +1328,7 @@ function renderAjResults(result) {
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
-    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "AJ Transport" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "AJ Transport" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong> new${log.updated ? `, <strong style="color:var(--text-strong);">${log.updated}</strong> updated` : ''}</span>`;
   $('ajSummary').innerHTML = summaryChips + logChip;
   $('ajSummary').classList.remove('hidden');
 
@@ -1342,9 +1342,11 @@ function renderAjResults(result) {
       <td>${esc(r.pickup_date || '')}</td>
       <td>${fmtMoney(r.rate)}</td>
       <td>${fmtMoney(r.amount)}</td>
-      <td>${r.others ? fmtMoney(r.others) : '—'}</td>
+      <td>${r.dry_run_charge ? fmtMoney(r.dry_run_charge) : '—'}</td>
+      <td>${r.extra_scale_charge ? fmtMoney(r.extra_scale_charge) : '—'}</td>
+      <td>${r.other_charge ? fmtMoney(r.other_charge) : '—'}</td>
       <td>${ajBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="12" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
   $('ajResultsWrap').classList.remove('hidden');
 }
 

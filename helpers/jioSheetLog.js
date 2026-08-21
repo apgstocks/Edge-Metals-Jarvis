@@ -19,7 +19,7 @@
 // is the natural unique key here, and re-running verification on an
 // invoice already logged shouldn't create a second row for it).
 
-const { getOrCreateSpreadsheetId, getSheets, ensureTab } = require('./proformaSheetLog');
+const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
 
 const TAB_NAME = 'Jio';
 const HEADER_ROW = ['Date', 'Container', 'Shipper', 'Line Haul', 'Port Fees', 'Chassis Rent', 'Others', 'Net Amount', 'Last Verified'];
@@ -31,13 +31,6 @@ function todayStr() {
 
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
-}
-
-// Reads every existing "Container" (column B) already in the Jio tab.
-async function getExistingContainers(sheets, spreadsheetId) {
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!B2:B` });
-    const values = res.data.values || [];
-    return new Set(values.map((r) => (r[0] || '').trim().toUpperCase()).filter(Boolean));
 }
 
 // matchedRows: the `matched` array crossCheckJioRecords() returns — only
@@ -62,29 +55,22 @@ async function logJioVerification(matchedRows) {
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row
 
-    if (!candidateRows.length) return { logged: 0, skipped_duplicates: 0 };
+    if (!candidateRows.length) return { logged: 0, updated: 0 };
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 
-    const existing = await getExistingContainers(sheets, spreadsheetId);
-    const rows = [];
-    let skipped = 0;
-    for (const c of candidateRows) {
-        if (existing.has(c.container)) { skipped++; continue; }
-        rows.push(c.row);
-        existing.add(c.container); // also guards against duplicates WITHIN this same batch
-    }
-
-    if (!rows.length) return { logged: 0, skipped_duplicates: skipped, spreadsheetId };
-
-    await sheets.spreadsheets.values.append({
-        spreadsheetId, range: `${TAB_NAME}!A:A`,
-        valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: rows },
-    });
-    return { logged: rows.length, skipped_duplicates: skipped, spreadsheetId };
+    // Per Apsara: "when we rerun verification,why it is rows/columns not
+    // getting updated?" — a Container already on the sheet now gets its
+    // row overwritten with the latest figures instead of skipped. Container
+    // is column B here.
+    const candidates = candidateRows.map((c) => ({ key: c.container, row: c.row }));
+    const { logged, updated } = await upsertRowsByKey(
+        sheets, spreadsheetId, TAB_NAME, 'B', candidates,
+        (v) => (v || '').trim().toUpperCase(), // match the same case-insensitive Container key used above
+    );
+    return { logged, updated, spreadsheetId };
 }
 
 module.exports = { logJioVerification, TAB_NAME, HEADER_ROW };

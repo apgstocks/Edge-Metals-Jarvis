@@ -556,14 +556,24 @@ Return the JSON object and nothing else.`;
 // that - that container's items are this"): these are NOT dropped anymore
 // — each is attributed to the CONTAINER line immediately above it (the
 // invoice always prints a non-container charge line right after the
-// container it belongs to) and summed into that container's own "others"
-// field, kept as its OWN column rather than folded into "amount" so the
-// container's own line-item Amount still matches exactly what the invoice
-// printed for that CONTAINER row.
+// container it belongs to).
+//
+// Follow-up ("instead of others,add new columns for that booking,keep the
+// column name in two words"): rather than one lumped "others" number, the
+// two REAL charge types seen so far each get their own named field —
+// dry_run_charge ("Dry Run") and extra_scale_charge ("Extra Scale"). A
+// third field, other_charge, is kept as a genuine catch-all for anything
+// that ISN'T one of those two known types — not shown as its own sheet
+// column (goes into the existing "Others" column instead), specifically so
+// a charge type that hasn't been seen yet on a real invoice still gets
+// captured somewhere rather than silently vanishing again the way DRY RUN
+// CHARGE/EXTRA SCALE did before this was fixed. If a new charge type
+// starts showing up regularly, ask for its own named column same as these
+// two.
 async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
     if (!pdfBase64) throw new Error('pdfBase64 required');
 
-    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from AJ Transport Inc. It bills one or more containers under an "ACTIVITY" column. Most activity lines are labeled "CONTAINER" — each is its own container, in the order they appear top to bottom. Some activity lines are a DIFFERENT charge type with no container of their own (e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE", or similar) — these always appear directly after the CONTAINER line they belong to, before the next CONTAINER line. Attribute each such charge to the CONTAINER line immediately above it: sum the AMOUNT of every non-CONTAINER charge line between one CONTAINER line and the next into that container's "others" field. If a non-CONTAINER charge line appears before ANY container line (nothing above it to attach to), ignore it. Extract one record per CONTAINER line. Return ONLY raw JSON — no markdown, no prose.
+    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from AJ Transport Inc. It bills one or more containers under an "ACTIVITY" column. Most activity lines are labeled "CONTAINER" — each is its own container, in the order they appear top to bottom. Some activity lines are a DIFFERENT charge type with no container of their own (e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE", or similar) — these always appear directly after the CONTAINER line they belong to, before the next CONTAINER line. Attribute each such charge to the CONTAINER line immediately above it: sum the AMOUNT of every "DRY RUN CHARGE" line between one CONTAINER line and the next into that container's "dry_run_charge" field, every "CHARGE FOR EXTRA SCALE" line into "extra_scale_charge", and anything else non-CONTAINER into "other_charge". If a non-CONTAINER charge line appears before ANY container line (nothing above it to attach to), ignore it. Extract one record per CONTAINER line. Return ONLY raw JSON — no markdown, no prose.
 
 {
   "invoice_no": null,      // e.g. "6405" — the invoice's own number, same for every record
@@ -576,7 +586,9 @@ async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
       "pickup_date": null,   // the date on that same description line (e.g. "8/11", "8/17") — exactly as printed, do NOT add a year since the invoice doesn't state one for this field
       "rate": 0,             // this container line's own RATE column value, plain number
       "amount": 0,           // this container line's own AMOUNT column value, plain number
-      "others": 0            // sum of any non-CONTAINER charge lines (e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE") attributed to this container per the rule above — 0 if none
+      "dry_run_charge": 0,   // sum of any "DRY RUN CHARGE" line(s) attributed to this container per the rule above — 0 if none
+      "extra_scale_charge": 0, // sum of any "CHARGE FOR EXTRA SCALE" line(s) attributed to this container per the rule above — 0 if none
+      "other_charge": 0      // sum of any OTHER non-CONTAINER charge line(s) attributed to this container that are neither of the above — 0 if none
     }
   ]
 }

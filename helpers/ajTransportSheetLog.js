@@ -10,33 +10,40 @@
 // reach here; a booking mismatch is exactly the error she wants surfaced
 // on-screen, never silently written as if confirmed correct.
 //
-// Dedup key: Container No. — same "don't duplicate an already-logged row"
-// rule as Jio (container) and Pan Metal (Inv No.).
+// Dedup/upsert key: Container No. — same key Jio uses. Per Apsara: "when
+// we rerun verification,why it is rows/columns not getting updated?" — a
+// Container No. already logged now gets that row OVERWRITTEN with the
+// latest verification result (see proformaSheetLog.js's upsertRowsByKey),
+// not silently skipped forever.
+//
+// Columns "Others" -> "Dry Run" -> "Extra Scale", all appended AFTER
+// Amount, never inserted before it or in place of an existing column —
+// this tab may already have rows logged under an earlier, shorter header
+// on Apsara's live sheet, and ensureTab() only ever backfills missing
+// TRAILING header cells, never rewrites one that's already there;
+// inserting/renaming a column in the middle would misalign every row
+// already logged under it. "Others" was this session's first fix for "why
+// DRY RUN CHARGE and CHARGE FOR EXTRA SCALE both are not there" (both
+// summed into one number); the follow-up ("instead of others,add new
+// columns for that booking,keep the column name in two words") splits
+// those two known charge types into their own named columns. "Others"
+// itself is NOT dropped — it's repurposed as the catch-all for any
+// non-container charge that's neither of those two named types (see
+// gemini.js's extractAjTransportInvoiceRecords / invoiceVerify.js's
+// crossCheckAjTransportRecords for other_charge), so a charge type that
+// hasn't been seen on a real invoice yet still lands somewhere instead of
+// silently vanishing the way DRY RUN CHARGE/EXTRA SCALE did before.
 
-const { getOrCreateSpreadsheetId, getSheets, ensureTab } = require('./proformaSheetLog');
+const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
 
 const TAB_NAME = 'AJ Transport';
-// "Others" appended AFTER Amount (not inserted before it) — this tab may
-// already have rows logged under the original 8-column header on
-// Apsara's live sheet, and ensureTab() never rewrites an existing header
-// row; inserting a column in the middle would misalign every row already
-// there. Appending at the end is additive-only: already-logged rows are
-// untouched, new rows just start populating column I too. Added per
-// Apsara: "why DRY RUN CHARGE and CHARGE FOR EXTRA SCALE both are not
-// there" — these are non-container charges on the invoice, attributed to
-// the container line above them (see helpers/gemini.js).
-const HEADER_ROW = ['Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Amount', 'Others'];
+const HEADER_ROW = [
+    'Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Amount',
+    'Others', 'Dry Run', 'Extra Scale',
+];
 
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
-}
-
-// Reads every existing "Container No." (column C) already in the AJ
-// Transport tab.
-async function getExistingContainers(sheets, spreadsheetId) {
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!C2:C` });
-    const values = res.data.values || [];
-    return new Set(values.map((r) => (r[0] || '').trim().toUpperCase()).filter(Boolean));
 }
 
 // matchedRows: the `matched` array crossCheckAjTransportRecords() returns
@@ -55,34 +62,25 @@ async function logAjTransportVerification(matchedRows) {
                 r.pickup_date || '',
                 safeNum(r.rate),
                 safeNum(r.amount),
-                safeNum(r.others),
+                safeNum(r.other_charge),
+                safeNum(r.dry_run_charge),
+                safeNum(r.extra_scale_charge),
             ],
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row
 
-    if (!candidateRows.length) return { logged: 0, skipped_duplicates: 0 };
+    if (!candidateRows.length) return { logged: 0, updated: 0 };
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 
-    const existing = await getExistingContainers(sheets, spreadsheetId);
-    const rows = [];
-    let skipped = 0;
-    for (const c of candidateRows) {
-        if (existing.has(c.container)) { skipped++; continue; }
-        rows.push(c.row);
-        existing.add(c.container); // also guards against duplicates WITHIN this same batch
-    }
-
-    if (!rows.length) return { logged: 0, skipped_duplicates: skipped, spreadsheetId };
-
-    await sheets.spreadsheets.values.append({
-        spreadsheetId, range: `${TAB_NAME}!A:A`,
-        valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: rows },
-    });
-    return { logged: rows.length, skipped_duplicates: skipped, spreadsheetId };
+    const candidates = candidateRows.map((c) => ({ key: c.container, row: c.row }));
+    const { logged, updated } = await upsertRowsByKey(
+        sheets, spreadsheetId, TAB_NAME, 'C', candidates,
+        (v) => (v || '').trim().toUpperCase(),
+    );
+    return { logged, updated, spreadsheetId };
 }
 
 module.exports = { logAjTransportVerification, TAB_NAME, HEADER_ROW };

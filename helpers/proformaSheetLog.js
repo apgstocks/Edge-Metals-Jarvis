@@ -258,6 +258,83 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
     }
 }
 
+// Shared by the verification-log modules (Pan Metal, Jio, Sher, AJ
+// Transport) — NOT used by Proforma logging above, which has its own
+// deliberately different dedupe rule (bump a colliding Inv No. to a new
+// unique one, since that's a running per-container-item ledger, not an
+// audit log keyed on one natural key per row).
+//
+// Per Apsara: "When we rerun verification,why it is rows/columns not
+// getting updated?" — every verification tab used to SKIP a row whose key
+// (Inv No./Container/Booking No.) was already logged, so re-running
+// verification on something already in the sheet (e.g. after a real
+// correction, or after a schema change added a new column like AJ
+// Transport's Others) never refreshed it. This replaces skip-on-duplicate
+// with update-in-place: a key that's already on the sheet gets that exact
+// row overwritten with the latest verification result; a new key gets
+// appended as before. `candidates` is `[{ key, row }]` — key already
+// normalized by the caller (trim-only for Pan Metal's Inv No., trim+
+// uppercase for the container/booking-keyed tabs) so this doesn't
+// second-guess each tab's existing normalization. Same-key collisions
+// WITHIN one batch (e.g. the same container appearing twice on one PDF)
+// collapse to the LAST occurrence before writing, so one call never emits
+// two conflicting writes for the same key.
+//
+// normalizeSheetValue: applied to whatever's already written in the sheet's
+// key column before comparing against `candidates`' keys — MUST match
+// however the caller normalized its own keys (default trim-only, matching
+// Pan Metal; container/booking-keyed tabs pass a trim+uppercase version),
+// otherwise e.g. a lowercase-typed container already on the sheet would
+// never be recognized as the same key and would get double-logged instead
+// of updated.
+async function upsertRowsByKey(sheets, spreadsheetId, tabName, keyColLetter, candidates, normalizeSheetValue) {
+    if (!candidates.length) return { logged: 0, updated: 0 };
+    const normalize = normalizeSheetValue || ((v) => (v || '').trim());
+
+    const byKey = new Map();
+    for (const c of candidates) byKey.set(c.key, c.row);
+    const deduped = [...byKey.entries()].map(([key, row]) => ({ key, row }));
+
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!${keyColLetter}2:${keyColLetter}` });
+    const values = res.data.values || [];
+    const rowNumberByKey = new Map();
+    values.forEach((r, i) => {
+        const k = normalize(r[0]);
+        // First occurrence wins if a key somehow appears twice already on
+        // the sheet (shouldn't happen going forward, but a row from before
+        // this dedupe existed could) — never guess which of two existing
+        // rows is "the real one".
+        if (k && !rowNumberByKey.has(k)) rowNumberByKey.set(k, i + 2); // +2: 1-based rows, plus the header row
+    });
+
+    const toAppend = [];
+    const updateData = [];
+    for (const c of deduped) {
+        const existingRowNum = rowNumberByKey.get(c.key);
+        if (existingRowNum) {
+            const lastCol = columnLetter(c.row.length);
+            updateData.push({ range: `${tabName}!A${existingRowNum}:${lastCol}${existingRowNum}`, values: [c.row] });
+        } else {
+            toAppend.push(c.row);
+        }
+    }
+
+    if (updateData.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId,
+            requestBody: { valueInputOption: 'USER_ENTERED', data: updateData },
+        });
+    }
+    if (toAppend.length) {
+        await sheets.spreadsheets.values.append({
+            spreadsheetId, range: `${tabName}!A:A`,
+            valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+            requestBody: { values: toAppend },
+        });
+    }
+    return { logged: toAppend.length, updated: updateData.length };
+}
+
 function todayStr() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -388,5 +465,5 @@ async function logProformaToSheet(body) {
 
 module.exports = {
     logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
-    getOrCreateSpreadsheetId, getSheets, ensureTab,
+    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey,
 };

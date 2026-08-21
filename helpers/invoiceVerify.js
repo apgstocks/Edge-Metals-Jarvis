@@ -477,13 +477,22 @@ async function crossCheckAjTransportRecords(pdfRecords) {
     const matched = (pdfRecords || []).map((rec) => {
         const containerNo = normContainer(rec.container_no);
         const bookingNo = normBooking(rec.booking_no);
-        // "others" = DRY RUN CHARGE / CHARGE FOR EXTRA SCALE / etc. attributed
-        // to this container by the Gemini extraction prompt (see gemini.js's
-        // extractAjTransportInvoiceRecords) — normalized the same way as any
-        // other sheet-bound dollar figure so a missing/blank value logs as 0,
-        // not a stray empty string.
-        const others = safeMoney(rec.others) || 0;
-        const base = { ...rec, container_no: containerNo, booking_no: bookingNo, others };
+        // Non-container charges attributed to this container by the Gemini
+        // extraction prompt (see gemini.js's extractAjTransportInvoiceRecords)
+        // — three named buckets, normalized the same way as any other
+        // sheet-bound dollar figure so a missing/blank value logs as 0, not a
+        // stray empty string. dryRunCharge/extraScaleCharge are the two known
+        // real charge types (their own sheet columns); otherCharge is a
+        // catch-all for anything that doesn't match either, logged into the
+        // sheet's existing "Others" column so a genuinely new charge type
+        // still lands somewhere instead of silently vanishing.
+        const dryRunCharge = safeMoney(rec.dry_run_charge) || 0;
+        const extraScaleCharge = safeMoney(rec.extra_scale_charge) || 0;
+        const otherCharge = safeMoney(rec.other_charge) || 0;
+        const base = {
+            ...rec, container_no: containerNo, booking_no: bookingNo,
+            dry_run_charge: dryRunCharge, extra_scale_charge: extraScaleCharge, other_charge: otherCharge,
+        };
         if (!containerNo) {
             return { ...base, status: 'no_container_on_pdf', sheet: null };
         }

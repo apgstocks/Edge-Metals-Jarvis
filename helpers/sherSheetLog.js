@@ -17,20 +17,13 @@
 // Dedup key: Booking No. — same "don't duplicate a row that's already
 // logged" rule already applied to Pan Metal (Inv No.) and Jio (Container).
 
-const { getOrCreateSpreadsheetId, getSheets, ensureTab } = require('./proformaSheetLog');
+const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
 
 const TAB_NAME = 'Sher';
 const HEADER_ROW = ['Date', 'Booking No.', 'Quantity', 'Chassis', 'Others', 'Amount'];
 
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
-}
-
-// Reads every existing "Booking No." (column B) already in the Sher tab.
-async function getExistingBookings(sheets, spreadsheetId) {
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!B2:B` });
-    const values = res.data.values || [];
-    return new Set(values.map((r) => (r[0] || '').trim().toUpperCase()).filter(Boolean));
 }
 
 // matchedRows: the `matched` array crossCheckSherRecords() returns — only
@@ -51,29 +44,22 @@ async function logSherVerification(matchedRows) {
         }))
         .filter((c) => c.booking); // nothing to key a dedupe check on without a booking no. — skip rather than log a blank row
 
-    if (!candidateRows.length) return { logged: 0, skipped_duplicates: 0 };
+    if (!candidateRows.length) return { logged: 0, updated: 0 };
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 
-    const existing = await getExistingBookings(sheets, spreadsheetId);
-    const rows = [];
-    let skipped = 0;
-    for (const c of candidateRows) {
-        if (existing.has(c.booking)) { skipped++; continue; }
-        rows.push(c.row);
-        existing.add(c.booking); // also guards against duplicates WITHIN this same batch
-    }
-
-    if (!rows.length) return { logged: 0, skipped_duplicates: skipped, spreadsheetId };
-
-    await sheets.spreadsheets.values.append({
-        spreadsheetId, range: `${TAB_NAME}!A:A`,
-        valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
-        requestBody: { values: rows },
-    });
-    return { logged: rows.length, skipped_duplicates: skipped, spreadsheetId };
+    // Per Apsara: "when we rerun verification,why it is rows/columns not
+    // getting updated?" — a Booking No. already on the sheet now gets its
+    // row overwritten with the latest quantity/amount instead of skipped.
+    // Booking No. is column B here.
+    const candidates = candidateRows.map((c) => ({ key: c.booking, row: c.row }));
+    const { logged, updated } = await upsertRowsByKey(
+        sheets, spreadsheetId, TAB_NAME, 'B', candidates,
+        (v) => (v || '').trim().toUpperCase(),
+    );
+    return { logged, updated, spreadsheetId };
 }
 
 module.exports = { logSherVerification, TAB_NAME, HEADER_ROW };
