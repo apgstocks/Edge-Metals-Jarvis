@@ -50,6 +50,13 @@ const HEADER_ROW = [
     'Others', 'Dry Run', 'Extra Scale', 'Total amount',
 ];
 
+// Per Apsara: "make changes in excel that if i change some number,total
+// should be modified" — "Total amount" (column L) is written as a LIVE
+// FORMULA (=H+I+J+K for that row), not a static number, so hand-editing
+// Line Haul/Others/Dry Run/Extra Scale directly in the sheet recalculates
+// it automatically, the same as any formula she'd typed in herself. See
+// the formula-patch step at the end of logAjTransportVerification below.
+
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
 }
@@ -89,10 +96,33 @@ async function logAjTransportVerification(matchedRows) {
     await renameHeaderCellIfMatches(sheets, spreadsheetId, TAB_NAME, 'H', 'Amount', 'Line Haul');
 
     const candidates = candidateRows.map((c) => ({ key: c.container, row: c.row }));
-    const { logged, updated } = await upsertRowsByKey(
+    const { logged, updated, rowRanges } = await upsertRowsByKey(
         sheets, spreadsheetId, TAB_NAME, 'C', candidates,
         (v) => (v || '').trim().toUpperCase(),
     );
+
+    // Per Apsara: "make changes in excel that if i change some number,
+    // total should be modified" — a plain number in "Total amount" would
+    // go stale the moment she hand-edits Line Haul/Others/Dry Run/Extra
+    // Scale directly in the sheet. Replace it with a real formula
+    // (=H+I+J+K for that row) so Sheets itself recalculates it on any edit,
+    // the same as it would for a formula she'd typed in herself. This has
+    // to run as a follow-up AFTER upsertRowsByKey, not baked into the row
+    // array up front, because a freshly appended row's actual row number
+    // isn't known until the append itself has happened.
+    if (rowRanges && rowRanges.length) {
+        const formulaData = [];
+        for (const [start, end] of rowRanges) {
+            for (let row = start; row <= end; row++) {
+                formulaData.push({ range: `${TAB_NAME}!L${row}`, values: [[`=H${row}+I${row}+J${row}+K${row}`]] });
+            }
+        }
+        await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId,
+            requestBody: { valueInputOption: 'USER_ENTERED', data: formulaData },
+        });
+    }
+
     return { logged, updated, spreadsheetId };
 }
 

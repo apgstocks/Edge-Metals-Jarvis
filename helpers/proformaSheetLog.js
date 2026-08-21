@@ -402,7 +402,13 @@ async function upsertRowsByKey(sheets, spreadsheetId, tabName, keyColLetter, can
     // every row this call just touched back to plain, every time.
     await clearRowFormatting(sheets, spreadsheetId, tabName, clearRanges);
 
-    return { logged: toAppend.length, updated: updateData.length };
+    // rowRanges: every row number this call actually wrote to (both
+    // overwritten-in-place and freshly appended), as [start,end] pairs —
+    // handed back so a caller that needs to do its own row-specific
+    // follow-up (e.g. AJ Transport writing a live SUM formula into a cell
+    // whose row number wasn't known until the append actually happened)
+    // doesn't have to re-derive it.
+    return { logged: toAppend.length, updated: updateData.length, rowRanges: clearRanges };
 }
 
 function todayStr() {
