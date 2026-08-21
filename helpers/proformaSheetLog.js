@@ -282,6 +282,37 @@ async function renameHeaderCellIfMatches(sheets, spreadsheetId, tabName, colLett
     return { renamed: true, current: newLabel };
 }
 
+// Per Apsara ("see only header should be in bold and colour" — reported
+// against a real screenshot where every data row in the AJ Transport tab
+// had picked up the header's bold+shaded look, not just row 1): the header
+// formatting above is scoped to row 1 ONLY (startRowIndex:0, endRowIndex:1
+// — never touches row 2 onward), so that's not where it comes from.
+// Google Sheets itself carries a formatted row's style onto NEW rows
+// inserted directly adjacent to it (both the UI and the API's
+// insertDataOption:'INSERT_ROWS' do this) — since every data row gets
+// inserted right below either the bold header or another already-bled row,
+// the formatting cascades down the whole tab over successive verification
+// runs even though the code never asked for that. Fix: explicitly reset
+// (not just leave alone) the formatting on every row this code just wrote
+// — both freshly appended ones and ones overwritten in place by
+// upsertRowsByKey below — back to plain/default right after writing it.
+// rowRanges: array of [startRow1Indexed, endRow1IndexedInclusive].
+async function clearRowFormatting(sheets, spreadsheetId, tabName, rowRanges) {
+    if (!rowRanges.length) return;
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const tab = (meta.data.sheets || []).find((s) => s.properties.title === tabName);
+    if (!tab) return; // tab vanished between write and here — nothing to clean up
+    const sheetId = tab.properties.sheetId;
+    const requests = rowRanges.map(([start, end]) => ({
+        repeatCell: {
+            range: { sheetId, startRowIndex: start - 1, endRowIndex: end },
+            cell: { userEnteredFormat: {} },
+            fields: 'userEnteredFormat(backgroundColor,textFormat)',
+        },
+    }));
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
 // Shared by the verification-log modules (Pan Metal, Jio, Sher, AJ
 // Transport) — NOT used by Proforma logging above, which has its own
 // deliberately different dedupe rule (bump a colliding Inv No. to a new
@@ -333,11 +364,13 @@ async function upsertRowsByKey(sheets, spreadsheetId, tabName, keyColLetter, can
 
     const toAppend = [];
     const updateData = [];
+    const updatedRowNumbers = [];
     for (const c of deduped) {
         const existingRowNum = rowNumberByKey.get(c.key);
         if (existingRowNum) {
             const lastCol = columnLetter(c.row.length);
             updateData.push({ range: `${tabName}!A${existingRowNum}:${lastCol}${existingRowNum}`, values: [c.row] });
+            updatedRowNumbers.push(existingRowNum);
         } else {
             toAppend.push(c.row);
         }
@@ -349,13 +382,26 @@ async function upsertRowsByKey(sheets, spreadsheetId, tabName, keyColLetter, can
             requestBody: { valueInputOption: 'USER_ENTERED', data: updateData },
         });
     }
+
+    const clearRanges = updatedRowNumbers.map((n) => [n, n]);
     if (toAppend.length) {
-        await sheets.spreadsheets.values.append({
+        const appendRes = await sheets.spreadsheets.values.append({
             spreadsheetId, range: `${tabName}!A:A`,
             valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
             requestBody: { values: toAppend },
         });
+        // updatedRange looks like "'AJ Transport'!A7:L11" — pull the row
+        // span so ONLY the rows actually just written get their formatting
+        // reset, nothing above or below.
+        const updatedRange = appendRes.data.updates && appendRes.data.updates.updatedRange;
+        const m = updatedRange && updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
+        if (m) clearRanges.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
     }
+    // See clearRowFormatting's comment above: Sheets bleeds the header's
+    // bold+shaded look onto newly-inserted adjacent rows on its own — reset
+    // every row this call just touched back to plain, every time.
+    await clearRowFormatting(sheets, spreadsheetId, tabName, clearRanges);
+
     return { logged: toAppend.length, updated: updateData.length };
 }
 
@@ -479,15 +525,23 @@ async function logProformaToSheet(body) {
         existing.add(unique); // also guards against duplicates WITHIN this same batch
     }
 
-    await sheets.spreadsheets.values.append({
+    const appendRes = await sheets.spreadsheets.values.append({
         spreadsheetId, range: `${TAB_NAME}!A:A`,
         valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
         requestBody: { values: rows },
     });
+    // Same header-bleed fix as upsertRowsByKey (see clearRowFormatting's
+    // comment) — Proforma's own append path doesn't go through that shared
+    // function, so it needs this call too, or its new rows would pick up
+    // the header's bold+shaded look exactly the way AJ Transport's did.
+    const updatedRange = appendRes.data.updates && appendRes.data.updates.updatedRange;
+    const m = updatedRange && updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
+    if (m) await clearRowFormatting(sheets, spreadsheetId, TAB_NAME, [[parseInt(m[1], 10), parseInt(m[2], 10)]]);
+
     return { logged: rows.length, spreadsheetId, duplicates_bumped: duplicatesBumped };
 }
 
 module.exports = {
     logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
-    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches,
+    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches, clearRowFormatting,
 };
