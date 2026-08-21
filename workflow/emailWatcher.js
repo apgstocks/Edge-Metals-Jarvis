@@ -10,11 +10,13 @@
 //      - STABLE fields (booking_number, carrier, ports, shipper, consignee,
 //        buyer, container_size, container_number) only fill in if currently
 //        empty — never overwritten once set.
-//      - DATE fields (cutoff_date, erd_date, etd) auto-update ONLY if the new
-//        date is LATER than what's on file — carriers push these back
-//        constantly, so a forward move is trusted; an earlier/tied/
-//        unparseable one is flagged for manual review instead of applied
-//        (see DATE_FIELDS below for the full reasoning).
+//      - DATE fields (cutoff_date, erd_date, etd) auto-update to whatever the
+//        email says, forward OR backward — no manual-review gate (per Apsara
+//        2026-08-20: "I don't want any human to do that"). The trust gate is
+//        classifyDocument's is_booking_confirmation check earlier in this
+//        same run, not date direction. A backward move still gets called out
+//        by name in the WhatsApp notice so it's visible, it just never blocks
+//        the write (see DATE_FIELDS below for the full history).
 //      - vessel_voyage always takes the newest value (not a date, "later"
 //        doesn't apply — a reassignment is a reassignment).
 //   2. New bookings: created directly into bookings.json, no pre-approval
@@ -48,19 +50,22 @@ const { syncBookingToSheet } = require('../helpers/bookingTracker');
 const { pushAlert } = require('../alerts');
 const AGENT = 'EMAIL';
 
-// REAL BUG (found 2026-08-20, live — Apsara: "cut off and erd are not proper
-// ... still jarvis booking hold old data"): the existing-booking merge below
-// only ever filled a field if it was CURRENTLY EMPTY. That's correct for
-// identity fields (booking_number, carrier, ports) but wrong for cutoff/ERD/
-// ETD/vessel — carriers amend those constantly (vessel rolls, port
+// REAL BUG #1 (found 2026-08-20, live — Apsara: "cut off and erd are not
+// proper ... still jarvis booking hold old data"): the existing-booking merge
+// below only ever filled a field if it was CURRENTLY EMPTY. That's correct
+// for identity fields (booking_number, carrier, ports) but wrong for
+// cutoff/ERD/ETD/vessel — carriers amend those constantly (vessel rolls, port
 // congestion), so a real amendment email was being silently ignored because
-// the booking already had a (now-stale) value on file.
-// Fix, per Apsara: only auto-apply a date change when the new date is LATER
-// than what's on file — carriers push dates back, they essentially never
-// pull them earlier, so a "later" email is trustworthy and an "earlier or
-// unparseable" one is more likely a stale/misextracted email than a real
-// correction. Rejected dates are flagged for a manual look instead of
-// silently applied OR silently dropped.
+// the booking already had a (now-stale) value on file. Fixed by always taking
+// the new value for DATE_FIELDS/VOLATILE_NON_DATE_FIELDS below.
+//
+// REAL BUG #2, same day: the first fix only auto-applied a FORWARD date move
+// and flagged anything else for manual review — reasonable-sounding (carriers
+// push dates back, rarely pull them earlier), but Apsara's explicit call was
+// "I don't want any human to do that." Manual-review-for-backward-moves is
+// removed; every date change now applies automatically regardless of
+// direction. A backward move still gets called out by name in the WhatsApp
+// notice as an FYI, it just never blocks the write.
 const DATE_FIELDS = new Set(['cutoff_date', 'erd_date', 'etd']);
 // vessel_voyage also changes over a booking's life (reassignment) but isn't a
 // date — "later" doesn't apply, so it always takes the newest value.
@@ -243,14 +248,12 @@ async function _runOnce() {
             // that was created/changed by someone else in the meantime.
             let actuallyCreated = false;
             let appliedFields = null;
-            let dateChanges = [];   // [{field, from, to}] — forward date/vessel moves, ACCEPTED
-            let dateRejections = []; // [{field, from, to}] — not a forward move, REJECTED (flagged instead)
+            let dateChanges = [];    // [{field, from, to, note}] — all applied date/vessel moves
             const finalAll = await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
                 if (all[bkg]) {
                     const fillable = {};
                     const changed = {};
                     const changes = [];
-                    const rejected = [];
                     const cur = all[bkg];
                     for (const [k, v] of Object.entries(fields)) {
                         if (k === 'booking_number') continue;
@@ -259,14 +262,21 @@ async function _runOnce() {
                         if (DATE_FIELDS.has(k)) {
                             if (cur[k] == null || cur[k] === '') { fillable[k] = v; continue; }
                             if (cur[k] === v) continue; // identical, nothing to do
+                            // Per Apsara 2026-08-20 ("I don't want any human to do
+                            // that"): removed the forward-only block that used to
+                            // reject a backward-moving date and wait for manual
+                            // review. This PDF already passed classifyDocument's
+                            // is_booking_confirmation check earlier in this same
+                            // function — that's the trust gate now, not date
+                            // direction. Every date change applies automatically;
+                            // a backward move still gets called out by name in the
+                            // WhatsApp notice (see "note" below) so it's visible,
+                            // it just never blocks the write anymore.
                             const oldDate = parseUSDate(cur[k]);
                             const newDate = parseUSDate(v);
-                            if (oldDate && newDate && newDate.getTime() > oldDate.getTime()) {
-                                changes.push({ field: k, from: cur[k], to: v });
-                                changed[k] = v;
-                            } else {
-                                rejected.push({ field: k, from: cur[k], to: v });
-                            }
+                            const backward = oldDate && newDate && newDate.getTime() < oldDate.getTime();
+                            changes.push({ field: k, from: cur[k], to: v, note: backward ? 'moved EARLIER — double-check this one' : null });
+                            changed[k] = v;
                             continue;
                         }
 
@@ -284,7 +294,6 @@ async function _runOnce() {
                     if (Object.keys(patch).length) Object.assign(all[bkg], patch);
                     appliedFields = fillable;
                     dateChanges = changes;
-                    dateRejections = rejected;
                 } else {
                     actuallyCreated = true;
                     all[bkg] = { ...fields, booking_number: bkg, created_at: new Date().toISOString(), source: 'email_watcher' };
@@ -323,7 +332,8 @@ async function _runOnce() {
                     });
                 }
                 if (dateChanges.length) {
-                    const summary = dateChanges.map(c => `${c.field} ${c.from} → ${c.to}`).join(', ');
+                    const summary = dateChanges.map(c => `${c.field} ${c.from} → ${c.to}${c.note ? ` (${c.note})` : ''}`).join(', ');
+                    const anyBackward = dateChanges.some(c => c.note);
                     console.log(`[${AGENT}] ${bkg} rescheduled: ${summary} (from "${subject.slice(0, 60)}")`);
                     rescheduled.push(`${bkg}: ${summary}`);
                     await syncBookingToSheet(bkg);
@@ -331,18 +341,7 @@ async function _runOnce() {
                     await pushAlert({
                         type: 'booking_rescheduled_email', bkgNo: bkg,
                         message: `Booking ${bkg} rescheduled by carrier: ${summary}`,
-                        severity: 'warning',
-                    });
-                }
-                if (dateRejections.length) {
-                    const summary = dateRejections.map(c => `${c.field} email says ${c.to} vs current ${c.from}`).join(', ');
-                    console.warn(`[${AGENT}] ${bkg} date not a forward move — NOT auto-applying: ${summary} (from "${subject.slice(0, 60)}")`);
-                    flagged.push(`${bkg}: ${summary} — verify manually`);
-                    await appendAuditLog({ source: 'email_watcher', bkgNo: bkg, intent: 'date_rejected_not_forward', resolvedBy: 'ai', confidence: null, actionTaken: 'flagged', subject, note: summary });
-                    await pushAlert({
-                        type: 'booking_flagged_email', bkgNo: bkg,
-                        message: `Booking ${bkg} — email date not later than current, not applied: ${summary}`,
-                        severity: 'warning',
+                        severity: anyBackward ? 'warning' : 'info',
                     });
                 }
                 if (duplicateThisRun) {
