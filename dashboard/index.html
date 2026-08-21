@@ -663,6 +663,8 @@ function invBySellerHtml(data) {
 }
 
 const INV_SUBTAB_RENDER = { byType: invByTypeHtml, byDay: invByDayHtml, bySeller: invBySellerHtml };
+// Last inventory payload, so switching sub-tabs repaints instead of refetching.
+let invData = null;
 
 async function renderInventory() {
   const params = new URLSearchParams();
@@ -672,7 +674,7 @@ async function renderInventory() {
   const root = $('viewRoot');
   root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
   let data;
-  try { data = await api('/api/loads/inventory' + qs); }
+  try { data = invData = await api('/api/loads/inventory' + qs); }
   catch (err) { root.innerHTML = `<div style="padding:60px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:13px;">${esc(err.message)}</div>`; return; }
 
   root.innerHTML = `
@@ -710,7 +712,22 @@ async function renderInventory() {
 
   $('btnInvApply').addEventListener('click', () => { invFrom = $('inv_from').value; invTo = $('inv_to').value; renderInventory(); });
   $('btnInvClear').addEventListener('click', () => { invFrom = ''; invTo = ''; renderInventory(); });
-  root.querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => { invSubTab = btn.dataset.subtab; renderInventory(); }));
+  // Sub-tab switch repaints from the payload already held — no refetch.
+  // Item type / Per day / Per seller all come back in the SAME response, so
+  // the old renderInventory() call here paid a full round trip (and a full
+  // page rebuild, losing scroll position) to show data already in hand.
+  // Same fix as the mobile app, 2026-08-21.
+  root.querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.subtab === invSubTab || !invData) return;
+    invSubTab = btn.dataset.subtab;
+    $('invSubtabBody').innerHTML = INV_SUBTAB_RENDER[invSubTab](invData);
+    root.querySelectorAll('.inv-subtab-btn').forEach(b => {
+      const on = b.dataset.subtab === invSubTab;
+      b.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
+      b.style.fontWeight = on ? '700' : '500';
+      b.style.color = on ? 'var(--text-strong)' : 'var(--text-muted)';
+    });
+  }));
 
   // Export menu — kebab toggles a small dropdown; picking an option navigates
   // to the export route with the current date filter attached (cookie auth

@@ -2786,12 +2786,88 @@ function mobInvBySellerHtml(data) {
 }
 const MOB_INV_SUBTAB_RENDER = { byType: mobInvByTypeHtml, byDay: mobInvByDayHtml, bySeller: mobInvBySellerHtml };
 
+// ── Inventory tab ─────────────────────────────────────────────────────────
+// Restructured 2026-08-21 after Apsara: "when i navigate from load to
+// inventory, it is taking some time."
+//
+// The server was never slow — getInventoryReport is ~15ms at 10,000 loads
+// and the payload is under 30KB. What cost the time was a network round
+// trip to the VM, and what made it FEEL broken was that nothing on screen
+// changed until it came back: the tab button highlighted instantly and the
+// Loads list just sat there underneath. Three changes, in order of how much
+// they actually matter:
+//
+//   1. Paint the page shell immediately, with a skeleton where the numbers
+//      go. The round trip is unchanged; it just stops looking like a freeze.
+//   2. Sub-tab switches no longer refetch. Item type / Per day / Per seller
+//      all arrive in the SAME response — the old code called this whole
+//      function again for each tap, paying a full round trip to re-render
+//      data already in hand. This was the worst of the three and the easiest
+//      to miss, because each individual tap only felt "a bit slow".
+//   3. Re-entering the tab paints the last known figures instantly and
+//      refreshes behind them, so only the first visit ever waits.
+//
+// mobInvData holds the last response, keyed by the filter it was fetched
+// with — without the key, changing the date range would briefly show the
+// previous range's totals as though they were the new ones.
+let mobInvData = null, mobInvDataKey = null;
+
+function mobInvKey() {
+  return `${mobInvFrom}|${mobInvTo}`;
+}
+
+// Repaints ONLY the sub-tab body from data already held. This is what the
+// sub-tab buttons call now.
+function paintInvSubtab() {
+  if (!mobInvData) return;
+  const body = $('invSubtabBody');
+  if (body) body.innerHTML = MOB_INV_SUBTAB_RENDER[mobInvSubTab](mobInvData);
+  $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => {
+    const on = btn.dataset.subtab === mobInvSubTab;
+    btn.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
+    btn.style.fontWeight = on ? '700' : '500';
+    btn.style.color = on ? 'var(--text-strong)' : 'var(--text-muted)';
+  });
+}
+
 async function renderInventoryTab() {
+  const key = mobInvKey();
+  // Stale data from a DIFFERENT filter must not be shown as if it were this
+  // one's — drop it and fall back to the skeleton.
+  if (mobInvDataKey !== key) mobInvData = null;
   const params = new URLSearchParams();
   if (mobInvFrom) params.set('from', mobInvFrom);
   if (mobInvTo) params.set('to', mobInvTo);
   const qs = params.toString() ? '?' + params.toString() : '';
-  const data = await api('/api/loads/inventory' + qs);
+
+  paintInventory(mobInvData, !mobInvData);
+  try {
+    const fresh = await api('/api/loads/inventory' + qs);
+    // Guard against a slow response landing after the filter moved on —
+    // tap Apply twice quickly and the first reply could otherwise overwrite
+    // the second with older numbers.
+    if (mobInvKey() !== key) return;
+    mobInvData = fresh; mobInvDataKey = key;
+    paintInventory(fresh, false);
+  } catch (err) {
+    if (err.message === 'unauthorized') return; // api() already redirected
+    // Keep whatever's on screen if we had real data; only a first visit
+    // with nothing cached gets the error page.
+    if (!mobInvData) throw err;
+    const hint = $('invStaleHint');
+    if (hint) { hint.textContent = "Couldn't refresh — showing the last figures."; hint.style.color = 'var(--status-warning)'; }
+  }
+}
+
+// data === null renders the skeleton. `loading` shows the refreshing hint.
+function paintInventory(data, loading) {
+  const skel = (w) => `<span style="display:inline-block; width:${w}; height:11px; border-radius:3px; background:var(--surface-sunken); opacity:.6;"></span>`;
+  const body = data
+    ? MOB_INV_SUBTAB_RENDER[mobInvSubTab](data)
+    : [70, 55, 62, 48, 58].map(w => `
+        <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle);">
+          ${skel(w + 'px')}${skel('110px')}
+        </div>`).join('');
   $('viewRoot').innerHTML = `
     <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
       <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:10px;">
@@ -2817,11 +2893,18 @@ async function renderInventoryTab() {
           <button class="btn inv-subtab-btn" data-subtab="${t.id}" style="flex:none; border:none; border-radius:0; border-bottom:2px solid ${mobInvSubTab === t.id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:8px 10px; font-size:12px; font-weight:${mobInvSubTab === t.id ? '700' : '500'}; color:${mobInvSubTab === t.id ? 'var(--text-strong)' : 'var(--text-muted)'}; white-space:nowrap;">${esc(t.label)}</button>
         `).join('')}
       </div>
-      <div id="invSubtabBody">${MOB_INV_SUBTAB_RENDER[mobInvSubTab](data)}</div>
+      <div id="invSubtabBody">${body}</div>
+      <div id="invStaleHint" style="margin-top:12px; font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); text-align:center;">${loading ? 'Loading…' : ''}</div>
     </section>`;
   $('btnInvApply').addEventListener('click', () => { mobInvFrom = $('inv_from').value; mobInvTo = $('inv_to').value; renderInventoryTab(); });
   $('btnInvClear').addEventListener('click', () => { mobInvFrom = ''; mobInvTo = ''; renderInventoryTab(); });
-  $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => { mobInvSubTab = btn.dataset.subtab; renderInventoryTab(); }));
+  // Sub-tab switch repaints from data already held — no refetch. All three
+  // sub-tabs come back in the same response; see the header comment.
+  $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.subtab === mobInvSubTab) return;
+    mobInvSubTab = btn.dataset.subtab;
+    paintInvSubtab();
+  }));
 
   // Export — mobile auth is a bearer token (see api()'s comment), not a
   // cookie, so a plain link or navigation wouldn't carry it. The file is
@@ -2839,7 +2922,16 @@ async function renderInventoryTab() {
     // which is part of why a silent failure read as "nothing happens".
     showWeighToast('working', `Preparing ${label} export…`, 'Building the file on the server');
     try {
-      const res = await fetch(API_BASE + `/api/loads/inventory/export.${ext}${qs}`, { headers: { Authorization: 'Bearer ' + getToken() } });
+      // Rebuilt from the live filter rather than closed over, since the
+      // 2026-08-21 split moved this wiring into paintInventory() where the
+      // fetch function's `qs` is out of scope. Reading it fresh is also more
+      // correct: the export now always matches what's on screen RIGHT NOW,
+      // not the filter that happened to be set when the page was painted.
+      const p = new URLSearchParams();
+      if (mobInvFrom) p.set('from', mobInvFrom);
+      if (mobInvTo) p.set('to', mobInvTo);
+      const eqs = p.toString() ? '?' + p.toString() : '';
+      const res = await fetch(API_BASE + `/api/loads/inventory/export.${ext}${eqs}`, { headers: { Authorization: 'Bearer ' + getToken() } });
       if (!res.ok) {
         // Surface the server's actual error message when it sent one,
         // instead of a bare status code.
