@@ -257,21 +257,22 @@ body[data-theme="light"] {
           <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
           <div class="field"><label>Reference #</label><input id="inv_reference"></div>
           <div class="field"><label>Terms</label><input id="inv_terms"></div>
+          <!-- Moved here from the Buyer + Vessel column, per Apsara: "make
+               vessel on left side below terms". -->
+          <div class="field"><label>Vessel / Flight No</label><input id="inv_vessel"></div>
         </div>
         <div>
           <div class="section-label">Shipment Details</div>
           <div class="field"><label>Container #</label><input id="inv_container"></div>
           <div class="field"><label>Booking #</label><input id="inv_booking"></div>
           <div class="field"><label>Seal #</label><input id="inv_seal"></div>
-          <div class="field"><label>HBL #</label><input id="inv_hbl"></div>
           <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
           <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
           <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
           <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
         </div>
         <div>
-          <div class="section-label">Buyer + Vessel</div>
-          <div class="field"><label>Vessel / Flight No</label><input id="inv_vessel"></div>
+          <div class="section-label">Buyer</div>
           <div class="field"><label>Buyer address (one line per row — first line is the name shown on the PDF)</label>
             <textarea id="inv_consignee_address" rows="7" placeholder="Company name&#10;Street, City, Country&#10;TEL: +..."></textarea></div>
         </div>
@@ -1689,7 +1690,6 @@ function applyInvoiceDataToForm(data) {
   $('inv_container').value = data.container_no || '';
   $('inv_booking').value = data.booking_no || '';
   $('inv_seal').value = data.seal_no || '';
-  $('inv_hbl').value = data.hbl_no || '';
   $('inv_receipt').value = data.place_of_receipt || '';
   $('inv_pol').value = data.port_loading || '';
   $('inv_pod').value = data.port_discharge || '';
@@ -1796,7 +1796,6 @@ function collectInvoicePayload() {
     container_no: $('inv_container').value.trim(),
     booking_no: $('inv_booking').value.trim(),
     seal_no: $('inv_seal').value.trim(),
-    hbl_no: $('inv_hbl').value.trim(),
     place_of_receipt: $('inv_receipt').value.trim(),
     port_loading: $('inv_pol').value.trim(),
     port_discharge: $('inv_pod').value.trim(),
