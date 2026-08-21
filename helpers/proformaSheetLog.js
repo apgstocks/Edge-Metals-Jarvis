@@ -150,6 +150,20 @@ async function getOrCreateSpreadsheetId() {
     return id;
 }
 
+// 1-based column index -> spreadsheet column letters (1 -> "A", 26 -> "Z",
+// 27 -> "AA", ...). Used by ensureTab's header-backfill path below to know
+// where to start writing newly-added trailing columns without touching
+// what's already there.
+function columnLetter(n) {
+    let s = '';
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        s = String.fromCharCode(65 + rem) + s;
+        n = Math.floor((n - 1) / 26);
+    }
+    return s;
+}
+
 // Generic version of ensureProformaTab's create-tab-if-missing /
 // write-header-if-blank logic, extracted so OTHER logging modules that
 // share this same "Edge Metals" spreadsheet (e.g. helpers/panMetalSheetLog.js)
@@ -186,10 +200,26 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
     }
 
     const headerCheck = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
-    if (!headerCheck.data.values || !headerCheck.data.values.length) {
+    const existingHeader = (headerCheck.data.values && headerCheck.data.values[0]) || [];
+    if (!existingHeader.length) {
         await sheets.spreadsheets.values.update({
             spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW',
             requestBody: { values: [headerRow] },
+        });
+    } else if (existingHeader.length < headerRow.length) {
+        // A tab whose header was already written (rows may already be logged
+        // under it) later got new trailing columns added to its schema in
+        // code — e.g. AJ Transport's "Others" column, added per Apsara after
+        // she'd already been running verifications. Backfill ONLY the
+        // missing trailing header cells, starting right after the last
+        // existing one — never touch or reorder what's already there, since
+        // that would misalign every row already logged under the old header.
+        const missingLabels = headerRow.slice(existingHeader.length);
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${tabName}!${columnLetter(existingHeader.length + 1)}1`,
+            valueInputOption: 'RAW',
+            requestBody: { values: [missingLabels] },
         });
     }
 

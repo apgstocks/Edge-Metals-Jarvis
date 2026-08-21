@@ -16,7 +16,16 @@
 const { getOrCreateSpreadsheetId, getSheets, ensureTab } = require('./proformaSheetLog');
 
 const TAB_NAME = 'AJ Transport';
-const HEADER_ROW = ['Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Amount'];
+// "Others" appended AFTER Amount (not inserted before it) — this tab may
+// already have rows logged under the original 8-column header on
+// Apsara's live sheet, and ensureTab() never rewrites an existing header
+// row; inserting a column in the middle would misalign every row already
+// there. Appending at the end is additive-only: already-logged rows are
+// untouched, new rows just start populating column I too. Added per
+// Apsara: "why DRY RUN CHARGE and CHARGE FOR EXTRA SCALE both are not
+// there" — these are non-container charges on the invoice, attributed to
+// the container line above them (see helpers/gemini.js).
+const HEADER_ROW = ['Invoice Date', 'Invoice No.', 'Container No.', 'Booking No.', 'Shipper', 'Pickup Date', 'Rate', 'Amount', 'Others'];
 
 function safeNum(n) {
     return (n === null || n === undefined || n === '') ? '' : n;
@@ -46,6 +55,7 @@ async function logAjTransportVerification(matchedRows) {
                 r.pickup_date || '',
                 safeNum(r.rate),
                 safeNum(r.amount),
+                safeNum(r.others),
             ],
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row

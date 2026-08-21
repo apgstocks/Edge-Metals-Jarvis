@@ -550,16 +550,20 @@ Return the JSON object and nothing else.`;
 // -8/17 (HARNESS WIRE)" — the shipper/origin name and the pickup date,
 // squeezed into free text with no separate labeled fields for either. The
 // invoice ALSO bills non-container line items (seen for real: "DRY RUN
-// CHARGE", "CHARGE FOR EXTRA SCALE") that have no container of their own —
-// Apsara's requested columns (container no., booking no., shipper, pickup
-// date, rate, amount) have nowhere for those to go, so this extracts ONLY
-// the CONTAINER activity rows, one record each; non-container charge lines
-// are intentionally left out rather than guessed onto the nearest
-// container's amount.
+// CHARGE", "CHARGE FOR EXTRA SCALE") that have no container of their own.
+// Per Apsara ("why DRY RUN CHARGE and CHARGE FOR EXTRA SCALE both are not
+// there. if its there without any container whatever the container before
+// that - that container's items are this"): these are NOT dropped anymore
+// — each is attributed to the CONTAINER line immediately above it (the
+// invoice always prints a non-container charge line right after the
+// container it belongs to) and summed into that container's own "others"
+// field, kept as its OWN column rather than folded into "amount" so the
+// container's own line-item Amount still matches exactly what the invoice
+// printed for that CONTAINER row.
 async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
     if (!pdfBase64) throw new Error('pdfBase64 required');
 
-    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from AJ Transport Inc. It bills one or more containers — each one appears as its own line item under an "ACTIVITY" column labeled "CONTAINER" (ignore any other activity line, e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE", or anything else that isn't a CONTAINER line — those don't belong to a specific container and should NOT be included). Extract one record per CONTAINER line. Return ONLY raw JSON — no markdown, no prose.
+    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from AJ Transport Inc. It bills one or more containers under an "ACTIVITY" column. Most activity lines are labeled "CONTAINER" — each is its own container, in the order they appear top to bottom. Some activity lines are a DIFFERENT charge type with no container of their own (e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE", or similar) — these always appear directly after the CONTAINER line they belong to, before the next CONTAINER line. Attribute each such charge to the CONTAINER line immediately above it: sum the AMOUNT of every non-CONTAINER charge line between one CONTAINER line and the next into that container's "others" field. If a non-CONTAINER charge line appears before ANY container line (nothing above it to attach to), ignore it. Extract one record per CONTAINER line. Return ONLY raw JSON — no markdown, no prose.
 
 {
   "invoice_no": null,      // e.g. "6405" — the invoice's own number, same for every record
@@ -571,7 +575,8 @@ async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
       "shipper": null,       // the origin/shipper name mentioned on the line below the container/booking (e.g. "MARTINEZ" from "LOADED- MARTINEZ- 8/11", or "BOSE Yard" from "LOADED - BOSE Yard -8/17 (HARNESS WIRE)") — just the name, not the date or the item in parentheses
       "pickup_date": null,   // the date on that same description line (e.g. "8/11", "8/17") — exactly as printed, do NOT add a year since the invoice doesn't state one for this field
       "rate": 0,             // this container line's own RATE column value, plain number
-      "amount": 0            // this container line's own AMOUNT column value, plain number
+      "amount": 0,           // this container line's own AMOUNT column value, plain number
+      "others": 0            // sum of any non-CONTAINER charge lines (e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE") attributed to this container per the rule above — 0 if none
     }
   ]
 }

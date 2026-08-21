@@ -477,7 +477,13 @@ async function crossCheckAjTransportRecords(pdfRecords) {
     const matched = (pdfRecords || []).map((rec) => {
         const containerNo = normContainer(rec.container_no);
         const bookingNo = normBooking(rec.booking_no);
-        const base = { ...rec, container_no: containerNo, booking_no: bookingNo };
+        // "others" = DRY RUN CHARGE / CHARGE FOR EXTRA SCALE / etc. attributed
+        // to this container by the Gemini extraction prompt (see gemini.js's
+        // extractAjTransportInvoiceRecords) — normalized the same way as any
+        // other sheet-bound dollar figure so a missing/blank value logs as 0,
+        // not a stray empty string.
+        const others = safeMoney(rec.others) || 0;
+        const base = { ...rec, container_no: containerNo, booking_no: bookingNo, others };
         if (!containerNo) {
             return { ...base, status: 'no_container_on_pdf', sheet: null };
         }

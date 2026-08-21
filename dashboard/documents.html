@@ -469,22 +469,9 @@ body[data-theme="light"] {
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="ajResultsTable">
               <thead>
-                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Status</th></tr>
+                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Others</th><th>Status</th></tr>
               </thead>
               <tbody id="ajResultsBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div id="ajSheetOnlyWrap" class="hidden" style="margin-top:18px;">
-          <div class="section-label">On the Invoice sheet, but not on any uploaded AJ Transport invoice this run</div>
-          <div style="font-size:11px; color:var(--text-faint); margin-top:-6px; margin-bottom:8px;">Not scoped to AJ Transport specifically — the sheet has no marker for which trucker hauled a container, so this includes every container that isn't Jio's or Sher's just as much as it includes anything actually missing from AJ Transport. Treat as a hint, not an alarm.</div>
-          <div class="inv-line-table-wrap">
-            <table class="inv-line-table" id="ajSheetOnlyTable">
-              <thead>
-                <tr><th>Container No.</th><th>Booking No. (sheet)</th><th>Inv No.</th><th>Consignee</th></tr>
-              </thead>
-              <tbody id="ajSheetOnlyBody"></tbody>
             </table>
           </div>
         </div>
@@ -1332,19 +1319,17 @@ function ajBadge(status) {
 
 function renderAjResults(result) {
   const matched = result.matched || [];
-  const sheetOnly = result.sheet_only || [];
 
   const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
   const summaryChips = [
     { key: 'verified', label: 'Verified' }, { key: 'booking_mismatch', label: 'Booking mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
   ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
     : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "AJ Transport" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
-  $('ajSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
+  $('ajSummary').innerHTML = summaryChips + logChip;
   $('ajSummary').classList.remove('hidden');
 
   $('ajResultsBody').innerHTML = matched.map((r) => `
@@ -1357,18 +1342,10 @@ function renderAjResults(result) {
       <td>${esc(r.pickup_date || '')}</td>
       <td>${fmtMoney(r.rate)}</td>
       <td>${fmtMoney(r.amount)}</td>
+      <td>${r.others ? fmtMoney(r.others) : '—'}</td>
       <td>${ajBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
   $('ajResultsWrap').classList.remove('hidden');
-
-  $('ajSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
-    <tr>
-      <td style="font-family:var(--font-mono);">${esc(r.container_no || '')}</td>
-      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '')}</td>
-      <td style="font-family:var(--font-mono);">${esc(r.inv_no || '')}</td>
-      <td>${esc(r.consignee || '')}</td>
-    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center; color:var(--text-faint);">Nothing outstanding — every container on the sheet was matched this run.</td></tr>`;
-  $('ajSheetOnlyWrap').classList.remove('hidden');
 }
 
 $('btnAjVerify').addEventListener('click', async () => {
