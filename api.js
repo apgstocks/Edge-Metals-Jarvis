@@ -688,6 +688,49 @@ function createApi() {
         }
     });
 
+    app.post('/api/verify/jio', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [] } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+
+            const { extractJioInvoiceRecords } = require('./helpers/gemini');
+            const { crossCheckJioRecords } = require('./helpers/invoiceVerify');
+
+            const extractedPerFile = await Promise.all(pdfs.map(async (pdf) => {
+                try {
+                    const extracted = await extractJioInvoiceRecords(pdf.base64);
+                    const records = (extracted && extracted.records) || [];
+                    return records.map((r) => ({ ...r, source_file: pdf.name || 'unnamed.pdf' }));
+                } catch (e) {
+                    console.error(`[verify/jio] extraction failed for ${pdf.name || 'unnamed.pdf'}:`, e.message);
+                    // One bad/unreadable PDF in a batch shouldn't fail the whole
+                    // run — surface it as its own row instead of losing it silently.
+                    return [{ container_no: null, net_amount: null, description: `Extraction failed: ${e.message}`, source_file: pdf.name || 'unnamed.pdf', extraction_failed: true }];
+                }
+            }));
+            const pdfRecords = extractedPerFile.flat();
+
+            const result = await crossCheckJioRecords(pdfRecords);
+
+            // Log post-comparison into the "Jio" tab of the Edge Metals
+            // sheet (see helpers/jioSheetLog.js) — only rows that actually
+            // verified (container found on our sheet) get written. Never
+            // let a logging hiccup fail the verification response itself.
+            try {
+                const { logJioVerification } = require('./helpers/jioSheetLog');
+                result.sheet_log = await logJioVerification(result.matched);
+            } catch (e) {
+                console.error('[verify/jio] sheet logging failed:', e.message);
+                result.sheet_log = { logged: 0, error: e.message };
+            }
+
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/jio] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Upload PDF to Drive and (optionally) attach to a booking record
     app.post('/api/bookings/upload-pdf', largeJson, async (req, res) => {
         const { booking_number, pdf_base64, original_filename } = req.body || {};

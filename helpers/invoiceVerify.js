@@ -281,7 +281,79 @@ async function crossCheckPanMetalRecords(pdfRecords) {
     return { matched, sheet_only: sheetOnly };
 }
 
+// ── Transport → Jio ─────────────────────────────────────────────────────────
+// Added per Apsara: "for jio,i want a new tab to be created in edge
+// metals.in that ,date(from uploaded),container,shipper,line haul,port
+// fees,chassis rent,others,then net amount,last verified should be
+// there.Your job is to find whether container number is there in my
+// original sheet against the column Container No. on successful
+// verification,create rows in jio tab of edge metals" — grounded against
+// two real Jio Transport invoices (Invoice_8559.pdf, Invoice_8635.pdf):
+// one load per PDF, "W/O (Ref):" holds the container number, charges
+// itemized under "RATES AND CHARGES" (Line Haul / PORT FEE(S) / chassis
+// rent line / occasionally something else), summing to "Total Rate:".
+//
+// Unlike Zimex (freight $ cross-checked) or Pan Metal (a calculation
+// cross-checked), Jio has no dollar figure already on the Invoice sheet to
+// compare against — "verification" here just means the container number
+// on the invoice is a real container Edge Metals actually shipped. That's
+// intentionally the whole check: existence, not a money match.
+function normContainer(v) { return safeStr(v).toUpperCase().replace(/\s+/g, ''); }
+
+// One entry per distinct container — same "first row wins" pattern as the
+// other indexes in this file.
+async function buildSheetContainerIndex() {
+    const { headers, rows } = await invoiceSheet.fetchRawSheet(true); // always fresh — same reasoning as the other verification indexes above
+    const colMap = invoiceSheet.buildColumnMap(headers);
+    const byContainer = new Map();
+    for (const row of rows) {
+        const d = invoiceSheet.rowToDict(row, colMap);
+        const containerNo = normContainer(d.container_no);
+        if (!containerNo) continue;
+        if (byContainer.has(containerNo)) continue; // already recorded — same container can legitimately repeat across rows (multi-item shipments)
+        byContainer.set(containerNo, {
+            container_no: containerNo,
+            inv_no: safeStr(d.inv_no),
+            consignee: safeStr(d.consignee),
+        });
+    }
+    return byContainer;
+}
+
+// Buckets a record's charges into the four columns Apsara asked for. Gemini
+// already sorts Line Haul / Port Fees / Chassis Rent into their own fields;
+// "others" is OUR sum of whatever it put in other_charges, computed here in
+// code rather than trusted from the model, same "money math happens in
+// code, not the LLM" rule the rest of this file follows.
+function sumOtherCharges(otherCharges) {
+    return (otherCharges || []).reduce((sum, c) => sum + (safeMoney(c && c.amount) || 0), 0);
+}
+
+// pdfRecords: [{ invoice_no, invoice_date, container_no, shipper, line_haul,
+// port_fees, chassis_rent, other_charges, net_amount, source_file }] — the
+// shape helpers/gemini.js's extractJioInvoiceRecords() returns.
+async function crossCheckJioRecords(pdfRecords) {
+    const containerIndex = await buildSheetContainerIndex();
+
+    const matched = (pdfRecords || []).map((rec) => {
+        const containerNo = normContainer(rec.container_no);
+        const others = sumOtherCharges(rec.other_charges);
+        const base = { ...rec, container_no: containerNo, others };
+        if (!containerNo) {
+            return { ...base, status: 'no_container_on_pdf', sheet: null };
+        }
+        const sheetRow = containerIndex.get(containerNo);
+        if (!sheetRow) {
+            return { ...base, status: 'not_in_sheet', sheet: null };
+        }
+        return { ...base, status: 'verified', sheet: sheetRow };
+    });
+
+    return { matched };
+}
+
 module.exports = {
     buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE,
     buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
+    buildSheetContainerIndex, crossCheckJioRecords,
 };

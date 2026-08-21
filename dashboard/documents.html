@@ -450,7 +450,37 @@ body[data-theme="light"] {
         <div class="placeholder-note">Sher Trucking verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
       </div>
       <div id="verifyPanelJio" class="hidden">
-        <div class="placeholder-note">Jio verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+        <div class="section-label" style="margin-top:0;">Upload Jio Transport invoices</div>
+        <label id="jioDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="jioPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">⇪</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="jioDropLabel">Drop Jio Transport invoice PDFs here — multiple files supported</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis reads each invoice's container number (W/O Ref) and confirms it's on the Invoice sheet's Container No. column before logging it</div>
+          </div>
+        </label>
+        <div id="jioFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+        <div style="margin-top:14px;">
+          <button id="btnJioVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+
+        <div id="jioLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the invoices and checking container numbers against the Invoice sheet…
+        </div>
+
+        <div id="jioSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <div id="jioResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">Jio invoices vs. Invoice sheet</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="jioResultsTable">
+              <thead>
+                <tr><th>Date</th><th>Container</th><th>Shipper</th><th>Line Haul</th><th>Port Fees</th><th>Chassis Rent</th><th>Others</th><th>Net Amount</th><th>Status</th></tr>
+              </thead>
+              <tbody id="jioResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -946,6 +976,99 @@ $('btnPanMetalVerify').addEventListener('click', async () => {
   } finally {
     setButtonLoading(btn, false);
     $('panMetalLoading').classList.add('hidden');
+  }
+});
+
+let jioFiles = []; // [{ name, base64 }]
+function renderJioFileList() {
+  $('jioFileList').innerHTML = jioFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:11px; font-family:var(--font-mono); color:var(--text-body);">
+      📄 ${esc(f.name)}
+      <button type="button" class="jio-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('jioFileList').querySelectorAll('.jio-file-remove').forEach((el) => el.addEventListener('click', () => {
+    jioFiles.splice(Number(el.dataset.i), 1);
+    renderJioFileList();
+  }));
+  $('jioDropLabel').textContent = jioFiles.length
+    ? `${jioFiles.length} file${jioFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop Jio Transport invoice PDFs here — multiple files supported';
+}
+function handleJioFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      jioFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderJioFileList();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+// jioDropZone is a <label> wrapping jioPdfInput, so the browser already
+// opens the file picker natively on click — no explicit click-forwarding
+// listener here (see the Zimex/Pan Metal fix above for why that would
+// double-fire the dialog and silently drop the selection).
+$('jioPdfInput').addEventListener('change', () => { handleJioFiles($('jioPdfInput').files); $('jioPdfInput').value = ''; });
+$('jioDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('jioDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleJioFiles(e.dataTransfer.files); });
+
+const JIO_STATUS_BADGE = {
+  verified: { label: 'Verified', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_container_on_pdf: { label: 'No container read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function jioBadge(status) {
+  const b = JIO_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+
+function renderJioResults(result) {
+  const matched = result.matched || [];
+
+  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const summaryChips = [
+    { key: 'verified', label: 'Verified' }, { key: 'not_in_sheet', label: 'Not on sheet' },
+  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  const log = result.sheet_log || {};
+  const logChip = log.error
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Jio" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+  $('jioSummary').innerHTML = summaryChips + logChip;
+  $('jioSummary').classList.remove('hidden');
+
+  $('jioResultsBody').innerHTML = matched.map((r) => `
+    <tr>
+      <td>${esc(r.invoice_date || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
+      <td>${esc(r.shipper || '')}</td>
+      <td>${fmtMoney(r.line_haul)}</td>
+      <td>${fmtMoney(r.port_fees)}</td>
+      <td>${fmtMoney(r.chassis_rent)}</td>
+      <td>${fmtMoney(r.others)}</td>
+      <td>${fmtMoney(r.net_amount)}</td>
+      <td>${jioBadge(r.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+  $('jioResultsWrap').classList.remove('hidden');
+}
+
+$('btnJioVerify').addEventListener('click', async () => {
+  if (!jioFiles.length) { alert('Drop at least one Jio Transport invoice PDF first.'); return; }
+  const btn = $('btnJioVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('jioLoading').classList.remove('hidden');
+  $('jioSummary').classList.add('hidden');
+  $('jioResultsWrap').classList.add('hidden');
+  try {
+    const body = { pdfs: jioFiles };
+    const result = await api('/api/verify/jio', { method: 'POST', body: JSON.stringify(body) });
+    renderJioResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('jioLoading').classList.add('hidden');
   }
 });
 
