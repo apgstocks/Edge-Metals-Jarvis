@@ -1,4 +1,27 @@
 const PDFDocument = require('pdfkit');
+// ── Template version ────────────────────────────────────────────────────────
+// Per Apsara 2026-08-20 ("nothing flags 'this ticket was built by older
+// code'").
+//
+// A load's PDF is generated ONCE and stored as a file in Drive. Changing the
+// layout here therefore does NOTHING to tickets that already exist — they
+// keep serving whatever was written at the time. That is exactly how the
+// scale-photo links appeared to be "not working": the code was deployed, but
+// every existing invoice had been written before it.
+//
+// Bumping this constant marks every previously-generated ticket as stale, so
+// the UI can say so and offer Regenerate, instead of the operator comparing
+// two tickets and wondering which is wrong.
+//
+// BUMP THIS whenever a change alters what appears on a generated document —
+// a new section, a moved field, changed number formatting. Do NOT bump for
+// internal refactors that produce a byte-identical page; a false "out of
+// date" badge is as useless as no badge.
+//
+// History:
+//   1 — baseline (everything generated before 2026-08-20 is treated as v0)
+const PDF_TEMPLATE_VERSION = 1;
+
 
 // ── Shared visual language for both load PDFs ─────────────────────────────
 // Redesigned per Apsara ("visual redesign" + "restructure layout") — was
@@ -988,6 +1011,7 @@ function generateLoadReceiptPdf(load, opts = {}) {
 // duplicating this reduce elsewhere — one definition of "how items roll up
 // by type" for both the PDF and the report.
 module.exports = {
+    PDF_TEMPLATE_VERSION,
     generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf,
     // Additive exports — added 2026-08-19 for the Documents (Invoice/Proforma/
     // Verification) build-out. These drawing primitives already existed as

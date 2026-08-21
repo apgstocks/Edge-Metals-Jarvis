@@ -4,7 +4,7 @@
 // (which needs to make sure every one of today's loads has PDFs before it
 // can email/attach them) without duplicating this logic in two places and
 // having them drift apart. The route itself now just calls this.
-const { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf } = require('./pdf');
+const { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, PDF_TEMPLATE_VERSION } = require('./pdf');
 const { uploadLoadPdf } = require('./drive');
 const { updateLoad } = require('./loads');
 
@@ -64,7 +64,11 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
         warnings.push(buildWarning('receipt_pdf_failed', e.message));
     }
 
-    const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch, ...receiptPatch });
+    // pdf_template_version records WHICH layout produced this file, so a
+    // later change can flag it as out of date rather than leaving the
+    // operator to compare two tickets and guess which is right. See
+    // PDF_TEMPLATE_VERSION in helpers/pdf.js.
+    const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', pdf_template_version: PDF_TEMPLATE_VERSION, pdf_generated_at: new Date().toISOString(), ...weightsPatch, ...receiptPatch });
 
     // The main ticket succeeded if we got here (a failure there throws), so
     // always clear its warnings — a successful Regenerate must wipe the

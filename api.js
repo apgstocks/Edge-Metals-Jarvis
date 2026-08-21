@@ -695,7 +695,18 @@ function createApi() {
     app.get('/api/loads', (req, res) => {
         try {
             const { loadLoads } = require('./helpers/loads');
-            res.json(loadLoads());
+            const { PDF_TEMPLATE_VERSION } = require('./helpers/pdf');
+            // pdf_stale is computed SERVER-SIDE and sent as a plain boolean so
+            // the clients never need to know the current template number — one
+            // place owns the version, and a client can't drift out of step
+            // with it (which would be its own version-skew bug).
+            // A load whose PDF predates versioning has no field at all, so it
+            // reads as 0 and is correctly reported stale — those really were
+            // built by older code.
+            res.json(loadLoads().map(l => ({
+                ...l,
+                pdf_stale: !!l.pdf_link && (Number(l.pdf_template_version) || 0) < PDF_TEMPLATE_VERSION,
+            })));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
     // Item-type inventory + per-day rollup — per Apsara 2026-08-15. Computed
@@ -1514,6 +1525,7 @@ function createApi() {
     // pass, and both roles already share every other Operations tab.
     const proformaPricing = require('./helpers/proformaPricing');
     const documentsSaved = require('./helpers/documentsSaved');
+    const invoiceVersions = require('./helpers/invoiceVersions');
 
     // preview=1 (query string) returns the PDF inline without saving a copy
     // or touching pricing memory — used by the "Preview" button so a user
@@ -1643,9 +1655,32 @@ function createApi() {
             const filename = `${safeInv}.pdf`;
             const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
 
+            // Save the form-state snapshot that produced this real PDF, so a
+            // later visit to the same container can offer "Load previous
+            // edits" instead of starting from raw sheet data again. Deliberately
+            // does not block the response on failure — losing this convenience
+            // history is not worth failing a real invoice generation over.
+            try {
+                await invoiceVersions.saveInvoiceVersion(body.container_no, body);
+            } catch (verErr) {
+                console.error('[invoice] saving version history failed (non-fatal):', verErr.message);
+            }
+
             res.json({ ok: true, saved_filename: path.basename(savedPath) });
         } catch (e) {
             console.error('[invoice] generate failed:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Review & Generate screen's version-history banner — "You last generated
+    // this container on [date] — N versions saved". See helpers/invoiceVersions.js
+    // for why this is separate from the saved-PDF archive above.
+    app.get('/api/invoice/versions', (req, res) => {
+        try {
+            res.json(invoiceVersions.getInvoiceVersionSummary(req.query.container || ''));
+        } catch (e) {
+            console.error('[invoice] versions lookup failed:', e.message);
             res.status(500).json({ error: e.message });
         }
     });

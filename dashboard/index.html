@@ -2773,7 +2773,15 @@ function loadCardHtml(l) {
         ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
         ${!l.pdf_link
           ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
-          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
+          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;${l.pdf_stale ? ' border-color:var(--status-warning); color:var(--status-warning);' : ''}">Regenerate PDF</button>`}
+        ${l.pdf_stale ? `
+        <!-- Stale-ticket notice, per Apsara 2026-08-20 ("nothing flags 'this
+             ticket was built by older code'"). A PDF is written once and
+             stored; changing the layout does nothing to files that already
+             exist. pdf_stale is computed server-side by comparing the
+             version stamped at generation against the current one, so the
+             client never needs to know the version number. -->
+        <div style="font-size:11px; color:var(--status-warning); line-height:1.4;">⚠ This ticket was built by an older version — regenerate it to pick up the latest layout.</div>` : ''}
         <!-- Send to seller — only once a PDF exists. Shown even without a
              phone on file so the click handler can surface that as a
              clear error rather than the option just silently not being
