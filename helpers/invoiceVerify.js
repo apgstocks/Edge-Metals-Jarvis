@@ -60,7 +60,9 @@ function parseSheetDate(s) {
 // forward match/mismatch always looks the HBL up regardless of period,
 // since an uploaded PDF is itself already scoped to whatever she uploaded.
 async function buildSheetFreightIndex(period) {
-    const { headers, rows } = await invoiceSheet.fetchRawSheet();
+    // forceRefresh: true — see helpers/invoiceSheet.js's fetchRawSheet()
+    // comment; a cross-check must never compare against a stale cached copy.
+    const { headers, rows } = await invoiceSheet.fetchRawSheet(true);
     const colMap = invoiceSheet.buildColumnMap(headers);
     const byHbl = new Map();
     for (const row of rows) {
@@ -174,7 +176,10 @@ function extractOrderNoFromInvNo(invNo) {
 // value wins" pattern as buildSheetFreightIndex, since weight/commission
 // are recorded once per order, not repeated on every line.
 async function buildSheetOrderIndex() {
-    const { headers, rows } = await invoiceSheet.fetchRawSheet();
+    // forceRefresh: true — same reasoning as buildSheetFreightIndex above;
+    // this is the fix for Apsara's "i changed the weight...it didn't take
+    // that" report — the 3-minute cache was serving a stale weight.
+    const { headers, rows } = await invoiceSheet.fetchRawSheet(true);
     const colMap = invoiceSheet.buildColumnMap(headers);
     const byOrder = new Map();
     for (const row of rows) {

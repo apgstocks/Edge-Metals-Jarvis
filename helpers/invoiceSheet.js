@@ -32,8 +32,18 @@ const { parseCsv } = require('./nextInvoiceNo');
 let cache = null; // { at, headers, rows: string[][] }
 const CACHE_MS = 3 * 60 * 1000;
 
-async function fetchRawSheet() {
-    if (cache && (Date.now() - cache.at) < CACHE_MS) return cache;
+// forceRefresh: bypasses the 3-minute cache entirely. Added after Apsara
+// edited a weight directly on the live sheet and re-ran Pan Metal
+// verification within that 3-minute window — it silently compared against
+// the stale cached copy instead of her edit. Every OTHER caller (invoice
+// preview/lookup below) keeps the cache as-is; it's fine for those to be up
+// to 3 minutes behind. A cross-check that's specifically verifying "does
+// this PDF match what's on the sheet RIGHT NOW" can't tolerate that same
+// staleness without silently grading against outdated numbers, so
+// helpers/invoiceVerify.js's buildSheetFreightIndex (Zimex) and
+// buildSheetOrderIndex (Pan Metal) both pass forceRefresh: true.
+async function fetchRawSheet(forceRefresh) {
+    if (!forceRefresh && cache && (Date.now() - cache.at) < CACHE_MS) return cache;
     if (!cfg.INVOICE_SHEET_ID) throw new Error('INVOICE_SHEET_ID not configured');
     const url = `https://docs.google.com/spreadsheets/d/${cfg.INVOICE_SHEET_ID}/export?format=csv&gid=${cfg.INVOICE_MAIN_GID}`;
     const res = await fetch(url);
