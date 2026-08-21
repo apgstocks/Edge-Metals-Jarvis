@@ -1990,11 +1990,24 @@ function createApi() {
         res.sendFile(target);
     });
 
-    // ── Custom item-type descriptions (self-growing "Others…" list) ─────────
-    // Per Apsara 2026-08-15. GET returns the flat array of custom entries;
-    // the client merges it with its own hardcoded ITEM_DESC_OPTIONS. No
-    // staff gate — same "everyone doing loads should see the full list"
-    // reasoning as /api/loads/* itself.
+    // ── Item-description catalog ────────────────────────────────────────────
+    // GET returns the WHOLE list, already sorted A–Z — as of 2026-08-20 this
+    // is the only list there is. The clients used to merge this response with
+    // a hardcoded ITEM_DESC_OPTIONS_BASE array of their own; that array now
+    // lives in helpers/itemTypes.js as one-time seed data and the clients
+    // render this response verbatim. See that file's header for why.
+    //
+    // Deliberately NOT behind requireAdmin, and '/api/item-types' is in
+    // STAFF_ALLOWED_PATH_PREFIXES: per Apsara 2026-08-20, "give this option
+    // to modify/delete the list in staff and admin settings." Staff are the
+    // people actually typing descriptions all day, so they're the ones who
+    // notice a typo — making them ask an admin to fix it is how the list
+    // ends up full of near-duplicates nobody cleans up.
+    //
+    // The blast radius of that decision is genuinely small: this catalog is
+    // a typing convenience, not a record. Descriptions are stored as text on
+    // each load, so nothing here can delete, reprice, or reword a saved
+    // load, an issued PDF, or a monthly sheet.
     app.get('/api/item-types', (req, res) => {
         try { res.json(require('./helpers/itemTypes').loadCustomItemTypes()); }
         catch (e) { res.status(500).json({ error: e.message }); }
@@ -2003,11 +2016,18 @@ function createApi() {
         try { res.json(await require('./helpers/itemTypes').addCustomItemType(req.body.description)); }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
-    // Delete a wrongly-added "Others…" description (Apsara 2026-08-16). Body,
-    // not a :param, since descriptions are free text and can contain slashes.
-    // No requireAdmin gate — same reasoning as GET/POST above — but the only
-    // UI that calls this lives in the admin-only Settings tab, so in
-    // practice only admin ever exercises it.
+    // Rename an entry (2026-08-20). Body-based like DELETE below, for the
+    // same reason. Renames the catalog entry ONLY — loads already saved with
+    // the old text keep it, see helpers/itemTypes.js's renameItemType for
+    // why that's intentional rather than a missing migration.
+    app.put('/api/item-types', async (req, res) => {
+        try { res.json(await require('./helpers/itemTypes').renameItemType(req.body.from, req.body.to)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    // Delete a description (Apsara 2026-08-16, widened to the full list
+    // 2026-08-20). Body, not a :param, since descriptions are free text and
+    // can contain slashes. Removing one stops it being OFFERED on the next
+    // load; it never touches a load that already used it.
     app.delete('/api/item-types', async (req, res) => {
         try { res.json(await require('./helpers/itemTypes').deleteCustomItemType(req.body.description)); }
         catch (e) { res.status(400).json({ error: e.message }); }

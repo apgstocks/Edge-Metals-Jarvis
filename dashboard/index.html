@@ -1720,7 +1720,11 @@ function renderSettings(s) {
         </div>
         <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item description list</div>
-          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Descriptions someone typed via "Others…" on a load, now saved as dropdown options so no one has to retype them. Remove one here if it was a typo or added by mistake — it just stops showing as an option; loads that already used it are unaffected.</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The descriptions offered while typing an item on a load. Anything new typed on a load is added here automatically. Renaming or removing one here only changes what future loads are offered — loads that already used the old wording keep it, and so do their PDFs and monthly sheets.</div>
+          <div style="display:flex; gap:8px; margin-bottom:14px; max-width:420px;">
+            <input id="itemTypeNew" placeholder="Add a description" style="flex:1; min-width:0; padding:10px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none;">
+            <button id="btnAddItemType" class="btn btn-primary" style="padding:10px 16px; font-size:11px;">Add</button>
+          </div>
           <div id="itemTypeRows" style="display:flex; flex-direction:column; gap:8px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
         </div>
       </div>
@@ -1783,33 +1787,76 @@ function renderSettings(s) {
   loadItemTypeRows();
 }
 
+// ── Item description catalog manager (Settings > Yard) ────────────────
+// Mirrors the mobile app's renderItemTypeManager. Per Apsara 2026-08-20 the
+// list is manageable from staff and admin settings alike; on this side that
+// means the Settings tab, which admin reaches directly.
 async function loadItemTypeRows() {
   const rows = $('itemTypeRows');
   if (!rows) return; // panel not mounted (settings re-rendered/left before this resolved)
   try {
-    // Sorted A-Z to match the dropdown (Apsara 2026-08-19) — the managed
-    // list and the list people pick from should read the same way.
-    const types = (await api('/api/item-types')).slice()
-        .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
+    // No client-side sort: GET /api/item-types is already A-Z (see
+    // helpers/itemTypes.js). Sorting again here is how the managed list and
+    // the list people pick from used to end up ordered differently.
+    const types = await api('/api/item-types');
     rows.innerHTML = types.length ? types.map(d => `
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-desc="${esc(d)}">
-        <span style="font-size:13px; color:var(--text-strong);">${esc(d)}</span>
+      <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);" data-desc="${esc(d)}">
+        <span style="flex:1; min-width:0; font-size:13px; color:var(--text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(d)}</span>
+        <button class="btn btn-ren-item-type" data-desc="${esc(d)}" style="padding:6px 12px; font-size:10px;">Rename</button>
         <button class="btn btn-danger btn-del-item-type" data-desc="${esc(d)}" style="padding:6px 12px; font-size:10px;">Remove</button>
-      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No custom descriptions yet — they show up here as soon as someone uses "Others…" on a load.</div>';
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No descriptions yet — they appear here as soon as one is used on a load, or add one above.</div>';
+
+    rows.querySelectorAll('.btn-ren-item-type').forEach(btn => btn.addEventListener('click', async () => {
+      const from = btn.dataset.desc;
+      const to = prompt(`Rename "${from}" to:`, from);
+      if (to === null) return;                       // cancelled
+      if (!to.trim() || to.trim() === from) return;  // blank or unchanged
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const r = await api('/api/item-types', { method: 'PUT', body: JSON.stringify({ from, to: to.trim() }) });
+        // customItemTypes is the in-memory cache the load form's type-ahead
+        // reads (see itemDescOptions() above) — keep it in step so the old
+        // wording doesn't linger as a suggestion until the next page load.
+        customItemTypes = customItemTypes.filter(x => String(x).toLowerCase() !== from.toLowerCase());
+        if (!r.merged) customItemTypes.push(to.trim());
+        loadItemTypeRows();
+      } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Rename'; }
+    }));
+
     rows.querySelectorAll('.btn-del-item-type').forEach(btn => btn.addEventListener('click', async () => {
-      if (!confirm(`Remove "${btn.dataset.desc}" from the item description list?`)) return;
+      if (!confirm(`Remove "${btn.dataset.desc}" from the item description list?\n\nLoads that already used it keep it — this only stops it being suggested.`)) return;
       btn.disabled = true; btn.textContent = 'Removing…';
       try {
         await api('/api/item-types', { method: 'DELETE', body: JSON.stringify({ description: btn.dataset.desc }) });
-        // customItemTypes is the in-memory cache the load-form dropdown reads
-        // (see itemDescOptions() above) — keep it in sync so the removed
-        // entry doesn't linger as an option until the next full page load.
-        customItemTypes = customItemTypes.filter(x => x.toLowerCase() !== btn.dataset.desc.toLowerCase());
+        customItemTypes = customItemTypes.filter(x => String(x).toLowerCase() !== btn.dataset.desc.toLowerCase());
         loadItemTypeRows();
       } catch (e) { alert(e.message); btn.disabled = false; btn.textContent = 'Remove'; }
     }));
+
+    // Add straight from Settings, so the catalog can be curated before
+    // anyone types a load — the auto-add-on-save path only ever grows the
+    // list as a side effect of real work. Wired here rather than in
+    // wireSettingsEvents because this whole section is re-rendered by
+    // loadItemTypeRows and the buttons above are wired the same way.
+    const addBtn = $('btnAddItemType'), addInput = $('itemTypeNew');
+    if (addBtn && addInput && !addBtn.dataset.wired) {
+      addBtn.dataset.wired = '1';
+      const add = async () => {
+        const v = addInput.value.trim();
+        if (!v) return;
+        addBtn.disabled = true;
+        try {
+          await api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: v }) });
+          if (!customItemTypes.some(x => String(x).toLowerCase() === v.toLowerCase())) customItemTypes.push(v);
+          addInput.value = '';
+          loadItemTypeRows();
+        } catch (e) { alert(e.message); } finally { addBtn.disabled = false; }
+      };
+      addBtn.addEventListener('click', add);
+      addInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } });
+    }
   } catch (e) {
-    rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load item types: ${esc(e.message)}</div>`;
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load the description list: ${esc(e.message)}</div>`;
   }
 }
 
@@ -2200,16 +2247,13 @@ let editingLoadId = null;
 // in-page camera stream is no longer needed).
 function stopCamera() {}
 
-// Fixed catalog of common scrap-yard item descriptions, per Apsara — picking
-// from a list instead of free-typing keeps item descriptions consistent
-// across loads (same wording every time, easier to total/report on later).
-// "Others" is the escape hatch for anything not on the list, and reveals a
-// free-text box right below the dropdown when chosen.
-const ITEM_DESC_OPTIONS_BASE = [
-  'Auto cast', 'Al rims(Dirty)', 'Mixed', 'Chrome', 'Sealed units', 'Motors',
-  'Al combo', 'Steel combo', 'Alternator', 'Ac compressor', 'Starter',
-];
-const ITEM_DESC_OTHER = 'Others';
+// ITEM_DESC_OPTIONS_BASE and ITEM_DESC_OTHER used to live here: eleven
+// hardcoded descriptions plus an "Others…" sentinel. Both are gone as of
+// 2026-08-20 (Apsara: "keep the list in backend"). The eleven were moved
+// into helpers/itemTypes.js as one-time seed data and are now ordinary,
+// editable catalog entries; "Others" is unnecessary because the field is
+// free text. Keeping a duplicate of the list in each client was also how
+// the phone and the dashboard drifted apart.
 
 // Custom descriptions typed via "Others…" on a PREVIOUS load — per Apsara
 // 2026-08-15 ("when something gets added in others, it should get added to
@@ -2257,11 +2301,14 @@ function lastPriceForDescription(desc) {
   return null;
 }
 
+// The catalog, verbatim from the server. As of 2026-08-20 there is no
+// client-side base list to merge in and no sorting to do here — GET
+// /api/item-types already returns the whole list sorted A-Z (see
+// helpers/itemTypes.js). Kept as a function rather than reading
+// customItemTypes directly at each call site so there's still one place to
+// change if the list ever needs filtering again.
 function itemDescOptions() {
-  const baseLower = ITEM_DESC_OPTIONS_BASE.map(o => o.toLowerCase());
-  return ITEM_DESC_OPTIONS_BASE
-    .concat(customItemTypes.filter(d => !baseLower.includes(String(d).toLowerCase())))
-    .sort((a, b) => String(a).localeCompare(String(b), undefined, { sensitivity: 'base' }));
+  return customItemTypes.slice();
 }
 
 // Live-recomputes ONE row's net weight (gross - tare) and amount (net *
@@ -2292,14 +2339,6 @@ function renderItemRows() {
   // throwing — which is why Add Item/Save Load looked completely broken).
   const rowsHtml = currentLoadItems.map((it, i) => {
     const desc = it.description || '';
-    const descOptions = itemDescOptions();
-    const isPreset = descOptions.includes(desc);
-    const isOther = desc && !isPreset; // non-empty, not on the (base + custom) list -> came from the "Others" box
-    const selectVal = isPreset ? desc : (isOther ? ITEM_DESC_OTHER : '');
-    const optionsHtml = ['<option value="" disabled ' + (selectVal ? '' : 'selected') + '>Select item…</option>']
-      .concat(descOptions.map(o => `<option value="${esc(o)}" ${o === selectVal ? 'selected' : ''}>${esc(o)}</option>`))
-      .concat([`<option value="${ITEM_DESC_OTHER}" ${selectVal === ITEM_DESC_OTHER ? 'selected' : ''}>${ITEM_DESC_OTHER}…</option>`])
-      .join('');
     const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
     const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
     const price = parseFloat(it.price);
@@ -2314,7 +2353,21 @@ function renderItemRows() {
     <div class="item-row" data-idx="${i}">
       <div class="ld-item-desc-wrap">
         <span class="ld-mobile-label">Description</span>
-        <select class="ld-item-desc-select">${optionsHtml}</select>
+        <!-- Free-text type-ahead, not a <select>, since 2026-08-20 (Apsara:
+             "make it as empty field, so that when user start typing
+             something, start matching and show all matches. If they type
+             something which is not in list, add that to list"). The old
+             control was a dropdown of presets plus an "Others…" option that
+             revealed a second text box on a second line — two controls and
+             two taps for anything not already on the list. This is one box:
+             known types autocomplete, unknown types are simply typed, and
+             the save handler adds whatever was new to the catalog.
+             Own relatively-positioned wrapper because .ld-item-desc-wrap is
+             forced position:static in the phone grid below. -->
+        <div class="ld-desc-ac-wrap">
+          <input class="ld-item-desc-input" placeholder="Type description…" autocomplete="off" value="${esc(desc)}" data-prev="${esc(desc)}">
+          <div class="ac-dropdown ld-desc-ac hidden"></div>
+        </div>
       </div>
       <div class="ld-item-cap ld-item-cap-gross">
         <span class="ld-mobile-label">Gross</span>
@@ -2331,12 +2384,6 @@ function renderItemRows() {
         <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
         <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
       </div>
-      <!-- "Others" free-text box moved OUT of .ld-item-desc-wrap to be a
-           direct grid child of .item-row (grid-column:1/-1 below) — per
-           Apsara, nested inside the narrow description column it rendered
-           tiny on mobile; as its own full-width line under the row it's a
-           normal-sized text box instead. -->
-      <input class="ld-item-desc-other ${isOther ? '' : 'hidden'}" placeholder="Enter item description" value="${isOther ? esc(desc) : ''}">
       <!-- Two file inputs per role (camera-forced vs library/files) instead
            of one plain accept="image/*" input — per Apsara, the single
            generic input's OS chooser was surfacing Google Photos ahead of
@@ -2378,30 +2425,79 @@ function renderItemRows() {
     row.querySelector('.ld-item-tare-file-camera').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
     row.querySelector('.ld-item-tare-file-files').addEventListener('change', (e) => handleFileUpload(row, 'tare', e.target.files[0]));
   });
-  box.querySelectorAll('.ld-item-desc-select').forEach(sel => sel.addEventListener('change', () => {
-    const row = sel.closest('.item-row');
-    const otherInput = row.querySelector('.ld-item-desc-other');
-    if (sel.value === ITEM_DESC_OTHER) {
-      otherInput.classList.remove('hidden');
-      otherInput.focus();
-    } else {
-      otherInput.classList.add('hidden');
-      otherInput.value = '';
-      // Always take the last price for this item type — per Apsara
-      // 2026-08-19 ("just take the last price"), overriding the earlier
-      // fill-only-if-empty version. Changing the description means you're
-      // pricing a different item, so whatever was in the box belonged to
-      // the previous one and should not survive. Still fully editable
-      // afterwards; this only sets the starting figure.
+  // ── Description type-ahead (2026-08-20) ─────────────────────────────────
+  // Replaces the preset <select> + "Others…" pair. Starts empty, matches as
+  // you type, and accepts anything — see the markup comment above.
+  box.querySelectorAll('.ld-item-desc-input').forEach(input => {
+    const row  = input.closest('.item-row');
+    const menu = row.querySelector('.ld-desc-ac');
+    const close = () => menu.classList.add('hidden');
+
+    // Price follows the description, but ONLY when the description actually
+    // changed — hence data-prev. The old select fired on 'change', which by
+    // definition meant a different value; a text box fires on blur every
+    // time it's tapped, and re-running the price fill on an unchanged
+    // description would wipe a rate the operator had just typed by hand for
+    // an item with no history. Apsara 2026-08-19: "just take the last
+    // price" — on a REAL change, last price wins outright (a new
+    // description means a different item, so the old rate is meaningless);
+    // with no history the box clears rather than keeping a stale figure.
+    const applyPriceIfChanged = () => {
+      const now = input.value.trim();
+      if (now.toLowerCase() === (input.dataset.prev || '').trim().toLowerCase()) return;
+      input.dataset.prev = now;
       const priceInput = row.querySelector('.ld-item-price');
-      if (priceInput) {
-        const last = lastPriceForDescription(sel.value);
-        priceInput.value = last != null ? fmtRate(last) : '';
-        recomputeRowTotals(row);
+      if (!priceInput) return;
+      const last = now ? lastPriceForDescription(now) : null;
+      priceInput.value = last != null ? fmtRate(last) : '';
+      recomputeRowTotals(row);
+    };
+
+    const openMatches = () => {
+      const q = input.value.trim().toLowerCase();
+      // Empty box shows the WHOLE catalog rather than nothing — the field is
+      // empty by default now, so a blank dropdown on first tap would leave
+      // someone who doesn't remember the exact wording with no way in.
+      const all = itemDescOptions();
+      const matches = q ? all.filter(o => String(o).toLowerCase().includes(q)) : all;
+      // An exact, complete match is not worth a dropdown showing only the
+      // thing already typed — it just covers the fields below it.
+      if (!matches.length || (matches.length === 1 && String(matches[0]).toLowerCase() === q)) return close();
+      menu.innerHTML = matches.map(o => `<div class="ac-item" data-val="${esc(o)}">${esc(o)}</div>`).join('');
+      menu.classList.remove('hidden');
+      menu.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
+        // mousedown, not click: blur fires first on a click and would close
+        // the menu before the click ever landed. preventDefault keeps focus
+        // in the input so the pick doesn't also trigger the blur handler.
+        ev.preventDefault();
+        input.value = el.dataset.val;
+        close();
+        applyPriceIfChanged();
+        syncItemsFromDom();
+      }));
+    };
+
+    input.addEventListener('focus', openMatches);
+    input.addEventListener('input', openMatches);
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { close(); return; }
+      // Enter accepts the only remaining match — the common case after
+      // typing three letters — instead of submitting anything.
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const only = menu.querySelectorAll('.ac-item');
+        if (!menu.classList.contains('hidden') && only.length === 1) input.value = only[0].dataset.val;
+        close();
+        applyPriceIfChanged();
+        syncItemsFromDom();
       }
-    }
-    syncItemsFromDom();
-  }));
+    });
+    input.addEventListener('blur', () => {
+      setTimeout(close, 150);
+      applyPriceIfChanged();
+      syncItemsFromDom();
+    });
+  });
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
     syncItemsFromDom();
     currentLoadItems.splice(parseInt(btn.dataset.row, 10), 1);
@@ -2421,9 +2517,9 @@ function renderItemRows() {
 function syncItemsFromDom() {
   const rows = $('ld_items').querySelectorAll('.item-row');
   currentLoadItems = Array.from(rows).map((row, i) => {
-    const sel = row.querySelector('.ld-item-desc-select');
-    const otherInput = row.querySelector('.ld-item-desc-other');
-    const description = sel.value === ITEM_DESC_OTHER ? (otherInput.value || '') : (sel.value || '');
+    // One free-text box since 2026-08-20 — no select, no "Others" branch.
+    const descInput = row.querySelector('.ld-item-desc-input');
+    const description = (descInput ? descInput.value : '').trim();
     // grossPhoto/tarePhoto/gross_photo_link/tare_photo_link aren't DOM-backed
     // (a captured photo, or an existing Drive link from an edit, isn't shown
     // as a form field) — carry them over from the previous state by row
@@ -2912,6 +3008,10 @@ function renderLoads(loads) {
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
+      /* Own positioning context for the description type-ahead dropdown —
+         .ld-item-desc-wrap is forced position:static in the phone grid. */
+      .ld-desc-ac-wrap { position:relative; min-width:0; }
+      .ld-desc-ac-wrap input { width:100%; }
       /* .ld-mobile-label + .ld-item-cap-inputs — added so mobile can show a
          label above each field (see the mobile redesign below) without
          touching the desktop layout: on desktop the label stays display:none
@@ -2946,8 +3046,6 @@ function renderLoads(loads) {
          column, which on a phone was too narrow to type an address-length
          description into. Sized up (bigger font/padding than the compact
          columns) since it's now its own full-width line, not a cramped cell. */
-      .ld-item-desc-other { grid-column:1 / -1; font-size:13px; padding:8px 10px; }
-      .ld-item-desc-other.hidden { display:none; }
       .ld-item-status:empty { display:none; }
       .ld-item-status { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin:-1px 0 3px; }
       #ld_items { overflow-x:auto; padding-bottom:2px; }
@@ -2999,7 +3097,6 @@ function renderLoads(loads) {
           grid-template-columns:1fr 1fr;
           grid-template-areas:
             "desc desc"
-            "other other"
             "gross tare"
             "net price"
             "amount amount"
@@ -3013,18 +3110,6 @@ function renderLoads(loads) {
           margin-bottom:12px;
         }
         .ld-item-desc-wrap { grid-area:desc; position:static; padding-right:0; }
-        /* Picking "Others…" in the dropdown above un-hides this immediately
-           (see the ld-item-desc-select change handler — no delay, it's a
-           synchronous classList change), but it wasn't assigned a spot in
-           the grid-template-areas above, so it fell through to the grid's
-           default auto-placement: a new row at the very BOTTOM of the
-           card, below Gross/Tare/Net/Price/Amount/Actions. Functionally
-           "immediate," but visually miles from the dropdown you just
-           tapped — reads as broken. Giving it its own named row directly
-           under desc fixes that: the moment "Others" is picked, the text
-           box appears right there, immediately below where you made the
-           selection. */
-        .ld-item-desc-other { grid-area:other; }
         .ld-item-cap-gross { grid-area:gross; }
         .ld-item-cap-tare { grid-area:tare; }
         .ld-item-net-wrap { grid-area:net; }
@@ -3176,12 +3261,38 @@ function wireLoadsEvents() {
         ev.preventDefault();
         const entry = matches[i];
         $('ld_seller').value = entry.aliases[0];
-        $('ld_seller_address').value = entry.raw;
+        // Populate BOTH address and phone from the address book, per Apsara
+        // 2026-08-20 ("i want address and phone number both should be
+        // populated whatever is available"). Only fills what the entry
+        // actually has — a contact with an address but no mobile fills the
+        // address and leaves the phone box empty for you to type into, which
+        // is exactly the case the backfill below then captures.
+        // `|| ''` rather than skipping: picking a different seller must
+        // CLEAR the previous one's details, otherwise the last seller's
+        // address silently rides along on this load.
+        $('ld_seller_address').value = entry.raw || '';
+        if ($('ld_seller_phone')) $('ld_seller_phone').value = entry.mobile || '';
         closeAc();
       });
     });
   });
-  $('ld_seller').addEventListener('blur', () => setTimeout(closeAc, 150));
+  $('ld_seller').addEventListener('blur', () => {
+    setTimeout(closeAc, 150);
+    // Typing the name out in full never fired the tap-to-pick handler above,
+    // so the address and phone stayed empty for anyone who knows their
+    // sellers by heart and doesn't wait for the dropdown. On blur, if what
+    // was typed is an EXACT address-book name, fill in whatever's missing.
+    //
+    // Only fills fields that are currently BLANK — unlike the pick handler,
+    // which clears and replaces. The difference is intent: tapping a
+    // suggestion is choosing a contact, so their details should win; typing
+    // a name is not a request to overwrite an address you may have just
+    // deliberately corrected for this one load.
+    const entry = addressBookExactMatch($('ld_seller').value);
+    if (!entry) return;
+    if (entry.raw && !$('ld_seller_address').value.trim()) $('ld_seller_address').value = entry.raw;
+    if (entry.mobile && $('ld_seller_phone') && !$('ld_seller_phone').value.trim()) $('ld_seller_phone').value = entry.mobile;
+  });
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
@@ -3219,13 +3330,18 @@ function wireLoadsEvents() {
           tare_photo_link : it.tare_photo_link  || null,
           tare_photo_drive_id : it.tare_photo_drive_id  || null,
         }));
-      // Auto-grow the item-type list — any description on this load that
-      // isn't already on the base+custom list came from "Others…" and is
-      // genuinely new. Fire-and-forget, same reasoning as the Address Book
-      // auto-save just above: the load itself is what matters, this is a
-      // convenience that must never block or fail the load save. Per Apsara
-      // 2026-08-15 ("when something gets added in others, it should get
-      // added to existing list of description").
+      // Auto-grow the catalog: anything typed into a description box that
+      // isn't already on the list gets added, per Apsara 2026-08-20 ("if
+      // they type something which is not in list, add that to list").
+      //
+      // Fires on SAVE rather than on blur on purpose. Typing is messy —
+      // people tab through fields, retype, correct themselves — and adding
+      // on every blur would fill the catalog with half-words like "Alum"
+      // that then need cleaning up in Settings. Saving a load is the point
+      // at which a description is a real one someone committed to.
+      //
+      // Fire-and-forget: the load is already saved, and a failure here
+      // costs nothing but retyping the description next time.
       const knownDescs = itemDescOptions().map(d => d.toLowerCase());
       const newDescs = [...new Set(items.map(it => it.description).filter(Boolean))]
         .filter(d => !knownDescs.includes(d.toLowerCase()));
@@ -3271,13 +3387,40 @@ function wireLoadsEvents() {
           api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address || '', mobile: payload.seller_phone || null }) })
             .then((entry) => { addressBookCache.push(entry); })
             .catch(() => {});
-        } else if (payload.seller_phone && !existingContact.mobile) {
-          api(`/api/address-book/${encodeURIComponent(existingContact.id)}`, {
-            method: 'PUT',
-            body: JSON.stringify({ aliases: existingContact.aliases, raw: existingContact.raw || '', mobile: payload.seller_phone, locked: !!existingContact.manually_edited }),
-          })
-            .then((updated) => { Object.assign(existingContact, updated); })
-            .catch(() => {});
+        } else {
+          // Backfill BLANK fields only. Extended 2026-08-20 from phone-only
+          // to address-as-well, per Apsara ("suppose that if address only
+          // there in address book but not mobile, if i type mobile number,
+          // address book should be updating"). The rule is symmetric and,
+          // more importantly, strictly additive: a field is written ONLY
+          // when the address book has nothing there and this load does.
+          //
+          // It deliberately does NOT overwrite a value that already exists,
+          // even when the two disagree. A yard hand correcting a delivery
+          // address for one load must not silently rewrite the company's
+          // address book for every future load — that edit belongs in
+          // Settings, where it's visible and deliberate. Silent overwrite
+          // is how a book of good addresses quietly rots.
+          const patch = {};
+          if (payload.seller_phone && !existingContact.mobile) patch.mobile = payload.seller_phone;
+          if (payload.seller_address && !existingContact.raw) patch.raw = payload.seller_address;
+          if (Object.keys(patch).length) {
+            api(`/api/address-book/${encodeURIComponent(existingContact.id)}`, {
+              method: 'PUT',
+              body: JSON.stringify({
+                aliases: existingContact.aliases,
+                raw: patch.raw !== undefined ? patch.raw : (existingContact.raw || ''),
+                mobile: patch.mobile !== undefined ? patch.mobile : (existingContact.mobile || null),
+                // PUT replaces tags wholesale, so echo the existing ones back
+                // — omitting them would blank the seller/buyer tags as a side
+                // effect of filling in a phone number.
+                tags: existingContact.tags || [],
+                locked: !!existingContact.manually_edited,
+              }),
+            })
+              .then((updated) => { Object.assign(existingContact, updated); })
+              .catch(() => {});
+          }
         }
       }
       stopCamera();
