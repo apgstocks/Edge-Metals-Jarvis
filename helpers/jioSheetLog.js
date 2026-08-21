@@ -14,25 +14,34 @@
 // data into the sheet" rule already applied to Pan Metal
 // (helpers/panMetalSheetLog.js's match-only filter).
 //
-// Dedup key: Container No. — same spirit as Pan Metal's "no duplicate on
-// invoice no" (Apsara hasn't said this explicitly for Jio, but a container
-// is the natural unique key here, and re-running verification on an
-// invoice already logged shouldn't create a second row for it).
-
-const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
+// Dedup/upsert key: Container No. — same spirit as Pan Metal's "no
+// duplicate on invoice no." Per Apsara: "when we rerun verification,why it
+// is rows/columns not getting updated?" — a Container already on the
+// sheet now gets its row overwritten with the latest figures instead of
+// skipped.
+//
+// Column order — Invoice No. was first added trailing at the end (safest
+// append-only move for a tab that may already have rows logged). Apsara's
+// very next message pasted the resulting header back and pointed at
+// "date,invoice no ,etc..", asking for Invoice No. to actually sit right
+// after Date instead. That's a genuine reorder, not just a rename or an
+// append, so — unlike everywhere else in this file's siblings that only
+// ever appends — this uses proformaSheetLog.js's reorderColumnToPosition,
+// which moves the WHOLE column (header + every value already logged
+// beneath it) as one unit via the Sheets API's moveDimension, so no
+// existing row's Invoice No. gets separated from the rest of that row.
+// Self-verifying: if the column doesn't land exactly where expected, it
+// throws rather than silently letting this file start writing new rows in
+// an order that no longer matches the sheet's real layout — a thrown error
+// here fails logJioVerification, which api.js already catches without
+// failing the verification response itself (surfaces as a "Sheet log
+// failed" chip instead of a silent misalignment).
+const {
+    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, reorderColumnToPosition,
+} = require('./proformaSheetLog');
 
 const TAB_NAME = 'Jio';
-// "Invoice No." appended AFTER Last Verified (not inserted near Date),
-// same "never insert/reorder an already-logged tab's columns" rule used
-// for AJ Transport's Others/Dry Run/Extra Scale — this tab may already
-// have rows logged under the original 9-column header on Apsara's live
-// sheet. The invoice number was already being extracted off every Jio PDF
-// (see gemini.js's extractJioInvoiceRecords — "invoice_no") and passed
-// through crossCheckJioRecords, it just wasn't logged to the sheet yet;
-// added per Apsara's follow-up after the AJ Transport work: "in jio,add
-// date,invoice no,... etc" — clarified to just add Invoice No., since Date
-// and the rest already exist.
-const HEADER_ROW = ['Date', 'Container', 'Shipper', 'Line Haul', 'Port Fees', 'Chassis Rent', 'Others', 'Net Amount', 'Last Verified', 'Invoice No.'];
+const HEADER_ROW = ['Date', 'Invoice No.', 'Container', 'Shipper', 'Line Haul', 'Port Fees', 'Chassis Rent', 'Others', 'Net Amount', 'Last Verified'];
 
 function todayStr() {
     const d = new Date();
@@ -53,6 +62,7 @@ async function logJioVerification(matchedRows) {
             container: (r.container_no || '').trim().toUpperCase(),
             row: [
                 r.invoice_date || '',
+                r.invoice_no || '',
                 r.container_no || '',
                 r.shipper || '',
                 safeNum(r.line_haul),
@@ -61,7 +71,6 @@ async function logJioVerification(matchedRows) {
                 safeNum(r.others),
                 safeNum(r.net_amount),
                 today,
-                r.invoice_no || '',
             ],
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row
@@ -71,14 +80,15 @@ async function logJioVerification(matchedRows) {
     const spreadsheetId = await getOrCreateSpreadsheetId();
     const sheets = getSheets();
     await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
+    // Runs AFTER ensureTab so the tab/header definitely exists first; a
+    // no-op every time after the first successful move since Invoice No.
+    // is already at index 1 afterward.
+    await reorderColumnToPosition(sheets, spreadsheetId, TAB_NAME, 'Invoice No.', 1);
 
-    // Per Apsara: "when we rerun verification,why it is rows/columns not
-    // getting updated?" — a Container already on the sheet now gets its
-    // row overwritten with the latest figures instead of skipped. Container
-    // is column B here.
+    // Container is column C now (was B before Invoice No. moved to B).
     const candidates = candidateRows.map((c) => ({ key: c.container, row: c.row }));
     const { logged, updated } = await upsertRowsByKey(
-        sheets, spreadsheetId, TAB_NAME, 'B', candidates,
+        sheets, spreadsheetId, TAB_NAME, 'C', candidates,
         (v) => (v || '').trim().toUpperCase(), // match the same case-insensitive Container key used above
     );
     return { logged, updated, spreadsheetId };

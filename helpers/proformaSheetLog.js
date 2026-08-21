@@ -258,6 +258,57 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
     }
 }
 
+// Physically moves an existing column (header cell AND every data value
+// beneath it, as one unit) to a new position — used when Apsara wants a
+// column's ORDER changed, not just relabeled or appended. Per her Jio
+// follow-up (column list ending "...Invoice No." followed by "--> date,
+// invoice no ,etc.." — read as: Invoice No. should sit right after Date,
+// not trailing at the end where it got appended): unlike
+// renameHeaderCellIfMatches (label only) or ensureTab's trailing backfill
+// (append only), this uses the Sheets API's moveDimension request, which
+// carries a column's data along with it — nothing gets separated from the
+// row it belongs to, unlike a naive "read everything, rewrite in new
+// order" approach would risk.
+//
+// Guarded and self-verifying: does nothing if the column's already in the
+// right spot; after moving, re-reads the header and throws if it doesn't
+// land exactly where expected, rather than letting the caller silently
+// start writing new rows in an order that no longer matches the sheet's
+// real layout.
+async function reorderColumnToPosition(sheets, spreadsheetId, tabName, columnLabel, desiredIndex0Based) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const tab = (meta.data.sheets || []).find((s) => s.properties.title === tabName);
+    if (!tab) return { moved: false, reason: 'tab not found' };
+    const sheetId = tab.properties.sheetId;
+
+    const headerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    const header = (headerRes.data.values && headerRes.data.values[0]) || [];
+    const currentIndex = header.indexOf(columnLabel);
+    if (currentIndex === -1) return { moved: false, reason: 'column not found', header };
+    if (currentIndex === desiredIndex0Based) return { moved: false, reason: 'already in position' };
+
+    await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{
+            moveDimension: {
+                source: { sheetId, dimension: 'COLUMNS', startIndex: currentIndex, endIndex: currentIndex + 1 },
+                destinationIndex: desiredIndex0Based,
+            },
+        }] },
+    });
+
+    const verifyRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    const newHeader = (verifyRes.data.values && verifyRes.data.values[0]) || [];
+    if (newHeader[desiredIndex0Based] !== columnLabel) {
+        throw new Error(
+            `reorderColumnToPosition: moved "${columnLabel}" on "${tabName}" but it landed at index ${newHeader.indexOf(columnLabel)}, `
+            + `not the expected ${desiredIndex0Based} — header is now [${newHeader.join(', ')}]. Stopping rather than writing rows `
+            + `in an order that may no longer match the sheet.`
+        );
+    }
+    return { moved: true, header: newHeader };
+}
+
 // A deliberate, narrow exception to ensureTab's "never touch an existing
 // header cell" rule above — for the rare case a column needs relabeling
 // in place, not just a new trailing column appended. Per Apsara's AJ
@@ -550,4 +601,5 @@ async function logProformaToSheet(body) {
 module.exports = {
     logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
     getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches, clearRowFormatting,
+    reorderColumnToPosition,
 };
