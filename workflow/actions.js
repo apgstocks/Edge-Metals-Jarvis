@@ -216,6 +216,107 @@ await _send(chatId, ['Truckers:', ...(t.length ? t : ['(none)']), '', 'Suppliers
 return { action_taken: 'contacts_shown' };
 }
 
+// Read-only address-book lookup. Reached ONLY via the AI classifier's
+// 'lookup_address' action — there is deliberately no regex/keyword grammar in
+// front of it (2026-08-22, per Apsara: "i cant hardcode everything. let jarvis
+// ai handle this"). Safe to be AI-first precisely because it sends nothing and
+// changes nothing; a misread costs a wrong address on screen, not a real
+// dispatch. See brain.js's SAFE_ACTIONS comment.
+//
+// REAL INCIDENT that prompted this (2026-08-22): "Junk car address" — a place
+// that IS in her address book — was answered with "I'm sorry, I can't help
+// with that. My purpose is to assist with freight operations for Edge Metals
+// Inc." There was no address-lookup action at all, so the classifier had
+// nothing to map it onto and fell through to a canned refusal, despite the
+// data being right there.
+//
+// Reuses quoteRequests' resolveLaneEntry rather than addressBook's
+// resolveAddress directly, so a lookup understands exactly the same names the
+// quote flow does — aliases, lane abbreviations ("LA"), and a raw-address text
+// search — instead of a second, subtly-different matcher drifting from it.
+function formatAddressEntry(entry) {
+    const name = (entry.aliases && entry.aliases[0]) || '(unnamed)';
+    const others = (entry.aliases || []).slice(1);
+    const lines = [`*${name}*`];
+    if (others.length) lines.push(`(also: ${others.join(', ')})`);
+    if (entry.raw) lines.push('', String(entry.raw).trim());
+    if (entry.mobile) lines.push('', `Mobile: ${entry.mobile}`);
+    if (entry.tags && entry.tags.length) lines.push(`Tagged: ${entry.tags.join(', ')}`);
+    return lines.join('\n');
+}
+// Strips the question wording off a lookup query, leaving just the place
+// name. This is NOT a command grammar — the AI still decides that a message
+// IS an address lookup (see brain.js). This only cleans up the NAME once that
+// decision is made, because the AI sometimes passes the whole message through
+// as target_name rather than isolating the place. Without it, "Junk car
+// address" reported "nothing saved" for a place that is very much saved.
+// Tried only as a FALLBACK, after the verbatim query has already failed, so a
+// real saved name that happens to contain one of these words still wins.
+function stripAddressQueryWording(text) {
+    let s = String(text || '').trim();
+    s = s.replace(/^(?:what(?:'?s| is)|where(?:'?s| is)|show|give|send|get|tell)\b\s*/i, '');
+    s = s.replace(/^(?:me|us)\b\s*/i, '');
+    s = s.replace(/^the\s+/i, '');
+    s = s.replace(/^(?:address|location|mobile|phone|number|contact)\s+(?:of|for)\s+/i, '');
+    s = s.replace(/[''`]s\s+(?:address|location|mobile|phone|number|contact)\b/i, '');
+    s = s.replace(/\s+(?:address|location|mobile|phone(?:\s+number)?|number|contact|details?|info)\b/i, '');
+    s = s.replace(/^(?:is|of|for|at)\s+/i, '');
+    return s.replace(/[?.!,]+$/, '').trim();
+}
+async function lookupAddress(chatId, query) {
+    const q = String(query || '').trim();
+    if (!q) {
+        await _send(chatId, `Which place? Give me the name as you've saved it (e.g. "Eccomelt address").`);
+        return { action_taken: 'address_no_query' };
+    }
+    const quoteHelper = require('../helpers/quoteRequests');
+    // Verbatim first — a saved name wins even if it contains a word the
+    // stripper would otherwise remove. Only fall back to the cleaned-up form.
+    let hit = quoteHelper.resolveLaneEntry(q);
+    if (!hit) {
+        const stripped = stripAddressQueryWording(q);
+        if (stripped && stripped.toLowerCase() !== q.toLowerCase()) {
+            hit = quoteHelper.resolveLaneEntry(stripped);
+        }
+    }
+
+    if (!hit) {
+        // Honest miss — offer the closest saved names rather than a bare "not
+        // found", since the usual cause is a slightly different spelling of a
+        // name that IS saved.
+        let suggestion = '';
+        try {
+            const { loadAddressBook } = require('../helpers/addressBook');
+            const names = loadAddressBook().map((e) => (e.aliases && e.aliases[0]) || '').filter(Boolean);
+            const ql = q.toLowerCase();
+            const close = names.filter((n) => {
+                const nl = n.toLowerCase();
+                return nl.includes(ql) || ql.includes(nl) || nl[0] === ql[0];
+            }).slice(0, 6);
+            if (close.length) suggestion = `\n\nClosest saved names: ${close.join(', ')}`;
+            else if (names.length) suggestion = `\n\n${names.length} places are saved — "show contacts" won't list them, but the Address Book page on the dashboard will.`;
+        } catch (err) {
+            console.warn('[ACTIONS] address suggestion lookup failed:', err.message);
+        }
+        await _send(chatId, `Nothing saved in the address book matching "${q}".${suggestion}`);
+        return { action_taken: 'address_not_found' };
+    }
+
+    if (hit.type === 'ambiguous') {
+        const listText = hit.matches
+            .map((e, i) => `${i + 1}. ${(e.aliases && e.aliases[0]) || '(unnamed)'} — ${String(e.raw || '').split('\n')[0]}`)
+            .join('\n');
+        // Deliberately NOT staged as a pending: this is a read-only lookup, and
+        // parking a pending here would block the queue behind a question that
+        // doesn't need answering. She can just re-ask with the exact name.
+        await _send(chatId, `"${q}" matches more than one saved place:\n${listText}\n\nAsk again with the exact name for the full address.`);
+        return { action_taken: 'address_ambiguous' };
+    }
+
+    await _send(chatId, formatAddressEntry(hit.entry));
+    return { action_taken: 'address_shown' };
+}
+
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
@@ -3100,38 +3201,6 @@ async function backfillCutoffs(chatId) {
     return { action_taken: 'cutoff_backfill_done', count: results.length };
 }
 
-// ── Manual Gmail poll trigger (2026-08-21) ────────────────────────────────────
-// Per Apsara: "run email watcher" over WhatsApp used to hit the LLM router
-// with nothing mapped to it ("I cannot directly 'run' it..."). This wires that
-// exact phrase to workflow/emailWatcher.js's run() — the SAME function
-// scheduler.js's 15-min cron already calls, so behavior is identical, just
-// on-demand instead of waiting for the next tick. Deliberately thin: no
-// separate result-summary plumbing here — run() already sends its own
-// aggregate WhatsApp notice (created/updated/rescheduled/flagged) via the
-// same _sendToManager wire if anything actually changed, so this only needs
-// to ack that the check is happening and let run() speak for itself after.
-async function checkEmailNow(chatId) {
-    const cfg = require('../config');
-    if (!cfg.getSettings().gmail_watch_enabled) {
-        await _send(chatId, 'Email watcher is turned off in Settings — turn it back on there first.');
-        return { action_taken: 'email_watch_disabled' };
-    }
-    const emailWatcher = require('./emailWatcher');
-    if (emailWatcher.isRunning()) {
-        await _send(chatId, 'Already checking Gmail right now — the scheduled poll must have just started. Give it a moment.');
-        return { action_taken: 'email_watch_already_running' };
-    }
-    await _send(chatId, "Checking Gmail now — I'll message you here if anything changes.");
-    try {
-        await emailWatcher.run();
-    } catch (err) {
-        console.error('[ACTIONS] checkEmailNow failed:', err.message);
-        await _send(chatId, `Email check failed: ${err.message}`);
-        return { action_taken: 'email_watch_check_failed' };
-    }
-    return { action_taken: 'email_watch_check_triggered' };
-}
-
 // ── Multi-trucker quote requests (2026-08-05) ────────────────────────────────
 // Per Apsara: "get quote from LA to Richmond" → resolve both ends against
 // the address book, resolve whichever truckers she named (or ask her which
@@ -3755,7 +3824,7 @@ async function handleContactQuoteLegReply(chatId, text) {
 module.exports = {
 init,
 setPending, clearPending, clearAllPending, getPending, getQueuedPendings, resolvePending, promoteQueued,
-showMenu, showBookingsMenu, showBookingStatus, showContacts,
+showMenu, showBookingsMenu, showBookingStatus, showContacts, lookupAddress,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,
@@ -3764,7 +3833,7 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs, checkEmailNow,
+    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
     startQuoteRequestFlow, resumeQuoteWithScaleTickets, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,

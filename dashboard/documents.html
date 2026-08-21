@@ -548,7 +548,7 @@ body[data-theme="light"] {
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="jioResultsTable">
               <thead>
-                <tr><th>Date</th><th>Container</th><th>Shipper</th><th>Line Haul</th><th>Port Fees</th><th>Chassis Rent</th><th>Others</th><th>Net Amount</th><th>Status</th></tr>
+                <tr><th>Date</th><th>Invoice No.</th><th>Container</th><th>Shipper</th><th>Line Haul</th><th>Port Fees</th><th>Chassis Rent</th><th>Others</th><th>Net Amount</th><th>Status</th></tr>
               </thead>
               <tbody id="jioResultsBody"></tbody>
             </table>
@@ -1129,6 +1129,7 @@ function renderJioResults(result) {
   $('jioResultsBody').innerHTML = matched.map((r) => `
     <tr>
       <td>${esc(r.invoice_date || '—')}</td>
+      <td>${esc(r.invoice_no || '—')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
       <td>${esc(r.shipper || '')}</td>
       <td>${fmtMoney(r.line_haul)}</td>
@@ -1137,7 +1138,7 @@ function renderJioResults(result) {
       <td>${fmtMoney(r.others)}</td>
       <td>${fmtMoney(r.net_amount)}</td>
       <td>${jioBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
   $('jioResultsWrap').classList.remove('hidden');
 
   $('jioSheetOnlyBody').innerHTML = sheetOnly.map((r) => `

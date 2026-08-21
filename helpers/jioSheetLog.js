@@ -22,7 +22,17 @@
 const { getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey } = require('./proformaSheetLog');
 
 const TAB_NAME = 'Jio';
-const HEADER_ROW = ['Date', 'Container', 'Shipper', 'Line Haul', 'Port Fees', 'Chassis Rent', 'Others', 'Net Amount', 'Last Verified'];
+// "Invoice No." appended AFTER Last Verified (not inserted near Date),
+// same "never insert/reorder an already-logged tab's columns" rule used
+// for AJ Transport's Others/Dry Run/Extra Scale — this tab may already
+// have rows logged under the original 9-column header on Apsara's live
+// sheet. The invoice number was already being extracted off every Jio PDF
+// (see gemini.js's extractJioInvoiceRecords — "invoice_no") and passed
+// through crossCheckJioRecords, it just wasn't logged to the sheet yet;
+// added per Apsara's follow-up after the AJ Transport work: "in jio,add
+// date,invoice no,... etc" — clarified to just add Invoice No., since Date
+// and the rest already exist.
+const HEADER_ROW = ['Date', 'Container', 'Shipper', 'Line Haul', 'Port Fees', 'Chassis Rent', 'Others', 'Net Amount', 'Last Verified', 'Invoice No.'];
 
 function todayStr() {
     const d = new Date();
@@ -51,6 +61,7 @@ async function logJioVerification(matchedRows) {
                 safeNum(r.others),
                 safeNum(r.net_amount),
                 today,
+                r.invoice_no || '',
             ],
         }))
         .filter((c) => c.container); // nothing to key a dedupe check on without a container — skip rather than log a blank row

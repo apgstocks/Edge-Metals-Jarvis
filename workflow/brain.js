@@ -866,19 +866,6 @@ function policyDecide(ctx) {
             return { intent: 'backfill_cutoffs', resolvedBy: 'policy', data: {} };
         }
 
-        // "run email watcher" / "check email" / "check gmail" / "check for new
-        // bookings" — manual trigger for workflow/emailWatcher.js's poll,
-        // added 2026-08-21 per Apsara: this exact phrase used to fall through
-        // to the AI router with nothing mapped to it at all ("I cannot
-        // directly 'run' it..."). Deterministic like backfill_cutoffs above —
-        // no reason to spend an LLM call classifying a fixed, common phrase
-        // with zero parameters to extract.
-        if (/^(?:run|check|poll)\s+(?:the\s+)?(?:email|gmail|mail)(?:\s+watcher)?(?:\s+now)?$/i.test(t) ||
-            /^check\s+(?:for\s+)?new\s+(?:emails?|bookings?)$/i.test(t) ||
-            /^check\s+(?:emails?|bookings?)\s+from\s+(?:mail|email|gmail)$/i.test(t)) {
-            return { intent: 'check_email_now', resolvedBy: 'policy', data: {} };
-        }
-
         // "learn radmetals contacts" / "learn radmetals domain" / "scan
         // radmetals contacts" — scans mail and proposes a domain-tree
         // contact group (primary/secondary/shared roles from real From/Cc/To
@@ -1308,7 +1295,8 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. CRITICAL: target_name is ALWAYS exactly the name/company the manager said, verbatim — a bare first name like "Mike" stays "Mike". If the manager typed a company name as ONE compressed word (e.g. "mkmetaltrading"), keep it as that exact one word — do NOT split or "clean up" it into separate words (e.g. "mk metal trading"); a real incident already happened where doing this broke address lookup entirely, because the search then went looking for a phrase that doesn't actually appear anywhere in real mail. Preserve the manager's exact spelling and spacing, whatever it is. NEVER invent, guess, or auto-complete an email address into target_name (e.g. turning "Mike" into "mike@example.com" or "mike@gmail.com") — you do not know their real address, and a fabricated one silently sent to would be a serious mistake. target_name may ONLY be a full email address if that literal address string is actually present in the manager's message. Actual address lookup (saved contacts, mail search, or asking the manager directly) is handled separately, after your classification — that is not your job here. SAME RULE for email_details: it is ONLY what the manager actually said the email should say — if they gave no content at all (e.g. "send mail to radmetals" with nothing else), email_details MUST be null. Do NOT invent a plausible-sounding reason or message ("just checking in", "I miss you", or similar filler) — a real incident already happened where this produced a fabricated "I miss you" email nobody asked for. Leaving email_details null is always correct when nothing was actually said; a downstream step handles that case properly (grounds the draft in real past correspondence, or asks a concrete question) — it does not need you to paper over the gap. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup, draft_email, search_mail, reply_email, and backfill_cutoffs. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. CRITICAL: target_name is ALWAYS exactly the name/company the manager said, verbatim — a bare first name like "Mike" stays "Mike". If the manager typed a company name as ONE compressed word (e.g. "mkmetaltrading"), keep it as that exact one word — do NOT split or "clean up" it into separate words (e.g. "mk metal trading"); a real incident already happened where doing this broke address lookup entirely, because the search then went looking for a phrase that doesn't actually appear anywhere in real mail. Preserve the manager's exact spelling and spacing, whatever it is. NEVER invent, guess, or auto-complete an email address into target_name (e.g. turning "Mike" into "mike@example.com" or "mike@gmail.com") — you do not know their real address, and a fabricated one silently sent to would be a serious mistake. target_name may ONLY be a full email address if that literal address string is actually present in the manager's message. Actual address lookup (saved contacts, mail search, or asking the manager directly) is handled separately, after your classification — that is not your job here. SAME RULE for email_details: it is ONLY what the manager actually said the email should say — if they gave no content at all (e.g. "send mail to radmetals" with nothing else), email_details MUST be null. Do NOT invent a plausible-sounding reason or message ("just checking in", "I miss you", or similar filler) — a real incident already happened where this produced a fabricated "I miss you" email nobody asked for. Leaving email_details null is always correct when nothing was actually said; a downstream step handles that case properly (grounds the draft in real past correspondence, or asks a concrete question) — it does not need you to paper over the gap. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. "lookup_address" is for ANY question about where a saved place IS, or its contact details on file — the address book holds yards, buyers, sellers, ports and facilities under short names Apsara uses daily ("Junk car", "Eccomelt", "Inesh yard", "LA"). Set target_name to the place she named, VERBATIM, and nothing else. Recognize this in whatever phrasing she uses: "Junk car address", "address of Eccomelt", "where is Inesh yard", "what's the address for LA", "send me Junk car's address", "Ecco addres" (typo), "junk car location", "Junk car mobile", "Junk car phone number". This is READ-ONLY — it just looks up and shows what's saved, nothing is sent to anyone and nothing is changed, so use it confidently rather than falling back to NEED_DATA or a refusal. A REAL INCIDENT (2026-08-22) is exactly why this action exists: "Junk car address" — a place that IS in the address book — got the generic "I'm sorry, I can't help with that. My purpose is to assist with freight operations" refusal, which was both wrong and absurd, since the data was sitting right there. If she names a place you don't recognize, still use lookup_address with her exact wording — the lookup itself reports honestly when nothing matches and offers close matches; that is not your job to pre-judge. Do NOT use draft_email/search_mail for these — she is asking what's on file, not asking to email anyone or search mail.
+You still cannot set reminders for the manager, make phone calls, or do anything else deferred beyond schedule_followup, draft_email, search_mail, reply_email, and backfill_cutoffs. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 
 - CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
@@ -1374,7 +1362,8 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, check_email_now, reply, silent, NEED_DATA, NEED_APPROVAL
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs,
+lookup_address, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -1399,7 +1388,17 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs', 'check_email_now',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
+    // Read-only address-book lookup — deliberately AI-classified with NO
+    // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
+    // hardcode everything. let jarvis ai handle this"). This is exactly the
+    // category where AI-first is correct: nothing is sent, nothing is
+    // mutated, no money moves. Worst case of a misread is showing the wrong
+    // saved address, which is immediately visible and correctable — unlike
+    // get_quote/forward_booking/draft_email, where a misread dispatches real
+    // messages or mutates booking state and therefore keeps its
+    // deterministic gate. See claude/jarvis-backlog-notes.md item 3.
+    'lookup_address',
 ]);
 
 async function aiDecide(ctx) {
@@ -1561,6 +1560,12 @@ async function route(decision, ctx, sendMessage) {
         case 'show_bookings_available':updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: 'unassigned' }); return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
+        // AI-classified, no regex in front of it — see SAFE_ACTIONS' comment
+        // on 'lookup_address' for why this one is deliberately AI-first.
+        // Falls back to the raw message text if the AI didn't isolate a name,
+        // since resolveLaneEntry does its own alias/partial/raw-text matching
+        // and copes fine with a bit of surrounding wording.
+        case 'lookup_address':         return actions.lookupAddress(chatId, d.target_name || ctx.text.trim());
         case 'forward_booking':        return bkg ? actions.forwardBooking(chatId, bkg, d.trucker_name, d.container_seq) : askBkg(chatId, 'Which booking should I forward? e.g. "forward BK123456"', 'forward_booking');
         case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : askBkg(chatId, 'Which booking should I assign? e.g. "assign BK123456"', 'assign_supplier');
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
@@ -1570,7 +1575,6 @@ async function route(decision, ctx, sendMessage) {
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
-        case 'check_email_now':         return actions.checkEmailNow(chatId);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'get_contact_quote':       return actions.startContactQuoteRequestFlow(chatId, d.recipient_query, d.details);
         case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());
@@ -1787,61 +1791,6 @@ function pendingFullReminder(p) {
     return null; // no type-specific text — use the generic template
 }
 
-
-// ── Standing reminders + price-sheet link, set from chat (2026-08-19) ────────
-// Added after a real transcript where Jarvis got BOTH of these wrong:
-//   "Please use this <sheets link>"        -> "I have noted the link" (it had
-//                                             not; PRICE_SHEET_ID is env-only,
-//                                             so nothing was stored at all)
-//   "remind Bose to update price list"     -> "I can't directly remind users"
-//                                             (it can: helpers/tasks.js plus a
-//                                             taskRunner cron already exist)
-// The first was a false claim of action, which is worse than refusing. The
-// second was a refusal of a capability the app already had — the AI simply
-// had no action exposed for it.
-//
-// Parsed deterministically here rather than left to the model: a standing
-// instruction that silently doesn't get created is exactly the failure above,
-// and a regex either matches or it doesn't.
-
-// "remind Bose to update the price list every day at 9am"
-// "remind @Bose to update prices daily at 09:00"
-function parseReminderCommand(text) {
-    const t = String(text || '').trim();
-    if (!/^\s*(please\s+)?remind\b/i.test(t)) return null;
-    // Time: "at 9am" / "at 9:30 pm" / "at 21:00". Defaults to 09:00 when a
-    // recurrence is clearly asked for but no time is given.
-    let hh = null, mm = 0;
-    const tm = t.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-    if (tm) {
-        hh = Number(tm[1]);
-        mm = tm[2] ? Number(tm[2]) : 0;
-        const ap = (tm[3] || '').toLowerCase();
-        if (ap === 'pm' && hh < 12) hh += 12;
-        if (ap === 'am' && hh === 12) hh = 0;
-    }
-    const daily = /\b(every\s*day|everyday|daily|each\s*day)\b/i.test(t);
-    if (hh == null) { if (!daily) return null; hh = 9; }
-    if (hh > 23 || mm > 59) return null;
-
-    // Who: "remind <who> to <what>"
-    const who = t.match(/remind\s+@?([^\s].*?)\s+to\s+/i);
-    const targetName = who ? who[1].replace(/[@\u2068\u2069]/g, '').trim() : null;
-    // What: everything after "to ", minus the trailing schedule phrase.
-    let what = t.replace(/^.*?\bto\s+/i, '');
-    what = what.replace(/\b(every\s*day|everyday|daily|each\s*day)\b/ig, '')
-               .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(am|pm)?/ig, '')
-               .replace(/\s{2,}/g, ' ').trim().replace(/[.,]+$/, '');
-    if (!what) return null;
-    return { targetName, what, hhmm: `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`, daily: true };
-}
-
-// Any Google Sheets URL in the message.
-function parseSheetLink(text) {
-    const m = String(text || '').match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
-    return m ? m[1] : null;
-}
-
 async function process(rawEvent, sendMessage) {
     const started = Date.now();
     const inbound = await normalize(rawEvent);
@@ -1859,71 +1808,6 @@ async function process(rawEvent, sendMessage) {
     // own chat (awaiting yes/no, then possibly a date).
     const pending = actions.getPending(inbound.chatId);
     const ctx     = await buildContext(inbound, pending);
-
-    // ── Deterministic command intercepts, before the AI sees the message ──
-    // Both of these were previously either refused or falsely confirmed; see
-    // parseReminderCommand's note above.
-    if (!pending) {
-        // Price-sheet link — MANAGER ONLY. Anyone in the yard group could
-        // otherwise repoint the price list the whole business quotes from,
-        // which is a bigger lever than it looks.
-        const sheetId = parseSheetLink(inbound.text);
-        if (sheetId) {
-            if (inbound.role !== 'manager') {
-                await sendMessage(inbound.chatId, "I can only change the price sheet when the request comes from the manager's number — ask Apsara to send that link.");
-                return;
-            }
-            const { loadSettings, saveSettings } = require('../helpers/json');
-            await saveSettings({ ...loadSettings(), price_sheet_id: sheetId });
-            await sendMessage(inbound.chatId, `Saved. I'll read the price list from that sheet from now on (id ending ...${sheetId.slice(-6)}). Previous sheet is no longer used.`);
-            return;
-        }
-
-        // "cancel reminders" / "stop reminders" — the way out. A standing
-        // instruction with no off switch is a trap.
-        if (/^\s*(cancel|stop|remove)\s+(all\s+)?reminders?\b/i.test(inbound.text || '')) {
-            const tasks = require('../helpers/tasks');
-            const mine = tasks.loadTasks().filter(t => t.status === 'pending' && t.repeat && t.target_chat === inbound.chatId);
-            for (const t of mine) await tasks.cancel(t.id, 'cancelled_from_chat');
-            await sendMessage(inbound.chatId, mine.length
-                ? `Cancelled ${mine.length} standing reminder${mine.length === 1 ? '' : 's'} for this chat.`
-                : 'There are no standing reminders set for this chat.');
-            return;
-        }
-
-        // Standing reminder — allowed from manager/team/yard, per Apsara
-        // 2026-08-19 ("anyone in the yard group").
-        const rem = parseReminderCommand(inbound.text);
-        if (rem) {
-            if (!['manager', 'team', 'yard'].includes(inbound.role)) {
-                await sendMessage(inbound.chatId, "Reminders can only be set from the yard or team group, or by the manager.");
-                return;
-            }
-            const tasks = require('../helpers/tasks');
-            const fireAt = tasks.nextDailyOccurrence(rem.hhmm);
-            if (!fireAt) {
-                await sendMessage(inbound.chatId, "I couldn't read a time from that — try \"remind Bose to update the price list every day at 9am\".");
-                return;
-            }
-            // Delivered back into THIS chat rather than DM'ing the named
-            // person: Jarvis can't reliably resolve "@Bose" to a phone
-            // number, and a reminder that lands in the group everyone
-            // already watches is more likely to be acted on anyway. The
-            // @name is kept in the text so it still pings them.
-            const who = rem.targetName ? `@${rem.targetName} ` : '';
-            await tasks.enqueue({
-                type: 'generic_message',
-                target_kind: 'chat',
-                target_chat: inbound.chatId,
-                message: `Reminder: ${who}${rem.what}`,
-                fire_at: fireAt.toISOString(),
-                repeat: { daily_at: rem.hhmm },
-                created_by: `chat:${inbound.role}`,
-            });
-            await sendMessage(inbound.chatId, `Done — I'll post "${rem.what}" here every day at ${rem.hhmm}, starting ${fireAt.toLocaleString('en-US', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}. Say "cancel reminders" to stop.`);
-            return;
-        }
-    }
 
     let decision = policyDecide(ctx);
     if (decision.needsAI) {
