@@ -2192,11 +2192,6 @@ let currentLoadItems = [];
 // editing an existing one (see openEditLoadModal) — Save then PUTs instead of
 // POSTing, and resetLoadModal() clears it back to null on close/new.
 let editingLoadId = null;
-// Set right before openEditLoadModal() when the load being edited is
-// locked (status === 'pdf_generated') — carried through to the PUT
-// request's admin_password field. Mirrors mobile-app/www/index.html's
-// same variable/flow.
-let editUnlockPassword = null;
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -2680,7 +2675,6 @@ function todayLocalDateStr() {
 
 function resetLoadModal() {
   editingLoadId = null;
-  editUnlockPassword = null;
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
@@ -3252,16 +3246,10 @@ function wireLoadsEvents() {
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
       if (isEdit) {
-        // admin_password only matters server-side when this load is
-        // locked (status === 'pdf_generated') — see the Edit button
-        // handler below, which prompts for it up front and stashes it in
-        // editUnlockPassword before this modal even opens.
-        if (editUnlockPassword) payload.admin_password = editUnlockPassword;
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
-      editUnlockPassword = null;
       // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
       // type a new name if it is not there in address book, it should be
       // created as new contact with name, address(optional), phone
@@ -3299,7 +3287,6 @@ function wireLoadsEvents() {
       $('loadModalErr').textContent = err.message;
       // Wrong admin password (or any other failure) — clear it rather than
       // silently resubmitting the same rejected password on a retry.
-      editUnlockPassword = null;
     } finally {
       btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Create invoice';
     }
@@ -3348,38 +3335,14 @@ function wireDeckEvents() {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
     if (!load) return;
-    // Locked once a PDF has been generated — per Apsara 2026-08-17.
-    // FIXED same day (Apsara: "when i click ok without entering admin
-    // password, still it is allowing me to edit") — the password is now
-    // verified BEFORE the form opens instead of only at save time. See
-    // mobile-app/www/index.html's identical handler for the full note.
-    // The server-side gate in PUT /api/loads/:id is unchanged and still
-    // the real boundary; this just stops the form opening on a bad or
-    // empty password.
-    // An admin session is already proof of admin — no prompt (corrected
-    // 2026-08-19 per Apsara). The prompt is how a STAFF or USER session
-    // unlocks a locked load; re-asking an admin for the password they
-    // just signed in with proves nothing. Server agrees: PUT
-    // /api/loads/:id skips the check entirely for req.role === 'admin'.
-    if (load.status === 'pdf_generated' && ROLE !== 'admin') {
-      const pw = prompt(`Load ${load.id}'s PDF has already been generated. Enter the admin password to unlock editing:`);
-      if (pw === null) return; // cancelled
-      if (!pw.trim()) { alert('Admin password is required to edit a load whose PDF has been generated.'); return; }
-      btn.disabled = true;
-      const original = btn.textContent;
-      btn.textContent = 'Checking…';
-      try {
-        await api('/api/verify-admin-password', { method: 'POST', body: JSON.stringify({ password: pw }) });
-      } catch (err) {
-        alert(err.message || 'Wrong admin password.');
-        return;
-      } finally {
-        btn.disabled = false; btn.textContent = original;
-      }
-      editUnlockPassword = pw;
-    } else {
-      editUnlockPassword = null;
-    }
+    // NO EDIT LOCK — removed 2026-08-20 per Apsara ("remove the admin
+    // password asking for editing even for staff access"). The lock, the
+    // prompt and the admin-only carve-out are all gone; any authorised user
+    // opens the form directly.
+    // Safe because the PDF is not the record — loads.json is. editLoad()
+    // clears the PDF links and resets status to 'open' on every edit, so a
+    // corrected load can't keep serving a stale ticket as current; Regenerate
+    // PDF rebuilds it from the corrected numbers.
     openEditLoadModal(load);
   }));
   document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', (ev) => {

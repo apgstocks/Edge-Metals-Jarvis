@@ -1131,14 +1131,15 @@ function createApi() {
             // git checkout) touched this exact file mid-session. If this
             // keeps happening, it's worth checking whether anything else
             // is writing to api.js while I'm mid-edit on it.
-            if (existing.status === 'pdf_generated') {
-                const adminPw = cfg.ADMIN_PASSWORD;
-                const supplied = String(b.admin_password || '');
-                const eq = (a, b2) => { const A = Buffer.from(a), B = Buffer.from(b2); return A.length === B.length && crypto.timingSafeEqual(A, B); };
-                if (!adminPw || !supplied || !eq(supplied, adminPw)) {
-                    return res.status(403).json({ error: 'This load\'s PDF has already been generated. Enter the admin password to unlock editing.', locked: true });
-                }
-            }
+            // NO EDIT LOCK. The admin-password gate that used to sit here was
+            // removed 2026-08-20 per Apsara ("remove the admin password asking
+            // for editing even for staff access") — it now applies to nobody,
+            // not just admins.
+            // Safe to drop because the PDF is not the record: loads.json is.
+            // editLoad() already clears pdf_link/weights_pdf_link and resets
+            // status to 'open' on every edit, so a corrected load cannot keep
+            // serving a stale ticket as if it were current — Regenerate PDF
+            // rebuilds it from the corrected numbers.
 
             const record = await editLoad(req.params.id, {
                 date: b.date, seller: b.seller, description: b.description,
