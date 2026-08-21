@@ -3100,6 +3100,38 @@ async function backfillCutoffs(chatId) {
     return { action_taken: 'cutoff_backfill_done', count: results.length };
 }
 
+// ── Manual Gmail poll trigger (2026-08-21) ────────────────────────────────────
+// Per Apsara: "run email watcher" over WhatsApp used to hit the LLM router
+// with nothing mapped to it ("I cannot directly 'run' it..."). This wires that
+// exact phrase to workflow/emailWatcher.js's run() — the SAME function
+// scheduler.js's 15-min cron already calls, so behavior is identical, just
+// on-demand instead of waiting for the next tick. Deliberately thin: no
+// separate result-summary plumbing here — run() already sends its own
+// aggregate WhatsApp notice (created/updated/rescheduled/flagged) via the
+// same _sendToManager wire if anything actually changed, so this only needs
+// to ack that the check is happening and let run() speak for itself after.
+async function checkEmailNow(chatId) {
+    const cfg = require('../config');
+    if (!cfg.getSettings().gmail_watch_enabled) {
+        await _send(chatId, 'Email watcher is turned off in Settings — turn it back on there first.');
+        return { action_taken: 'email_watch_disabled' };
+    }
+    const emailWatcher = require('./emailWatcher');
+    if (emailWatcher.isRunning()) {
+        await _send(chatId, 'Already checking Gmail right now — the scheduled poll must have just started. Give it a moment.');
+        return { action_taken: 'email_watch_already_running' };
+    }
+    await _send(chatId, "Checking Gmail now — I'll message you here if anything changes.");
+    try {
+        await emailWatcher.run();
+    } catch (err) {
+        console.error('[ACTIONS] checkEmailNow failed:', err.message);
+        await _send(chatId, `Email check failed: ${err.message}`);
+        return { action_taken: 'email_watch_check_failed' };
+    }
+    return { action_taken: 'email_watch_check_triggered' };
+}
+
 // ── Multi-trucker quote requests (2026-08-05) ────────────────────────────────
 // Per Apsara: "get quote from LA to Richmond" → resolve both ends against
 // the address book, resolve whichever truckers she named (or ask her which
@@ -3732,7 +3764,7 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
-    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs, checkEmailNow,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
     startQuoteRequestFlow, resumeQuoteWithScaleTickets, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,

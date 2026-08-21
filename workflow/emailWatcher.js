@@ -99,13 +99,26 @@ async function saveProcessed(set) {
 let _running = false;
 
 async function run() {
-    if (!cfg.GMAIL_WATCH_ENABLED) return;
+    // Dynamic (dashboard-editable) setting, not the static cfg.GMAIL_WATCH_ENABLED
+    // env read — per Apsara 2026-08-21, this needs to be flippable live from
+    // Settings without a restart. getSettings() falls back to the env var if
+    // nobody's touched the toggle yet, so existing deployments are unaffected.
+    if (!cfg.getSettings().gmail_watch_enabled) return;
     if (_running) {
         console.log(`[${AGENT}] Previous run still in progress — skipping this tick to avoid duplicate processing`);
         return;
     }
     _running = true;
     try {
+        // Stamped here — reaching this point means a real poll is actually
+        // starting (enabled, not already running), which is what "last active"
+        // should mean. mutateJson (already imported below) for the same
+        // locking/atomicity reason every other settings.json write in this
+        // codebase uses it, not a plain read-then-write.
+        await mutateJson(cfg.SETTINGS_FILE, {}, (s) => {
+            s.gmail_watcher_last_run = new Date().toISOString();
+            return s;
+        });
         await _runOnce();
     } finally {
         _running = false;
@@ -396,4 +409,4 @@ async function _runOnce() {
     }
 }
 
-module.exports = { init, run };
+module.exports = { init, run, isRunning: () => _running };

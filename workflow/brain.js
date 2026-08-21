@@ -866,6 +866,19 @@ function policyDecide(ctx) {
             return { intent: 'backfill_cutoffs', resolvedBy: 'policy', data: {} };
         }
 
+        // "run email watcher" / "check email" / "check gmail" / "check for new
+        // bookings" — manual trigger for workflow/emailWatcher.js's poll,
+        // added 2026-08-21 per Apsara: this exact phrase used to fall through
+        // to the AI router with nothing mapped to it at all ("I cannot
+        // directly 'run' it..."). Deterministic like backfill_cutoffs above —
+        // no reason to spend an LLM call classifying a fixed, common phrase
+        // with zero parameters to extract.
+        if (/^(?:run|check|poll)\s+(?:the\s+)?(?:email|gmail|mail)(?:\s+watcher)?(?:\s+now)?$/i.test(t) ||
+            /^check\s+(?:for\s+)?new\s+(?:emails?|bookings?)$/i.test(t) ||
+            /^check\s+(?:emails?|bookings?)\s+from\s+(?:mail|email|gmail)$/i.test(t)) {
+            return { intent: 'check_email_now', resolvedBy: 'policy', data: {} };
+        }
+
         // "learn radmetals contacts" / "learn radmetals domain" / "scan
         // radmetals contacts" — scans mail and proposes a domain-tree
         // contact group (primary/secondary/shared roles from real From/Cc/To
@@ -1361,7 +1374,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, reply, silent, NEED_DATA, NEED_APPROVAL
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, check_email_now, reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
 {
@@ -1386,7 +1399,7 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs', 'check_email_now',
 ]);
 
 async function aiDecide(ctx) {
@@ -1557,6 +1570,7 @@ async function route(decision, ctx, sendMessage) {
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
+        case 'check_email_now':         return actions.checkEmailNow(chatId);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'get_contact_quote':       return actions.startContactQuoteRequestFlow(chatId, d.recipient_query, d.details);
         case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());
