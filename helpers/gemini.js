@@ -473,6 +473,143 @@ Return the JSON object and nothing else.`;
     if (lastErr) throw lastErr;
     return null;
 }
+
+// ── Multimodal: extract line items from a Sher Trucking invoice ─────────────
+// Used by the Verification tab's Transport → Sher Trucking sub-tab. Added
+// per Apsara: "instead of container,booking number shoudl be compared...
+// Create a tab called Sher in that date (from uplaoded),booking no,quantity
+// ,chassis,others,Amount should be there." Unlike Jio, I don't have a real
+// Sher Trucking invoice sample to ground this prompt against (Jio's prompt
+// was written against Invoice_8559.pdf/Invoice_8635.pdf's actual text) —
+// this is a best-effort field guess modeled on the same
+// trucking-invoice shape Jio uses, keyed on Booking No. instead of
+// container. Flagged to Apsara: worth sending a real Sher invoice to
+// confirm/tune this against, same way Jio's was verified.
+async function extractSherTruckingInvoiceRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from Sher Trucking for hauling containers under an ocean carrier booking number. Extract one record per booking billed. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "records": [
+    {
+      "invoice_date": null,   // MM/DD/YYYY — the invoice's own date
+      "booking_no": null,     // the ocean carrier's Booking No. this invoice is billing against
+      "quantity": null,       // how many containers/loads this invoice is billing under that ONE booking number — an integer count, e.g. 2. null if not stated anywhere on the invoice.
+      "chassis": 0,           // any chassis rental/rent charge, plain number, 0 if not present
+      "other_charges": [      // ANY other line item that isn't chassis — e.g. line haul, port fees, detention, fuel surcharge. Empty array if none.
+        { "label": null, "amount": 0 }
+      ],
+      "amount": 0             // the invoice's own total/net amount due — the actual grand total printed, not a sum you compute yourself
+    }
+  ]
+}
+
+Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.records)) {
+                console.log(`[GEMINI] Sher Trucking invoice extraction: ${parsed.records.length} record(s)`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Sher Trucking invoice extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Sher Trucking invoice extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
+
+// ── Multimodal: extract line items from an AJ Transport invoice ─────────────
+// Used by the Verification tab's Transport → AJ Transport sub-tab. Grounded
+// against a real file (Invoice_6405_from_AJ_Transport_Inc.pdf): ONE invoice
+// bills MULTIPLE containers, one "CONTAINER" activity row per container,
+// each row's Description packing BOTH the container no. and the ocean
+// carrier booking no. on one line (e.g. "LYGU0110485 EBKG17996190"),
+// followed by a line like "LOADED- MARTINEZ- 8/11" or "LOADED - BOSE Yard
+// -8/17 (HARNESS WIRE)" — the shipper/origin name and the pickup date,
+// squeezed into free text with no separate labeled fields for either. The
+// invoice ALSO bills non-container line items (seen for real: "DRY RUN
+// CHARGE", "CHARGE FOR EXTRA SCALE") that have no container of their own —
+// Apsara's requested columns (container no., booking no., shipper, pickup
+// date, rate, amount) have nowhere for those to go, so this extracts ONLY
+// the CONTAINER activity rows, one record each; non-container charge lines
+// are intentionally left out rather than guessed onto the nearest
+// container's amount.
+async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are a trucking/drayage billing expert. This PDF is an invoice from AJ Transport Inc. It bills one or more containers — each one appears as its own line item under an "ACTIVITY" column labeled "CONTAINER" (ignore any other activity line, e.g. "DRY RUN CHARGE", "CHARGE FOR EXTRA SCALE", or anything else that isn't a CONTAINER line — those don't belong to a specific container and should NOT be included). Extract one record per CONTAINER line. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "invoice_no": null,      // e.g. "6405" — the invoice's own number, same for every record
+  "invoice_date": null,    // MM/DD/YYYY — the invoice's own date, same for every record
+  "records": [
+    {
+      "container_no": null,  // the container number on this CONTAINER line's description (e.g. "LYGU0110485") — a standard container number is 4 letters + 7 digits
+      "booking_no": null,    // the booking number on the SAME line as the container number (e.g. "EBKG17996190") — usually right after the container number, on the same line
+      "shipper": null,       // the origin/shipper name mentioned on the line below the container/booking (e.g. "MARTINEZ" from "LOADED- MARTINEZ- 8/11", or "BOSE Yard" from "LOADED - BOSE Yard -8/17 (HARNESS WIRE)") — just the name, not the date or the item in parentheses
+      "pickup_date": null,   // the date on that same description line (e.g. "8/11", "8/17") — exactly as printed, do NOT add a year since the invoice doesn't state one for this field
+      "rate": 0,             // this container line's own RATE column value, plain number
+      "amount": 0            // this container line's own AMOUNT column value, plain number
+    }
+  ]
+}
+
+Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.records)) {
+                console.log(`[GEMINI] AJ Transport invoice extraction: ${parsed.records.length} record(s)`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] AJ Transport invoice extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] AJ Transport invoice extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
 // NOTE: callGeminiText() was removed here (2026-07-16 cleanup). It had been
 // declared TWICE in this file — once above returning a trimmed string, once
 // down here returning raw JSON text with its own separate GoogleGenerativeAI
@@ -3506,4 +3643,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords };

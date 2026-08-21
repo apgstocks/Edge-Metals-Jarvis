@@ -130,43 +130,14 @@ async function createSheet(drive) {
     return res.data.id;
 }
 
+// Delegates to the generic ensureTab below (same logic this function used
+// to inline itself, now shared) — kept as its own named function since
+// getOrCreateSpreadsheetId() below already calls it by name, and other
+// files may too. Behavior is unchanged: create-or-find the Proforma tab,
+// write its header if blank. ensureTab additionally applies header
+// formatting (bold/shaded/frozen row) — see that function's comment.
 async function ensureProformaTab(sheets, spreadsheetId) {
-    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
-    const sheetsList = meta.data.sheets || [];
-    const tab = sheetsList.find((s) => s.properties.title === TAB_NAME);
-
-    if (!tab) {
-        if (sheetsList.length === 1) {
-            // Freshly-created spreadsheet has exactly one default tab
-            // ("Sheet1") — rename it in place rather than leaving a stray
-            // extra tab around.
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId,
-                requestBody: { requests: [{
-                    updateSheetProperties: {
-                        properties: { sheetId: sheetsList[0].properties.sheetId, title: TAB_NAME },
-                        fields: 'title',
-                    },
-                }] },
-            });
-        } else {
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId,
-                requestBody: { requests: [{ addSheet: { properties: { title: TAB_NAME } } }] },
-            });
-        }
-    }
-
-    // Only write the header row if row 1 is currently empty — never
-    // clobber a header that's already there (e.g. if Apsara edits it by
-    // hand later).
-    const headerCheck = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!A1:Z1` });
-    if (!headerCheck.data.values || !headerCheck.data.values.length) {
-        await sheets.spreadsheets.values.update({
-            spreadsheetId, range: `${TAB_NAME}!A1`, valueInputOption: 'RAW',
-            requestBody: { values: [HEADER_ROW] },
-        });
-    }
+    await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 }
 
 async function getOrCreateSpreadsheetId() {
@@ -189,6 +160,7 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
     const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
     const sheetsList = meta.data.sheets || [];
     const tab = sheetsList.find((s) => s.properties.title === tabName);
+    let sheetId = tab ? tab.properties.sheetId : null;
 
     if (!tab) {
         if (sheetsList.length === 1 && sheetsList[0].properties.title === 'Sheet1') {
@@ -203,11 +175,13 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
                     },
                 }] },
             });
+            sheetId = sheetsList[0].properties.sheetId;
         } else {
-            await sheets.spreadsheets.batchUpdate({
+            const created = await sheets.spreadsheets.batchUpdate({
                 spreadsheetId,
                 requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
             });
+            sheetId = created.data.replies[0].addSheet.properties.sheetId;
         }
     }
 
@@ -216,6 +190,40 @@ async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
         await sheets.spreadsheets.values.update({
             spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW',
             requestBody: { values: [headerRow] },
+        });
+    }
+
+    // Header formatting — bold text, a shaded background, and the header
+    // row frozen so it stays visible while scrolling. Per Apsara: "headers
+    // in tab should be differentiated in my edge metals sheet." Applied on
+    // EVERY call, not just when the tab/header is first created, so it
+    // reaches tabs that already existed before this was added (Proforma,
+    // Pan metal, Jio, Sher) — not just brand-new ones. Cheap and
+    // idempotent: re-applying the same formatting to an already-formatted
+    // header is a no-op in effect.
+    if (sheetId != null) {
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: { requests: [
+                {
+                    repeatCell: {
+                        range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+                        cell: {
+                            userEnteredFormat: {
+                                backgroundColor: { red: 0.85, green: 0.89, blue: 0.95 },
+                                textFormat: { bold: true },
+                            },
+                        },
+                        fields: 'userEnteredFormat(backgroundColor,textFormat)',
+                    },
+                },
+                {
+                    updateSheetProperties: {
+                        properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+                        fields: 'gridProperties.frozenRowCount',
+                    },
+                },
+            ] },
         });
     }
 }

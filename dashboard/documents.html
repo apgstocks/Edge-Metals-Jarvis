@@ -444,10 +444,96 @@ body[data-theme="light"] {
         <button class="verify-subtab-btn" data-verify-subtab="jio">Jio</button>
       </div>
       <div id="verifyPanelAjTransport">
-        <div class="placeholder-note">AJ Transport verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+        <div class="section-label" style="margin-top:0;">Upload AJ Transport invoices</div>
+        <label id="ajDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="ajPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">⇪</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="ajDropLabel">Drop AJ Transport invoice PDFs here — multiple files supported</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis reads every container line on the invoice and confirms both the container no. and its booking no. match the Invoice sheet</div>
+          </div>
+        </label>
+        <div id="ajFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+        <div style="margin-top:14px;">
+          <button id="btnAjVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+
+        <div id="ajLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the invoices and checking containers + bookings against the Invoice sheet…
+        </div>
+
+        <div id="ajSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <div id="ajResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">AJ Transport invoices vs. Invoice sheet</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="ajResultsTable">
+              <thead>
+                <tr><th>Invoice Date</th><th>Invoice No.</th><th>Container No.</th><th>Booking No.</th><th>Shipper</th><th>Pickup Date</th><th>Rate</th><th>Amount</th><th>Status</th></tr>
+              </thead>
+              <tbody id="ajResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="ajSheetOnlyWrap" class="hidden" style="margin-top:18px;">
+          <div class="section-label">On the Invoice sheet, but not on any uploaded AJ Transport invoice this run</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:-6px; margin-bottom:8px;">Not scoped to AJ Transport specifically — the sheet has no marker for which trucker hauled a container, so this includes every container that isn't Jio's or Sher's just as much as it includes anything actually missing from AJ Transport. Treat as a hint, not an alarm.</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="ajSheetOnlyTable">
+              <thead>
+                <tr><th>Container No.</th><th>Booking No. (sheet)</th><th>Inv No.</th><th>Consignee</th></tr>
+              </thead>
+              <tbody id="ajSheetOnlyBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div id="verifyPanelSherTrucking" class="hidden">
-        <div class="placeholder-note">Sher Trucking verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+        <div class="section-label" style="margin-top:0;">Upload Sher Trucking invoices</div>
+        <label id="sherDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="sherPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">⇪</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="sherDropLabel">Drop Sher Trucking invoice PDFs here — multiple files supported</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis reads each invoice's Booking No. and quantity, then checks that the booking appears that many times on the Invoice sheet's Booking No. column</div>
+          </div>
+        </label>
+        <div id="sherFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+        <div style="margin-top:14px;">
+          <button id="btnSherVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+
+        <div id="sherLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the invoices and checking booking counts against the Invoice sheet…
+        </div>
+
+        <div id="sherSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <div id="sherResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">Sher invoices vs. Invoice sheet</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="sherResultsTable">
+              <thead>
+                <tr><th>Date</th><th>Booking No.</th><th>Quantity</th><th>Sheet Count</th><th>Chassis</th><th>Others</th><th>Amount</th><th>Status</th></tr>
+              </thead>
+              <tbody id="sherResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sherSheetOnlyWrap" class="hidden" style="margin-top:18px;">
+          <div class="section-label">On the Invoice sheet, but not on any uploaded Sher invoice this run</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:-6px; margin-bottom:8px;">Not scoped to Sher specifically — the sheet has no marker for which trucker hauled a booking, so this includes every booking that isn't AJ Transport's or Jio's just as much as it includes anything actually missing from Sher. Treat as a hint, not an alarm.</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="sherSheetOnlyTable">
+              <thead>
+                <tr><th>Booking No.</th><th>Sheet Count</th><th>Inv No.</th><th>Consignee</th></tr>
+              </thead>
+              <tbody id="sherSheetOnlyBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div id="verifyPanelJio" class="hidden">
         <div class="section-label" style="margin-top:0;">Upload Jio Transport invoices</div>
@@ -1092,6 +1178,215 @@ $('btnJioVerify').addEventListener('click', async () => {
   } finally {
     setButtonLoading(btn, false);
     $('jioLoading').classList.add('hidden');
+  }
+});
+
+let sherFiles = []; // [{ name, base64 }]
+function renderSherFileList() {
+  $('sherFileList').innerHTML = sherFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:11px; font-family:var(--font-mono); color:var(--text-body);">
+      📄 ${esc(f.name)}
+      <button type="button" class="sher-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('sherFileList').querySelectorAll('.sher-file-remove').forEach((el) => el.addEventListener('click', () => {
+    sherFiles.splice(Number(el.dataset.i), 1);
+    renderSherFileList();
+  }));
+  $('sherDropLabel').textContent = sherFiles.length
+    ? `${sherFiles.length} file${sherFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop Sher Trucking invoice PDFs here — multiple files supported';
+}
+function handleSherFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      sherFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderSherFileList();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+// sherDropZone is a <label> wrapping sherPdfInput — no explicit
+// click-forwarding listener here, same fix as Zimex/Pan Metal/Jio above.
+$('sherPdfInput').addEventListener('change', () => { handleSherFiles($('sherPdfInput').files); $('sherPdfInput').value = ''; });
+$('sherDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('sherDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleSherFiles(e.dataTransfer.files); });
+
+const SHER_STATUS_BADGE = {
+  verified: { label: 'Verified', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  quantity_mismatch: { label: 'Quantity mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_booking_on_pdf: { label: 'No booking no. read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  quantity_unreadable: { label: 'Quantity unreadable', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function sherBadge(status) {
+  const b = SHER_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+
+function renderSherResults(result) {
+  const matched = result.matched || [];
+  const sheetOnly = result.sheet_only || [];
+
+  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const summaryChips = [
+    { key: 'verified', label: 'Verified' }, { key: 'quantity_mismatch', label: 'Quantity mismatch' },
+    { key: 'not_in_sheet', label: 'Not on sheet' },
+  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  const log = result.sheet_log || {};
+  const logChip = log.error
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Sher" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+  $('sherSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
+  $('sherSummary').classList.remove('hidden');
+
+  $('sherResultsBody').innerHTML = matched.map((r) => `
+    <tr>
+      <td>${esc(r.invoice_date || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
+      <td>${r.quantity != null ? r.quantity : '—'}</td>
+      <td>${r.sheet_count != null ? r.sheet_count : '—'}</td>
+      <td>${fmtMoney(r.chassis)}</td>
+      <td>${fmtMoney(r.others)}</td>
+      <td>${fmtMoney(r.amount)}</td>
+      <td>${sherBadge(r.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="8" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+  $('sherResultsWrap').classList.remove('hidden');
+
+  $('sherSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '')}</td>
+      <td>${r.count != null ? r.count : '—'}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.inv_no || '')}</td>
+      <td>${esc(r.consignee || '')}</td>
+    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center; color:var(--text-faint);">Nothing outstanding — every booking on the sheet was matched this run.</td></tr>`;
+  $('sherSheetOnlyWrap').classList.remove('hidden');
+}
+
+$('btnSherVerify').addEventListener('click', async () => {
+  if (!sherFiles.length) { alert('Drop at least one Sher Trucking invoice PDF first.'); return; }
+  const btn = $('btnSherVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('sherLoading').classList.remove('hidden');
+  $('sherSummary').classList.add('hidden');
+  $('sherResultsWrap').classList.add('hidden');
+  try {
+    const body = { pdfs: sherFiles };
+    const result = await api('/api/verify/sher', { method: 'POST', body: JSON.stringify(body) });
+    renderSherResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('sherLoading').classList.add('hidden');
+  }
+});
+
+let ajFiles = []; // [{ name, base64 }]
+function renderAjFileList() {
+  $('ajFileList').innerHTML = ajFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:11px; font-family:var(--font-mono); color:var(--text-body);">
+      📄 ${esc(f.name)}
+      <button type="button" class="aj-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('ajFileList').querySelectorAll('.aj-file-remove').forEach((el) => el.addEventListener('click', () => {
+    ajFiles.splice(Number(el.dataset.i), 1);
+    renderAjFileList();
+  }));
+  $('ajDropLabel').textContent = ajFiles.length
+    ? `${ajFiles.length} file${ajFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop AJ Transport invoice PDFs here — multiple files supported';
+}
+function handleAjFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      ajFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderAjFileList();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+// ajDropZone is a <label> wrapping ajPdfInput — no explicit
+// click-forwarding listener here, same fix as the other drop zones above.
+$('ajPdfInput').addEventListener('change', () => { handleAjFiles($('ajPdfInput').files); $('ajPdfInput').value = ''; });
+$('ajDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('ajDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleAjFiles(e.dataTransfer.files); });
+
+const AJ_STATUS_BADGE = {
+  verified: { label: 'Verified', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  booking_mismatch: { label: 'Booking mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_container_on_pdf: { label: 'No container read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  sheet_booking_blank: { label: 'Sheet booking blank', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function ajBadge(status) {
+  const b = AJ_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+
+function renderAjResults(result) {
+  const matched = result.matched || [];
+  const sheetOnly = result.sheet_only || [];
+
+  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const summaryChips = [
+    { key: 'verified', label: 'Verified' }, { key: 'booking_mismatch', label: 'Booking mismatch' },
+    { key: 'not_in_sheet', label: 'Not on sheet' },
+  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  const log = result.sheet_log || {};
+  const logChip = log.error
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "AJ Transport" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+  $('ajSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
+  $('ajSummary').classList.remove('hidden');
+
+  $('ajResultsBody').innerHTML = matched.map((r) => `
+    <tr>
+      <td>${esc(r.invoice_date || '—')}</td>
+      <td>${esc(r.invoice_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
+      <td>${esc(r.shipper || '')}</td>
+      <td>${esc(r.pickup_date || '')}</td>
+      <td>${fmtMoney(r.rate)}</td>
+      <td>${fmtMoney(r.amount)}</td>
+      <td>${ajBadge(r.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+  $('ajResultsWrap').classList.remove('hidden');
+
+  $('ajSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.container_no || '')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.inv_no || '')}</td>
+      <td>${esc(r.consignee || '')}</td>
+    </tr>`).join('') || `<tr><td colspan="4" style="text-align:center; color:var(--text-faint);">Nothing outstanding — every container on the sheet was matched this run.</td></tr>`;
+  $('ajSheetOnlyWrap').classList.remove('hidden');
+}
+
+$('btnAjVerify').addEventListener('click', async () => {
+  if (!ajFiles.length) { alert('Drop at least one AJ Transport invoice PDF first.'); return; }
+  const btn = $('btnAjVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('ajLoading').classList.remove('hidden');
+  $('ajSummary').classList.add('hidden');
+  $('ajResultsWrap').classList.add('hidden');
+  try {
+    const body = { pdfs: ajFiles };
+    const result = await api('/api/verify/aj-transport', { method: 'POST', body: JSON.stringify(body) });
+    renderAjResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('ajLoading').classList.add('hidden');
   }
 });
 

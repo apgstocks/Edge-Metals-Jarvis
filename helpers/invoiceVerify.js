@@ -315,6 +315,11 @@ async function buildSheetContainerIndex() {
             container_no: containerNo,
             inv_no: safeStr(d.inv_no),
             consignee: safeStr(d.consignee),
+            // booking_no added for crossCheckAjTransportRecords below (a
+            // container-existence check alone, like Jio's, plus AJ
+            // Transport's own booking no. cross-checked against this same
+            // sheet row) — harmless for Jio's own use, which never reads it.
+            booking_no: normBooking(d.booking_no),
         });
     }
     return byContainer;
@@ -372,8 +377,142 @@ async function crossCheckJioRecords(pdfRecords) {
     return { matched, sheet_only: sheetOnly };
 }
 
+// ── Transport → Sher Trucking ────────────────────────────────────────────
+// Added per Apsara: "instead of container,booking number shoudl be
+// compared from uplaoded sheet vs Booking No. in my original sheet.Create
+// a tab called Sher in that date (from uplaoded),booking no,quantity
+// ,chassis,others,Amount should be there.if quantity in uplaoded sheet is
+// mentioned as 2,check whether there is two occurence of the booking no in
+// my original sheet,else show error and dont put the row in sher tab."
+//
+// Verification here is DIFFERENT from Jio's plain existence check: a
+// booking number can legitimately appear on multiple sheet rows (multiple
+// containers under one booking), and Sher's invoice states how many
+// containers/loads it's billing under that booking (quantity). The check
+// is that the sheet's row-count for that booking matches the invoice's
+// stated quantity EXACTLY — not just "booking exists somewhere."
+function normBooking(v) { return safeStr(v).toUpperCase().replace(/\s+/g, ''); }
+
+// booking_no -> { count, inv_no, consignee } — count is how many sheet rows
+// carry this booking (NOT deduped the way container/order indexes above
+// are — the row COUNT is the actual thing being verified here, so every
+// occurrence has to be counted, not collapsed to one).
+async function buildSheetBookingIndex() {
+    const { headers, rows } = await invoiceSheet.fetchRawSheet(true); // always fresh — same reasoning as the other verification indexes above
+    const colMap = invoiceSheet.buildColumnMap(headers);
+    const byBooking = new Map();
+    for (const row of rows) {
+        const d = invoiceSheet.rowToDict(row, colMap);
+        const bookingNo = normBooking(d.booking_no);
+        if (!bookingNo) continue;
+        const existing = byBooking.get(bookingNo);
+        if (existing) { existing.count += 1; continue; }
+        byBooking.set(bookingNo, { count: 1, inv_no: safeStr(d.inv_no), consignee: safeStr(d.consignee) });
+    }
+    return byBooking;
+}
+
+// pdfRecords: [{ invoice_date, booking_no, quantity, chassis, other_charges,
+// amount, source_file }] — the shape helpers/gemini.js's
+// extractSherTruckingInvoiceRecords() returns.
+async function crossCheckSherRecords(pdfRecords) {
+    const bookingIndex = await buildSheetBookingIndex();
+    const seenBookings = new Set();
+
+    const matched = (pdfRecords || []).map((rec) => {
+        const bookingNo = normBooking(rec.booking_no);
+        const others = sumOtherCharges(rec.other_charges);
+        const qty = (rec.quantity === null || rec.quantity === undefined || rec.quantity === '') ? null : Number(rec.quantity);
+        const base = { ...rec, booking_no: bookingNo, others, quantity: qty };
+        if (!bookingNo) {
+            return { ...base, status: 'no_booking_on_pdf', sheet: null, sheet_count: null };
+        }
+        const sheetRow = bookingIndex.get(bookingNo);
+        if (!sheetRow) {
+            return { ...base, status: 'not_in_sheet', sheet: null, sheet_count: null };
+        }
+        seenBookings.add(bookingNo);
+        if (qty == null || !Number.isFinite(qty)) {
+            return { ...base, status: 'quantity_unreadable', sheet: sheetRow, sheet_count: sheetRow.count };
+        }
+        if (qty !== sheetRow.count) {
+            return { ...base, status: 'quantity_mismatch', sheet: sheetRow, sheet_count: sheetRow.count };
+        }
+        return { ...base, status: 'verified', sheet: sheetRow, sheet_count: sheetRow.count };
+    });
+
+    // Reverse direction — same symmetric check Apsara asked to always
+    // include (see Jio/Pan Metal above). Same noise caveat as Jio's: the
+    // sheet has no "this booking is Sher's" marker, so this lists every
+    // booking not claimed by this run's uploads, Sher's or not.
+    const sheetOnly = [];
+    for (const [bookingNo, row] of bookingIndex.entries()) {
+        if (seenBookings.has(bookingNo)) continue;
+        sheetOnly.push({ booking_no: bookingNo, ...row });
+    }
+
+    return { matched, sheet_only: sheetOnly };
+}
+
+// ── Transport → AJ Transport ─────────────────────────────────────────────
+// Added per Apsara: "Similarly for AJ Transport invoice date,invoice
+// no,container no,booking no,shipper,pickup date,rate,amount in new tab
+// called AJ Transport.About the logic,you know hwat to do" — grounded
+// against a real file (Invoice_6405_from_AJ_Transport_Inc.pdf).
+//
+// Unlike Jio (container existence only) or Sher (booking row-COUNT), AJ
+// Transport's invoice states BOTH a container no. AND a booking no. per
+// line — the extra field is put to use, not just displayed: this verifies
+// the container is on our sheet (like Jio) AND that OUR sheet's Booking
+// No. for that same container matches what AJ Transport billed against.
+// A container whose booking doesn't match what we have on file is exactly
+// the kind of thing worth a hard stop, not a silent pass — "you know what
+// to do" is read here as "hold this to the same standard as Sher's
+// quantity check": a real mismatch is an error, not a warning, and never
+// gets logged.
+async function crossCheckAjTransportRecords(pdfRecords) {
+    const containerIndex = await buildSheetContainerIndex();
+    const seenContainers = new Set();
+
+    const matched = (pdfRecords || []).map((rec) => {
+        const containerNo = normContainer(rec.container_no);
+        const bookingNo = normBooking(rec.booking_no);
+        const base = { ...rec, container_no: containerNo, booking_no: bookingNo };
+        if (!containerNo) {
+            return { ...base, status: 'no_container_on_pdf', sheet: null };
+        }
+        const sheetRow = containerIndex.get(containerNo);
+        if (!sheetRow) {
+            return { ...base, status: 'not_in_sheet', sheet: null };
+        }
+        seenContainers.add(containerNo);
+        if (!sheetRow.booking_no) {
+            return { ...base, status: 'sheet_booking_blank', sheet: sheetRow };
+        }
+        if (bookingNo && bookingNo !== sheetRow.booking_no) {
+            return { ...base, status: 'booking_mismatch', sheet: sheetRow };
+        }
+        return { ...base, status: 'verified', sheet: sheetRow };
+    });
+
+    // Reverse direction — same symmetric check applied to every other
+    // trucker tab, same noise caveat as Jio/Sher: no "this container is
+    // AJ Transport's" marker on the sheet, so this is every container this
+    // run's uploads didn't claim, not a clean "AJ Transport missed this"
+    // signal.
+    const sheetOnly = [];
+    for (const [containerNo, row] of containerIndex.entries()) {
+        if (seenContainers.has(containerNo)) continue;
+        sheetOnly.push(row);
+    }
+
+    return { matched, sheet_only: sheetOnly };
+}
+
 module.exports = {
     buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE,
     buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
     buildSheetContainerIndex, crossCheckJioRecords,
+    buildSheetBookingIndex, crossCheckSherRecords,
+    crossCheckAjTransportRecords,
 };

@@ -731,6 +731,102 @@ function createApi() {
         }
     });
 
+    app.post('/api/verify/sher', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [] } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+
+            const { extractSherTruckingInvoiceRecords } = require('./helpers/gemini');
+            const { crossCheckSherRecords } = require('./helpers/invoiceVerify');
+
+            const extractedPerFile = await Promise.all(pdfs.map(async (pdf) => {
+                try {
+                    const extracted = await extractSherTruckingInvoiceRecords(pdf.base64);
+                    const records = (extracted && extracted.records) || [];
+                    return records.map((r) => ({ ...r, source_file: pdf.name || 'unnamed.pdf' }));
+                } catch (e) {
+                    console.error(`[verify/sher] extraction failed for ${pdf.name || 'unnamed.pdf'}:`, e.message);
+                    // One bad/unreadable PDF in a batch shouldn't fail the whole
+                    // run — surface it as its own row instead of losing it silently.
+                    return [{ booking_no: null, amount: null, description: `Extraction failed: ${e.message}`, source_file: pdf.name || 'unnamed.pdf', extraction_failed: true }];
+                }
+            }));
+            const pdfRecords = extractedPerFile.flat();
+
+            const result = await crossCheckSherRecords(pdfRecords);
+
+            // Log post-comparison into the "Sher" tab of the Edge Metals
+            // sheet (see helpers/sherSheetLog.js) — only rows where the
+            // sheet's booking row-count matched the invoice's stated
+            // quantity exactly get written. Never let a logging hiccup
+            // fail the verification response itself.
+            try {
+                const { logSherVerification } = require('./helpers/sherSheetLog');
+                result.sheet_log = await logSherVerification(result.matched);
+            } catch (e) {
+                console.error('[verify/sher] sheet logging failed:', e.message);
+                result.sheet_log = { logged: 0, error: e.message };
+            }
+
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/sher] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/verify/aj-transport', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [] } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+
+            const { extractAjTransportInvoiceRecords } = require('./helpers/gemini');
+            const { crossCheckAjTransportRecords } = require('./helpers/invoiceVerify');
+
+            const extractedPerFile = await Promise.all(pdfs.map(async (pdf) => {
+                try {
+                    const extracted = await extractAjTransportInvoiceRecords(pdf.base64);
+                    const records = (extracted && extracted.records) || [];
+                    // invoice_no/invoice_date come back ONCE per PDF (one
+                    // invoice, many container lines) — not per record, so
+                    // stamp them onto every extracted line here.
+                    return records.map((r) => ({
+                        ...r,
+                        invoice_no: (extracted && extracted.invoice_no) || null,
+                        invoice_date: (extracted && extracted.invoice_date) || null,
+                        source_file: pdf.name || 'unnamed.pdf',
+                    }));
+                } catch (e) {
+                    console.error(`[verify/aj-transport] extraction failed for ${pdf.name || 'unnamed.pdf'}:`, e.message);
+                    // One bad/unreadable PDF in a batch shouldn't fail the whole
+                    // run — surface it as its own row instead of losing it silently.
+                    return [{ container_no: null, amount: null, description: `Extraction failed: ${e.message}`, source_file: pdf.name || 'unnamed.pdf', extraction_failed: true }];
+                }
+            }));
+            const pdfRecords = extractedPerFile.flat();
+
+            const result = await crossCheckAjTransportRecords(pdfRecords);
+
+            // Log post-comparison into the "AJ Transport" tab of the Edge
+            // Metals sheet (see helpers/ajTransportSheetLog.js) — only
+            // rows where the container matched AND the booking no. on file
+            // agreed get written. Never let a logging hiccup fail the
+            // verification response itself.
+            try {
+                const { logAjTransportVerification } = require('./helpers/ajTransportSheetLog');
+                result.sheet_log = await logAjTransportVerification(result.matched);
+            } catch (e) {
+                console.error('[verify/aj-transport] sheet logging failed:', e.message);
+                result.sheet_log = { logged: 0, error: e.message };
+            }
+
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/aj-transport] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Upload PDF to Drive and (optionally) attach to a booking record
     app.post('/api/bookings/upload-pdf', largeJson, async (req, res) => {
         const { booking_number, pdf_base64, original_filename } = req.body || {};
