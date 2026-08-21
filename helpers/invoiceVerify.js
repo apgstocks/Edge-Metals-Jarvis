@@ -220,6 +220,7 @@ const COMMISSION_TOLERANCE = 0.05; // absorbs cent-level rounding, not a real mi
 
 async function crossCheckPanMetalRecords(pdfRecords) {
     const orderIndex = await buildSheetOrderIndex();
+    const seenOrders = new Set();
 
     const matched = (pdfRecords || []).map((rec) => {
         const orderNo = safeStr(rec.order_no).toUpperCase();
@@ -231,6 +232,7 @@ async function crossCheckPanMetalRecords(pdfRecords) {
         if (!sheetRow) {
             return { ...rec, status: 'not_in_sheet', sheet: null, rate_used: null, rate_source: null, calculated: null, delta: null };
         }
+        seenOrders.add(orderNo);
         if (sheetRow.weight == null) {
             return { ...rec, status: 'sheet_weight_blank', sheet: sheetRow, rate_used: null, rate_source: null, calculated: null, delta: null };
         }
@@ -257,7 +259,26 @@ async function crossCheckPanMetalRecords(pdfRecords) {
         };
     });
 
-    return { matched };
+    // Reverse direction — per Apsara: "if a invoice no there in uploaded
+    // sheet but not in my original excel sheet and vice versa how does tis
+    // work?" The forward pass above only ever looks at what's ON the
+    // uploaded debit note; an order that's on OUR sheet but that Pan Metal
+    // never billed (omitted from the PDF, whether by mistake or not) was
+    // previously invisible. This lists every sheet order with a real
+    // weight — i.e. an actual shipment, not a blank row — that this run's
+    // PDF(s) never claimed. No year/month scoping here (Apsara: "month/year
+    // field i dont want" — unlike Zimex's equivalent sheet_only list),
+    // so this is EVERY unmatched weighed order on the whole sheet, not a
+    // recent window — expect this list to be long unless the upload covers
+    // every outstanding order.
+    const sheetOnly = [];
+    for (const [orderNo, row] of orderIndex.entries()) {
+        if (row.weight == null) continue;
+        if (seenOrders.has(orderNo)) continue;
+        sheetOnly.push(row);
+    }
+
+    return { matched, sheet_only: sheetOnly };
 }
 
 module.exports = {

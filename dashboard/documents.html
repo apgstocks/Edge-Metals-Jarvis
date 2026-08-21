@@ -495,6 +495,19 @@ body[data-theme="light"] {
             </table>
           </div>
         </div>
+
+        <div id="panMetalSheetOnlyWrap" class="hidden" style="margin-top:18px;">
+          <div class="section-label">On the Invoice sheet with a weight, but not on this debit note</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:-6px; margin-bottom:8px;">Not scoped to a period — every unmatched order on the whole sheet, not just a recent window.</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="panMetalSheetOnlyTable">
+              <thead>
+                <tr><th>Order No.</th><th>Inv No.</th><th>Consignee</th><th>Container No.</th><th>Weight (MT)</th><th>Rate</th></tr>
+              </thead>
+              <tbody id="panMetalSheetOnlyBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -876,17 +889,19 @@ function panMetalBadge(status) {
 
 function renderPanMetalResults(result) {
   const matched = result.matched || [];
+  const sheetOnly = result.sheet_only || [];
 
   const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
   const summaryChips = [
     { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
   ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not on this debit note: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
     : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Pan metal" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
-  $('panMetalSummary').innerHTML = summaryChips + logChip;
+  $('panMetalSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('panMetalSummary').classList.remove('hidden');
 
   $('panMetalResultsBody').innerHTML = matched.map((r) => `
@@ -902,6 +917,17 @@ function renderPanMetalResults(result) {
       <td>${panMetalBadge(r.status)}</td>
     </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No orders extracted.</td></tr>`;
   $('panMetalResultsWrap').classList.remove('hidden');
+
+  $('panMetalSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.order_no || '')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.inv_no || '')}</td>
+      <td>${esc(r.consignee || '')}</td>
+      <td>${esc(r.container_no || '')}</td>
+      <td>${r.weight != null ? r.weight : '—'}</td>
+      <td>${r.commission_rate != null ? fmtMoney(r.commission_rate) : '—'}</td>
+    </tr>`).join('') || `<tr><td colspan="6" style="text-align:center; color:var(--text-faint);">Nothing outstanding — every weighed order on the sheet was matched.</td></tr>`;
+  $('panMetalSheetOnlyWrap').classList.remove('hidden');
 }
 
 $('btnPanMetalVerify').addEventListener('click', async () => {

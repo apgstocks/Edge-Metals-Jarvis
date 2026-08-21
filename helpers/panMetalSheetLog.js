@@ -60,21 +60,32 @@ async function getExistingInvNos(sheets, spreadsheetId) {
 // matchedRows: the `matched` array crossCheckPanMetalRecords() returns —
 // one entry per order read off the uploaded debit note, each already
 // carrying its matched `sheet` row (or null) and computed rate_used.
+//
+// Per Apsara: "on every geerate my edge metal sheet should be updated but
+// only matched rows should go.inv no is the key" — narrowed from logging
+// every row (including mismatches/not-on-sheet) to ONLY status === 'match'.
+// A mismatch or an unmatched order is exactly the thing she wants surfaced
+// on-screen to investigate, not silently written into her sheet as if it
+// were confirmed reconciled — so those never reach this tab now. Inv No.
+// (from OUR sheet, since only real sheet matches get here at all) stays
+// the dedupe key, same as before.
 async function logPanMetalVerification(matchedRows) {
     const today = todayStr();
-    const candidateRows = (matchedRows || []).map((r) => {
-        const invNo = (r.sheet && r.sheet.inv_no) ? r.sheet.inv_no : (r.order_no || '');
-        return {
-            invNo: (invNo || '').trim(),
-            row: [
-                invNo,
-                r.sheet && r.sheet.weight != null ? r.sheet.weight : safeNum(r.weight),
-                safeNum(r.rate_used),
-                safeNum(r.commission),
-                today,
-            ],
-        };
-    }).filter((c) => c.invNo); // nothing to key a dedupe check on without an Inv No. — skip rather than log a blank row
+    const candidateRows = (matchedRows || [])
+        .filter((r) => r.status === 'match')
+        .map((r) => {
+            const invNo = (r.sheet && r.sheet.inv_no) ? r.sheet.inv_no : '';
+            return {
+                invNo: (invNo || '').trim(),
+                row: [
+                    invNo,
+                    r.sheet && r.sheet.weight != null ? r.sheet.weight : safeNum(r.weight),
+                    safeNum(r.rate_used),
+                    safeNum(r.commission),
+                    today,
+                ],
+            };
+        }).filter((c) => c.invNo); // nothing to key a dedupe check on without an Inv No. — skip rather than log a blank row
 
     if (!candidateRows.length) return { logged: 0, skipped_duplicates: 0 };
 
