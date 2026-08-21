@@ -1837,6 +1837,13 @@ function resetWizard() {
   $('pfWizConsigneeList').classList.add('hidden');
   $('pfWizard').classList.remove('hidden');
   $('pfFullForm').classList.add('hidden');
+  // Per Apsara: "in proforma,Invoice Date should be today by default" —
+  // set it here (called every time the Proforma tab is opened, see the
+  // 'proforma' view-switch handler above) rather than once at page load,
+  // so it's always TODAY's date for a fresh proforma, not whatever day the
+  // dashboard happened to be loaded. Still a normal editable date input
+  // afterward — this only sets the starting value.
+  $('pf_inv_date').value = new Date().toISOString().slice(0, 10);
   showWizStep(1);
 }
 function showWizStep(n) {

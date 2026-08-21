@@ -317,6 +317,185 @@ async function lookupAddress(chatId, query) {
     return { action_taken: 'address_shown' };
 }
 
+// ── Recurring reminders ───────────────────────────────────────────────────────
+// Built 2026-08-22 after Jarvis refused one: "Send a reminder to Edge Yard
+// group everyday morning to update pricelist" → "I cannot set daily reminders.
+// Please set this up in your calendar." That was wrong on the facts (this
+// process runs a cron scheduler AND a minute-resolution task queue) and wrong
+// on the posture — Apsara: "it is my assistant. it should do whatever i want.
+// i am the manager."
+//
+// Implemented on the EXISTING task queue rather than a new subsystem: a
+// recurring reminder is an ordinary task carrying a `repeat` spec, which
+// scheduler.js's taskRunner advances instead of archiving after each fire.
+// See helpers/tasks.js's recurrence block.
+//
+// Target resolution happens HERE, at creation time, and the resolved chatId is
+// stored as target_chat — deliberately NOT deferred to fire time. Two reasons:
+// (a) the runner's own name-based lookup only knows truckers/suppliers, not
+// arbitrary WhatsApp groups like "Edge Yard"; (b) resolving now means she finds
+// out immediately if the group can't be found, instead of at 8am tomorrow when
+// nothing arrives and nobody knows why.
+const REMINDER_TZ = 'America/Los_Angeles';
+// Bare-word times she actually uses. Anything explicit ("7am", "18:30") is
+// parsed below instead.
+const NAMED_TIMES = { morning: '08:00', afternoon: '14:00', evening: '18:00', night: '20:00', noon: '12:00', midday: '12:00' };
+function parseReminderTime(text) {
+    const s = String(text || '').toLowerCase().trim();
+    if (!s) return null;
+    let m = /(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?/.exec(s);
+    if (m) {
+        let hh = +m[1]; const mm = +m[2];
+        if (m[3] === 'pm' && hh < 12) hh += 12;
+        if (m[3] === 'am' && hh === 12) hh = 0;
+        if (hh <= 23 && mm <= 59) return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+    m = /(\d{1,2})\s*(am|pm)/.exec(s);
+    if (m) {
+        let hh = +m[1];
+        if (m[2] === 'pm' && hh < 12) hh += 12;
+        if (m[2] === 'am' && hh === 12) hh = 0;
+        if (hh <= 23) return `${String(hh).padStart(2, '0')}:00`;
+    }
+    for (const [word, time] of Object.entries(NAMED_TIMES)) if (s.includes(word)) return time;
+    return null;
+}
+function parseReminderRepeat(text) {
+    const s = String(text || '').toLowerCase();
+    const DAYS = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    for (const [name, idx] of Object.entries(DAYS)) {
+        if (new RegExp(`every\\s+${name}|each\\s+${name}|${name}s\\b`).test(s)) return { kind: 'weekly', weekday: idx };
+    }
+    if (/weekday|working day|business day|mon(day)?\s*(-|to|–)\s*fri/.test(s)) return { kind: 'weekdays' };
+    if (/every\s*day|everyday|daily|each day/.test(s)) return { kind: 'daily' };
+    return null;
+}
+// Resolves whoever/whatever the reminder should go to: a real WhatsApp group
+// by name first (that's what "Edge Yard group" means), then the saved
+// trucker/supplier/contact rosters, then the manager herself.
+async function resolveReminderTarget(query, managerChatId) {
+    const q = String(query || '').trim();
+    if (!q) return { chatId: managerChatId, label: 'you' };
+    const bare = q.replace(/\s*\bgroup\b\s*/gi, ' ').trim();
+    if (/^(me|manager|myself)$/i.test(q)) return { chatId: managerChatId, label: 'you' };
+
+    // 1. Live WhatsApp groups — the only path that can find "Edge Yard".
+    try {
+        const waState = require('../helpers/wa-state');
+        const groups = await waState.findGroups(bare || q);
+        if (groups && groups.length === 1) return { chatId: groups[0].id, label: groups[0].name || q };
+        if (groups && groups.length > 1) {
+            const exact = groups.find((g) => String(g.name || '').toLowerCase() === (bare || q).toLowerCase());
+            if (exact) return { chatId: exact.id, label: exact.name };
+            return { ambiguous: groups.slice(0, 8) };
+        }
+    } catch (e) {
+        // WhatsApp not ready / lookup unavailable — fall through to the saved
+        // rosters rather than failing outright.
+        console.warn('[ACTIONS] reminder group lookup unavailable:', e.message);
+    }
+
+    // 2. Saved rosters.
+    const ql = (bare || q).toLowerCase();
+    const [truckers, suppliers] = [await loadTruckers(), await loadSuppliers()];
+    const roster = [...truckers, ...suppliers];
+    let hit = roster.find((r) => String(r.name || '').toLowerCase() === ql)
+           || roster.find((r) => String(r.name || '').toLowerCase().includes(ql));
+    if (hit) {
+        const chatId = hit.group_id || (hit.whatsapp ? `${hit.whatsapp}@c.us` : null);
+        if (chatId) return { chatId, label: hit.name };
+    }
+    try {
+        const { loadContacts } = require('../helpers/contacts');
+        const c = loadContacts().find((x) => String(x.name || '').toLowerCase().includes(ql));
+        if (c) {
+            const chatId = c.group_id || (c.whatsapp ? `${c.whatsapp}@c.us` : null);
+            if (chatId) return { chatId, label: c.name };
+        }
+    } catch { /* contacts store optional */ }
+    return { notFound: true };
+}
+async function setReminder(chatId, { target, message, when }) {
+    const tasksHelper = require('../helpers/tasks');
+    const text = String(message || '').trim();
+    if (!text) {
+        await _send(chatId, `What should the reminder say?`);
+        return { action_taken: 'reminder_no_message' };
+    }
+    const repeatBase = parseReminderRepeat(when) || parseReminderRepeat(target) || { kind: 'daily' };
+    const at = parseReminderTime(when) || parseReminderTime(target) || '08:00';
+    const repeat = { ...repeatBase, at, tz: REMINDER_TZ };
+
+    const resolved = await resolveReminderTarget(target, chatId);
+    if (resolved.ambiguous) {
+        const list = resolved.ambiguous.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
+        await _send(chatId, `More than one group matches "${target}":\n${list}\n\nAsk again with the exact group name.`);
+        return { action_taken: 'reminder_target_ambiguous' };
+    }
+    if (resolved.notFound) {
+        await _send(chatId, `Couldn't find "${target}" — no WhatsApp group, trucker, supplier or contact by that name. Check the exact group name (I have to be a member of it) and ask again.`);
+        return { action_taken: 'reminder_target_not_found' };
+    }
+
+    const next = tasksHelper.nextFireAt(repeat, new Date());
+    if (!next) {
+        await _send(chatId, `Couldn't work out a schedule from "${when || target}". Try something like "every day at 8am" or "every Monday 9:30".`);
+        return { action_taken: 'reminder_bad_schedule' };
+    }
+    const task = await tasksHelper.enqueue({
+        type: 'generic_message',
+        target_kind: 'group',
+        target_name: resolved.label,
+        target_chat: resolved.chatId,
+        message: text,
+        fire_at: next.toISOString(),
+        repeat,
+        created_by: 'brain',
+        max_tries: 3,
+    });
+    const whenText = tasksHelper.describeRepeat(repeat);
+    await _send(chatId, `Done — I'll message ${resolved.label} ${whenText} (LA time): "${text}"\n\nFirst one: ${next.toLocaleString('en-US', { timeZone: REMINDER_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.\nSay "show reminders" to see them, or "cancel reminder ${task.id.slice(0, 6)}" to stop it.`);
+    return { action_taken: 'reminder_set' };
+}
+async function showReminders(chatId) {
+    const tasksHelper = require('../helpers/tasks');
+    const all = tasksHelper.loadTasks().filter((t) => t.repeat && t.status !== 'cancelled');
+    if (!all.length) {
+        await _send(chatId, `No recurring reminders set up. Set one with something like: "remind Edge Yard group every day at 8am to update the pricelist".`);
+        return { action_taken: 'reminders_none' };
+    }
+    const lines = all.map((t) => {
+        const next = t.fire_at ? new Date(t.fire_at).toLocaleString('en-US', { timeZone: REMINDER_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '?';
+        return `• [${t.id.slice(0, 6)}] ${t.target_name || t.target_chat} — ${tasksHelper.describeRepeat(t.repeat)}\n   "${t.message}"\n   next: ${next}`;
+    });
+    await _send(chatId, `Recurring reminders:\n\n${lines.join('\n\n')}\n\nCancel one with "cancel reminder <id>".`);
+    return { action_taken: 'reminders_shown' };
+}
+async function cancelReminder(chatId, idFragment) {
+    const tasksHelper = require('../helpers/tasks');
+    const frag = String(idFragment || '').trim().toLowerCase();
+    const all = tasksHelper.loadTasks().filter((t) => t.repeat);
+    if (!frag) {
+        await _send(chatId, `Which one? Say "show reminders" for the list, then "cancel reminder <id>".`);
+        return { action_taken: 'reminder_cancel_no_id' };
+    }
+    const matches = all.filter((t) => t.id.toLowerCase().startsWith(frag)
+        || String(t.target_name || '').toLowerCase().includes(frag)
+        || String(t.message || '').toLowerCase().includes(frag));
+    if (!matches.length) {
+        await _send(chatId, `No recurring reminder matching "${idFragment}". Say "show reminders" to see what's set.`);
+        return { action_taken: 'reminder_cancel_not_found' };
+    }
+    if (matches.length > 1) {
+        const list = matches.map((t) => `• [${t.id.slice(0, 6)}] ${t.target_name} — "${t.message}"`).join('\n');
+        await _send(chatId, `That matches more than one:\n${list}\n\nUse the id in brackets.`);
+        return { action_taken: 'reminder_cancel_ambiguous' };
+    }
+    await tasksHelper.cancel(matches[0].id, 'user_cancelled');
+    await _send(chatId, `Cancelled — no more "${matches[0].message}" to ${matches[0].target_name}.`);
+    return { action_taken: 'reminder_cancelled' };
+}
+
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
@@ -3825,6 +4004,7 @@ module.exports = {
 init,
 setPending, clearPending, clearAllPending, getPending, getQueuedPendings, resolvePending, promoteQueued,
 showMenu, showBookingsMenu, showBookingStatus, showContacts, lookupAddress,
+setReminder, showReminders, cancelReminder,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,

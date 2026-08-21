@@ -39,50 +39,6 @@ const NEW_TASK_DEFAULTS = {
     created_by   : 'web',
 };
 
-// ── Recurring tasks ─────────────────────────────────────────────────────────
-// Added 2026-08-19. Tasks were one-shot: fire once, then archive. A standing
-// instruction like "remind Bose to update the price list every day" needs
-// the task to re-arm itself instead of disappearing after the first send.
-//
-// Shape: task.repeat = { daily_at: 'HH:MM' } (local time). Deliberately
-// just daily for now — that's what was actually asked for, and inventing a
-// cron-expression field nobody uses would be more surface to get wrong.
-//
-// Re-arming computes the NEXT occurrence from now rather than adding 24h to
-// the previous fire_at. Adding 24h drifts: if the runner is late, or the
-// server was down over a fire window, the task would keep firing at a
-// slightly later time each day, or fire repeatedly to "catch up" on a
-// backlog it should simply have skipped.
-function nextDailyOccurrence(hhmm, from = new Date()) {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
-    if (!m) return null;
-    const hour = Number(m[1]), minute = Number(m[2]);
-    if (hour > 23 || minute > 59) return null;
-    const next = new Date(from);
-    next.setHours(hour, minute, 0, 0);
-    // Strictly in the future — a task firing AT its own time must not
-    // immediately re-arm for the same instant and fire again in a loop.
-    if (next.getTime() <= from.getTime()) next.setDate(next.getDate() + 1);
-    return next;
-}
-
-// Re-arm a recurring task for its next run instead of archiving it.
-// Returns the new fire_at ISO string, or null if the task isn't recurring
-// (in which case the caller should archive as normal).
-async function rearmRecurring(taskId) {
-    const task = loadTasks().find(t => t.id === taskId);
-    if (!task || !task.repeat || !task.repeat.daily_at) return null;
-    const next = nextDailyOccurrence(task.repeat.daily_at);
-    if (!next) return null;
-    await updateTask(taskId, {
-        fire_at: next.toISOString(),
-        status: 'pending',
-        tries: 0,
-        last_fired_at: new Date().toISOString(),
-    });
-    return next.toISOString();
-}
-
 function newId() {
     return 't_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
@@ -249,9 +205,120 @@ function evaluateCondition(task) {
     return 'fire';
 }
 
+// ── Recurring tasks (2026-08-22) ────────────────────────────────────────────
+// Added after a real refusal: Apsara asked "Send a reminder to Edge Yard group
+// everyday morning to update pricelist" and got "I cannot set daily reminders.
+// Please set this up in your calendar." — wrong on the merits, since this
+// process already runs a full cron scheduler AND a minute-resolution task
+// queue. Her response: "it is my assistant. it should do whatever i want. i am
+// the manager." Correct on both counts.
+//
+// Recurrence is deliberately a property of an EXISTING task rather than a new
+// parallel system: a recurring task is an ordinary task that, instead of being
+// archived after a successful fire, has its fire_at advanced to the next
+// occurrence. Everything else — the condition gate, retry/backoff, target
+// resolution, history — is inherited unchanged.
+//
+//   repeat: {
+//     kind    : 'daily' | 'weekdays' | 'weekly',
+//     at      : 'HH:MM'  (24h, in tz)
+//     weekday : 0-6      (Sunday=0; only for kind==='weekly')
+//     tz      : IANA zone, defaults to America/Los_Angeles (same default as
+//               every other schedule in scheduler.js — every freight deadline
+//               is a US port date)
+//   }
+//
+// A task with no `repeat` behaves EXACTLY as before — this is purely additive.
+const DEFAULT_TZ = 'America/Los_Angeles';
+
+// Wall-clock parts for an instant in a given zone. Uses Intl rather than
+// hand-rolled offset math so DST is handled by the platform, not by us — the
+// LA-vs-ET split already causes enough confusion in scheduler.js.
+function zonedParts(date, tz) {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', weekday: 'short',
+    });
+    const p = {};
+    for (const { type, value } of fmt.formatToParts(date)) p[type] = value;
+    const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    return {
+        year: +p.year, month: +p.month, day: +p.day,
+        hour: +p.hour % 24, minute: +p.minute, weekday: WD[p.weekday],
+    };
+}
+// The UTC instant at which the given zone's wall clock reads y-m-d hh:mm.
+// Solved by probing rather than by offset tables: guess as if UTC, measure how
+// far off the zone actually renders, correct, then re-check once (the second
+// pass catches the rare case where the correction itself crosses a DST edge).
+function instantForZonedWallClock(y, m, d, hh, mm, tz) {
+    let ts = Date.UTC(y, m - 1, d, hh, mm, 0, 0);
+    for (let i = 0; i < 2; i++) {
+        const p = zonedParts(new Date(ts), tz);
+        const rendered = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0, 0);
+        const target = Date.UTC(y, m - 1, d, hh, mm, 0, 0);
+        const drift = target - rendered;
+        if (drift === 0) break;
+        ts += drift;
+    }
+    return new Date(ts);
+}
+function parseAtTime(at) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(at || '').trim());
+    if (!m) return null;
+    const hh = +m[1], mm = +m[2];
+    if (hh > 23 || mm > 59) return null;
+    return { hh, mm };
+}
+// Next occurrence STRICTLY after `from`. Returns null for an unusable repeat
+// spec, so callers can fall back to archiving instead of looping forever on a
+// task that can never advance.
+function nextFireAt(repeat, from = new Date()) {
+    if (!repeat || !repeat.kind) return null;
+    const t = parseAtTime(repeat.at);
+    if (!t) return null;
+    const tz = repeat.tz || DEFAULT_TZ;
+    const base = zonedParts(from, tz);
+    // Walk forward day by day (14 covers daily/weekdays/weekly incl. any DST
+    // shift) until we find the first slot that is genuinely later than `from`.
+    for (let addDays = 0; addDays <= 14; addDays++) {
+        const probe = new Date(Date.UTC(base.year, base.month - 1, base.day + addDays, 12, 0, 0));
+        const p = zonedParts(probe, tz);
+        if (repeat.kind === 'weekdays' && (p.weekday === 0 || p.weekday === 6)) continue;
+        if (repeat.kind === 'weekly' && p.weekday !== (repeat.weekday ?? 1)) continue;
+        const cand = instantForZonedWallClock(p.year, p.month, p.day, t.hh, t.mm, tz);
+        if (cand.getTime() > from.getTime()) return cand;
+    }
+    return null;
+}
+// Human-readable, for confirmations and listings.
+function describeRepeat(repeat) {
+    if (!repeat || !repeat.kind) return 'one time';
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const at = repeat.at || '?';
+    if (repeat.kind === 'daily')    return `every day at ${at}`;
+    if (repeat.kind === 'weekdays') return `every weekday at ${at}`;
+    if (repeat.kind === 'weekly')   return `every ${DAYS[repeat.weekday ?? 1]} at ${at}`;
+    return `repeating (${repeat.kind}) at ${at}`;
+}
+// Advance a recurring task to its next slot instead of archiving it. Returns
+// the new fire_at, or null if it can't recur (caller should archive instead).
+async function rescheduleRecurring(taskId, repeat, from = new Date()) {
+    const next = nextFireAt(repeat, from);
+    if (!next) return null;
+    await updateTask(taskId, {
+        status: 'pending',
+        tries: 0,
+        fire_at: next.toISOString(),
+        last_fired_at: new Date().toISOString(),
+    });
+    return next;
+}
+
 module.exports = {
-    nextDailyOccurrence, rearmRecurring,
     loadTasks, loadHistory,
     enqueue, dueTasks, archive, updateTask, cancel, cancelMatching, evaluateCondition,
     newId,
+    nextFireAt, describeRepeat, rescheduleRecurring, parseAtTime, DEFAULT_TZ,
 };
