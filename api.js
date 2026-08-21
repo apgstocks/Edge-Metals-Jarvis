@@ -667,6 +667,20 @@ function createApi() {
             const pdfRecords = extractedPerFile.flat();
 
             const result = await crossCheckPanMetalRecords(pdfRecords);
+
+            // Log post-comparison into the "Pan metal" tab of the Edge
+            // Metals sheet (see helpers/panMetalSheetLog.js). Never let a
+            // logging hiccup (sheet permissions, transient API error, etc.)
+            // fail the verification response itself — the comparison
+            // Apsara actually asked to see already succeeded above.
+            try {
+                const { logPanMetalVerification } = require('./helpers/panMetalSheetLog');
+                result.sheet_log = await logPanMetalVerification(result.matched);
+            } catch (e) {
+                console.error('[verify/panmetal] sheet logging failed:', e.message);
+                result.sheet_log = { logged: 0, error: e.message };
+            }
+
             res.json(result);
         } catch (e) {
             console.error('[verify/panmetal] failed:', e.message);

@@ -867,7 +867,11 @@ function renderPanMetalResults(result) {
     { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
   ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  $('panMetalSummary').innerHTML = summaryChips;
+  const log = result.sheet_log || {};
+  const logChip = log.error
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Pan metal" tab: <strong style="color:var(--text-strong);">${log.logged || 0}</strong>${log.skipped_duplicates ? ` (${log.skipped_duplicates} already there, skipped)` : ''}</span>`;
+  $('panMetalSummary').innerHTML = summaryChips + logChip;
   $('panMetalSummary').classList.remove('hidden');
 
   $('panMetalResultsBody').innerHTML = matched.map((r) => `

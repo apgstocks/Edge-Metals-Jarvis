@@ -179,6 +179,47 @@ async function getOrCreateSpreadsheetId() {
     return id;
 }
 
+// Generic version of ensureProformaTab's create-tab-if-missing /
+// write-header-if-blank logic, extracted so OTHER logging modules that
+// share this same "Edge Metals" spreadsheet (e.g. helpers/panMetalSheetLog.js)
+// don't have to duplicate the Sheets API calls. ensureProformaTab itself is
+// left untouched above — this is purely additive, nothing about the
+// existing Proforma logging path changed.
+async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const sheetsList = meta.data.sheets || [];
+    const tab = sheetsList.find((s) => s.properties.title === tabName);
+
+    if (!tab) {
+        if (sheetsList.length === 1 && sheetsList[0].properties.title === 'Sheet1') {
+            // Freshly-created spreadsheet's untouched default tab — rename
+            // rather than leave a stray "Sheet1" around.
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: { requests: [{
+                    updateSheetProperties: {
+                        properties: { sheetId: sheetsList[0].properties.sheetId, title: tabName },
+                        fields: 'title',
+                    },
+                }] },
+            });
+        } else {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+            });
+        }
+    }
+
+    const headerCheck = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    if (!headerCheck.data.values || !headerCheck.data.values.length) {
+        await sheets.spreadsheets.values.update({
+            spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW',
+            requestBody: { values: [headerRow] },
+        });
+    }
+}
+
 function todayStr() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -307,4 +348,7 @@ async function logProformaToSheet(body) {
     return { logged: rows.length, spreadsheetId, duplicates_bumped: duplicatesBumped };
 }
 
-module.exports = { logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME };
+module.exports = {
+    logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
+    getOrCreateSpreadsheetId, getSheets, ensureTab,
+};
