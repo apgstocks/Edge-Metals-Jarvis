@@ -737,7 +737,13 @@ function handleZimexFiles(fileList) {
     reader.readAsDataURL(f);
   });
 }
-$('zimexDropZone').addEventListener('click', () => $('zimexPdfInput').click());
+// No explicit click-forwarding listener here on purpose: zimexDropZone is a
+// <label> wrapping zimexPdfInput, so the browser already opens the file
+// picker natively on click. Adding a JS handler that also calls .click()
+// double-fires the file dialog and can silently drop the selection — this
+// was a real bug (fixed the same way on panMetalDropZone below, after
+// tracing "post uploading pdf, still shows Drop at least one PDF first"
+// there back to this exact pattern).
 $('zimexPdfInput').addEventListener('change', () => { handleZimexFiles($('zimexPdfInput').files); $('zimexPdfInput').value = ''; });
 $('zimexDropZone').addEventListener('dragover', (e) => e.preventDefault());
 $('zimexDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleZimexFiles(e.dataTransfer.files); });
@@ -839,7 +845,16 @@ function handlePanMetalFiles(fileList) {
     reader.readAsDataURL(f);
   });
 }
-$('panMetalDropZone').addEventListener('click', () => $('panMetalPdfInput').click());
+// Bug fix: panMetalDropZone is a <label> wrapping panMetalPdfInput, so the
+// browser already opens the file picker on click, natively, with no JS
+// needed. The removed line here used to ALSO call .click() on the input
+// from a separate listener — that double-invocation is what caused "post
+// uploading pdf, still shows Drop at least one Pan Metal commission debit
+// note PDF first": the second, redundant click interfered with the file
+// dialog and the selection never reliably reached panMetalFiles. Confirmed
+// via a headless-browser reproduction (a single real click on the label
+// hung when both the native forward and this handler both fired) before
+// removing it — same root cause fixed on zimexDropZone above.
 $('panMetalPdfInput').addEventListener('change', () => { handlePanMetalFiles($('panMetalPdfInput').files); $('panMetalPdfInput').value = ''; });
 $('panMetalDropZone').addEventListener('dragover', (e) => e.preventDefault());
 $('panMetalDropZone').addEventListener('drop', (e) => { e.preventDefault(); handlePanMetalFiles(e.dataTransfer.files); });
