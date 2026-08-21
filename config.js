@@ -369,6 +369,10 @@ function getSettings() {
         yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
         yard_whatsapp_group_id : '',
         yard_whatsapp_contacts : '',
+        // Kept in sync with helpers/json.js's loadSettings() defaults, same
+        // reason as yard_report_emails above — see that file's comment.
+        gmail_watch_enabled    : GMAIL_WATCH_ENABLED,
+        gmail_watcher_last_run : null,
     };
     try {
         if (fs.existsSync(FILES.SETTINGS_FILE)) {

@@ -1668,6 +1668,19 @@ function renderSettings(s) {
           <div class="grp-search-results" id="groupResults" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;"></div>
         </div>
         <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Email watcher (Gmail)</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">Polls Gmail every 15 minutes for booking-confirmation PDFs, auto-creates/updates bookings, and applies carrier date changes automatically. Turning this off stops the poll immediately — takes effect on the next tick, no restart needed.</div>
+          <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer; margin-bottom:12px;">
+            <input id="s_email_watcher_enabled" type="checkbox" ${s.gmail_watch_enabled ? 'checked' : ''} style="width:16px; height:16px; margin:0;">
+            Email watcher enabled
+          </label>
+          <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">
+            Last active: ${s.gmail_watcher_last_run
+              ? esc(new Date(s.gmail_watcher_last_run).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + ' (LA time)'
+              : 'never run yet'}
+          </div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Outbound email — Cc / Bcc</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Applied to every email Jarvis drafts — composing new mail or replying in a thread — before you confirm sending. Comma-separate multiple addresses. Leave blank for none.</div>
           <div class="field"><label>Cc</label><input id="s_email_cc" value="${esc(s.email_cc || '')}" placeholder="e.g. ops@edgemetals.com"></div>
@@ -1752,6 +1765,7 @@ function renderSettings(s) {
     try {
       await api('/api/settings', { method: 'PUT', body: JSON.stringify({
         manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group').value.trim(),
+        gmail_watch_enabled: $('s_email_watcher_enabled').checked,
         email_cc: $('s_email_cc').value.trim(), email_bcc: $('s_email_bcc').value.trim(),
         yard_report_emails: $('s_yard_emails').value.trim(),
         yard_whatsapp_group_id: $('s_yard_group').value.trim(),

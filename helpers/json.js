@@ -213,6 +213,19 @@ function loadSettings() {
         // WhatsApp blast the moment this ships — it only starts sending once
         // someone explicitly turns it on in Settings > Yard.
         yard_report_enabled: false,
+        // Master on/off for workflow/emailWatcher.js's Gmail poll — dashboard-
+        // editable under Settings, per Apsara 2026-08-21 ("Add email watcher
+        // enabled in admin of settings"). Was previously a static env-only
+        // read (cfg.GMAIL_WATCH_ENABLED) checked once at process boot —
+        // moved here so it can be flipped live without a restart, same
+        // pattern as yard_report_enabled above. Falls back to that env var
+        // so existing deployments keep their current behavior on upgrade.
+        gmail_watch_enabled: cfg.GMAIL_WATCH_ENABLED,
+        // Stamped by emailWatcher.js every time it actually starts a poll
+        // (not just when the 15-min cron tick fires) — per Apsara: "I want
+        // to know at what time gmail watcher was active last." null until
+        // the first run after this was added.
+        gmail_watcher_last_run: null,
     });
 }
 const saveSettings = (s) => saveJson(cfg.SETTINGS_FILE, s);
