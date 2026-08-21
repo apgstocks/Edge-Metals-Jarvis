@@ -307,6 +307,47 @@ function createApi() {
 
     app.get('/api/me', (req, res) => res.json({ role: req.role || 'user' }));
 
+    // ── Health check ────────────────────────────────────────────────────────
+    // Per Apsara 2026-08-20. There was previously NO way to answer "is Drive
+    // working, is WhatsApp connected, did the sheet sync" without reading pm2
+    // logs — which is why several problems (a stale Supabase key, a missing
+    // exceljs module, WhatsApp failing) were only discovered when someone
+    // noticed missing data days later.
+    // Deliberately cheap and read-only: it reports what the process already
+    // knows plus a couple of trivial file checks. It does NOT make live API
+    // calls to Drive/Gemini — a health endpoint that costs money and latency
+    // every time it's polled is one nobody leaves running.
+    app.get('/api/health', (req, res) => {
+        const out = { ok: true, checks: {}, at: new Date().toISOString() };
+        const mark = (name, ok, detail) => { out.checks[name] = { ok, detail: detail || null }; if (!ok) out.ok = false; };
+        try {
+            mark('drive_keyfile', !!cfg.GDRIVE_KEYFILE && fs.existsSync(cfg.GDRIVE_KEYFILE),
+                 cfg.GDRIVE_KEYFILE ? undefined : 'GDRIVE_KEYFILE not set');
+            mark('gemini_key', !!cfg.GEMINI_API_KEY, cfg.GEMINI_API_KEY ? undefined : 'GEMINI_API_KEY not set');
+
+            // Sheet sync — its own last-run outcome.
+            const sync = require('./helpers/sheetSync').syncStatus();
+            mark('sheet_sync', !sync.lastSyncError,
+                 sync.lastSyncError ? `${sync.lastSyncError.message} (at ${sync.lastSyncError.at})` : (sync.lastSyncOk ? `last ok ${sync.lastSyncOk}` : 'not run yet this boot'));
+
+            // WhatsApp readiness, if index.js exposed it.
+            const waReady = typeof global.__jarvisWaReady === 'function' ? global.__jarvisWaReady() : null;
+            if (waReady !== null) mark('whatsapp', !!waReady, waReady ? undefined : 'not connected — scan the QR in Settings');
+
+            // Loads carrying unresolved warnings — the number that actually
+            // matters day to day, and the reason this endpoint exists.
+            const { loadLoads } = require('./helpers/loads');
+            const flagged = loadLoads().filter(l => Array.isArray(l.warnings) && l.warnings.length);
+            out.loads_with_warnings = flagged.length;
+            out.flagged_load_ids = flagged.slice(0, 20).map(l => l.id);
+            mark('load_warnings', flagged.length === 0, flagged.length ? `${flagged.length} load(s) need attention` : undefined);
+        } catch (e) {
+            out.ok = false;
+            out.error = e.message;
+        }
+        res.json(out);
+    });
+
     // Check an admin password WITHOUT performing any action — added
     // 2026-08-17 after Apsara found that clicking OK on the edit-unlock
     // prompt with an empty box still opened the edit form. The save was
@@ -759,6 +800,10 @@ function createApi() {
             const items = record.items || [];
             const inputItems = Array.isArray(b.items) ? b.items : [];
             let anyPhotoUploaded = false;
+            // Photo failures are collected, not just logged. Still non-fatal —
+            // the load saves either way — but the operator is told, instead of
+            // discovering days later that a weight has no photo behind it.
+            const photoFailures = [];
             await Promise.all(items.map(async (item, i) => {
                 const input = inputItems[i] || {};
                 const tag = `${record.id}-item${i}`;
@@ -767,19 +812,38 @@ function createApi() {
                         const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime, undefined, record.id);
                         item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
-                    } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
+                    } catch (e) {
+                        console.error(`[API] gross photo upload failed for ${tag}:`, e.message);
+                        // Recorded on the load, not just logged — see helpers/loadWarnings.js
+                        photoFailures.push(`item ${i + 1} gross: ${e.message}`);
+                    }
                 }
                 if (input.tare_photo_base64) {
                     try {
                         const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime, undefined, record.id);
                         item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
-                    } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }
+                    } catch (e) {
+                        console.error(`[API] tare photo upload failed for ${tag}:`, e.message);
+                        // Recorded on the load, not just logged — see helpers/loadWarnings.js
+                        photoFailures.push(`item ${i + 1} tare: ${e.message}`);
+                    }
                 }
             }));
 
             const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
-            const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            let finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            // Attach/clear the photo warning so the badge reflects THIS save:
+            // a retry that succeeds must clear the previous complaint,
+            // otherwise the badge becomes permanent and people learn to
+            // ignore it.
+            {
+                const { buildWarning, setLoadWarnings, clearLoadWarnings } = require('./helpers/loadWarnings');
+                const withWarn = photoFailures.length
+                    ? await setLoadWarnings(record.id, [buildWarning('photo_upload_failed', photoFailures.join('; '))])
+                    : await clearLoadWarnings(record.id, 'photo_upload_failed');
+                if (withWarn) finalLoad = withWarn;
+            }
             // Live sheet sync — per Apsara 2026-08-19. Fire-and-forget by
             // design: a Drive hiccup must never make saving a load fail, and
             // every sync rebuilds from loads.json anyway, so a missed one
@@ -855,6 +919,10 @@ function createApi() {
             const items = record.items || [];
             const inputItems = Array.isArray(b.items) ? b.items : [];
             let anyPhotoUploaded = false;
+            // Photo failures are collected, not just logged. Still non-fatal —
+            // the load saves either way — but the operator is told, instead of
+            // discovering days later that a weight has no photo behind it.
+            const photoFailures = [];
             await Promise.all(items.map(async (item, i) => {
                 const input = inputItems[i] || {};
                 const tag = `${record.id}-item${i}`;
@@ -863,19 +931,38 @@ function createApi() {
                         const f = await uploadScaleTicketImage(`${tag}-gross`, input.gross_photo_base64, input.gross_photo_mime, undefined, record.id);
                         item.gross_photo_drive_id = f.id; item.gross_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
-                    } catch (e) { console.error(`[API] gross photo upload failed for ${tag}:`, e.message); }
+                    } catch (e) {
+                        console.error(`[API] gross photo upload failed for ${tag}:`, e.message);
+                        // Recorded on the load, not just logged — see helpers/loadWarnings.js
+                        photoFailures.push(`item ${i + 1} gross: ${e.message}`);
+                    }
                 }
                 if (input.tare_photo_base64) {
                     try {
                         const f = await uploadScaleTicketImage(`${tag}-tare`, input.tare_photo_base64, input.tare_photo_mime, undefined, record.id);
                         item.tare_photo_drive_id = f.id; item.tare_photo_link = f.webViewLink;
                         anyPhotoUploaded = true;
-                    } catch (e) { console.error(`[API] tare photo upload failed for ${tag}:`, e.message); }
+                    } catch (e) {
+                        console.error(`[API] tare photo upload failed for ${tag}:`, e.message);
+                        // Recorded on the load, not just logged — see helpers/loadWarnings.js
+                        photoFailures.push(`item ${i + 1} tare: ${e.message}`);
+                    }
                 }
             }));
 
             const finalLoads = anyPhotoUploaded ? await updateLoad(record.id, { items }) : null;
-            const finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            let finalLoad = finalLoads ? finalLoads.find(l => l.id === record.id) : record;
+            // Attach/clear the photo warning so the badge reflects THIS save:
+            // a retry that succeeds must clear the previous complaint,
+            // otherwise the badge becomes permanent and people learn to
+            // ignore it.
+            {
+                const { buildWarning, setLoadWarnings, clearLoadWarnings } = require('./helpers/loadWarnings');
+                const withWarn = photoFailures.length
+                    ? await setLoadWarnings(record.id, [buildWarning('photo_upload_failed', photoFailures.join('; '))])
+                    : await clearLoadWarnings(record.id, 'photo_upload_failed');
+                if (withWarn) finalLoad = withWarn;
+            }
             // Live sheet sync. Passes BOTH the old and new month: an edit can
             // move a load across months (correcting a date from 08-01 to
             // 07-31), which would otherwise leave July's workbook stale.
@@ -1119,6 +1206,13 @@ function createApi() {
             res.json({ ok: true, load: updated });
         } catch (err) {
             console.error('[API] generate-pdf failed:', err.message);
+            // Record it on the load as well as returning the error — the
+            // operator may dismiss the toast, close the app, and only look
+            // again tomorrow; the badge is what's still there then.
+            try {
+                const { buildWarning, setLoadWarnings } = require('./helpers/loadWarnings');
+                await setLoadWarnings(req.params.id, [buildWarning('pdf_generate_failed', err.message)]);
+            } catch (e) { console.warn('[API] could not record pdf warning:', e.message); }
             res.status(500).json({ error: err.message });
         }
     });

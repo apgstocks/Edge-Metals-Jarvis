@@ -102,6 +102,9 @@ require('./helpers/notify').init({ pushAlert: alerts.pushAlert });
 // argument, and api.js needs to pass the SAME sendMessage that has the capture
 // logic. Global bridge avoids circular require (api ← index).
 global.__jarvisSendMessage = sendMessage;
+// Exposed for /api/health — lets the health endpoint report WhatsApp
+// connectivity without api.js needing to import the client.
+global.__jarvisWaReady = () => waReady;
 scheduler.init({ sendToManager, sendToTeam, sendMessage });
 
 // ── HTTP up first — dashboard usable while WA scans QR ─────────────────────────

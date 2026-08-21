@@ -48,6 +48,10 @@ let pending = false;
 // the temporal dead zone until initialised, so a call that somehow landed
 // during module evaluation would have thrown a ReferenceError.
 let pendingMonths = new Set();
+// Last sync outcome, read by the health endpoint so a silently failing
+// background sync is visible somewhere a human actually looks.
+let lastSyncError = null;
+let lastSyncOk = null;
 
 function monthKeyFor(date) {
     // 'YYYY-MM-DD' -> 'YYYY-MM'. Falls back to today's month for a load with
@@ -129,8 +133,15 @@ function scheduleSync(extraMonths = []) {
         try {
             const res = await runSync(batch);
             console.log(`[SHEETSYNC] Updated Inventory-Overall + ${res.months.map(m => m.monthKey).join(', ') || 'no months'}`);
+            lastSyncOk = new Date().toISOString();
+            lastSyncError = null;
         } catch (err) {
             console.error('[SHEETSYNC] sync failed (non-fatal, will retry on next change):', err.message);
+            // Surfaced on the health endpoint (api.js /api/health) rather
+            // than on a load: a sync covers every load at once, so pinning
+            // the failure to whichever one happened to trigger it would be
+            // arbitrary and misleading.
+            lastSyncError = { message: err.message, at: new Date().toISOString() };
         } finally {
             running = false;
             if (pending) { pending = false; scheduleSync(batch); }
@@ -152,4 +163,6 @@ async function syncNow(extraMonths = []) {
     }
 }
 
-module.exports = { scheduleSync, syncNow, monthKeyFor };
+function syncStatus() { return { lastSyncOk, lastSyncError }; }
+
+module.exports = { scheduleSync, syncNow, monthKeyFor, syncStatus };

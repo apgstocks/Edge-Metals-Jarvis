@@ -28,6 +28,11 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     const items = Array.isArray(load.items) ? load.items : [];
     const hasScalePhotos = items.some(it => it.gross_photo_link || it.tare_photo_link);
 
+    // Warnings are recorded on the load so a failed sub-document is visible
+    // in the UI instead of only in pm2 logs (helpers/loadWarnings.js).
+    const { buildWarning, setLoadWarnings, clearLoadWarnings } = require('./loadWarnings');
+    const warnings = [];
+
     let weightsPatch = {};
     if (!hasScalePhotos) {
         console.log(`[loadsPdf] ${load.id}: no scale photos captured, skipping the weights PDF`);
@@ -38,6 +43,7 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
             weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
         } catch (e) {
             console.error(`[loadsPdf] weights-pdf generation failed for ${load.id}:`, e.message);
+            warnings.push(buildWarning('weights_pdf_failed', e.message));
         }
     }
 
@@ -55,9 +61,20 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
         receiptPatch = { receipt_pdf_drive_id: receiptFile.id, receipt_pdf_link: receiptFile.webViewLink };
     } catch (e) {
         console.error(`[loadsPdf] receipt-pdf generation failed for ${load.id}:`, e.message);
+        warnings.push(buildWarning('receipt_pdf_failed', e.message));
     }
 
     const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', ...weightsPatch, ...receiptPatch });
+
+    // The main ticket succeeded if we got here (a failure there throws), so
+    // always clear its warnings — a successful Regenerate must wipe the
+    // previous complaint, or the badge never goes away and stops meaning
+    // anything. Sub-document warnings are then re-applied if they recurred.
+    await clearLoadWarnings(load.id, ['pdf_generate_failed', 'pdf_upload_failed', 'weights_pdf_failed', 'receipt_pdf_failed']);
+    if (warnings.length) {
+        const withWarn = await setLoadWarnings(load.id, warnings);
+        if (withWarn) return withWarn;
+    }
     return loads.find(l => l.id === load.id) || null;
 }
 
