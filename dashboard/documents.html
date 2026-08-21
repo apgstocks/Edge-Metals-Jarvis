@@ -63,11 +63,13 @@ table { width:100%; border-collapse:collapse; }
 th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
 td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
-.subtab-btn, .verify-subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
-.subtab-btn.active, .verify-subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
-.verify-group-btn { padding:6px 14px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-faint); cursor:pointer; }
-.verify-group-btn.active { color:var(--text-strong); border-color:var(--accent); background:var(--surface-raised); }
-.verify-placeholder-inner { padding:40px 20px; text-align:center; color:var(--text-faint); font-size:13px; max-width:520px; margin:0 auto; line-height:1.6; }
+.subtab-btn, .verify-subtab-btn, .verify-group-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
+.subtab-btn.active, .verify-subtab-btn.active, .verify-group-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+/* Group row (Freight/Transport/Commission) sits visually one level above
+   the entity sub-tab row beneath it — same underline mechanic, slightly
+   larger/bolder so the hierarchy reads at a glance. */
+.verify-group-btn { font-size:12px; padding:9px 18px; }
+.verify-group-btn.active { background:var(--surface-sunken); border-radius:var(--radius-xs) var(--radius-xs) 0 0; }
 .field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
 .field input, .field select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; font-family:inherit; }
 /* Textarea gets its own, more generous treatment — Apsara: "text box is
@@ -339,35 +341,31 @@ body[data-theme="light"] {
   </div>
 
   <!-- ── Verification ─────────────────────────────────────────────────────── -->
-  <!-- Per Apsara: "build verification .in that create sub tab as zimex" —
-       carrier freight invoices get cross-checked against the Invoice
-       sheet's own Freight column, per carrier, one sub-tab each. Zimex is
-       the only one with real extraction/cross-check logic. Restructured
-       2026-08-21 into 3 groups (Freight/Transport/Commission) per Apsara —
-       the 5 new party sub-tabs (Joey, Pan Metal, AJ Transport, Sher
-       Trucking, Jio) are STRUCTURE ONLY: no PDF extraction or cross-check
-       logic yet. Commission has a real sheet column (commission_amt) to
-       check against but no known invoice format for Joey/Pan Metal yet;
-       Transport has no sheet column to check against at all today (see
-       helpers/invoiceSheet.js's buildColumnMap — no transport-cost field
-       exists). Each needs a sample invoice PDF (and, for Transport, a
-       decision on what column to add) before real verification can be
-       built, same as Zimex was. See helpers/invoiceVerify.js for the
-       actual match/mismatch logic and helpers/gemini.js's
-       extractFreightInvoiceRecords for the PDF extraction. -->
+  <!-- Per Apsara: "under verification,create group as Frieght,Transport,
+       Commission. Under Freight,Zimex. Under commission-Joey,Pan metal,
+       Under Transport-AJ Transport,Sher Trucking,Jio" — two tiers: a GROUP
+       row (what kind of billing this is), then a sub-tab row of the
+       specific counterparties within that group. Only Freight → Zimex has
+       real cross-check logic (helpers/invoiceVerify.js +
+       helpers/gemini.js's extractFreightInvoiceRecords) — Transport and
+       Commission's five entities are placeholders for now, same honest
+       "not built yet" pattern this whole tab started as before Zimex was
+       built, rather than faking logic with no real data model behind it
+       yet. Both levels are wired generically (setVerifyGroup/
+       setVerifySubtab below) so adding a real Transport or Commission
+       check later, or another entity under any group, is just another
+       button + panel, not a rewrite. -->
   <div id="panelVerification" class="hidden">
-    <div style="display:flex; gap:4px; margin-bottom:2px;">
+    <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:14px;">
       <button class="verify-group-btn active" data-verify-group="freight">Freight</button>
       <button class="verify-group-btn" data-verify-group="transport">Transport</button>
       <button class="verify-group-btn" data-verify-group="commission">Commission</button>
     </div>
-    <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:18px;">
-      <button class="verify-subtab-btn active" data-verify-group="freight" data-verify-subtab="zimex">Zimex</button>
-      <button class="verify-subtab-btn hidden" data-verify-group="transport" data-verify-subtab="ajtransport">AJ Transport</button>
-      <button class="verify-subtab-btn hidden" data-verify-group="transport" data-verify-subtab="shertrucking">Sher Trucking</button>
-      <button class="verify-subtab-btn hidden" data-verify-group="transport" data-verify-subtab="jio">Jio</button>
-      <button class="verify-subtab-btn hidden" data-verify-group="commission" data-verify-subtab="joey">Joey</button>
-      <button class="verify-subtab-btn hidden" data-verify-group="commission" data-verify-subtab="panmetal">Pan Metal</button>
+
+    <!-- ── Freight ─────────────────────────────────────────────────────── -->
+    <div id="verifyGroupFreight">
+    <div style="display:flex; gap:4px; margin-bottom:18px;">
+      <button class="verify-subtab-btn active" data-verify-subtab="zimex">Zimex</button>
     </div>
 
     <div id="verifyPanelZimex">
@@ -436,23 +434,38 @@ body[data-theme="light"] {
         </div>
       </div>
     </div>
+    </div>
 
-    <!-- Structure-only placeholders — see the comment above panelVerification
-         for exactly what's missing before each of these can work like Zimex. -->
-    <div id="verifyPanelAjtransport" class="hidden verify-placeholder">
-      <div class="verify-placeholder-inner">Not wired up yet — the Invoice sheet has no transport-cost column to check a trucking invoice against. Send a sample AJ Transport invoice and decide what to verify it against, and this can be built out like Zimex.</div>
+    <!-- ── Transport ───────────────────────────────────────────────────── -->
+    <div id="verifyGroupTransport" class="hidden">
+      <div style="display:flex; gap:4px; margin-bottom:18px;">
+        <button class="verify-subtab-btn active" data-verify-subtab="aj-transport">AJ Transport</button>
+        <button class="verify-subtab-btn" data-verify-subtab="sher-trucking">Sher Trucking</button>
+        <button class="verify-subtab-btn" data-verify-subtab="jio">Jio</button>
+      </div>
+      <div id="verifyPanelAjTransport">
+        <div class="placeholder-note">AJ Transport verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+      </div>
+      <div id="verifyPanelSherTrucking" class="hidden">
+        <div class="placeholder-note">Sher Trucking verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+      </div>
+      <div id="verifyPanelJio" class="hidden">
+        <div class="placeholder-note">Jio verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">Tell me what to cross-check (trucking invoice vs. what on the sheet?) and I'll build it the same way Zimex works.</span></div>
+      </div>
     </div>
-    <div id="verifyPanelShertrucking" class="hidden verify-placeholder">
-      <div class="verify-placeholder-inner">Not wired up yet — same gap as AJ Transport: no transport-cost column on the sheet yet. Send a sample Sher Trucking invoice to get this built.</div>
-    </div>
-    <div id="verifyPanelJio" class="hidden verify-placeholder">
-      <div class="verify-placeholder-inner">Not wired up yet — same gap as the other transport sub-tabs. Send a sample Jio invoice to get this built.</div>
-    </div>
-    <div id="verifyPanelJoey" class="hidden verify-placeholder">
-      <div class="verify-placeholder-inner">Not wired up yet — the sheet's Commission column exists, but I don't have a sample Joey commission invoice to build extraction against. Send one and this can cross-check the same way Zimex does against Freight.</div>
-    </div>
-    <div id="verifyPanelPanmetal" class="hidden verify-placeholder">
-      <div class="verify-placeholder-inner">Not wired up yet — same as Joey: the Commission column exists on the sheet, but I need a sample Pan Metal invoice to build extraction against.</div>
+
+    <!-- ── Commission ──────────────────────────────────────────────────── -->
+    <div id="verifyGroupCommission" class="hidden">
+      <div style="display:flex; gap:4px; margin-bottom:18px;">
+        <button class="verify-subtab-btn active" data-verify-subtab="joey">Joey</button>
+        <button class="verify-subtab-btn" data-verify-subtab="pan-metal">Pan Metal</button>
+      </div>
+      <div id="verifyPanelJoey">
+        <div class="placeholder-note">Joey commission verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">The Invoice sheet's Commission columns are already mapped (helpers/invoiceSheet.js) — tell me what should be cross-checked against them and I'll build it.</span></div>
+      </div>
+      <div id="verifyPanelPanMetal" class="hidden">
+        <div class="placeholder-note">Pan Metal commission verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">The Invoice sheet's Commission columns are already mapped (helpers/invoiceSheet.js) — tell me what should be cross-checked against them and I'll build it.</span></div>
+      </div>
     </div>
   </div>
 
@@ -613,27 +626,48 @@ function setSubtab(name) {
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
-// ── Verification / group + sub-tab switching ─────────────────────────────
-// Two-tier nav added 2026-08-21 per Apsara: groups (Freight/Transport/
-// Commission) each show only their own sub-tab buttons; only Zimex has
-// real logic behind it (see helpers/invoiceVerify.js and
-// helpers/gemini.js's extractFreightInvoiceRecords) — the rest render the
-// verify-placeholder panel until extraction/cross-check is built for them.
-// Every panel is keyed off "verifyPanel" + capitalized sub-tab name, so
-// adding a real one later is just swapping that panel's innerHTML, not
-// touching this switcher.
-const VERIFY_GROUP_DEFAULT_SUBTAB = { freight: 'zimex', transport: 'ajtransport', commission: 'joey' };
-function verifyPanelId(subtab) { return 'verifyPanel' + subtab.charAt(0).toUpperCase() + subtab.slice(1); }
-function setVerifySubtab(name) {
-  document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifySubtab === name));
-  document.querySelectorAll('[id^="verifyPanel"]').forEach((el) => el.classList.toggle('hidden', el.id !== verifyPanelId(name)));
-}
-function setVerifyGroup(group) {
-  document.querySelectorAll('.verify-group-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifyGroup === group));
-  document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.classList.toggle('hidden', b.dataset.verifyGroup !== group));
-  setVerifySubtab(VERIFY_GROUP_DEFAULT_SUBTAB[group]);
+// ── Verification / Zimex sub-tab ─────────────────────────────────────────
+// Two tiers per Apsara: "under verification,create group as
+// Frieght,Transport,Commission. Under Freight,Zimex. Under
+// commission-Joey,Pan metal, Under Transport-AJ Transport,Sher
+// Trucking,Jio" — a GROUP row (verify-group-btn/verifyGroup*) and, inside
+// whichever group is showing, a sub-tab row (verify-subtab-btn) for its
+// specific entities. Both wired generically off data-verify-group/
+// data-verify-subtab + a name→element-id lookup, so a new entity under an
+// existing group, or a whole new group, is just another button + panel +
+// one lookup-table line — not a rewrite of either switcher.
+const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyGroupTransport', commission: 'verifyGroupCommission' };
+// Every entity's subtab key, in display order, per group — doubles as the
+// "which subtab do I reset to when this group is (re)selected" list. Keep
+// in sync with each group's row of .verify-subtab-btn buttons above.
+const VERIFY_GROUP_SUBTABS = {
+  freight: ['zimex'],
+  transport: ['aj-transport', 'sher-trucking', 'jio'],
+  commission: ['joey', 'pan-metal'],
+};
+const VERIFY_SUBTAB_PANELS = {
+  zimex: 'verifyPanelZimex',
+  'aj-transport': 'verifyPanelAjTransport', 'sher-trucking': 'verifyPanelSherTrucking', 'jio': 'verifyPanelJio',
+  joey: 'verifyPanelJoey', 'pan-metal': 'verifyPanelPanMetal',
+};
+function setVerifyGroup(name) {
+  document.querySelectorAll('.verify-group-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifyGroup === name));
+  Object.entries(VERIFY_GROUP_PANELS).forEach(([key, id]) => $(id).classList.toggle('hidden', key !== name));
+  // setVerifySubtab toggles hidden across EVERY subtab panel regardless of
+  // group (simplest correct way to guarantee only one is ever visible at
+  // once) — which means switching groups without also resetting the
+  // subtab would leave whichever panel a PREVIOUS group's click last hid
+  // still hidden here too. Always reset to this group's first entity on
+  // switch, same as clicking straight into it fresh — standard tab
+  // behavior, and the only way this stays correct with a shared toggle.
+  setVerifySubtab(VERIFY_GROUP_SUBTABS[name][0]);
 }
 document.querySelectorAll('.verify-group-btn').forEach((b) => b.addEventListener('click', () => setVerifyGroup(b.dataset.verifyGroup)));
+
+function setVerifySubtab(name) {
+  document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifySubtab === name));
+  Object.entries(VERIFY_SUBTAB_PANELS).forEach(([key, id]) => $(id).classList.toggle('hidden', key !== name));
+}
 document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => setVerifySubtab(b.dataset.verifySubtab)));
 
 // Year select — current year down to 3 years back covers realistic lookback
