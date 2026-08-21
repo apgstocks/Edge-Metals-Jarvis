@@ -2824,28 +2824,117 @@ async function renderInventoryTab() {
   $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => btn.addEventListener('click', () => { mobInvSubTab = btn.dataset.subtab; renderInventoryTab(); }));
 
   // Export — mobile auth is a bearer token (see api()'s comment), not a
-  // cookie, so a plain link/navigation wouldn't carry it. Fetch the file as
-  // a blob through the same authed api() path instead, then trigger a
-  // download via a temporary object URL.
+  // cookie, so a plain link or navigation wouldn't carry it. The file is
+  // always fetched as a blob through the authed path; how it's DELIVERED
+  // then depends on where we're running (see deliverExportedFile).
   const exportMenu = $('invExportMenu');
   $('btnInvExportMenu').addEventListener('click', (ev) => { ev.stopPropagation(); exportMenu.classList.toggle('hidden'); });
   document.addEventListener('click', () => exportMenu.classList.add('hidden'));
   exportMenu.querySelectorAll('.ac-item').forEach(item => item.addEventListener('click', async () => {
     exportMenu.classList.add('hidden');
     const ext = item.dataset.export;
+    const label = ext === 'xlsx' ? 'Excel' : 'PDF';
+    // Generating a big range server-side takes a beat, and before this
+    // there was no feedback at all between tapping and the share sheet —
+    // which is part of why a silent failure read as "nothing happens".
+    showWeighToast('working', `Preparing ${label} export…`, 'Building the file on the server');
     try {
       const res = await fetch(API_BASE + `/api/loads/inventory/export.${ext}${qs}`, { headers: { Authorization: 'Bearer ' + getToken() } });
-      if (!res.ok) throw new Error('export failed (' + res.status + ')');
+      if (!res.ok) {
+        // Surface the server's actual error message when it sent one,
+        // instead of a bare status code.
+        let detail = `export failed (${res.status})`;
+        try { const j = await res.json(); if (j && j.error) detail = j.error; } catch {}
+        throw new Error(detail);
+      }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `inventory.${ext}`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      // A JSON error body that slipped through with a 200 would otherwise
+      // be saved as a corrupt .xlsx that Excel refuses to open — a failure
+      // that looks like a broken file rather than a broken request.
+      if (!blob.size) throw new Error('the server returned an empty file');
+      await deliverExportedFile(blob, `inventory-${todayStamp()}.${ext}`, ext);
+      hideWeighToast();
     } catch (err) {
-      alert('Export failed: ' + err.message);
+      hideWeighToast();
+      alert(`Couldn't export the ${label} file.\n\n${err.message}`);
     }
   }));
+}
+
+// Filename stamp so repeated exports don't all land as "inventory.xlsx" and
+// overwrite each other in the share target's folder.
+function todayStamp() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ── Getting a downloaded file OUT of the app ───────────────────────────────
+// This is the fix for "export as excel/pdf not working" (Apsara 2026-08-21).
+//
+// The old code did the standard browser thing: make an object URL for the
+// blob, create an <a download>, click it. That works in Chrome and it works
+// on the dashboard. It does NOTHING in an Android WebView, silently — the
+// WebView has no download manager of its own, and blob: URLs are internal to
+// the WebView so they never reach a DownloadListener even if one is
+// installed. Tap, no error, no file. Exactly what she saw.
+//
+// So on native we write the bytes to the app's cache directory with
+// @capacitor/filesystem and hand the real file:// URI to @capacitor/share,
+// which opens the Android share sheet. That's a better fit for a yard than a
+// download would have been anyway: the sheet offers WhatsApp, Drive, Gmail
+// and Files, so the report goes straight to whoever needs it instead of
+// landing in /Downloads to be hunted for later.
+//
+// Cache directory, not Documents: these are disposable reports regenerated
+// on demand from live data, and Cache needs no storage permission on any
+// Android version. Android clears it under pressure, which is correct — the
+// file has already been shared by then.
+//
+// The <a download> path is kept for running this same page in a real browser
+// (dev/testing), where it's the right mechanism.
+async function deliverExportedFile(blob, filename, ext) {
+  const cap = window.Capacitor;
+  const isNative = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+  const FS = isNative && cap.Plugins && cap.Plugins.Filesystem;
+  const Share = isNative && cap.Plugins && cap.Plugins.Share;
+
+  if (!FS || !Share) {
+    // Browser path — unchanged behaviour.
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return;
+  }
+
+  // Filesystem.writeFile takes base64, not a Blob. FileReader's data URL is
+  // "data:<mime>;base64,<payload>" — split off the payload.
+  const base64 = await new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1]);
+    fr.onerror = () => reject(new Error("couldn't read the downloaded file"));
+    fr.readAsDataURL(blob);
+  });
+
+  const { uri } = await FS.writeFile({ path: filename, data: base64, directory: 'CACHE' });
+  try {
+    await Share.share({
+      title: 'Inventory export',
+      // No `text`: on some targets (Gmail, WhatsApp) a text field alongside
+      // a file attachment gets treated as the message body, and on a few it
+      // makes the file itself get dropped.
+      files: [uri],
+      dialogTitle: ext === 'xlsx' ? 'Send the Excel file' : 'Send the PDF',
+    });
+  } catch (e) {
+    // Backing out of the Android share sheet REJECTS rather than resolving,
+    // so without this a deliberate cancel would pop an error alert saying
+    // the export failed — when in fact the file built fine and the user
+    // simply changed their mind. Anything else is a real failure.
+    if (/cancel/i.test(e && e.message || '')) return;
+    throw e;
+  }
 }
 
 async function bootLoads() {
