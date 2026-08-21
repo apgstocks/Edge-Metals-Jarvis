@@ -184,6 +184,12 @@ async function findContainersForBuyer(buyerQuery) {
             inv_no: first.inv_no,
             inv_date: first.inv_date,
             item_count: containerRows.length,
+            // Exposed so the client can group a multi-select batch by
+            // shared booking number without a second round trip — see
+            // buildMultiContainerInvoiceData() below and Apsara: "if both
+            // containers belong to the same booking, it should get
+            // generated in same invoice".
+            booking_no: first.booking_no,
         });
     }
     // Most recently added rows tend to sort later in the sheet — reverse so
@@ -225,6 +231,7 @@ async function findContainersByNumber(containerQuery) {
             inv_no: first.inv_no,
             inv_date: first.inv_date,
             item_count: containerRows.length,
+            booking_no: first.booking_no,
         });
     }
     out.reverse(); // newest shipment first, same rationale as findContainersForBuyer
@@ -302,6 +309,99 @@ async function buildContainerInvoiceData(containerNo) {
         subtotal,
         final_amount: subtotal - freight,
         line_items: lineItems,
+    };
+}
+
+// Builds ONE invoice covering several containers that share a booking —
+// per Apsara: "if both containers belong to the same booking, it should
+// get generated in same invoice". Header fields (consignee, inv_no, dates,
+// booking_no, terms…) come from the FIRST matched row same as
+// buildContainerInvoiceData, since Booking # is the one field genuinely
+// shared across every container in the group. Container # and Seal #
+// differ PER CONTAINER though, so — unlike the single-container path —
+// each line item carries its OWN container_no/seal_no rather than
+// inheriting one top-level value. helpers/invoicePdf.js's item/packing
+// rows read `item.container_no || data.container_no` so this same
+// template renders both shapes without a second code path.
+async function buildMultiContainerInvoiceData(containerNos) {
+    const { headers, rows } = await fetchRawSheet();
+    const colMap = buildColumnMap(headers);
+    if (colMap.container_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected a "Container No." column');
+    }
+    const targets = new Set((containerNos || []).map((c) => safeStr(c).toUpperCase()).filter(Boolean));
+    if (!targets.size) return null;
+    const matchedRows = rows.filter((r) => targets.has(safeStr(r[colMap.container_no]).toUpperCase()));
+    if (!matchedRows.length) return null;
+
+    const first = rowToDict(matchedRows[0], colMap);
+    const packingLookup = await fetchPackingLookup();
+
+    let freight = 0;
+    const lineItems = matchedRows.map((row) => {
+        const d = rowToDict(row, colMap);
+        const containerNo = safeStr(d.container_no).toUpperCase();
+        const weight = safeFloat(d.weight);
+        const rate = safeFloat(d.inv_price);
+        const amount = weight * rate;
+        if (!freight) {
+            const fv = evalFreight(d.freight_charge);
+            if (fv > 0) freight = fv;
+        }
+        const itemDesc = resolveItemDesc(d.item_desc, first.inv_no);
+        const weightLbs = Math.round(weight * 2204.62);
+        const packing = packingLookup.get(containerNo) || null;
+        const pr = packing ? findPackingRow(packing.rows, itemDesc) : null;
+        return {
+            item_desc: itemDesc,
+            weight,
+            rate,
+            amount,
+            container_no: containerNo,
+            seal_no: d.seal_no,
+            packing: {
+                gross_weight_lbs: (pr && pr.gross_weight_lbs) || '',
+                truck_lbs: (pr && pr.truck_lbs) || '',
+                container_tare_lbs: (pr && pr.container_tare_lbs) || '',
+                chassis_lbs: (pr && pr.chassis_lbs) || '',
+                boxes_weight_lbs: (pr && pr.boxes_weight_lbs) || '',
+                net_weight_lbs: (pr && pr.net_weight_lbs) || String(weightLbs),
+                net_weight_mt: (pr && pr.net_weight_mt) || weight.toFixed(3),
+            },
+        };
+    });
+
+    const subtotal = lineItems.reduce((s, it) => s + it.amount, 0);
+    const firstContainerNo = safeStr(first.container_no).toUpperCase();
+    const firstPacking = packingLookup.get(firstContainerNo) || null;
+
+    // Distinct container list, sheet order — used both as a display fallback
+    // (any item missing its own container_no falls back to this) and as the
+    // identifier documentsSaved.js/invoiceVersions.js file this invoice
+    // under, since there's no single container number to key off of here.
+    const distinctContainers = Array.from(new Set(lineItems.map((li) => li.container_no)));
+
+    return {
+        container_no: distinctContainers.join('+'),
+        consignee: first.consignee,
+        inv_no: first.inv_no,
+        inv_date: first.inv_date,
+        hbl_no: first.hbl_no,
+        booking_no: first.booking_no,
+        seal_no: first.seal_no,
+        terms: first.terms,
+        reference: first.reference,
+        proforma_date: first.proforma_date,
+        eta: first.eta,
+        port_loading: firstPacking ? firstPacking.port_loading : 'LOS ANGELES',
+        port_discharge: firstPacking ? firstPacking.port_discharge : 'TO BE ADVISED',
+        place_of_receipt: firstPacking ? firstPacking.place_of_receipt : '',
+        freight,
+        subtotal,
+        final_amount: subtotal - freight,
+        line_items: lineItems,
+        multi_container: true,
+        containers: distinctContainers,
     };
 }
 
@@ -387,6 +487,7 @@ module.exports = {
     findContainersForBuyer,
     findContainersByNumber,
     buildContainerInvoiceData,
+    buildMultiContainerInvoiceData,
     fetchPackingLookup,
     findPackingRow,
     resolveItemDesc,

@@ -201,24 +201,33 @@ body[data-theme="light"] {
       <div id="invContainerList" style="display:flex; flex-direction:column; gap:8px;"></div>
       <div id="invContainerListEmpty" class="placeholder-note hidden">No containers found — check the name/number/spelling, or the shipment may not be logged in the Invoice sheet yet.</div>
 
-      <!-- Multi-container batch generate — matches her original tool's
-           --all behavior (loop over containers, one PDF each, no per-field
-           review) rather than the single-container flow's "load into Step 3
-           and review every field first" — see loadInvoicePreview()/
-           generateInvoicePreviewPayload() below for why the two paths build
-           the PDF payload differently. Hidden until at least one checkbox
-           is ticked. -->
+      <!-- Multi-select batch review — steps through Step 3 once per
+           selected group (containers sharing a booking # are pre-merged
+           into one group/one invoice), same editable screen as reviewing
+           a single container. See startInvQueue()/loadNextInvQueueItem()
+           below. Hidden until at least one checkbox is ticked. -->
       <div id="invBulkBar" class="hidden" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:10px 14px; margin-top:12px;">
         <span id="invBulkCountLabel" style="font-size:12px; color:var(--text-muted);"></span>
-        <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Generate selected</button>
+        <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Review &amp; generate selected</button>
       </div>
-      <div id="invBulkProgress" class="hidden" style="margin-top:10px; font-size:12px; color:var(--text-muted); white-space:pre-line;"></div>
     </div>
 
     <div id="invStep3" class="card hidden" style="padding:20px 22px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
         <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Review &amp; generate — every field below is editable before you download.</div>
         <button id="btnInvStep3Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
+      </div>
+
+      <!-- Multi-select batch review queue — "Generate selected" on Step 2
+           no longer skips straight to PDF; it steps through one editable
+           review per selected booking/container so nothing goes out
+           unreviewed, per Apsara: "yes" (to editing before generate).
+           Containers sharing a booking # are pre-merged into ONE review
+           here (see startInvQueue()/loadNextInvQueueItem() below). Hidden
+           outside of queue mode. -->
+      <div id="invQueueBanner" class="hidden" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:#eff6ff; border:1px solid #93c5fd; border-radius:8px; padding:9px 14px; margin-bottom:14px; font-size:12px; color:#1e3a8a;">
+        <span id="invQueueBannerText"></span>
+        <button id="btnInvQueueCancel" type="button" class="btn btn-secondary" style="padding:4px 9px; font-size:10px; flex-shrink:0;">Cancel batch</button>
       </div>
 
       <!-- "You last generated this container on [date] — N versions saved"
@@ -279,7 +288,7 @@ body[data-theme="light"] {
         <table class="inv-line-table">
           <thead>
             <tr>
-              <th>#</th><th>Description</th><th>Qty MT</th><th>Rate</th><th>Amount</th>
+              <th>#</th><th>Container #</th><th>Seal #</th><th>Description</th><th>Qty MT</th><th>Rate</th><th>Amount</th>
               <th>Gross lbs</th><th>Truck lbs</th><th>Tare lbs</th><th>Chassis lbs</th><th>Boxes lbs</th><th>Net lbs</th><th></th>
             </tr>
           </thead>
@@ -1351,7 +1360,7 @@ function updateInvBulkBar(containers) {
   const n = checked.length;
   $('invBulkBar').classList.toggle('hidden', n === 0);
   if (n > 0) $('invBulkCountLabel').textContent = `${n} container${n === 1 ? '' : 's'} selected`;
-  $('btnInvBulkGenerate').onclick = () => runInvBulkGenerate(checked.map((el) => containers[Number(el.dataset.idx)]));
+  $('btnInvBulkGenerate').onclick = () => startInvQueue(checked.map((el) => containers[Number(el.dataset.idx)]));
 }
 
 $('btnInvStep1Next').addEventListener('click', async () => {
@@ -1391,71 +1400,75 @@ $('inv_container_search').addEventListener('keydown', (e) => { if (e.key === 'En
 $('btnInvStep2Back').addEventListener('click', () => showInvStep(1));
 $('btnInvStep3Back').addEventListener('click', () => showInvStep(2));
 
-// ── Bulk generate — matches her original tool's --all behavior: one PDF
-// per selected container, straight from the sheet's computed data, no
-// per-field manual review screen in between (that's what the single-
-// container Step 3 flow is for). Each container still goes through the
-// same generateInvoiceClassicPdf/saveInvoiceCopy/saveInvoiceVersion path
-// server-side as the reviewed single-container flow — this only skips
-// showing the editable form for each one before generating.
-function invoicePayloadFromPreviewData(data) {
-  const items = (data.line_items || []).map((item) => ({
-    item_desc: item.item_desc, weight: Number(item.weight) || 0, rate: Number(item.rate) || 0,
-    amount: Number(item.amount) || (Number(item.weight) || 0) * (Number(item.rate) || 0),
-    packing: item.packing || {},
-  }));
-  const subtotal = items.reduce((s, it) => s + it.amount, 0);
-  const notes = Number(data.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(data.freight) }] : [];
-  const notesTotal = notes.reduce((s, n) => s + n.amount, 0);
-
-  // Same address-book lookup loadInvoicePreview() uses for the reviewed
-  // single-container path — without it, a bulk-generated PDF's buyer block
-  // would print blank below the company name (the current live sheet has
-  // no address columns at all), which is exactly the kind of quality gap a
-  // real financial document can't skip just because there's no review step.
-  const consigneeTag = data.consignee || '';
-  const consigneeParts = consigneeTag.split('/').map((s) => s.trim()).filter(Boolean);
-  const searchTerm = (consigneeParts[consigneeParts.length - 1] || consigneeTag).toLowerCase();
-  const entries = searchTerm ? searchAddressBook(searchTerm) : [];
-  const match = entries.find((e) => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
-  const addressLines = match ? (match.raw || '').split('\n').map((l) => l.trim()).filter(Boolean) : (consigneeTag ? [consigneeTag] : []);
-
-  return {
-    inv_no: data.inv_no || '', inv_date: data.inv_date || '', reference: data.reference || '',
-    terms: data.terms || '', container_no: data.container_no || '', booking_no: data.booking_no || '',
-    seal_no: data.seal_no || '', hbl_no: data.hbl_no || '', place_of_receipt: data.place_of_receipt || '',
-    port_loading: data.port_loading || '', port_discharge: data.port_discharge || '',
-    vessel: data.vessel || '', country_of_origin: data.country_of_origin || 'USA',
-    consignee: consigneeTag, consignee_address: addressLines, proforma_date: data.proforma_date || '',
-    notes, subtotal, final_amount: subtotal + notesTotal, line_items: items,
-  };
-}
-async function runInvBulkGenerate(containers) {
-  if (!containers.length) return;
-  const btn = $('btnInvBulkGenerate');
-  setButtonLoading(btn, true, 'Generating…');
-  $('invBulkProgress').classList.remove('hidden');
-  const lines = containers.map((c) => `${c.container_no} — queued`);
-  $('invBulkProgress').textContent = lines.join('\n');
-  let okCount = 0;
-  for (let i = 0; i < containers.length; i++) {
-    const c = containers[i];
-    try {
-      const data = await api('/api/invoice/preview?container=' + encodeURIComponent(c.container_no));
-      const payload = invoicePayloadFromPreviewData(data);
-      const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
-      if (result.saved_filename) await downloadSavedInvoice(result.saved_filename, c.container_no);
-      lines[i] = `${c.container_no} — ✓ generated`;
-      okCount++;
-    } catch (e) {
-      lines[i] = `${c.container_no} — ✗ ${e.message}`;
-    }
-    $('invBulkProgress').textContent = lines.join('\n');
+// ── Multi-select batch review queue ─────────────────────────────────────
+// Selecting several containers on Step 2 and clicking "Generate selected"
+// no longer skips straight to PDF (Apsara: "yes" — she wants to edit
+// before generating, even in a batch). Instead it steps through Step 3
+// once per group, in order, same editable screen and same Generate &
+// Download button as the single-container flow — this just drives which
+// data loads into it next.
+//
+// Containers sharing a booking # are pre-merged into ONE group (one
+// review, one invoice) per Apsara: "if both containers belong to the same
+// booking, it should get generated in same invoice" — a container with no
+// booking # on record never merges with anything, even another
+// no-booking container, since there'd be no real basis for combining them.
+function groupSelectedContainersByBooking(containers) {
+  const groups = new Map(); // key -> { booking_no, containers: [container_no,...] }
+  let singleton = 0;
+  for (const c of containers) {
+    const booking = (c.booking_no || '').trim().toUpperCase();
+    const key = booking || `__single__${singleton++}`;
+    if (!groups.has(key)) groups.set(key, { booking_no: booking, containers: [] });
+    groups.get(key).containers.push(c.container_no);
   }
-  setButtonLoading(btn, false);
-  lines.push(`Done — ${okCount}/${containers.length} generated.`);
-  $('invBulkProgress').textContent = lines.join('\n');
+  return Array.from(groups.values());
 }
+
+let invQueue = [];      // [{ booking_no, containers: [container_no,...] }, ...] — remaining groups to review
+let invQueueIndex = 0;
+
+async function startInvQueue(containers) {
+  invQueue = groupSelectedContainersByBooking(containers);
+  invQueueIndex = 0;
+  await loadNextInvQueueItem();
+}
+
+async function loadNextInvQueueItem() {
+  if (invQueueIndex >= invQueue.length) {
+    $('invQueueBanner').classList.add('hidden');
+    invQueue = [];
+    return;
+  }
+  const group = invQueue[invQueueIndex];
+  const isMulti = group.containers.length > 1;
+  try {
+    const data = isMulti
+      ? await api('/api/invoice/preview-multi?containers=' + encodeURIComponent(group.containers.join(',')))
+      : await api('/api/invoice/preview?container=' + encodeURIComponent(group.containers[0]));
+    // Version history has no single container to key off of for a merged
+    // invoice — use the shared booking # instead, still a stable per-
+    // shipment identifier (see helpers/invoiceVersions.js — it just
+    // uppercases/trims whatever key it's given).
+    enterInvoiceReview(data, isMulti
+      ? { suppressVersionBanner: false, versionKey: group.booking_no }
+      : {});
+    $('invQueueBannerText').textContent = isMulti
+      ? `Reviewing ${invQueueIndex + 1} of ${invQueue.length} — booking ${group.booking_no} (${group.containers.length} containers merged into one invoice)`
+      : `Reviewing ${invQueueIndex + 1} of ${invQueue.length} — ${group.containers[0]}`;
+    $('invQueueBanner').classList.remove('hidden');
+  } catch (e) {
+    alert(`${group.containers.join(', ')}: ${e.message}`);
+    invQueueIndex++;
+    await loadNextInvQueueItem();
+  }
+}
+$('btnInvQueueCancel').addEventListener('click', () => {
+  invQueue = [];
+  invQueueIndex = 0;
+  $('invQueueBanner').classList.add('hidden');
+  showInvStep(2);
+});
 
 // Unified Line Items & Packing Weights row — one <tr> combining what used
 // to be two stacked rows (sale fields, then a separate packing-fields row
@@ -1466,6 +1479,8 @@ function invItemRowHtml(item, i) {
   const p = item.packing || {};
   return `<tr class="inv-item-row" data-i="${i}">
     <td>${i + 1}</td>
+    <td><input class="inv-item-container" placeholder="container #" value="${esc(item.container_no || '')}"></td>
+    <td><input class="inv-item-seal" placeholder="seal #" value="${esc(item.seal_no || '')}"></td>
     <td><input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}"></td>
     <td><input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}"></td>
     <td><input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}"></td>
@@ -1574,6 +1589,20 @@ $('btnInvVersionLoad').addEventListener('click', () => {
 // or a saved version-history payload — same shape) into every field on the
 // review screen. Factored out of loadInvoicePreview() so "Load previous
 // edits" can reuse it without re-fetching from the sheet.
+// Every row always carries a container_no/seal_no once it reaches the
+// form — single-container sheet data doesn't set these per item (there's
+// only one container), so each row falls back to the shared header
+// fields; a multi-container merge (buildMultiContainerInvoiceData) already
+// sets its own per item. Keeps invItemRowHtml/collectInvoicePayload
+// blind to which case they're in.
+function normalizeInvItemsForForm(data) {
+  return (data.line_items || []).map((it) => ({
+    ...it,
+    container_no: it.container_no || data.container_no || '',
+    seal_no: it.seal_no || data.seal_no || '',
+  }));
+}
+
 function applyInvoiceDataToForm(data) {
   $('inv_no').value = data.inv_no || '';
   $('inv_date').value = data.inv_date || '';
@@ -1588,10 +1617,26 @@ function applyInvoiceDataToForm(data) {
   $('inv_pod').value = data.port_discharge || '';
   $('inv_vessel').value = data.vessel || '';
   $('inv_country_of_origin').value = data.country_of_origin || 'USA';
-  $('inv_consignee_address').value = (data.consignee_address || []).join('\n');
 
-  $('invItemsEditor').innerHTML = (data.line_items || []).map(invItemRowHtml).join('');
+  // Prefer an explicit consignee_address array (a saved version already
+  // has one) — otherwise fall back to the same address-book lookup by
+  // consignee tag fresh sheet data needs (the sheet itself has no address
+  // columns). Keeps this one function usable for both "load a fresh
+  // preview" and "load previous edits".
+  if (data.consignee_address && data.consignee_address.length) {
+    $('inv_consignee_address').value = data.consignee_address.join('\n');
+  } else {
+    const consigneeTag = data.consignee || '';
+    const consigneeParts = consigneeTag.split('/').map((s) => s.trim()).filter(Boolean);
+    const searchTerm = (consigneeParts[consigneeParts.length - 1] || consigneeTag).toLowerCase();
+    const entries = searchTerm ? searchAddressBook(searchTerm) : [];
+    const match = entries.find((e) => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
+    $('inv_consignee_address').value = match ? (match.raw || '') : consigneeTag;
+  }
+
+  $('invItemsEditor').innerHTML = normalizeInvItemsForForm(data).map(invItemRowHtml).join('');
   $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
+  recalcInvFinalAmount();
 
   // Legacy single-freight payloads (older sheet data / older saved
   // versions) become one note; the new client always sends data.notes
@@ -1602,53 +1647,33 @@ function applyInvoiceDataToForm(data) {
   renderInvoiceNotes(notes);
 }
 
+// Pours a fetched preview (or a multi-container merge) into Step 3 and
+// shows it — the single shared entry point loadInvoicePreview(), the
+// container-search "open" click, and the batch review queue all funnel
+// through this, so the version banner / queue banner / invCurrentData
+// bookkeeping happens exactly once regardless of which path got here.
+// opts.versionKey overrides what /api/invoice/versions is queried with
+// (defaults to the data's own container_no) — a multi-container merge has
+// no single container number, so the queue passes the shared booking # as
+// the version-history key instead. opts.suppressVersionBanner skips that
+// lookup entirely when a key doesn't make sense.
+function enterInvoiceReview(data, opts = {}) {
+  invCurrentData = data;
+  applyInvoiceDataToForm(data);
+  $('invSuccessMsg').textContent = '';
+  $('invQueueBanner').classList.add('hidden'); // queue loader re-shows it right after, if we're mid-batch
+  if (opts.suppressVersionBanner) {
+    $('invVersionBanner').classList.add('hidden');
+  } else {
+    refreshInvVersionBanner(opts.versionKey || data.container_no);
+  }
+  showInvStep(3);
+}
+
 async function loadInvoicePreview(containerNo) {
   try {
     const data = await api('/api/invoice/preview?container=' + encodeURIComponent(containerNo));
-    invCurrentData = data;
-    $('inv_no').value = data.inv_no || '';
-    $('inv_date').value = data.inv_date || '';
-    $('inv_reference').value = data.reference || '';
-    $('inv_terms').value = data.terms || '';
-    $('inv_container').value = data.container_no || '';
-    $('inv_booking').value = data.booking_no || '';
-    $('inv_seal').value = data.seal_no || '';
-    $('inv_hbl').value = data.hbl_no || '';
-    $('inv_receipt').value = data.place_of_receipt || '';
-    $('inv_pol').value = data.port_loading || '';
-    $('inv_pod').value = data.port_discharge || '';
-    // Fresh sheet data only ever carries the old single freight number
-    // (there's no notes column on the sheet) — one starter note, same as
-    // the PDF side's legacy fallback. "+Add Note" covers EFS/anything else.
-    renderInvoiceNotes(Number(data.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(data.freight) }] : []);
-    // No sheet column backs either of these (see comment above the fields)
-    // — always starts blank/default, purely manual entry before download.
-    $('inv_vessel').value = data.vessel || '';
-    $('inv_country_of_origin').value = data.country_of_origin || 'USA';
-
-    refreshInvVersionBanner(data.container_no || containerNo);
-
-    // Buyer address — same address-book lookup Proforma uses, keyed off the
-    // sheet's own Consignee text for this container so it's pre-filled
-    // without asking her to re-pick the buyer a second time. Searched by
-    // the LAST "/"-separated part (e.g. "Taewon" out of "Joey/Taewon") since
-    // searchAddressBook matches against individual aliases, not a joined
-    // "Joey/Taewon" string that wouldn't literally appear anywhere in the
-    // address book — then the full joined tag is preferred among results
-    // so a same-agent, different-company match doesn't win by accident.
-    const consigneeTag = data.consignee || '';
-    const consigneeParts = consigneeTag.split('/').map((s) => s.trim()).filter(Boolean);
-    const searchTerm = (consigneeParts[consigneeParts.length - 1] || consigneeTag).toLowerCase();
-    const entries = searchTerm ? searchAddressBook(searchTerm) : [];
-    const match = entries.find((e) => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
-    $('inv_consignee_address').value = match ? (match.raw || '') : consigneeTag;
-
-    $('invItemsEditor').innerHTML = (data.line_items || []).map(invItemRowHtml).join('');
-    $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
-    recalcInvFinalAmount();
-
-    $('invSuccessMsg').textContent = '';
-    showInvStep(3);
+    enterInvoiceReview(data);
   } catch (e) {
     alert(e.message);
   }
@@ -1660,6 +1685,14 @@ function collectInvoicePayload() {
     const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
     return {
       item_desc: row.querySelector('.inv-item-desc').value.trim(),
+      // Per-item container_no/seal_no — normally the same as the header
+      // Container #/Booking # fields (pre-filled from them so a plain
+      // single-container invoice needs no extra typing), but different
+      // per row when several containers under one booking were merged
+      // into this invoice. See helpers/invoicePdf.js's
+      // `item.container_no || data.container_no` fallback.
+      container_no: row.querySelector('.inv-item-container').value.trim(),
+      seal_no: row.querySelector('.inv-item-seal').value.trim(),
       weight, rate, amount: weight * rate,
       packing: {
         gross_weight_lbs: row.querySelector('.inv-p-gross').value.trim(),
@@ -1729,6 +1762,18 @@ $('btnInvGenerate').addEventListener('click', async () => {
     if (result.saved_filename) {
       const ok = await downloadSavedInvoice(result.saved_filename, payload.container_no);
       $('invSuccessMsg').textContent = ok ? '✓ Saved and downloaded.' : '✓ Saved — download failed, check Saved documents.';
+    }
+    // Batch review queue: advance to the next group (single container or
+    // booking-merged) instead of leaving her stuck on this screen. A brief
+    // pause so the success message is actually readable before the form
+    // repopulates underneath it. Single-container flow (invQueue empty) is
+    // completely unaffected — falls through and just stays on Step 3 as before.
+    if (invQueue.length > 0) {
+      setButtonLoading(btn, false);
+      await new Promise((r) => setTimeout(r, 900));
+      invQueueIndex++;
+      await loadNextInvQueueItem();
+      return;
     }
   } catch (e) {
     alert(e.message);

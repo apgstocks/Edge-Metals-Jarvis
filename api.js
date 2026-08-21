@@ -1636,6 +1636,25 @@ function createApi() {
         }
     });
 
+    // Preview for SEVERAL containers merged into one invoice — used when a
+    // multi-select batch on Step 2 has containers sharing a booking #. Per
+    // Apsara: "if both containers belong to the same booking, it should get
+    // generated in same invoice". See helpers/invoiceSheet.js's
+    // buildMultiContainerInvoiceData() for how Container #/Seal # end up
+    // per-line-item instead of one shared top-level value.
+    app.get('/api/invoice/preview-multi', async (req, res) => {
+        try {
+            const containers = String(req.query.containers || '').split(',').map((s) => s.trim()).filter(Boolean);
+            if (!containers.length) return res.status(400).json({ error: 'No containers specified.' });
+            const data = await invoiceSheet.buildMultiContainerInvoiceData(containers);
+            if (!data) return res.status(404).json({ error: `None of the containers [${containers.join(', ')}] were found in the Invoice sheet.` });
+            res.json(data);
+        } catch (e) {
+            console.error('[invoice] preview-multi failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Step 2: full computed preview for one chosen container — every field
     // editable client-side before generating, same "never send a real
     // invoice without a human look" principle the old Flask tool's

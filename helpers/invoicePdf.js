@@ -146,11 +146,16 @@ function buildInvoiceClassicHtml(data) {
         // Quantity) to the top of a row that a wrapped Description has
         // made much taller. Apsara: "make the text in center aligned. also
         // wrap description always." / "mid center alignment."
+        // item.container_no/item.seal_no exist when several containers are
+        // merged into one invoice (buildMultiContainerInvoiceData — each
+        // container keeps its own seal); falls back to the shared
+        // top-level value for the ordinary single-container case, so this
+        // one code path renders both shapes correctly.
         return `        <tr style="height:8mm;">
           ${idCell(i + 1)}
           ${idCell(data.booking_no)}
-          ${idCell(data.container_no)}
-          ${idCell(data.seal_no)}
+          ${idCell(item.container_no || data.container_no)}
+          ${idCell(item.seal_no || data.seal_no)}
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${escapeHtml(item.item_desc)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatQtyMt(qty)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatRate(rate)}</td>
@@ -197,7 +202,7 @@ function buildInvoiceClassicHtml(data) {
         totalNetMt += netMt;
         totalNetLbs += netLbs;
         return `        <tr style="height:10mm;">
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(data.container_no)}</td>
+          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(item.container_no || data.container_no)}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.truck_lbs || '-')}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.container_tare_lbs || '-')}</td>
