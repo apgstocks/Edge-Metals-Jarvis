@@ -61,7 +61,30 @@ function findCol(headers, exact, startsWith) {
     return -1;
 }
 
+// Returns EVERY column index whose header matches exactly — the sheet has
+// two columns that both read "Commissions" once lowercased (checked live:
+// col 15 "Commissions" holds a $/MT RATE, e.g. "10"; col 23 "COMMISSIONS"
+// holds the already-computed dollar AMOUNT, e.g. "184.11" = weight × rate,
+// confirmed against several real rows). findCol's plain indexOf() would
+// silently always resolve to the FIRST one (the rate), which is the wrong
+// number for a dollar cross-check — this exists so buildColumnMap below can
+// disambiguate them explicitly instead of guessing.
+function findAllCol(headers, exact) {
+    const out = [];
+    headers.forEach((h, i) => { if (h === exact) out.push(i); });
+    return out;
+}
+
 function buildColumnMap(headers) {
+    // See findAllCol's comment above — first occurrence is the commission
+    // RATE ($/MT), last occurrence (when a second one exists) is the
+    // computed dollar AMOUNT. Sheets with only one "Commissions" column
+    // fall back to treating it as the amount, since that's the more useful
+    // field for a dollar cross-check and there's nothing to disambiguate.
+    const commissionIdxs = findAllCol(headers, 'commissions');
+    const commissionRateIdx = commissionIdxs.length > 1 ? commissionIdxs[0] : -1;
+    const commissionAmtIdx = commissionIdxs.length > 1 ? commissionIdxs[commissionIdxs.length - 1] : (commissionIdxs[0] ?? -1);
+
     return {
         consignee: findCol(headers, 'consignee'),
         inv_no: findCol(headers, 'inv no.', 'inv no'),
@@ -79,6 +102,13 @@ function buildColumnMap(headers) {
         weight: findCol(headers, 'weight'),
         inv_price: findCol(headers, 'inv price'),
         freight_charge: findCol(headers, 'freight charge'),
+        // "Freight" (col 21) — the carrier's actual billed freight dollar
+        // amount, distinct from "Freight Charge" (col 20, an eval-able
+        // expression like "95+35+50" that sums to the same figure). This is
+        // what the Zimex sub-tab cross-checks a carrier PDF's amount against.
+        freight_amt: findCol(headers, 'freight'),
+        commission_rate: commissionRateIdx,
+        commission_amt: commissionAmtIdx,
         eta: findCol(headers, 'eta'),
     };
 }
@@ -500,5 +530,11 @@ module.exports = {
     findPackingRow,
     resolveItemDesc,
     evalFreight,
+    // Exposed for helpers/invoiceVerify.js (Verification tab's Zimex
+    // sub-tab) to build its own HBL-keyed freight/commission index without
+    // duplicating the column-resolution/CSV-fetch logic above.
+    fetchRawSheet,
+    buildColumnMap,
+    rowToDict,
     ITEM_CODE_MAP,
 };

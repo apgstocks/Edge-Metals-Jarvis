@@ -270,6 +270,68 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
     if (lastErr) throw lastErr;
     return null;
 }
+
+// ── Multimodal: extract freight-billing line items from a carrier invoice PDF ──
+// Used by the Verification tab's Zimex sub-tab (Apsara: "build verification
+// .in that create sub tab as zimex") — a carrier freight invoice can bill
+// several HBL/shipments in one PDF, so this returns an ARRAY of records, one
+// per HBL, rather than one flat object like extractPdfFields above. Each
+// record's amount gets cross-checked in helpers/invoiceVerify.js against the
+// Invoice sheet's own Freight column for that HBL. Same retry/temperature-0/
+// JSON-mode pattern as extractPdfFields and classifyDocument for consistency.
+async function extractFreightInvoiceRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are a freight billing expert. This PDF is a carrier's freight invoice (e.g. from Zimex or another ocean carrier), which may bill ONE shipment or SEVERAL on the same invoice. Extract every line item. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "records": [
+    {
+      "hbl_no": null,       // the House Bill of Lading number this line item is billed against — e.g. "GLTOEH-23002". null if this invoice has no HBL reference at all for this line.
+      "container_no": null, // container number for this line item, if shown, e.g. "HMMU6247533"
+      "booking_no": null,   // booking/carrier reference number for this line item, if shown
+      "description": null,  // short description of the charge, e.g. "Ocean Freight", "THC", "Documentation Fee" — if several charges roll up into one HBL's total, describe it as "Combined" or list them briefly
+      "amount": 0           // the billed amount in US dollars for this HBL/line item, as a plain number (no $ or commas)
+    }
+  ],
+  "invoice_no": null,   // the carrier's own invoice number for this PDF, if shown
+  "invoice_date": null  // MM/DD/YYYY, if shown
+}
+
+If the same HBL appears on multiple lines (e.g. separate freight + THC charges), combine them into ONE record with the summed amount, since that HBL is cross-checked against a single Freight total on our side. Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.records)) {
+                console.log(`[GEMINI] Freight invoice extraction: ${parsed.records.length} record(s), inv#=${parsed.invoice_no || '?'}`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Freight invoice extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Freight invoice extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
 // NOTE: callGeminiText() was removed here (2026-07-16 cleanup). It had been
 // declared TWICE in this file — once above returning a trimmed string, once
 // down here returning raw JSON text with its own separate GoogleGenerativeAI
@@ -3303,4 +3365,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords };

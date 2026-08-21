@@ -63,8 +63,8 @@ table { width:100%; border-collapse:collapse; }
 th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
 td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
 tr:last-child td { border-bottom:none; }
-.subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
-.subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+.subtab-btn, .verify-subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
+.subtab-btn.active, .verify-subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
 .field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
 .field input, .field select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; font-family:inherit; }
 /* Textarea gets its own, more generous treatment — Apsara: "text box is
@@ -335,11 +335,87 @@ body[data-theme="light"] {
     </div>
   </div>
 
-  <!-- ── Verification (not yet built) ────────────────────────────────────── -->
+  <!-- ── Verification ─────────────────────────────────────────────────────── -->
+  <!-- Per Apsara: "build verification .in that create sub tab as zimex" —
+       carrier freight invoices get cross-checked against the Invoice
+       sheet's own Freight column, per carrier, one sub-tab each. Only
+       Zimex exists for now (that's the carrier the old placeholder text
+       named); structured as its own sub-tab row, not a single fixed pane,
+       specifically so a second carrier can be added later as another
+       button + panel without restructuring this. See
+       helpers/invoiceVerify.js for the actual match/mismatch logic and
+       helpers/gemini.js's extractFreightInvoiceRecords for the PDF
+       extraction. -->
   <div id="panelVerification" class="hidden">
-    <div class="placeholder-note">
-      ZIMEX freight / commission cross-check isn't built here yet — this tab is a placeholder.<br>
-      <span style="font-size:11px;">The Proforma tab (below) is fully working. Verification is next.</span>
+    <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:18px;">
+      <button class="verify-subtab-btn active" data-verify-subtab="zimex">Zimex</button>
+    </div>
+
+    <div id="verifyPanelZimex">
+      <div class="section-label" style="margin-top:0;">Upload Zimex freight invoices</div>
+      <label id="zimexDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+        <input type="file" id="zimexPdfInput" accept="application/pdf" multiple class="hidden">
+        <span style="color:var(--accent); font-size:20px;">⇪</span>
+        <div>
+          <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="zimexDropLabel">Drop Zimex freight invoice PDFs here — multiple files supported</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Jarvis extracts every HBL/amount and cross-checks it against the Invoice sheet's Freight column</div>
+        </div>
+      </label>
+      <div id="zimexFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+      <div style="display:flex; gap:10px; align-items:flex-end; margin-top:14px; flex-wrap:wrap;">
+        <div class="field" style="max-width:130px; margin-bottom:0;">
+          <label>Invoice Year</label>
+          <select id="zimexYear"></select>
+        </div>
+        <div class="field" style="max-width:170px; margin-bottom:0;">
+          <label>Invoice Month</label>
+          <select id="zimexMonth">
+            <option value="">All months</option>
+            <option value="1">January</option><option value="2">February</option>
+            <option value="3">March</option><option value="4">April</option>
+            <option value="5">May</option><option value="6">June</option>
+            <option value="7">July</option><option value="8">August</option>
+            <option value="9">September</option><option value="10">October</option>
+            <option value="11">November</option><option value="12">December</option>
+          </select>
+        </div>
+        <button id="btnZimexVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+      </div>
+      <!-- Year/month only scope the "on the sheet but no matching PDF"
+           section below — a PDF's own HBL is always checked against the
+           full sheet regardless of period. See
+           helpers/invoiceVerify.js's crossCheckZimexRecords() comment. -->
+      <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Year/Month only scope the "billed but no matching PDF" list below — every uploaded PDF is always checked against the full sheet.</div>
+
+      <div id="zimexLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+        <span class="btn-spinner"></span> Analyzing PDFs and cross-checking against the Invoice sheet…
+      </div>
+
+      <div id="zimexSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+      <div id="zimexResultsWrap" class="hidden" style="margin-top:14px;">
+        <div class="section-label">PDF line items vs. Invoice sheet</div>
+        <div class="inv-line-table-wrap">
+          <table class="inv-line-table" id="zimexResultsTable">
+            <thead>
+              <tr><th>Source File</th><th>HBL #</th><th>Description</th><th>PDF Amount</th><th>Sheet Freight</th><th>Difference</th><th>Status</th></tr>
+            </thead>
+            <tbody id="zimexResultsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="zimexSheetOnlyWrap" class="hidden" style="margin-top:18px;">
+        <div class="section-label">On the sheet for this period, but no matching PDF uploaded</div>
+        <div class="inv-line-table-wrap">
+          <table class="inv-line-table" id="zimexSheetOnlyTable">
+            <thead>
+              <tr><th>HBL #</th><th>Container #</th><th>Consignee</th><th>Invoice #</th><th>Invoice Date</th><th>Sheet Freight</th></tr>
+            </thead>
+            <tbody id="zimexSheetOnlyBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -499,6 +575,131 @@ function setSubtab(name) {
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+
+// ── Verification / Zimex sub-tab ─────────────────────────────────────────
+// Only one carrier sub-tab (Zimex) exists today, but this is wired
+// generically — a second carrier later just needs another
+// .verify-subtab-btn + panel, not a rewrite of this switcher. See
+// helpers/invoiceVerify.js for the actual cross-check and
+// helpers/gemini.js's extractFreightInvoiceRecords for PDF extraction.
+function setVerifySubtab(name) {
+  document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifySubtab === name));
+  $('verifyPanelZimex').classList.toggle('hidden', name !== 'zimex');
+}
+document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => setVerifySubtab(b.dataset.verifySubtab)));
+
+// Year select — current year down to 3 years back covers realistic lookback
+// without a free-typed field; matches the old verify.html tool's fixed
+// 2025/2026 dropdown, just not hardcoded to a specific pair of years so it
+// doesn't go stale.
+(function populateZimexYears() {
+  const sel = $('zimexYear');
+  const nowYear = new Date().getFullYear();
+  const years = [nowYear + 1, nowYear, nowYear - 1, nowYear - 2];
+  sel.innerHTML = years.map((y) => `<option value="${y}"${y === nowYear ? ' selected' : ''}>${y}</option>`).join('');
+})();
+
+let zimexFiles = []; // [{ name, base64 }]
+function renderZimexFileList() {
+  $('zimexFileList').innerHTML = zimexFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:11px; font-family:var(--font-mono); color:var(--text-body);">
+      📄 ${esc(f.name)}
+      <button type="button" class="zimex-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('zimexFileList').querySelectorAll('.zimex-file-remove').forEach((el) => el.addEventListener('click', () => {
+    zimexFiles.splice(Number(el.dataset.i), 1);
+    renderZimexFileList();
+  }));
+  $('zimexDropLabel').textContent = zimexFiles.length
+    ? `${zimexFiles.length} file${zimexFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop Zimex freight invoice PDFs here — multiple files supported';
+}
+function handleZimexFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      zimexFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderZimexFileList();
+    };
+    reader.readAsDataURL(f);
+  });
+}
+$('zimexDropZone').addEventListener('click', () => $('zimexPdfInput').click());
+$('zimexPdfInput').addEventListener('change', () => { handleZimexFiles($('zimexPdfInput').files); $('zimexPdfInput').value = ''; });
+$('zimexDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('zimexDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleZimexFiles(e.dataTransfer.files); });
+
+const ZIMEX_STATUS_BADGE = {
+  match: { label: 'Match', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  mismatch: { label: 'Mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_hbl_on_pdf: { label: 'No HBL read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  sheet_freight_blank: { label: 'Sheet freight blank', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  pdf_amount_unreadable: { label: 'PDF amount unreadable', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function zimexBadge(status) {
+  const b = ZIMEX_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+function fmtMoney(n) { return n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+function renderZimexResults(result) {
+  const matched = result.matched || [];
+  const sheetOnly = result.sheet_only || [];
+
+  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
+  const summaryChips = [
+    { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
+    { key: 'not_in_sheet', label: 'Not on sheet' },
+  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  $('zimexSummary').innerHTML = summaryChips + `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Billed, no matching PDF: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  $('zimexSummary').classList.remove('hidden');
+
+  $('zimexResultsBody').innerHTML = matched.map((r) => `
+    <tr>
+      <td>${esc(r.source_file || '')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.hbl_no || '—')}</td>
+      <td>${esc(r.description || '')}</td>
+      <td>${fmtMoney(r.amount)}</td>
+      <td>${r.sheet ? fmtMoney(r.sheet.freight_amt) : '—'}</td>
+      <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
+      <td>${zimexBadge(r.status)}</td>
+    </tr>`).join('') || `<tr><td colspan="7" style="text-align:center; color:var(--text-faint);">No line items extracted.</td></tr>`;
+  $('zimexResultsWrap').classList.remove('hidden');
+
+  $('zimexSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.hbl_no || '')}</td>
+      <td>${esc(r.container_no || '')}</td>
+      <td>${esc(r.consignee || '')}</td>
+      <td>${esc(r.inv_no || '')}</td>
+      <td>${esc(r.inv_date || '')}</td>
+      <td>${fmtMoney(r.freight_amt)}</td>
+    </tr>`).join('') || `<tr><td colspan="6" style="text-align:center; color:var(--text-faint);">Nothing outstanding for this period.</td></tr>`;
+  $('zimexSheetOnlyWrap').classList.remove('hidden');
+}
+
+$('btnZimexVerify').addEventListener('click', async () => {
+  if (!zimexFiles.length) { alert('Drop at least one Zimex freight invoice PDF first.'); return; }
+  const btn = $('btnZimexVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('zimexLoading').classList.remove('hidden');
+  $('zimexSummary').classList.add('hidden');
+  $('zimexResultsWrap').classList.add('hidden');
+  $('zimexSheetOnlyWrap').classList.add('hidden');
+  try {
+    const body = { pdfs: zimexFiles, year: $('zimexYear').value || undefined, month: $('zimexMonth').value || undefined };
+    const result = await api('/api/verify/zimex', { method: 'POST', body: JSON.stringify(body) });
+    renderZimexResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('zimexLoading').classList.add('hidden');
+  }
+});
 
 // ── Address book typeahead (buyer/consignee) ─────────────────────────────
 let addressBook = [];

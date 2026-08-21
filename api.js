@@ -605,6 +605,45 @@ function createApi() {
         }
     });
 
+    // Verification tab's Zimex sub-tab — Apsara: "build verification .in
+    // that create sub tab as zimex". Body: { pdfs: [{name, base64}], year,
+    // month }. Extracts HBL/amount records from each uploaded carrier
+    // freight PDF (Gemini, same multimodal pattern as /api/documents/scan
+    // above) then cross-checks every record against the Invoice sheet's own
+    // Freight column — see helpers/invoiceVerify.js for the match/mismatch/
+    // not_in_sheet logic and why year/month only scopes the reverse
+    // "sheet_only" list. year/month are both optional; omit either to skip
+    // that filter.
+    app.post('/api/verify/zimex', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [], year, month } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+
+            const { extractFreightInvoiceRecords } = require('./helpers/gemini');
+            const { crossCheckZimexRecords } = require('./helpers/invoiceVerify');
+
+            const extractedPerFile = await Promise.all(pdfs.map(async (pdf) => {
+                try {
+                    const extracted = await extractFreightInvoiceRecords(pdf.base64);
+                    const records = (extracted && extracted.records) || [];
+                    return records.map((r) => ({ ...r, source_file: pdf.name || 'unnamed.pdf' }));
+                } catch (e) {
+                    console.error(`[verify/zimex] extraction failed for ${pdf.name || 'unnamed.pdf'}:`, e.message);
+                    // One bad/unreadable PDF in a batch shouldn't fail the whole
+                    // run — surface it as its own row instead of losing it silently.
+                    return [{ hbl_no: null, amount: null, description: `Extraction failed: ${e.message}`, source_file: pdf.name || 'unnamed.pdf', extraction_failed: true }];
+                }
+            }));
+            const pdfRecords = extractedPerFile.flat();
+
+            const result = await crossCheckZimexRecords(pdfRecords, { year, month });
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/zimex] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Upload PDF to Drive and (optionally) attach to a booking record
     app.post('/api/bookings/upload-pdf', largeJson, async (req, res) => {
         const { booking_number, pdf_base64, original_filename } = req.body || {};
