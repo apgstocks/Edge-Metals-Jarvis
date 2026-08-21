@@ -334,6 +334,7 @@ function sumOtherCharges(otherCharges) {
 // shape helpers/gemini.js's extractJioInvoiceRecords() returns.
 async function crossCheckJioRecords(pdfRecords) {
     const containerIndex = await buildSheetContainerIndex();
+    const seenContainers = new Set();
 
     const matched = (pdfRecords || []).map((rec) => {
         const containerNo = normContainer(rec.container_no);
@@ -346,10 +347,29 @@ async function crossCheckJioRecords(pdfRecords) {
         if (!sheetRow) {
             return { ...base, status: 'not_in_sheet', sheet: null };
         }
+        seenContainers.add(containerNo);
         return { ...base, status: 'verified', sheet: sheetRow };
     });
 
-    return { matched };
+    // Reverse direction — per Apsara: "Always ensure to check the same
+    // where if container number not in sheet and vice versa case", same
+    // symmetric check already built for Pan Metal. IMPORTANT CAVEAT, worth
+    // reading before trusting this list: Zimex/Pan Metal's reverse checks
+    // are meaningful because every sheet order genuinely SHOULD have a
+    // matching freight/commission entry. There's no equivalent signal here
+    // — the sheet has no column saying "this container was trucked by
+    // Jio" specifically (vs. AJ Transport, Sher Trucking, or anyone else).
+    // So this lists EVERY container on the whole sheet this run's PDFs
+    // didn't claim, which will include plenty of containers that were
+    // never Jio's to begin with — it's a much noisier signal than the
+    // Pan Metal/Zimex version, not a real "missing invoice" alarm.
+    const sheetOnly = [];
+    for (const [containerNo, row] of containerIndex.entries()) {
+        if (seenContainers.has(containerNo)) continue;
+        sheetOnly.push(row);
+    }
+
+    return { matched, sheet_only: sheetOnly };
 }
 
 module.exports = {
