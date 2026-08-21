@@ -205,19 +205,27 @@ async function findContainersForBuyer(buyerQuery) {
 // flag, see invoice_gen.py's main()) before Jarvis added the buyer-first
 // flow above. Same summary shape as findContainersForBuyer so the UI can
 // reuse one render function for either search path.
+//
+// containerQuery may hold SEVERAL container numbers/fragments separated by
+// commas, spaces, or newlines — per Apsara: "add multi container search",
+// so she can pull two specific containers from the same booking straight
+// into one search result and check them both, rather than re-searching and
+// losing the first result each time. Each term is matched independently
+// (substring match, same as before) and results are unioned/deduped by
+// container_no — a single term behaves exactly as it always did.
 async function findContainersByNumber(containerQuery) {
     const { headers, rows } = await fetchRawSheet();
     const colMap = buildColumnMap(headers);
     if (colMap.consignee === -1 || colMap.container_no === -1) {
         throw new Error('Invoice sheet header layout changed — expected "Consignee" and "Container No." columns');
     }
-    const query = safeStr(containerQuery).toUpperCase();
-    if (!query) return [];
+    const terms = safeStr(containerQuery).toUpperCase().split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+    if (!terms.length) return [];
 
     const groups = new Map(); // container_no -> rows[]
     for (const row of rows) {
         const containerNo = safeStr(row[colMap.container_no]).toUpperCase();
-        if (!containerNo || !containerNo.includes(query)) continue;
+        if (!containerNo || !terms.some((t) => containerNo.includes(t))) continue;
         if (!groups.has(containerNo)) groups.set(containerNo, []);
         groups.get(containerNo).push(row);
     }
