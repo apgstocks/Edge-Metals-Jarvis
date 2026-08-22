@@ -3893,11 +3893,18 @@ function invStep1Html() {
     <button id="btnInvSearchBuyer" class="btn btn-primary" style="width:100%;">Find their shipments</button>
     <div style="display:flex; align-items:center; gap:10px; margin:18px 0;">
       <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
-      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">OR</span>
+      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">OR SEARCH DIRECTLY</span>
       <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
     </div>
     <div class="field"><label>Container number</label><input id="invw_containerSearch" placeholder="e.g. 26JY52" autocomplete="off"></div>
-    <button id="btnInvSearchContainer" class="btn" style="width:100%;">Search by container</button>`;
+    <button id="btnInvSearchContainer" class="btn" style="width:100%;">Search by container</button>
+    <!-- Invoice-number search, added 2026-08-22 to match the dashboard: the
+         route (/api/invoice/by-inv-no, commit 8dc3495 "INV BY INV NO")
+         already existed server-side but nothing on the phone called it.
+         Useful when you have the paperwork in hand and the invoice number is
+         the only thing on it you can read. -->
+    <div class="field" style="margin-top:14px;"><label>Invoice number</label><input id="invw_invNoSearch" placeholder="e.g. 260822_AC_26JY95" autocomplete="off"></div>
+    <button id="btnInvSearchInvNo" class="btn" style="width:100%;">Search by invoice no</button>`;
 }
 function wireInvStep1() {
   wireDocTypeahead('invw_buyer', 'invwBuyerList',
@@ -3939,6 +3946,12 @@ function wireInvStep1() {
     search($('btnInvSearchContainer'), '/api/invoice/by-container?q=' + encodeURIComponent(q), q);
   });
   $('invw_containerSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvSearchContainer').click(); });
+  $('btnInvSearchInvNo').addEventListener('click', () => {
+    const q = $('invw_invNoSearch').value.trim();
+    if (!q) return;
+    search($('btnInvSearchInvNo'), '/api/invoice/by-inv-no?q=' + encodeURIComponent(q), q);
+  });
+  $('invw_invNoSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvSearchInvNo').click(); });
 }
 
 function invStep2Html() {
