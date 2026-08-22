@@ -363,6 +363,16 @@ input::placeholder { color:var(--steel-500); }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// Registers dashboard/sw.js — a deliberately no-op passthrough worker, added
+// ONLY because Chrome/Edge require a registered service worker (alongside
+// the manifest + HTTPS) before showing the "Install Jarvis" icon in the
+// address bar. See sw.js's own comment for why it does no caching. Silently
+// no-ops in browsers without serviceWorker support (older Safari) and over
+// plain HTTP (the API is simply undefined there) rather than throwing.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(e => console.warn('[PWA] service worker registration failed:', e.message));
+}
+
 // Two money rules on screen, matching helpers/pdf.js exactly so the form
 // and the printed ticket never disagree (Apsara 2026-08-19).
 //   fmtRate   — a per-unit price: min 2 decimals, never rounded, so
