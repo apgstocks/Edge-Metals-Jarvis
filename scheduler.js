@@ -564,6 +564,53 @@ async function taskRunner() {
                 await tasks.updateTask(task.id, { status: 'firing' });
                 try {
                     const { sendEmail } = require('./helpers/gmail');
+
+                    // STALENESS GUARD — Apsara, 2026-08-22: "if there is
+                    // to-and-fro messages in email, if one of the to and fro
+                    // already addressed what i have scheduled — how does this
+                    // work?" It used to fire regardless. Now, if this is a
+                    // reply into a thread and that thread moved after she
+                    // approved the draft, it is HELD and she is asked rather
+                    // than sent blind. See helpers/scheduledEmailGuard.js.
+                    //
+                    // Fails open by design: a fresh compose, an unreachable
+                    // Gmail, or a Gemini outage all return proceed:true, so a
+                    // broken guard can never silently stop her mail.
+                    const guard = require('./helpers/scheduledEmailGuard');
+                    const check = await guard.checkBeforeSend(task.email_payload, task.approved_at || task.created_at);
+                    if (!check.proceed) {
+                        // Stage the same await_email_confirm pending the
+                        // normal draft flow uses, so answering "yes" here
+                        // goes through exactly one send path — no parallel
+                        // machinery, and the scheduled email keeps its
+                        // already-resolved to/cc/bcc/subject/body untouched.
+                        const held = { ...task.email_payload, bkg_no: task.bkg_no || null, scheduled_for: null };
+                        const staged = await actions.setPending(chatId, { type: 'await_email_confirm', ...held });
+                        await tasks.archive(task.id, { status: 'done', result_note: 'held_thread_moved' });
+                        const note = guard.buildHoldMessage(task.email_payload, check);
+                        // Critical: this asks whether an email she already
+                        // approved should still go out. If it is dropped she
+                        // never learns the send was held, and the email
+                        // simply never happens.
+                        const heldMsg = staged.queued
+                            ? `${note}\n\n(You have a pending "${staged.blockedBy}" to answer first — I'll ask about this right after.)`
+                            : note;
+                        // Delivered ONLY through the outbox — a second direct
+                        // _sendMessage here would double-send whenever
+                        // WhatsApp is up, which is exactly what the first
+                        // version of this patch did.
+                        try {
+                            const outbox = require('./helpers/managerOutbox');
+                            outbox.init({ sendToManager: (t) => _sendMessage(chatId, t) });
+                            await outbox.deliver(heldMsg, { critical: true, subject: 'Scheduled email held' });
+                        } catch (e) {
+                            console.error('[TASK] outbox deliver failed, sending directly:', e.message);
+                            await _sendMessage(chatId, heldMsg);
+                        }
+                        console.log(`[TASK] Scheduled email ${task.id} HELD — thread moved (${check.newMessages.length} new, superseded=${check.superseded})`);
+                        continue;
+                    }
+
                     const sent = await sendEmail(task.email_payload);
                     // Same reply-tracking as the immediate-send path in
                     // actions.js's sendDraftedEmail — a scheduled email is
@@ -958,13 +1005,34 @@ function start() {
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => generalEmailReplyWatch().catch(e => console.error('[SCHED] general-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
-    // Needs-a-reply inbox scan — hourly during the working day only. Hourly,
-    // not every 5 minutes like the reply watchers above, because this one
-    // costs a Gemini call per unseen email and a digest that arrives twelve
-    // times an hour is a digest nobody reads. Business hours only: an email
-    // landing at 3am does not want waking her, and it will be picked up by
-    // the 9am run anyway (LOOKBACK_DAYS covers it).
-    cron.schedule('0 9-18 * * 1-6', () => replyWatch().catch(e => console.error('[SCHED] reply-watch:', e)), TZ);
+    // Needs-a-reply inbox scan — every 5 minutes, around the clock. Apsara,
+    // 2026-08-22: "i want email to be monitored all the time."
+    //
+    // Affordable at this frequency because every email is assessed by Gemini
+    // exactly ONCE (deduped by message id), so cost tracks how much mail
+    // arrives, not how often we look. The previous hourly schedule was not
+    // saving anything; it was just adding up to an hour of delay.
+    //
+    // Notification rationing lives inside workflow/replyWatch.js, NOT here:
+    // urgent mail is sent as soon as it is found, everything else is batched
+    // to at most one digest an hour, and anything found overnight is held
+    // rather than dropped. Detection is continuous; only delivery is paced.
+    cron.schedule('*/5 * * * *', () => replyWatch().catch(e => console.error('[SCHED] reply-watch:', e)), TZ);
+    // Retry manager notifications queued while WhatsApp was unavailable.
+    // index.js flushes on reconnect; this covers the case where WhatsApp
+    // never fires a 'ready' event at all — banned, or stuck in a bad session —
+    // and is also what escalates a long outage to email.
+    cron.schedule('*/5 * * * *', () => {
+        // init() here too, not just in index.js's 'ready' handler. AUDIT
+        // FINDING (2026-08-22): this cron relied on init having already
+        // happened elsewhere in the process. If WhatsApp never becomes ready
+        // — banned, or stuck on a bad session — that handler never fires, and
+        // the outbox would hold the default no-op sender. Cheap to set every
+        // tick and removes the ordering dependency entirely.
+        const outbox = require('./helpers/managerOutbox');
+        outbox.init({ sendToManager: _sendToManager });
+        outbox.flush().catch(e => console.error('[SCHED] outbox-flush:', e.message));
+    }, TZ);
     cron.schedule('45 23 * * *', () => {
         const settings = cfg.getSettings ? cfg.getSettings() : {};
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';

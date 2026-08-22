@@ -1795,13 +1795,68 @@ async function searchOwnThenBose(query, maxResults, gmailBose) {
     if (senderGmail) {
         try {
             const messages = await listMessages(senderGmail, query, maxResults);
-            if (messages.length) return { messages, gmail: senderGmail };
+            if (messages.length) return { messages, gmail: senderGmail, source: 'sender' };
         } catch (err) {
             console.warn('[ACTIONS] Sender-mailbox search failed, falling back to bose@:', err.message);
         }
     }
+    // `source` matters to callers, not just for logging. A thread found only
+    // in bose@ has no copy in apsara@ at all, so a reply sent from apsara —
+    // correctly threaded for the RECIPIENT via In-Reply-To — still shows up
+    // in HER OWN mailbox as an orphan with no conversation above it. Apsara,
+    // 2026-08-22: "if email is found only in bose, but not in apsara —
+    // forward that to email to apsara and then in-mail reply." Callers use
+    // this flag to decide whether that forward is needed.
     const messages = await listMessages(gmailBose, query, maxResults);
-    return { messages, gmail: gmailBose };
+    return { messages, gmail: gmailBose, source: 'bose' };
+}
+
+// Forwards the original into apsara@ so her mailbox holds the conversation
+// the reply belongs to.
+//
+// Sent FROM apsara TO apsara, carrying the ORIGINAL's Message-ID in
+// In-Reply-To/References. That is what makes her Gmail thread the forward
+// and the reply together instead of showing two loose messages: both
+// reference the same chain. Those are ordinary RFC headers, so unlike a
+// Gmail threadId they cross accounts perfectly well.
+//
+// Returns true only if the forward actually went out. A failure here is
+// deliberately NOT fatal to the reply — the reply is the thing she asked
+// for and the thing the customer is waiting on; losing it because a
+// convenience copy failed would be the wrong trade. The caller says plainly
+// which parts happened.
+async function forwardOriginalToSelf({ subject, from, date, body, messageIdHeader, references }) {
+    const { sendEmail, getMyEmailAddress, getGmailSenderRead } = require('../helpers/gmail');
+    let me = null;
+    try {
+        const senderGmail = getGmailSenderRead();
+        if (senderGmail) me = await getMyEmailAddress(senderGmail);
+    } catch (e) { /* fall through */ }
+    if (!me) {
+        console.warn('[ACTIONS] forwardOriginalToSelf: own address unknown — skipping forward');
+        return false;
+    }
+    const fwdBody = [
+        '---------- Forwarded message ----------',
+        `From: ${from || '(unknown)'}`,
+        `Date: ${date || '(unknown)'}`,
+        `Subject: ${subject || '(no subject)'}`,
+        '',
+        String(body || '').slice(0, 20000),
+    ].join('\n');
+    try {
+        await sendEmail({
+            to: me,
+            subject: /^fwd:/i.test(subject || '') ? subject : `Fwd: ${subject || '(no subject)'}`,
+            body: fwdBody,
+            inReplyTo: messageIdHeader || undefined,
+            references: references || messageIdHeader || undefined,
+        });
+        return true;
+    } catch (err) {
+        console.error('[ACTIONS] forwardOriginalToSelf failed (non-fatal):', err.message);
+        return false;
+    }
 }
 
 async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText) {
@@ -2333,6 +2388,14 @@ async function resolveDomainLearnName(chatId, nameText) {
 // 'await_email_confirm' case below. Never called directly from brain.js.
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
+    // Forward FIRST, so that by the time the reply lands in her mailbox the
+    // message it is replying to is already sitting there — otherwise Gmail
+    // shows a reply with nothing above it for however long the forward takes
+    // to arrive. Ordering only, no dependency: the reply goes out regardless.
+    let forwarded = null;
+    if (pending.forward_original) {
+        forwarded = await forwardOriginalToSelf(pending.forward_original);
+    }
     try {
         // inReplyTo/references are only present when this pending came from
         // draftReplyForConfirm (below) — undefined for a plain
@@ -2356,8 +2419,18 @@ async function sendDraftedEmail(chatId, pending) {
             threadId: sent?.threadId, to: pending.to, targetName: pending.target_name,
             subject: pending.subject, bkgNo: pending.bkg_no,
         }).catch((e) => console.error('[ACTIONS] emailThreads.trackSentEmail failed (non-fatal):', e.message));
-        await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.`);
-        return { action_taken: 'email_sent' };
+        // Report both parts honestly. A silent partial success ("Sent.") when
+        // the forward failed would leave her expecting a copy in her inbox
+        // that never arrives, and quietly wondering later whether the reply
+        // went at all.
+        let note = '';
+        if (pending.forward_original) {
+            note = forwarded
+                ? ' Forwarded the original to your inbox too, so the thread reads in order.'
+                : " Couldn't forward the original copy to your inbox — the reply itself went fine.";
+        }
+        await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.${note}`);
+        return { action_taken: 'email_sent', forwarded: !!forwarded };
     } catch (err) {
         console.error('[ACTIONS] sendEmail failed:', err.message);
         await _send(chatId, `Send failed: ${err.message}. Not retried automatically — try again.`);
@@ -2383,6 +2456,13 @@ async function scheduleDraftedEmail(chatId, pending) {
     };
     await tasks.enqueue({
         type: 'scheduled_email',
+        // When SHE approved this content. The staleness guard in
+        // helpers/scheduledEmailGuard.js compares the thread against this
+        // moment at fire time — anything that arrived after she said yes is
+        // what she has not seen. Stored explicitly rather than relying on
+        // created_at, so the meaning stays "approved at" even if the task
+        // record is ever re-enqueued or migrated.
+        approved_at: new Date().toISOString(),
         // 'direct_chat' — deliberately NOT 'manager': scheduler.js's
         // taskRunner overrides target_kind:'manager' with whatever the
         // globally configured manager_number setting is, which may not be
@@ -2676,7 +2756,11 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // ranking on the combined OR query happened to rank the forward first.
     const bkgTerm = bkgNo ? ` ${bkgNo}` : '';
     const subjectHint = extractSubjectHint(rawText);
-    let messages, searchGmail = gmail;
+    // foundSource tracks WHICH mailbox actually answered, so the reply path
+    // can tell "this thread is only in bose@" from "this thread is in
+    // apsara@ too". Defaults to 'bose' because `gmail` here IS the bose
+    // client — searchOwnThenBose overwrites it when apsara@ answers.
+    let messages, searchGmail = gmail, foundSource = 'bose';
     try {
         if (subjectHint) {
             // REAL BUG (found 2026-08-04, live): originally scoped this to
@@ -2715,6 +2799,7 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
             }
             messages = result.messages;
             searchGmail = result.gmail;
+            foundSource = result.source || 'bose';
             if (!messages.length) {
                 // Deliberately does NOT fall back to the generic from:name
                 // search here — she gave a SPECIFIC subject because she
@@ -2731,6 +2816,7 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
             }
             messages = result.messages;
             searchGmail = result.gmail;
+            foundSource = result.source || 'bose';
         }
     } catch (err) {
         await _send(chatId, `Couldn't search mail: ${err.message}`);
@@ -2949,7 +3035,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
     // getMyEmailAddress() (cc-self-exclusion), so passing whichever account
     // actually found the thread is fine either way, and correctly reports
     // apsara@ when the match came from her own mailbox.
-    return composeThreadReply(chatId, searchGmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor);
+    return composeThreadReply(chatId, searchGmail, targetName, details, bkgNo, fromAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor, foundSource);
 }
 
 // Shared "reply within an existing real thread" composer — extracted
@@ -2967,7 +3053,10 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 // — either way the correct reply recipient is the address Jarvis already
 // resolved and trusts, not whichever header happens to be on this one
 // message.
-async function composeThreadReply(chatId, gmail, targetName, details, bkgNo, replyToAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor = null) {
+// foundSource — which mailbox the original was located in ('sender' =
+// apsara@, 'bose' = bose@ only). Defaults to 'sender' so any caller that
+// doesn't pass it keeps today's behaviour of not forwarding anything.
+async function composeThreadReply(chatId, gmail, targetName, details, bkgNo, replyToAddr, origSubject, hdrs, origBody, globalCc, bcc, ccForAddress, bookingLine, scheduledFor = null, foundSource = 'sender') {
     const { callGeminiJSON } = require('../helpers/gemini');
     const replySubject = /^re:/i.test(origSubject) ? origSubject : `Re: ${origSubject}`;
     const messageIdHeader = hdrs['Message-ID'] || hdrs['Message-Id'];
@@ -3017,14 +3106,31 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         inReplyTo: messageIdHeader, references,
         target_name: targetName, bkg_no: bkgNo || null,
         scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+        // Set only when the thread was found ONLY in bose@ — apsara@ has no
+        // copy, so on confirm the original is forwarded to her first and the
+        // reply lands underneath it in her own mailbox. Carries the fields
+        // the forward needs, captured now while the message is in hand
+        // rather than re-fetched later from a mailbox the send-side token
+        // cannot read.
+        forward_original: (foundSource === 'bose' && messageIdHeader) ? {
+            subject: origSubject, from: hdrs.From, date: hdrs.Date,
+            body: String(origBody || '').slice(0, 20000),
+            messageIdHeader, references,
+        } : null,
     });
     const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
         await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
         return { action_taken: 'reply_draft_queued' };
     }
+    // Say up front that a forward will happen. She is confirming what leaves
+    // the system, so a second email going out — even one only to herself —
+    // must not be a surprise after the fact.
+    const fwdNote = (foundSource === 'bose' && messageIdHeader)
+        ? `\n(This thread is only in bose@ — I'll forward the original to you first so the reply sits under it in your own inbox.)`
+        : '';
     await _send(chatId,
-        `Reply to ${targetName} <${replyToAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}\n\nSend this${whenSuffix}? (yes/no)`
+        `Reply to ${targetName} <${replyToAddr}> (thread: "${origSubject}"):\n${ccBccPreviewLine({ cc: replyCc, bcc })}\n${draft.body}${fwdNote}\n\nSend this${whenSuffix}? (yes/no)`
     );
     return { action_taken: 'reply_draft_staged' };
 }
@@ -3531,7 +3637,7 @@ async function handleContactQuoteLegReply(chatId, text) {
 }
 
 module.exports = {
-    showPendingReplies, replyToDigestItem,
+    showPendingReplies, replyToDigestItem, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,

@@ -124,6 +124,21 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     waReady = true;
+    // WhatsApp is back — deliver anything that was queued while it was down.
+    // Without this, a message dropped during an outage would stay dropped:
+    // sendMessage's own !waReady guard returns false and nothing retries.
+    // See helpers/managerOutbox.js for why this queue exists at all.
+    (async () => {
+        try {
+            const outbox = require('./helpers/managerOutbox');
+            outbox.init({ sendToManager });
+            const before = outbox.pending();
+            if (before.count) {
+                console.log(`[WA] Reconnected with ${before.count} queued manager message(s) — flushing`);
+                await outbox.flush();
+            }
+        } catch (e) { console.error('[WA] outbox flush on ready failed:', e.message); }
+    })();
     console.log('[WA] Client ready');
     waState.setStatus('ready');
     scheduler.start();

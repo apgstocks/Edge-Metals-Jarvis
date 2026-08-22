@@ -117,19 +117,186 @@ function parseEmailDate(raw) {
 }
 
 // Walk the MIME tree: return { body, pdfParts }
+// Converts email HTML to readable text.
+//
+// AUDIT FINDING (2026-08-22): getEmailContent read ONLY text/plain. A
+// staggering share of real business mail — anything from Outlook, a carrier
+// portal, a CRM, or any rich-text composer — is HTML-only, with no text/plain
+// alternative at all. For every one of those, body came back as an EMPTY
+// STRING, and nothing downstream noticed:
+//   - workflow/replyWatch.js sees no content and skips the message entirely,
+//     so an HTML-only email asking for a quote is never flagged. Silent.
+//   - searchMail answers questions about mail it cannot read.
+//   - draftReplyForConfirm drafts a reply with no idea what was said.
+//   - cutoffBackfill extracts booking fields from nothing.
+// This was the single largest hole in the email surface: not a wrong answer,
+// but whole emails invisible with no error anywhere.
+//
+// Deliberately hand-rolled rather than adding another dependency. Email HTML
+// is a narrow, well-understood subset and this only needs to produce
+// something Gemini can read — not faithful rendering. Ordering matters:
+// script/style contents are removed BEFORE tags are stripped, or their
+// contents would survive as body text.
+function htmlToText(html) {
+    if (!html) return '';
+    let t = String(html);
+    t = t.replace(/<!--[\s\S]*?-->/g, ' ');
+    // Contents, not just the tags — otherwise CSS and JS become "body text".
+    t = t.replace(/<(script|style|head|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+    // Block boundaries become line breaks so sentences do not run together.
+    t = t.replace(/<br\s*\/?>/gi, '\n');
+    t = t.replace(/<\/(p|div|tr|li|h[1-6]|table|blockquote)>/gi, '\n');
+    t = t.replace(/<\/(td|th)>/gi, '\t');
+    t = t.replace(/<[^>]+>/g, ' ');
+    // Entities, commonest first. &amp; is decoded LAST so that an encoded
+    // "&amp;lt;" does not turn into a "<" and re-introduce markup.
+    t = t.replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+         .replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+         .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(+d); } catch (e) { return ' '; } })
+         .replace(/&amp;/gi, '&');
+    t = t.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n');
+    return t.trim();
+}
+
+// Walks the MIME tree. Returns { body, pdfParts, wasHtmlOnly }.
+//
+// text/plain always wins when present — it is what the sender's client
+// produced as the readable version. HTML is used only when there is no plain
+// alternative, which is exactly the case that used to yield nothing.
 function getEmailContent(payload) {
     let body = '';
+    let html = '';
     const pdfParts = [];
     (function walk(part) {
         const mtype = part.mimeType || '';
         if (mtype === 'text/plain' && part.body && part.body.data) {
             body += Buffer.from(part.body.data, 'base64').toString('utf8');
+        } else if (mtype === 'text/html' && part.body && part.body.data) {
+            html += Buffer.from(part.body.data, 'base64').toString('utf8');
         } else if (mtype.includes('pdf') || /\.pdf$/i.test(part.filename || '')) {
             pdfParts.push(part);
         }
         (part.parts || []).forEach(walk);
     })(payload);
-    return { body, pdfParts };
+
+    let wasHtmlOnly = false;
+    if (!body.trim() && html.trim()) {
+        body = htmlToText(html);
+        wasHtmlOnly = true;
+    }
+    return { body, pdfParts, wasHtmlOnly };
+}
+
+// ── Auth health — surface a dead Gmail token instead of failing silently ────
+//
+// AUDIT FINDING (2026-08-22): when a Gmail refresh token is revoked or
+// expires, every call throws `invalid_grant`, and every caller in this
+// codebase catches it and moves on: emailWatcher logs and continues, the
+// inbox scan logs and returns zero, searchMail says it could not find
+// anything. From the outside Jarvis looks like a quiet inbox. The entire
+// email side of the business could be down for days with nothing but console
+// noise to show for it — the same failure shape as WhatsApp dropping
+// messages, which is the bug that started this whole thread.
+//
+// This does not fix the token; only re-running the auth script can. It makes
+// the failure LOUD, once, through the manager outbox — which will reach her
+// by WhatsApp or, if that is also down, by... well, not email. That is worth
+// stating plainly rather than pretending otherwise: if Gmail auth is dead,
+// the email fallback is dead too, so this is deliberately routed as critical
+// so it also lands in the dashboard alert rail.
+const AUTH_ERROR_RE = /invalid_grant|invalid_credentials|unauthorized_client|Token has been expired or revoked|insufficient(Permissions| authentication)|401|403/i;
+let _lastAuthAlertAt = 0;
+const AUTH_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // once per 6h, not per call
+
+function looksLikeAuthFailure(err) {
+    if (!err) return false;
+    const msg = `${err.message || ''} ${err.code || ''} ${(err.response && err.response.status) || ''}`;
+    return AUTH_ERROR_RE.test(msg);
+}
+
+// Call from any catch block that swallowed a Gmail error. Non-blocking and
+// never throws — a health check that can break its caller is worse than none.
+function reportGmailError(err, context) {
+    try {
+        if (!looksLikeAuthFailure(err)) return false;
+        const now = Date.now();
+        // Rate-limited hard: a broken token throws on EVERY poll, and this
+        // runs inside a 5-minute scan loop. Without the cooldown a dead token
+        // would generate a notification every few minutes, all night.
+        if (now - _lastAuthAlertAt < AUTH_ALERT_COOLDOWN_MS) return true;
+        _lastAuthAlertAt = now;
+        console.error(`[GMAIL] AUTH FAILURE in ${context}: ${err.message}`);
+        const outbox = require('./managerOutbox');
+        outbox.deliver(
+            `Gmail authorization has failed (${context}).\n\n` +
+            `Email is not being read or sent right now — inbox monitoring, booking intake and replies are all affected.\n\n` +
+            `Fix: re-run the Gmail auth script on the server and sign in again.\n` +
+            `Detail: ${String(err.message || '').slice(0, 200)}`,
+            { critical: true, subject: 'Gmail authorization failed', dedupeKey: 'gmail-auth-failure' },
+        ).catch((e) => console.error('[GMAIL] could not report auth failure:', e.message));
+        return true;
+    } catch (e) {
+        console.error('[GMAIL] reportGmailError itself failed:', e.message);
+        return false;
+    }
+}
+
+// The address a reply should actually go to.
+//
+// AUDIT FINDING (2026-08-22): every reply path used the From header. RFC 5322
+// Reply-To exists precisely because those differ, and in business mail they
+// often do — a carrier sends from a no-reply notification address with
+// Reply-To pointing at the desk that reads answers, a broker sends from a
+// personal address with Reply-To on a shared inbox. Replying to From in
+// those cases sends into a void that nobody reads, and it looks to the
+// customer like the message was ignored.
+//
+// Falls back to From whenever Reply-To is absent or unparseable, so this can
+// only ever improve where the header exists and changes nothing where it
+// does not.
+function preferredReplyAddress(headers) {
+    const get = (n) => {
+        if (Array.isArray(headers)) {
+            const h = headers.find((x) => (x.name || '').toLowerCase() === n);
+            return h ? h.value : '';
+        }
+        return headers ? (headers[n] || headers[n.replace(/(^|-)([a-z])/g, (m, a, b) => a + b.toUpperCase())] || '') : '';
+    };
+    const replyTo = get('reply-to');
+    const from = get('from');
+    const pick = (v) => {
+        if (!v) return null;
+        const m = String(v).match(/<([^>]+)>/);
+        const addr = (m ? m[1] : String(v)).trim();
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr) ? addr : null;
+    };
+    return pick(replyTo) || pick(from) || null;
+}
+
+// Mail that must never be replied to, and should not be flagged as needing a
+// reply either.
+//
+// AUDIT FINDING (2026-08-22): nothing checked for this. An out-of-office
+// bounce would be assessed by Gemini like any other message, could plausibly
+// read as "needs a reply", and land in her digest as work. Worse, replying to
+// an auto-responder that itself auto-responds is the classic mail loop — two
+// systems answering each other indefinitely, from her real business address.
+//
+// These headers are the standard machine-generated markers (RFC 3834 and the
+// widely-implemented conventions that predate it). Checking headers rather
+// than body text matters: "out of office" appearing in a human's sentence is
+// not an auto-reply, and would be a false positive that hides real work.
+function isAutoReply(headers) {
+    const get = (n) => {
+        const h = (headers || []).find((x) => (x.name || '').toLowerCase() === n);
+        return h ? String(h.value || '').toLowerCase() : '';
+    };
+    if (/auto-(replied|generated|notified)/.test(get('auto-submitted'))) return true;
+    if (get('x-autoreply') || get('x-autorespond') || get('x-auto-response-suppress')) return true;
+    if (/(auto_reply|bulk|junk|list)/.test(get('precedence'))) return true;
+    if (get('list-unsubscribe') && !get('in-reply-to')) return true; // bulk mail, not a conversation
+    if (/^\s*(auto(matic)?[- ]?reply|out of (the )?office|automatic reply)\b/i.test(get('subject'))) return true;
+    return false;
 }
 
 // Download one attachment, return { filename, base64 }
@@ -525,7 +692,7 @@ async function getMyEmailAddress(gmail) {
 
 module.exports = {
     READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite, getGmailSenderRead,
-    parseEmailDate, getEmailContent, downloadAttachment, listMessages, getMessage,
+    parseEmailDate, getEmailContent, htmlToText, preferredReplyAddress, isAutoReply, looksLikeAuthFailure, reportGmailError, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
     tallyAddressesForTerm,
 };
