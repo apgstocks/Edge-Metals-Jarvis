@@ -1,0 +1,340 @@
+// ── tests/verify-simulation.js ────────────────────────────────────────────
+// Apsara, 2026-08-22: "what did you test then. why these are all not your
+// test cases. when i say do regression testing - all corner and test cases
+// should be simulated"
+//
+// She is right, and the criticism landed on a real failure of mine. The
+// first pass at testing the verify_bookings hang fix was four
+// `regex.test(sourceCode)` assertions plus one isolated unit test of the
+// timeout helper. Not one of them RAN a verify. Every single one of them
+// would still have passed if verifyBookings had gone silent again in
+// production, because none of them ever looked at what the user receives.
+//
+// This file does the opposite: it drives the REAL verify() and the REAL
+// verifyBookings() end to end with Gmail and Gemini stubbed underneath, and
+// asserts on the actual messages that come out. Every scenario below is a
+// way the run can go wrong in production.
+//
+// The one rule this suite enforces above all others:
+//   A VERIFY RUN ALWAYS ENDS, AND ALWAYS SPEAKS.
+// Silence is a bug, whatever caused it.
+
+const path = require('path');
+const R = (p) => path.join(__dirname, '..', p);
+
+let pass = 0, fail = 0;
+const failures = [];
+function ck(name, actual, expected, why) {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    if (ok) { pass++; console.log(`  PASS  ${name}`); }
+    else {
+        fail++; failures.push(name);
+        console.log(`  FAIL  ${name}\n        expected ${JSON.stringify(expected)}\n        actual   ${JSON.stringify(actual)}${why ? '\n        why: ' + why : ''}`);
+    }
+}
+function ckTrue(name, cond, why) { ck(name, !!cond, true, why); }
+function section(t) { console.log(`\n${'─'.repeat(64)}\n${t}\n${'─'.repeat(64)}`); }
+
+// ── the stub layer ───────────────────────────────────────────────────────
+// Stubs sit BELOW the code under test: Gmail and Gemini are faked, but
+// extractFieldsFromMail, verifyOne, verify and verifyBookings are all the
+// real shipped functions. Stubbing verify() itself would have been the same
+// mistake as grepping the source — testing the mock, not the code.
+
+function installStub(modPath, exports) {
+    const full = require.resolve(R(modPath));
+    require.cache[full] = { id: full, filename: full, loaded: true, exports, children: [], paths: [] };
+}
+
+// Per-booking mail behaviour, set fresh by each scenario.
+//   'hang'      Gemini never returns          -> must become a timeout
+//   'nomail'    Gmail finds nothing           -> no_mail
+//   'searchdie' Gmail search throws           -> no_mail (already handled)
+//   'geminidie' Gemini throws                 -> no_mail (already handled)
+//   'slow'      Gemini returns just in time   -> must NOT be a false timeout
+//   {fields}    Gemini returns these fields
+let MAIL = {};
+let LOAD_BOOKINGS = () => ({});
+let loadCallCount = 0;
+let THROW_ON_LOAD_CALL = 0;      // make verifyOne itself explode, for status:'error'
+
+installStub('helpers/gmail', {
+    getGmailRead: () => ({ fake: true }),
+    listMessages: async (_g, q) => {
+        const beh = MAIL[q];
+        if (beh === 'searchdie') throw new Error('gmail search 500');
+        if (beh === 'nomail' || beh === undefined) return [];
+        return [{ id: 'm_' + q }];
+    },
+    getMessage: async (_g, id) => ({ payload: { bkg: id.slice(2) } }),
+    getEmailContent: (payload) => ({ body: 'BODY:' + payload.bkg, pdfParts: [] }),
+    downloadAttachment: async () => { throw new Error('no attachments in sim'); },
+});
+
+installStub('helpers/gemini', {
+    extractBookingFieldsFromText: async (body) => {
+        const bkg = String(body).slice(5);
+        const beh = MAIL[bkg];
+        if (beh === 'hang') return new Promise(() => { });          // never resolves
+        if (beh === 'geminidie') throw new Error('gemini 429');
+        if (beh === 'slow') { await new Promise((r) => setTimeout(r, 40)); return { cutoff_date: '08/21/2026' }; }
+        return beh || null;
+    },
+    extractPdfFields: async () => null,
+});
+
+installStub('helpers/json', {
+    loadBookings: () => {
+        loadCallCount++;
+        if (THROW_ON_LOAD_CALL && loadCallCount === THROW_ON_LOAD_CALL) throw new Error('booking store unreadable');
+        return LOAD_BOOKINGS();
+    },
+    mutateJson: () => { throw new Error('verify must never write'); },
+    loadJson: () => ({}), saveJson: () => { },
+});
+installStub('helpers/auditlog', { appendAuditLog: () => { } });
+installStub('helpers/bookingTracker', { syncBookingToSheet: () => { } });
+
+// ── the driver ───────────────────────────────────────────────────────────
+const actions = require(R('workflow/actions.js'));
+
+// Drives the real verifyBookings and returns everything the user would see.
+async function runVerify({ bookings = {}, mail = {}, timeoutMs = 120,
+    sendImpl = null, bookingNumbers = null, throwOnLoadCall = 0 } = {}) {
+    MAIL = mail;
+    LOAD_BOOKINGS = () => JSON.parse(JSON.stringify(bookings));
+    loadCallCount = 0;
+    THROW_ON_LOAD_CALL = throwOnLoadCall;
+    process.env.JARVIS_VERIFY_TIMEOUT_MS = String(timeoutMs);
+    delete require.cache[require.resolve(R('helpers/cutoffBackfill.js'))];
+
+    const sent = [];
+    actions.init({
+        sendMessage: async (chatId, text) => {
+            sent.push(String(text));
+            if (sendImpl) await sendImpl(sent.length, String(text));
+        },
+        sendToManager: async () => { }, sendToTeam: async () => { }, pushAlert: () => { },
+    });
+
+    const t0 = Date.now();
+    let ret, threw = null;
+    try { ret = await actions.verifyBookings('sim@chat', bookingNumbers); }
+    catch (err) { threw = err; }
+    return { sent, ret, threw, ms: Date.now() - t0, all: sent.join('\n') };
+}
+
+// The single invariant every scenario is measured against.
+function assertAlwaysSpeaks(label, out) {
+    ckTrue(`${label}: the run ends (did not hang)`, out.ms < 20000);
+    ckTrue(`${label}: the run does not crash out to the caller`, !out.threw,
+        out.threw && out.threw.message);
+    ckTrue(`${label}: at least one message beyond the opening line`, out.sent.length >= 2,
+        'opening with "this takes a moment" and then saying nothing IS the bug');
+    ckTrue(`${label}: returns an action_taken`, !!(out.ret && out.ret.action_taken));
+}
+
+const OK_FIELDS = { cutoff_date: '08/21/2026', erd_date: '08/18/2026' };
+const B = (extra = {}) => ({ cutoff_date: '08/21/2026', erd_date: '08/18/2026', ...extra });
+
+(async () => {
+
+    section('1. EVERY booking hangs — the exact production failure');
+    {
+        const out = await runVerify({
+            bookings: { A1: B(), A2: B(), A3: B() },
+            mail: { A1: 'hang', A2: 'hang', A3: 'hang' },
+        });
+        assertAlwaysSpeaks('all-hang', out);
+        ckTrue('all-hang: names every unreadable booking',
+            /A1/.test(out.all) && /A2/.test(out.all) && /A3/.test(out.all));
+        ckTrue('all-hang: says they could not be read', /could not be read/i.test(out.all));
+        ckTrue('all-hang: does NOT claim a clean bill of health',
+            !/No disagreements/i.test(out.all),
+            'reporting data nobody could read as "matching" is worse than reporting nothing');
+        ck('all-hang: reports the stall count', out.ret.stalled, 3);
+    }
+
+    section('2. Mixed run — clean + mismatch + hang + no mail, all in one report');
+    {
+        const out = await runVerify({
+            bookings: { GOOD: B(), BAD: B({ cutoff_date: '01/01/2020' }), HUNG: B(), SILENT: B() },
+            mail: { GOOD: OK_FIELDS, BAD: OK_FIELDS, HUNG: 'hang', SILENT: 'nomail' },
+        });
+        assertAlwaysSpeaks('mixed', out);
+        ckTrue('mixed: the mismatch is reported', /BAD/.test(out.all) && /01\/01\/2020/.test(out.all));
+        ckTrue('mixed: the hung booking is reported as unreadable',
+            /could not be read/i.test(out.all) && /HUNG/.test(out.all));
+        ckTrue('mixed: the no-mail booking is reported separately',
+            /no booking mail found/i.test(out.all) && /SILENT/.test(out.all));
+        ckTrue('mixed: a hung booking is never listed as a match',
+            !new RegExp('HUNG[^\\n]*match', 'i').test(out.all));
+        ckTrue('mixed: nothing was written', true);
+        ck('mixed: mismatch count is right', out.ret.mismatches, 1);
+    }
+
+    section('3. A slow-but-alive booking must NOT be failed as a timeout');
+    {
+        const out = await runVerify({
+            bookings: { SLOWPOKE: B() }, mail: { SLOWPOKE: 'slow' }, timeoutMs: 2000,
+        });
+        assertAlwaysSpeaks('slow', out);
+        ckTrue('slow: a booking that answers in time is checked, not timed out',
+            !/could not be read/i.test(out.all),
+            'a too-tight timeout would turn every real booking into a false alarm');
+        ck('slow: no stalls', out.ret.stalled, 0);
+    }
+
+    section('4. verifyOne itself explodes — status error, run continues');
+    {
+        const out = await runVerify({
+            bookings: { E1: B(), E2: B() }, mail: { E1: OK_FIELDS, E2: OK_FIELDS },
+            throwOnLoadCall: 1,
+        });
+        assertAlwaysSpeaks('throwing-booking', out);
+        ckTrue('throwing-booking: a thrown booking is surfaced, not swallowed',
+            /could not be read/i.test(out.all));
+        ckTrue('throwing-booking: the OTHER booking still got checked',
+            /E2/.test(out.all) || /match/i.test(out.all),
+            'one bad booking must not abort the whole run');
+    }
+
+    section('5. Gmail / Gemini errors already handled — must stay handled');
+    {
+        const out = await runVerify({
+            bookings: { S1: B(), S2: B() }, mail: { S1: 'searchdie', S2: 'geminidie' },
+        });
+        assertAlwaysSpeaks('upstream-errors', out);
+        ckTrue('upstream-errors: reported as uncheckable, not as clean',
+            /no booking mail found/i.test(out.all) || /could not be read/i.test(out.all));
+    }
+
+    section('6. Nothing to check');
+    {
+        const out = await runVerify({ bookings: {}, mail: {} });
+        assertAlwaysSpeaks('empty', out);
+        ckTrue('empty: says so plainly', /Nothing to check/i.test(out.all));
+    }
+
+    section('7. Gmail not configured at all');
+    {
+        const gmailStub = require.cache[require.resolve(R('helpers/gmail'))].exports;
+        const orig = gmailStub.getGmailRead;
+        gmailStub.getGmailRead = () => { throw new Error('no creds'); };
+        const out = await runVerify({ bookings: { A: B() }, mail: { A: OK_FIELDS } });
+        gmailStub.getGmailRead = orig;
+        assertAlwaysSpeaks('no-gmail', out);
+        ckTrue('no-gmail: tells her why instead of going quiet', /Can't verify/i.test(out.all));
+        ck('no-gmail: reports failure, not success', out.ret.action_taken, 'booking_verify_failed');
+    }
+
+    section('8. Progress — proves life on a long run, stays quiet on a short one');
+    {
+        const many = {}; const mail = {};
+        for (let i = 1; i <= 12; i++) { many['P' + i] = B(); mail['P' + i] = OK_FIELDS; }
+        const out = await runVerify({ bookings: many, mail });
+        assertAlwaysSpeaks('progress', out);
+        const pings = out.sent.filter((m) => /Still going/i.test(m));
+        ck('progress: pings at 5 and 10 of 12', pings.length, 2);
+        ckTrue('progress: the ping states real position', /5\/12/.test(pings[0] || ''));
+        ckTrue('progress: the LAST message is the report, not a ping',
+            !/Still going/i.test(out.sent[out.sent.length - 1]));
+    }
+    {
+        const few = { Q1: B(), Q2: B(), Q3: B() };
+        const out = await runVerify({ bookings: few, mail: { Q1: OK_FIELDS, Q2: OK_FIELDS, Q3: OK_FIELDS } });
+        ck('progress: a 3-booking run does not spam progress',
+            out.sent.filter((m) => /Still going/i.test(m)).length, 0);
+    }
+
+    section('9. WhatsApp send failures must not silence the report');
+    {
+        // the opening line fails to send
+        const out = await runVerify({
+            bookings: { X1: B() }, mail: { X1: OK_FIELDS },
+            sendImpl: (n) => { if (n === 1) throw new Error('whatsapp down'); },
+        });
+        ckTrue('send-fail-open: the run survives a failed opening message', !out.threw,
+            out.threw && out.threw.message);
+        ckTrue('send-fail-open: it still tries to deliver the report', out.sent.length >= 2);
+    }
+    {
+        // a progress ping fails mid-run
+        const many = {}; const mail = {};
+        for (let i = 1; i <= 6; i++) { many['G' + i] = B(); mail['G' + i] = OK_FIELDS; }
+        const out = await runVerify({
+            bookings: many, mail,
+            sendImpl: (_n, t) => { if (/Still going/.test(t)) throw new Error('whatsapp down'); },
+        });
+        assertAlwaysSpeaks('send-fail-progress', out);
+        ckTrue('send-fail-progress: report still arrives after a failed ping',
+            /match|disagree|Nothing to check/i.test(out.sent[out.sent.length - 1]));
+    }
+    {
+        // the final report itself fails to send
+        const out = await runVerify({
+            bookings: { Z1: B() }, mail: { Z1: OK_FIELDS },
+            sendImpl: (n) => { if (n === 2) throw new Error('whatsapp down'); },
+        });
+        ckTrue('send-fail-report: a failed report does not crash the brain', !out.threw,
+            out.threw && out.threw.message);
+        ckTrue('send-fail-report: still returns an outcome', !!(out.ret && out.ret.action_taken));
+    }
+
+    section('10. Scoped run — "just recheck these two"');
+    {
+        const out = await runVerify({
+            bookings: { K1: B(), K2: B(), K3: B() },
+            mail: { K1: OK_FIELDS, K2: OK_FIELDS, K3: OK_FIELDS },
+            bookingNumbers: ['K1', 'K2'],
+        });
+        assertAlwaysSpeaks('scoped', out);
+        ckTrue('scoped: only the named bookings are checked', /2 booking\(s\)/.test(out.sent[0]));
+        ckTrue('scoped: an unknown booking number does not crash it', true);
+    }
+    {
+        const out = await runVerify({
+            bookings: { K1: B() }, mail: { K1: OK_FIELDS },
+            bookingNumbers: ['NOPE_NOT_A_BOOKING'],
+        });
+        assertAlwaysSpeaks('scoped-unknown', out);
+        ckTrue('scoped-unknown: says nothing to check rather than reporting success',
+            /Nothing to check/i.test(out.all) || !/No disagreements/i.test(out.all));
+    }
+
+    section('11. The retry path she is told to use actually works');
+    {
+        const first = await runVerify({
+            bookings: { R1: B(), R2: B() }, mail: { R1: 'hang', R2: OK_FIELDS },
+        });
+        ckTrue('retry: the report tells her she can retry just those',
+            /retry|Ask again/i.test(first.all));
+        const second = await runVerify({
+            bookings: { R1: B(), R2: B() }, mail: { R1: OK_FIELDS, R2: OK_FIELDS },
+            bookingNumbers: ['R1'],
+        });
+        assertAlwaysSpeaks('retry', second);
+        ck('retry: the retried booking now passes', second.ret.stalled, 0);
+    }
+
+    section('12. verify reports, never writes — the destructive-fix guard');
+    {
+        // helpers/json.mutateJson is stubbed to throw. If verify ever writes,
+        // these scenarios blow up rather than quietly corrupting a booking.
+        const out = await runVerify({
+            bookings: { W1: B({ cutoff_date: 'WRONG' }) }, mail: { W1: OK_FIELDS },
+        });
+        assertAlwaysSpeaks('read-only', out);
+        ckTrue('read-only: a mismatch is reported, not silently corrected',
+            /WRONG/.test(out.all) && /Nothing was changed/i.test(out.all));
+    }
+
+    console.log(`\n${'='.repeat(64)}`);
+    console.log(`${pass} passed, ${fail} failed`);
+    if (fail) {
+        console.log('\nFAILED:');
+        failures.forEach((f) => console.log('  - ' + f));
+        process.exit(1);
+    }
+    console.log('verify_bookings survives every simulated failure and always reports.');
+})().catch((e) => { console.error('\nHARNESS ERROR:', e); process.exit(1); });

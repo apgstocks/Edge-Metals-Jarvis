@@ -3180,7 +3180,22 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
 async function verifyBookings(chatId, bookingNumbers) {
     const { verify, FIELD_LABELS } = require('../helpers/cutoffBackfill');
     const scope = bookingNumbers && bookingNumbers.length ? `${bookingNumbers.length} booking(s)` : 'every active booking';
-    await _send(chatId, `Re-checking ${scope} against the original booking mail — this takes a moment, it reads each booking's mail separately.`);
+    // Every send in this function goes through say(). Found by simulation
+    // 2026-08-22: a WhatsApp send that throws (client reconnecting, rate
+    // limit) used to blow the whole verify run out through the caller — so a
+    // transient send failure on the OPENING line meant the actual report,
+    // already computed, was never even attempted. The report is the valuable
+    // part; a lost "this takes a moment" is not worth aborting for.
+    let undelivered = 0;
+    const say = async (text) => {
+        try { await _send(chatId, text); return true; }
+        catch (err) {
+            undelivered++;
+            console.error('[ACTIONS] verify send failed:', err.message);
+            return false;
+        }
+    };
+    await say(`Re-checking ${scope} against the original booking mail — this takes a moment, it reads each booking's mail separately.`);
     // Apsara, 2026-08-22: "but nothing fired yet". This used to open with that
     // line and then, if a single Gemini call hung, say nothing ever again.
     // Progress every few bookings proves it is alive; the helper's per-booking
@@ -3194,17 +3209,16 @@ async function verifyBookings(chatId, bookingNumbers) {
             if (nearlyDone) return;                       // the report itself is the last word
             if (done % 5 === 0 || Date.now() - lastPing > 60000) {
                 lastPing = Date.now();
-                try { await _send(chatId, `Still going — ${done}/${total} bookings checked.`); }
-                catch (e) { console.error('[ACTIONS] verify progress send failed:', e.message); }
+                await say(`Still going — ${done}/${total} bookings checked.`);
             }
         });
     } catch (err) {
         console.error('[ACTIONS] verifyBookings failed:', err.message);
-        await _send(chatId, `Verification failed: ${err.message}`);
+        await say(`Verification failed: ${err.message}`);
         return { action_taken: 'booking_verify_failed' };
     }
     if (out.error) {
-        await _send(chatId, `Can't verify: ${out.error}.`);
+        await say(`Can't verify: ${out.error}.`);
         return { action_taken: 'booking_verify_failed' };
     }
     const results = out.results || [];
@@ -3251,8 +3265,12 @@ async function verifyBookings(chatId, bookingNumbers) {
         lines.push('Ask again for just those and I\'ll retry them.');
     }
     if (!lines.length) lines.push('Nothing to check — no bookings on file.');
-    await _send(chatId, lines.join('\n'));
-    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length, stalled: stalled.length };
+    // If even the report cannot be delivered, log loudly and still return a
+    // clean outcome — throwing here would take the brain down with it and
+    // lose the fact that the work was actually done.
+    const delivered = await say(lines.join('\n'));
+    if (!delivered) console.error('[ACTIONS] verify report UNDELIVERED:', lines.join(' | '));
+    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length, stalled: stalled.length, delivered, undelivered };
 }
 
 async function backfillCutoffs(chatId) {

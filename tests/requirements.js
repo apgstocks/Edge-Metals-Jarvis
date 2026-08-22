@@ -542,15 +542,18 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
         ck('a hung booking resolves as a timeout, not a hang', raced.status, 'timeout');
         ckTrue('the timeout actually fires quickly', Date.now() - t0 < 2000);
     }
-    ckTrue('verify reports timed-out bookings instead of counting them as clean',
-        /status === 'timeout'/.test(verifyActionsSrc) && /could not be read/.test(verifyActionsSrc),
-        'a booking nobody could read must never be reported as matching');
-    ckTrue('verify always sends a final report, on every exit path',
-        (verifyActionsSrc.split('async function verifyBookings')[1] || '').split('async function ')[0]
-            .split('_send(').length - 1 >= 4,
-        'open + progress + failure + report; silence is not an allowed outcome');
-    ckTrue('verify reports progress while it runs',
-        /Still going/.test(verifyActionsSrc), 'a silent long job looks identical to a dead one');
+    // The three assertions that used to live here were `regex.test(source)` —
+    // they checked that certain STRINGS existed in actions.js, which is not a
+    // test, it is a spell-check. Apsara, 2026-08-22: "what did you test then".
+    // Real end-to-end simulation of the hang, the mixed run, the send
+    // failures and the progress pings now lives in tests/verify-simulation.js,
+    // which drives the actual verifyBookings and reads the actual output.
+    // Run by `npm test` alongside this file. This one assertion remains here
+    // only to make sure that suite cannot be quietly dropped.
+    ckTrue('the verify simulation suite exists and is wired into npm test',
+        require('fs').existsSync(R('tests/verify-simulation.js'))
+        && /verify-simulation/.test(src('package.json')),
+        'the hang fix is only as good as the suite that proves it')
 }
 
 // ─────────────────────────────────────────────────────────────────────────

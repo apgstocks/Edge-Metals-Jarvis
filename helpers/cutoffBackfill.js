@@ -328,7 +328,9 @@ async function verifyOne(bkgNo, gmail) {
 //   - onProgress fires as it goes, so the caller can show life;
 //   - the loop cannot throw out — every booking yields a result object, even
 //     if that result is { status: 'timeout' } or { status: 'error' }.
-const VERIFY_BOOKING_TIMEOUT_MS = 45000;
+// env-overridable so the simulation suite can drive real timeouts in ms
+// instead of pretending, and so this is tunable live without a code change.
+const VERIFY_BOOKING_TIMEOUT_MS = Number(process.env.JARVIS_VERIFY_TIMEOUT_MS) || 45000;
 
 function withTimeout(promise, ms, onTimeoutValue) {
     let timer;
