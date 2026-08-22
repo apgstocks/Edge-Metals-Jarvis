@@ -847,7 +847,38 @@ function policyDecide(ctx) {
         // the pattern anywhere in the text, so a typo'd prefix ("shoe" instead
         // of "show") doesn't prevent the match; only the meaningful part needs
         // to be right.
-        const locQueryMatch = t.match(/\b(available|unassigned|assigned)?\s*bookings?\s+(?:from|at|in|for)\s+(.+?)\s*$/i);
+        // ── Location queries defer to the AI when they are not certain ────
+        // Apsara, 2026-08-22: "i dont want textbook case. just let ai decide
+        // the policy." She is right, and this rule is the clearest example of
+        // why. It is deliberately UNANCHORED so a typo'd prefix ("shoe
+        // bookings from LA") still works — and that same reach is what let it
+        // claim "reverify bookings in mail", read "mail" as a PORT, and answer
+        // "No bookings from mail." before the AI ever saw the sentence.
+        //
+        // The fix is not another keyword blocklist; it is to stop this rule
+        // from deciding when it cannot be sure. It now only claims the
+        // sentence when the captured place is plausibly a PLACE — the query
+        // resolves against real booking data. Anything else falls through to
+        // the AI, which as of today has bookings_list_query/bookings_count_query
+        // in its own action list and can pick them (or verify_bookings, or
+        // search_mail) by reading what she actually meant.
+        //
+        // Net effect: the fast path still handles every real location query
+        // without an AI call, and stops guessing on everything else.
+        const rawLocMatch = t.match(/\b(available|unassigned|assigned)?\s*bookings?\s+(?:from|at|in|for)\s+(.+?)\s*$/i);
+        const locQueryMatch = (() => {
+            if (!rawLocMatch) return null;
+            const place = (rawLocMatch[2] || '').trim();
+            if (!place) return null;
+            try {
+                // Does this actually name somewhere we have bookings for? If
+                // yes it is unambiguously a location query and the fast path
+                // is correct. If not, the AI is better placed to judge.
+                const { count } = queryBookingsByLocation(place, undefined);
+                if (count > 0) return rawLocMatch;
+            } catch (e) { /* fall through to the AI */ }
+            return null;
+        })();
         if (locQueryMatch) {
             const filter = locQueryMatch[1] === 'assigned' ? 'assigned' : (locQueryMatch[1] ? 'unassigned' : undefined);
             const location = locQueryMatch[2].trim();
@@ -1397,6 +1428,10 @@ STRICT RULES:
 "track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
+"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
+"get_quote" starts a freight quote request for a lane — "get/send/request a quote from X to Y", "quote LA to Houston", "ask NTG and TQL for a rate from Junk car to Eccomelt". Set origin and destination to the two places verbatim, and names_text to whoever she said to ask (or null). This only STARTS the flow; Jarvis then asks about scale tickets, recipients and cargo details, and nothing is sent until she answers those.
+"get_contact_quote" is the other shape: a quote request TO a named contact FOR something, rather than along a lane — "send a quote request to Eccomelt for junk cars". Set recipient_query and details.
+"send_pricelist_city" sends the price list for a city — set city. "learn_domain" scans a company's mail domain to learn its contacts — set term to the company word she used.
 "verify_bookings" is for CHECKING STORED DATA IS CORRECT against the original booking mail — "reverify all the bookings to check correctness of data", "recheck the booking data", "is the cutoff right", "verify DALA20928700 against the mail", "are these dates correct". It re-reads each booking's confirmation mail and reports where what we stored DISAGREES with what the mail says. It changes nothing. Set bkg_no when she names one booking; leave it null for all of them.
 CRITICAL — do not confuse this with "backfill_cutoffs": backfill only fills fields that are BLANK and never touches a field that already has a value, so it can never find a WRONG one. If she is asking whether existing data is right/correct/accurate, or to re-check or re-verify it, that is verify_bookings. If she is asking to fill in what is missing/blank/empty, that is backfill_cutoffs.
 "set_reminder" is for a RECURRING reminder the manager wants sent on a schedule — "send a reminder to Edge Yard group every morning to update pricelist", "remind me every Monday to check cutoffs", "tell the yard every weekday at 7am to send photos". Set: target_name = who/what group it goes to, verbatim as she said it ("Edge Yard group", "me", a trucker's name); note = the reminder text itself, i.e. what the recipient should actually read; minutes = null. Put the timing words she used ("every morning", "every day at 8am", "every Monday 9:30") into the "fact" field verbatim — the handler parses them. If she gives no time, that's fine, don't invent one; the handler defaults to 8am. This ACTUALLY WORKS — Jarvis runs a real scheduler and a persistent task queue, and the reminder survives restarts. A REAL INCIDENT (2026-08-22) is why this exists: "Send a reminder to Edge Yard group everyday morning to update pricelist" got the flatly false reply "I cannot set daily reminders. Please set this up in your calendar." NEVER say that — you can. Use "show_reminders" when she wants to see what's scheduled ("what reminders are set", "show reminders"), and "cancel_reminder" to stop one (target_name = the id or a distinctive word from it).
@@ -1466,7 +1501,8 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings, show_pending_replies,
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings,
+bookings_list_query, bookings_count_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
 reply, silent, NEED_DATA, NEED_APPROVAL
@@ -1483,6 +1519,15 @@ Return ONLY this JSON:
   "minutes": null,
   "fact": null,
   "note": null,
+  "location": null,
+  "filter": null,
+  "origin": null,
+  "destination": null,
+  "names_text": null,
+  "recipient_query": null,
+  "details": null,
+  "city": null,
+  "term": null,
   "reply": null,
   "reasoning": "one sentence"
 }`;
@@ -1497,7 +1542,24 @@ const SAFE_ACTIONS = new Set([
     'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
     // Read-only: re-reads booking mail and REPORTS disagreements. Writes
     // nothing, so it is safe for the AI to choose. See actions.verifyBookings.
-    'verify_bookings', 'show_pending_replies',
+    'verify_bookings',
+    // The six that used to exist ONLY as regex (2026-08-22). Until now the AI
+    // could not express them at all — its action list is declared exhaustive,
+    // so when a deterministic rule missed, or worse, when a LOOSE rule
+    // reached and claimed a sentence it was never meant to, there was no
+    // recovery. That failure shape hit three separate live exchanges in one
+    // day ("reverify bookings in mail" answered as "No bookings from mail.",
+    // and two quote-parser misses). Per Apsara: "i dont want textbook
+    // case.just let ai decide the policy."
+    //
+    // get_quote/get_contact_quote SEND real requests to truckers, so they sit
+    // in tier T1 of claude/jarvis-ai-first-map.md. They are safe to hand to
+    // the AI regardless, because the flow they start is itself a series of
+    // confirmations — scale tickets, then recipients, then mandatory cargo
+    // details — and nothing dispatches until all of them are answered. The AI
+    // chooses the INTENT; the deterministic flow still gates the SEND.
+    'bookings_list_query', 'bookings_count_query', 'get_quote',
+    'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'show_pending_replies',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
     // hardcode everything. let jarvis ai handle this"). This is exactly the
@@ -2015,7 +2077,21 @@ async function process(rawEvent, sendMessage) {
             intent    : ai.action,
             resolvedBy: 'ai',
             confidence: ai.confidence ?? null,
-            data      : { bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name, target_name: ai.target_name, email_details: ai.email_details, minutes: ai.minutes, fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning },
+            // Every field the AI is allowed to return must be forwarded, or
+            // the action fires with empty parameters and fails in a way that
+            // looks like the AI got it wrong. The six intents added 2026-08-22
+            // (bookings_list_query, bookings_count_query, get_quote,
+            // get_contact_quote, send_pricelist_city, learn_domain) each need
+            // fields the original list did not carry.
+            data      : {
+                bkg_no: ai.bkg_no, supplier_name: ai.supplier_name, trucker_name: ai.trucker_name,
+                target_name: ai.target_name, email_details: ai.email_details, minutes: ai.minutes,
+                fact: ai.fact, note: ai.note, reply: ai.reply, reasoning: ai.reasoning,
+                location: ai.location, filter: ai.filter,
+                origin: ai.origin, destination: ai.destination, names_text: ai.names_text,
+                recipient_query: ai.recipient_query, details: ai.details,
+                city: ai.city, term: ai.term,
+            },
         };
     }
 

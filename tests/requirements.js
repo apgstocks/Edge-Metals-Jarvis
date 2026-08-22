@@ -440,6 +440,81 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
         'without this the AI answers a correctness question by filling blanks');
     ckTrue('actions.verifyBookings is implemented', typeof actions.verifyBookings === 'function');
 
+
+    // ── "reverify bookings in mail" -> "No bookings from mail." ──────────
+    // The location-query regex read "mail" as a PLACE and answered before the
+    // AI ever saw the message, so verify_bookings could not be chosen. Two
+    // guards fixed it; both directions are asserted, because loosening this
+    // rule too far would break every genuine "bookings from <port>" query.
+    const soloIntent = (text) => {
+        const d = brain.policyDecide({ isManagerOrTeam: true, isManager: true, pendingAction: null,
+            text, textLower: text.toLowerCase(), chatId: 'sim@c.us', session: {} });
+        return d.needsAI ? null : d.intent;
+    };
+    for (const t of ['reverify bookings in mail', 'reverify all the bookings against the mail',
+        'verify bookings from mail', 'recheck bookings in email']) {
+        ck(`"${t}" reaches the AI (so verify_bookings can be picked)`, soloIntent(t), null);
+    }
+    // The rule now defers to the AI unless the captured place actually
+    // resolves to bookings — so the test has to provide that world, otherwise
+    // it is asserting against an empty database rather than against the rule.
+    {
+        // brain.js DESTRUCTURES queryBookingsByLocation at module load, so
+        // patching the helper afterwards never reaches the reference it
+        // captured. Both modules have to be reloaded with the stub already in
+        // place — the same cache-reload pattern tests/integration.js uses for
+        // its degraded-mode section.
+        const bookingPath = require.resolve(R('helpers/booking.js'));
+        const brainPath = require.resolve(R('workflow/brain.js'));
+        const KNOWN = ['oakland', 'la', 'los angeles', 'long beach', 'houston'];
+        delete require.cache[bookingPath];
+        delete require.cache[brainPath];
+        const bookingHelper = require(bookingPath);
+        bookingHelper.queryBookingsByLocation = (place) => (KNOWN.includes(String(place || '').toLowerCase())
+            ? { count: 3, bookings: ['A', 'B', 'C'], records: [] }
+            : { count: 0, bookings: [], records: [] });
+        const brainStubbed = require(brainPath);
+        const withData = (text) => {
+            const d = brainStubbed.policyDecide({ isManagerOrTeam: true, isManager: true, pendingAction: null,
+                text, textLower: text.toLowerCase(), chatId: 'sim@c.us', session: {} });
+            return d.needsAI ? null : d.intent;
+        };
+        for (const t of ['bookings from oakland', 'available bookings from LA', 'shoe bookings from oakland']) {
+            ck(`"${t}" is still a location query`, withData(t), 'bookings_list_query');
+        }
+        // The whole point of the change: an unresolvable "place" is the AI's
+        // call, not the regex's.
+        ck('"bookings from wherever" defers to the AI', withData('bookings from wherever'), null);
+        ck('"reverify bookings in mail" defers even with data loaded',
+            withData('reverify bookings in mail'), null);
+        // Restore, so later sections see the real modules.
+        delete require.cache[bookingPath];
+        delete require.cache[brainPath];
+        require(brainPath);
+    }
+
+    // ── The six regex-only intents now have an AI fallback ───────────────
+    // Apsara: "i dont want textbook case. just let ai decide the policy."
+    // Until 2026-08-22 these existed ONLY as regex and were absent from the
+    // AI's action list, which the prompt declares exhaustive — so a missed or
+    // over-reaching rule had no recovery path at all.
+    {
+        const brainSrc2 = src('workflow/brain.js');
+        const aiList = (brainSrc2.split('═══ AVAILABLE ACTIONS ═══')[1] || '').split('Return ONLY')[0];
+        for (const intent of ['bookings_list_query', 'bookings_count_query', 'get_quote',
+            'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'verify_bookings']) {
+            ckTrue(`${intent} is offered to the AI, not regex-only`, aiList.includes(intent),
+                'the AI cannot choose an action it was never given');
+        }
+        // A field the AI returns but route() drops = the action fires empty.
+        for (const f of ['location', 'filter', 'origin', 'destination', 'names_text',
+            'recipient_query', 'details', 'city', 'term']) {
+            ckTrue(`AI field "${f}" is forwarded to route()`,
+                new RegExp(`${f}: ai\\.${f}`).test(brainSrc2),
+                'declared in the JSON shape but dropped before routing');
+        }
+    }
+
     // ── Verification must not cry wolf ───────────────────────────────────
     const cb = require(R('helpers/cutoffBackfill.js'));
     ck('08/21/2026 and 2026-08-21 are the SAME date, not a mismatch',
