@@ -1655,6 +1655,24 @@ function createApi() {
         (body) => emailContacts.addContact(body.name, body.email),
         (name) => emailContacts.removeContact(name),
     );
+    // Edit — the factory above only does add/list/delete, so correcting a
+    // typo'd address meant deleting the contact and retyping it (losing any
+    // domain group, role and standing Cc with it). Apsara, 2026-08-22:
+    // "EMAIL CONTACTS doesnt have edit option."
+    //
+    // PUT rather than reusing POST: POST is an upsert-by-NAME and therefore
+    // cannot rename anything — it would just create a second record. See
+    // helpers/emailContacts.js's updateContact for the preserve/rename rules.
+    // 400, not 500: every failure it raises is a bad request (unknown
+    // contact, name clash, malformed address), not a server fault.
+    app.put('/api/email-contacts/:contactName', async (req, res) => {
+        try {
+            await emailContacts.updateContact(req.params.contactName, req.body || {});
+            res.json({ ok: true });
+        } catch (e) {
+            res.status(400).json({ error: e.message });
+        }
+    });
 
     // ── Price list contacts ──────────────────────────────────────────────────
     // helpers/pricelist.js's loadContacts/addContact/removeContact have

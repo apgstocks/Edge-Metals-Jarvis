@@ -105,6 +105,71 @@ async function addContact(name, email, extra = {}) {
     return true;
 }
 
+// Edits an EXISTING contact. Apsara, 2026-08-22: "EMAIL CONTACTS doesnt have
+// edit option."
+//
+// Deliberately separate from addContact rather than reusing it. addContact is
+// an upsert-by-name, so it cannot express a RENAME — a new name simply
+// creates a second record and leaves the original behind, which is how a
+// directory quietly fills with duplicates. It also carries a guard that
+// silently REFUSES (returns the list untouched) when a bare name collides
+// with a known domain group; correct for auto-saves, but an edit that
+// silently does nothing while the UI says "saved" is worse than an error.
+//
+// Everything not being edited is preserved: `domain`, `role`, and any
+// standing `cc` survive an address correction, so fixing a typo cannot drop
+// someone out of their company group.
+async function updateContact(originalName, patch = {}) {
+    const from = String(originalName || '').trim();
+    if (!from) throw new Error('original contact name is required');
+
+    const nextName = patch.name != null ? String(patch.name).trim() : from;
+    if (!nextName) throw new Error('name cannot be empty');
+    if (patch.email != null) {
+        const e = String(patch.email).trim();
+        if (!e) throw new Error('email cannot be empty');
+        if (!isValidEmail(e)) throw new Error('email address looks invalid');
+    }
+
+    let failure = null;
+    await mutateJson(cfg.EMAIL_CONTACTS_FILE, [], (list) => {
+        const i = list.findIndex((x) => x.name.toLowerCase() === from.toLowerCase());
+        if (i === -1) { failure = `No email contact named "${from}".`; return list; }
+
+        // Renaming onto a name that already belongs to someone else would
+        // either clobber them or leave two records competing in
+        // resolveContact's exact-name tier. Refuse loudly instead.
+        if (nextName.toLowerCase() !== from.toLowerCase()) {
+            const clash = list.some((x, j) => j !== i && x.name.toLowerCase() === nextName.toLowerCase());
+            if (clash) { failure = `Another contact is already named "${nextName}".`; return list; }
+        }
+
+        const entry = { ...list[i], name: nextName };
+        if (patch.email != null) entry.email = String(patch.email).trim().toLowerCase();
+        // Blanking a display name is a legitimate edit — it falls back to the
+        // contact's name — so an empty string DELETES the field rather than
+        // being ignored the way addContact's truthy checks would.
+        if (patch.displayName != null) {
+            const dn = String(patch.displayName).trim();
+            if (dn) entry.displayName = dn; else delete entry.displayName;
+        }
+        // Same for cc: an empty list means "no standing cc any more".
+        if (patch.cc != null) {
+            const list_ = Array.isArray(patch.cc) ? patch.cc : String(patch.cc).split(',');
+            const clean = list_.map((c) => String(c).trim().toLowerCase()).filter(Boolean);
+            const bad = clean.find((c) => !isValidEmail(c));
+            if (bad) { failure = `Cc address "${bad}" looks invalid.`; return list; }
+            if (clean.length) entry.cc = clean; else delete entry.cc;
+        }
+
+        list[i] = entry;
+        return list;
+    });
+
+    if (failure) throw new Error(failure);
+    return true;
+}
+
 async function removeContact(name) {
     await mutateJson(cfg.EMAIL_CONTACTS_FILE, [], (list) =>
         list.filter((x) => x.name.toLowerCase() !== String(name).toLowerCase()));
@@ -336,6 +401,7 @@ function proposeDomainRoles(tally, term, domain) {
 }
 
 module.exports = {
+    updateContact,
     loadContacts, addContact, removeContact, resolveContact, isValidEmail,
     setContactCc, declineCcSuggestion, normalizeDomain, proposeDomainRoles,
 };
