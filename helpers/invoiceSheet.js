@@ -286,6 +286,84 @@ async function findContainersByNumber(containerQuery) {
     return out;
 }
 
+// The searchable tail of an Inv No.
+//
+// Apsara, 2026-08-22: "SEARCH BY INV NO. MULTI ENTRY SUPPORT. IT SHOULD BE
+// LAST PART AFTER _. EG;[DATE]_[CODE]_[WHAT WE NEED]"
+//
+// "260819_AC_26JY96" -> ["26JY96"]. The date and item code are shared by
+// every invoice generated that day for that material, so searching on them
+// would return the whole day rather than the one document she wants — the
+// trailing segment is the part that actually identifies it.
+//
+// Returns an ARRAY because a multi-container proforma now puts several codes
+// in that segment: "260819_AC_26JY96,26JY97" -> ["26JY96", "26JY97"]. Typing
+// either one has to find that invoice, or a merged invoice would be
+// reachable only by whichever container happened to be listed first.
+function invNoTailCodes(invNo) {
+    const s = safeStr(invNo).toUpperCase().trim();
+    if (!s) return [];
+    const idx = s.lastIndexOf('_');
+    const tail = idx === -1 ? s : s.slice(idx + 1);
+    return tail.split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+// Mirror of findContainersByNumber, keyed on the Inv No. tail instead of the
+// container number. Returns the IDENTICAL shape on purpose — the dashboard
+// renders both results through the same list and the same downstream
+// select/preview/generate flow, so nothing after the search needs to know
+// which box the query came from.
+async function findContainersByInvNo(invNoQuery) {
+    const { headers, rows } = await fetchRawSheet();
+    const colMap = buildColumnMap(headers);
+    if (colMap.consignee === -1 || colMap.container_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected "Consignee" and "Container No." columns');
+    }
+    if (colMap.inv_no === -1) throw new Error('Invoice sheet has no "Inv No." column to search');
+
+    // Same comma/space splitting as the container search, so both boxes
+    // accept a pasted list in whatever form it arrives.
+    const terms = safeStr(invNoQuery).toUpperCase().split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+    if (!terms.length) return [];
+
+    const groups = new Map(); // container_no -> rows[]
+    for (const row of rows) {
+        const codes = invNoTailCodes(row[colMap.inv_no]);
+        if (!codes.length) continue;
+        // PREFIX match, not substring. A partial "26JY9" should still pull
+        // up the run of related invoices, but plain `includes` matches
+        // mid-string and produced a real false positive in testing: the term
+        // "AC" matched the unrelated invoice "LEGACYINV" (leg-AC-yinv). On a
+        // financial lookup, surfacing someone else's invoice because two
+        // letters happened to appear inside it is worse than being slightly
+        // stricter — and these codes are read left-to-right anyway, so a
+        // prefix is how a person actually shortens one.
+        if (!terms.some((t) => codes.some((c) => c.startsWith(t)))) continue;
+        // Grouped by CONTAINER, not by invoice: the result list feeds a
+        // container multi-select, and a merged invoice must appear as its
+        // individual containers there so she can pick a subset.
+        const containerNo = safeStr(row[colMap.container_no]).toUpperCase();
+        if (!containerNo) continue;
+        if (!groups.has(containerNo)) groups.set(containerNo, []);
+        groups.get(containerNo).push(row);
+    }
+
+    const out = [];
+    for (const [containerNo, containerRows] of groups.entries()) {
+        const first = rowToDict(containerRows[0], colMap);
+        out.push({
+            container_no: containerNo,
+            consignee: first.consignee,
+            inv_no: first.inv_no,
+            inv_date: first.inv_date,
+            item_count: containerRows.length,
+            booking_no: first.booking_no,
+        });
+    }
+    out.reverse(); // newest shipment first, same rationale as the sibling searches
+    return out;
+}
+
 // Builds the full computed invoice/packing data for one container — mirrors
 // invoice_gen.py's rows_to_invoice_data() + resolve_item_desc() +
 // eval_freight(), minus the fields that don't have a matching real column
@@ -531,78 +609,12 @@ function findPackingRow(packingRows, itemDesc) {
     return packingRows[0];
 }
 
-// ── Every invoice on the sheet, with its total ──────────────────────────────
-// Built 2026-08-22 for the receivables ledger (helpers/receivables.js). Lives
-// HERE, not there, on purpose: the invoice total is real money, and the rule
-// for it — sum(weight × inv price), then subtract freight ONCE per invoice —
-// already exists twice in this file (buildContainerInvoiceData and
-// buildMultiContainerInvoiceData, which agree exactly). A third copy in
-// another file would be a place for the three to silently drift apart, and
-// the symptom would be an AR balance that disagrees with the invoice PDF the
-// customer is holding.
-//
-// Grouped by INV NO. rather than by container, because that's the unit a
-// customer actually owes against: one invoice can cover several containers
-// (see buildMultiContainerInvoiceData), and freight applies once to the
-// invoice, not once per container.
-//
-// Rows with no invoice number are skipped rather than lumped together — an
-// unnumbered row is a draft or a spacer, not a debt.
-async function listAllInvoices(forceRefresh) {
-    const { headers, rows } = await fetchRawSheet(forceRefresh);
-    const colMap = buildColumnMap(headers);
-    if (colMap.inv_no === -1) {
-        throw new Error('Invoice sheet header layout changed — expected an "Inv No." column');
-    }
-    const byInvNo = new Map();
-    for (const row of rows) {
-        const d = rowToDict(row, colMap);
-        const invNo = safeStr(d.inv_no);
-        if (!invNo) continue;
-        if (!byInvNo.has(invNo)) {
-            byInvNo.set(invNo, {
-                inv_no: invNo,
-                consignee: safeStr(d.consignee),
-                customer: safeStr(d.customer),
-                inv_date: safeStr(d.inv_date),
-                terms: safeStr(d.terms),
-                containers: [],
-                subtotal: 0,
-                freight: 0,
-                line_count: 0,
-            });
-        }
-        const inv = byInvNo.get(invNo);
-        inv.subtotal += safeFloat(d.weight) * safeFloat(d.inv_price);
-        inv.line_count += 1;
-        const c = safeStr(d.container_no).toUpperCase();
-        if (c && !inv.containers.includes(c)) inv.containers.push(c);
-        // First non-zero freight wins, exactly as the two builders above do.
-        if (!inv.freight) {
-            const fv = evalFreight(d.freight_charge);
-            if (fv > 0) inv.freight = fv;
-        }
-        // Keep the first non-empty header value seen for the invoice — later
-        // rows of a multi-container invoice often leave these blank and carry
-        // only line-item data.
-        if (!inv.consignee) inv.consignee = safeStr(d.consignee);
-        if (!inv.customer) inv.customer = safeStr(d.customer);
-        if (!inv.inv_date) inv.inv_date = safeStr(d.inv_date);
-        if (!inv.terms) inv.terms = safeStr(d.terms);
-    }
-    return Array.from(byInvNo.values()).map((inv) => ({
-        ...inv,
-        subtotal: Math.round(inv.subtotal * 100) / 100,
-        final_amount: Math.round((inv.subtotal - inv.freight) * 100) / 100,
-    }));
-}
-
 module.exports = {
+    findContainersByInvNo, invNoTailCodes,
     findContainersForBuyer,
     findContainersByNumber,
     buildContainerInvoiceData,
     buildMultiContainerInvoiceData,
-    listAllInvoices,
     fetchPackingLookup,
     findPackingRow,
     resolveItemDesc,

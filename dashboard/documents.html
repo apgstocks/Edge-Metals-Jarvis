@@ -195,6 +195,17 @@ body[data-theme="light"] {
           <input id="inv_container_search" placeholder="e.g. KOCU4877967 or KOCU4877967, TCLU7789012" autocomplete="off">
         </div>
         <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvContainerSearch" type="button" class="btn btn-primary">Find by container #</button></div>
+
+        <div style="display:flex; align-items:center; gap:10px; margin:18px 0 10px;">
+          <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);">or</span>
+          <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+        </div>
+        <div class="field" style="max-width:420px;">
+          <label>Search by Inv No. (just the last part after the underscore — comma-separate several)</label>
+          <input id="inv_no_search" placeholder="e.g. 26JY96 or 26JY96, 26JY97" autocomplete="off">
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvNoSearch" type="button" class="btn btn-primary">Find by Inv No.</button></div>
       </div>
     </div>
 
@@ -203,6 +214,7 @@ body[data-theme="light"] {
         <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Which shipment? <span style="font-weight:400; font-size:11px; color:var(--text-muted);">— pick one to review, or check several and generate them together</span></div>
         <button id="btnInvStep2Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
       </div>
+      <div id="invBuyerRangeNote" class="hidden" style="font-size:11.5px; color:var(--text-muted); margin-bottom:8px;"></div>
       <div id="invContainerList" style="display:flex; flex-direction:column; gap:8px;"></div>
       <div id="invContainerListEmpty" class="placeholder-note hidden">No containers found — check the name/number/spelling, or the shipment may not be logged in the Invoice sheet yet.</div>
 
@@ -213,7 +225,13 @@ body[data-theme="light"] {
            below. Hidden until at least one checkbox is ticked. -->
       <div id="invBulkBar" class="hidden" style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:10px 14px; margin-top:12px;">
         <span id="invBulkCountLabel" style="font-size:12px; color:var(--text-muted);"></span>
-        <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Review &amp; generate selected</button>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <label id="invMergeAllWrap" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); cursor:pointer;">
+            <input type="checkbox" id="invMergeAll" style="width:15px; height:15px; cursor:pointer;">
+            Merge all selected into ONE invoice
+          </label>
+          <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Review &amp; generate selected</button>
+        </div>
       </div>
     </div>
 
@@ -2408,13 +2426,94 @@ $('btnInvStep1Next').addEventListener('click', async () => {
   setButtonLoading(btn, true, 'Searching…');
   try {
     const { containers } = await api('/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer));
-    renderInvContainerList(containers);
+    invBuyerAllResults = containers;
+    invBuyerShowAll = false;
+    renderInvBuyerResults();
   } catch (e) {
     alert(e.message);
   } finally {
     setButtonLoading(btn, false);
   }
 });
+
+// ── Buyer search: last 5 days by default ────────────────────────────────
+// Apsara, 2026-08-22: "AFTER TYPING BUYER NAME AND FIND CONTAINERS, SHOW
+// LAST 5 DAY'S ENTRY ONLY."
+//
+// A long-standing buyer can have dozens of shipments on the sheet, and the
+// one she is invoicing is essentially always a recent one — the older rows
+// are just noise to scroll past.
+//
+// Filtered CLIENT-side on purpose. helpers/invoiceSheet.js's
+// findContainersForBuyer is shared, and narrowing it at the source would
+// silently change every other caller. Doing it here keeps the change
+// contained to the screen that asked for it.
+//
+// Crucially this HIDES rather than DISCARDS: the count of older shipments is
+// shown with a one-click "show all". A hard cutoff would make an older
+// invoice unreachable from this screen with no hint that anything was
+// missing — the kind of silent omission that reads as "the system lost my
+// data".
+function hideInvBuyerRangeNote() {
+  const n = $('invBuyerRangeNote');
+  if (n) { n.innerHTML = ''; n.classList.add('hidden'); }
+}
+const INV_BUYER_RECENT_DAYS = 5;
+let invBuyerAllResults = [];
+let invBuyerShowAll = false;
+
+// Sheet dates arrive in several shapes (M/D/YYYY, YYYY-MM-DD, D-Mon-YY).
+// Returns null when unparseable, and an unparseable date is treated as
+// RECENT so a row with an odd date format is never silently hidden.
+function parseInvSheetDate(v) {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) return new Date(+iso[1], +iso[2] - 1, +iso[3]);
+  const us = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (us) {
+    let y = +us[3];
+    if (y < 100) y += 2000;
+    return new Date(y, +us[1] - 1, +us[2]); // M/D/Y, matching the sheet
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function isWithinRecentDays(dateStr, days) {
+  const d = parseInvSheetDate(dateStr);
+  if (!d) return true; // unparseable -> never hide it
+  const cutoff = new Date();
+  cutoff.setHours(0, 0, 0, 0);
+  cutoff.setDate(cutoff.getDate() - days);
+  return d.getTime() >= cutoff.getTime();
+}
+
+function renderInvBuyerResults() {
+  const all = invBuyerAllResults || [];
+  const recent = all.filter((c) => isWithinRecentDays(c.inv_date, INV_BUYER_RECENT_DAYS));
+  const hidden = all.length - recent.length;
+  // If nothing at all falls in the window, show everything rather than an
+  // empty screen — "no results" for a buyer who plainly has shipments would
+  // look like a broken search.
+  const show = (invBuyerShowAll || recent.length === 0) ? all : recent;
+  renderInvContainerList(show);
+  const note = $('invBuyerRangeNote');
+  if (!note) return;
+  if (invBuyerShowAll || hidden <= 0 || recent.length === 0) {
+    note.innerHTML = (recent.length === 0 && all.length)
+      ? `Nothing in the last ${INV_BUYER_RECENT_DAYS} days — showing all ${all.length}.`
+      : (invBuyerShowAll && hidden > 0 ? `Showing all ${all.length}. <a href="#" id="invShowRecent">Back to last ${INV_BUYER_RECENT_DAYS} days</a>` : '');
+    note.classList.toggle('hidden', !note.innerHTML);
+  } else {
+    note.innerHTML = `Showing the last ${INV_BUYER_RECENT_DAYS} days — ${hidden} older shipment${hidden === 1 ? '' : 's'} hidden. <a href="#" id="invShowAllBuyer">Show all</a>`;
+    note.classList.remove('hidden');
+  }
+  const showAll = $('invShowAllBuyer');
+  if (showAll) showAll.addEventListener('click', (e) => { e.preventDefault(); invBuyerShowAll = true; renderInvBuyerResults(); });
+  const showRecent = $('invShowRecent');
+  if (showRecent) showRecent.addEventListener('click', (e) => { e.preventDefault(); invBuyerShowAll = false; renderInvBuyerResults(); });
+}
 
 // Direct container-number search — the ONLY lookup her original
 // PythonAnywhere tool had. See helpers/invoiceSheet.js's
@@ -2431,6 +2530,10 @@ $('btnInvContainerSearch').addEventListener('click', async () => {
   setButtonLoading(btn, true, 'Searching…');
   try {
     const { containers } = await api('/api/invoice/by-container?q=' + encodeURIComponent(q));
+    // The last-5-days note belongs to the buyer search only — these
+    // lookups are the deliberate way to reach an OLDER shipment, so leaving
+    // it on screen would claim a filter that is not being applied.
+    hideInvBuyerRangeNote();
     const preCheckNos = new Set(q.toUpperCase().split(/[,\s]+/).map((t) => t.trim()).filter(Boolean));
     renderInvContainerList(containers, preCheckNos);
   } catch (e) {
@@ -2440,6 +2543,42 @@ $('btnInvContainerSearch').addEventListener('click', async () => {
   }
 });
 $('inv_container_search').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvContainerSearch').click(); });
+
+// Search by the Inv No.'s trailing segment — "260819_AC_26JY96" is found by
+// typing "26JY96". Apsara, 2026-08-22: "IT SHOULD BE LAST PART AFTER _".
+// The date and item code are shared by every invoice generated that day for
+// that material, so searching on those would return the whole day.
+//
+// Feeds the SAME renderInvContainerList and the same downstream flow as the
+// container search — deliberately, so there is one path from "found it" to
+// "generated it" rather than two that can drift apart.
+$('btnInvNoSearch').addEventListener('click', async () => {
+  const q = $('inv_no_search').value.trim();
+  if (!q) return;
+  const btn = $('btnInvNoSearch');
+  setButtonLoading(btn, true, 'Searching…');
+  try {
+    const { containers } = await api('/api/invoice/by-inv-no?q=' + encodeURIComponent(q));
+    if (!containers.length) {
+      alert(`No invoice found for "${q}".\n\nSearch the part AFTER the last underscore — for 260819_AC_26JY96 that is 26JY96.`);
+      return;
+    }
+    // Pre-tick every container the search actually matched, so a merged
+    // invoice comes back ready to re-open in one click. The container search
+    // pre-ticks on the typed text; here the typed text is an invoice code,
+    // not a container number, so the match set comes from the RESULTS.
+    // The last-5-days note belongs to the buyer search only — these
+    // lookups are the deliberate way to reach an OLDER shipment, so leaving
+    // it on screen would claim a filter that is not being applied.
+    hideInvBuyerRangeNote();
+    renderInvContainerList(containers, new Set(containers.map((c) => String(c.container_no || '').toUpperCase())));
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+$('inv_no_search').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvNoSearch').click(); });
 
 $('btnInvStep2Back').addEventListener('click', () => showInvStep(1));
 $('btnInvStep3Back').addEventListener('click', () => showInvStep(2));
@@ -2458,6 +2597,33 @@ $('btnInvStep3Back').addEventListener('click', () => showInvStep(2));
 // booking # on record never merges with anything, even another
 // no-booking container, since there'd be no real basis for combining them.
 function groupSelectedContainersByBooking(containers) {
+  // "Merge all selected into ONE invoice" overrides the booking rule
+  // entirely. Apsara, 2026-08-22: "IF I WANT TO MERGE AND SEND TWO
+  // CONTAINERS IN ONE INVOICE.. IT SHOULD ALLOW MULTIPLE SELECT".
+  //
+  // Multi-select already existed, but merging only happened AUTOMATICALLY
+  // for containers that shared a booking number — two containers on
+  // different bookings always became two separate invoices with no way to
+  // combine them. This is the manual override for exactly that case.
+  //
+  // Off by default and opt-in per batch, deliberately: combining containers
+  // from different bookings onto one invoice is a real commercial decision,
+  // not a default. Unticked, this function behaves precisely as it always
+  // did.
+  const mergeAllEl = $('invMergeAll');
+  if (mergeAllEl && mergeAllEl.checked && containers.length > 1) {
+    const bookings = Array.from(new Set(containers.map((c) => (c.booking_no || '').trim().toUpperCase()).filter(Boolean)));
+    return [{
+      // Version history keys off booking_no. With several bookings in one
+      // invoice there is no single one to use, so join them — still a
+      // stable, meaningful identifier for this exact combination rather
+      // than silently picking the first and overwriting another shipment's
+      // history. See helpers/invoiceVersions.js — any string works as a key.
+      booking_no: bookings.join('+'),
+      containers: containers.map((c) => c.container_no),
+    }];
+  }
+
   const groups = new Map(); // key -> { booking_no, containers: [container_no,...] }
   let singleton = 0;
   for (const c of containers) {

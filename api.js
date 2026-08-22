@@ -1859,6 +1859,21 @@ function createApi() {
         }
     });
 
+    // Sibling of by-container: finds the same container rows, but keyed on
+    // the Inv No.'s trailing segment. Apsara, 2026-08-22: "SEARCH BY INV NO.
+    // MULTI ENTRY SUPPORT. IT SHOULD BE LAST PART AFTER _." Returns the
+    // identical { containers } shape so the dashboard reuses one renderer and
+    // one downstream select/preview/generate flow for both searches.
+    app.get('/api/invoice/by-inv-no', async (req, res) => {
+        try {
+            const containers = await invoiceSheet.findContainersByInvNo(req.query.q || '');
+            res.json({ containers });
+        } catch (e) {
+            console.error('[invoice] by-inv-no lookup failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // Preview for SEVERAL containers merged into one invoice — used when a
     // multi-select batch on Step 2 has containers sharing a booking #. Per
     // Apsara: "if both containers belong to the same booking, it should get
