@@ -1642,6 +1642,70 @@ function retrofitInvNoItemCode() {
   const itemCode = deriveItemCode(firstDesc);
   if (itemCode) $('pf_inv_no').value = `${sug.dateStr}_${itemCode}_${sug.codeOnly}`;
 }
+// Appends every container on this proforma to the Invoice No.
+//
+// Apsara, 2026-08-22: "if more than one container in proforma-inv no should
+// get appended as [date]_code_26JY96,26JY97 ETC.."
+//
+// The PDF's number comes from THIS field (api.js passes body.inv_no straight
+// to generateProformaDc2Pdf), while helpers/proformaSheetLog.js builds its
+// own from the container list. Before this they could disagree the moment a
+// second container was added: the sheet would say
+// "260819_AC_26JY96,26JY97" and the customer's PDF would still say
+// "260819_AC_26JY96". Same document, two identities — and the PDF is the one
+// the customer files and pays against.
+//
+// Runs from collectProformaPayload, unconditionally, right before the value
+// is read — the same safety-net point retrofitInvNoItemCode uses, and for
+// the same reason: containers can be added or removed after any particular
+// input event, so this must not depend on which event fired.
+//
+// Deliberately conservative. It rewrites the trailing code list ONLY when
+// that list consists entirely of container codes currently on the form, so a
+// hand-typed number is never overwritten. It is idempotent, and a
+// single-container proforma is left exactly as it was.
+function retrofitInvNoContainers() {
+  const el = $('pf_inv_no');
+  if (!el) return;
+  const cur = el.value.trim();
+  if (!cur) return;
+
+  const blocks = Array.from($('pfContainers').children);
+  const entries = blocks.map((b) => {
+    const codeEl = b.querySelector('.container-no');
+    const descEl = b.querySelector('.item-desc');
+    return {
+      code: codeEl ? codeEl.value.trim() : '',
+      item: descEl ? (deriveItemCode(descEl.value) || '') : '',
+    };
+  }).filter((e) => e.code);
+  if (entries.length < 2) return; // single container — nothing to append
+
+  const sep = cur.lastIndexOf('_');
+  if (sep === -1) return;                    // not the "date_ITEM_code" shape
+  const prefix = cur.slice(0, sep + 1);
+  const tail = cur.slice(sep + 1);
+
+  // The item code sitting in the number decides which containers belong to
+  // it. A mixed-material proforma keeps only its matching containers here —
+  // the sheet splits those into separate invoices per material precisely so
+  // the item description stays correct, and quietly listing a CHROME WHEELS
+  // container under an AUTO CAST number would put the wrong goods on a
+  // financial document.
+  const itemInNo = (prefix.match(/_([A-Z]{2})_$/) || [])[1] || '';
+  const relevant = itemInNo ? entries.filter((e) => e.item.toUpperCase() === itemInNo) : entries;
+  if (relevant.length < 2) return;
+
+  const present = tail.split(',').map((x) => x.trim()).filter(Boolean);
+  const known = relevant.map((e) => e.code);
+  // If anything in the current tail is not a container on this form, she has
+  // typed something bespoke — leave it completely alone.
+  if (!present.length || !present.every((x) => known.includes(x))) return;
+
+  const next = prefix + known.join(',');
+  if (next !== cur) el.value = next;
+}
+
 async function applyNextInvNoSuggestion(customer) {
   // Only the "fill Invoice No" half bails out when it's already got text in
   // it (typed by hand, or left over from earlier) — the container-numbering
@@ -1990,6 +2054,7 @@ function collectProformaPayload() {
   // actually read for the PDF, closes that gap regardless of which input
   // event sequence got the form into its current state.
   retrofitInvNoItemCode();
+  retrofitInvNoContainers();
   // retrofitContainerItemCode() deliberately NOT called any more — as of
   // 2026-08-22 the Container # box stays BARE ("26JY52"), see that function's
   // own comment. The item code still reaches the Edge Metals sheet, but as a

@@ -543,52 +543,75 @@ async function logProformaToSheet(body) {
     // scoping.
     const blankRow = () => Array(HEADER_ROW.length).fill('');
 
-    const rows = [];
+    // ── Inv No. for a MULTI-CONTAINER proforma ──────────────────────────────
+    //
+    // Apsara, 2026-08-22: "if more than one container in proforma-inv no
+    // should get appended as [date]_code_26JY96,26JY97 ETC.."
+    //
+    // A proforma is ONE invoice. When it covers several containers, it still
+    // has one number, and that number names every container on it:
+    //   260819_AC_26JY96,26JY97
+    // Previously each container was given its OWN number, so a single
+    // document split into several invoice identities on the sheet and
+    // downstream grouping (helpers/invoiceSheet.js groups rows by Inv No.)
+    // saw them as unrelated invoices.
+    //
+    // Grouped by ITEM CODE rather than lumping every container together. Her
+    // format carries exactly one code, which only makes sense while the
+    // containers share one — the normal case, and then the result is exactly
+    // what she asked for. When a proforma genuinely mixes materials, forcing
+    // one number would have to pick a single code and silently misdescribe
+    // the rest: helpers/invoiceSheet.js's resolveItemDesc reads that code
+    // back out of the Inv No. to label the goods, so a wrong code becomes a
+    // wrong item description on a financial document. Separate numbers per
+    // material is the honest representation. A single-container proforma is
+    // simply a group of one and produces the identical string it always did.
+    const groups = new Map(); // itemCode(upper) -> { itemCode, codes[], containers[] }
     for (const container of (body.containers || [])) {
         const containerCode = (container.container_no || '').trim();
-        // Underscore-joined per Apsara's real format ("260819_AC_26JY19").
-        //
-        // CHANGED 2026-08-22, per Apsara ("in proforma-container#, IT SHOULD
-        // JUST BE 26JY52 SAY., it should not be AC_26JY52"): the Container #
-        // box on the proforma form is now BARE, so containerCode no longer
-        // carries an item-code segment of its own. The item code arrives as
-        // its own `container.item_code` field instead and is spliced in HERE,
-        // so THIS column's format is completely unchanged from before.
-        // Without this, dropping the prefix from the form would have silently
-        // degraded every logged Inv No. to "260819_26JY19".
-        //
-        // Degrades safely both ways: an older client that still sends a glued
-        // container_no (and no item_code) produces the identical string it
-        // always did — the startsWith guard stops a double prefix like
-        // "AC_AC_26JY19" — and a container whose material matched no item-code
-        // rule simply logs without that segment rather than inventing one.
-        //
-        // NOTE: this merges the item-code splicing that landed directly on
-        // the live server on 2026-08-22 (never pushed through me — found via
-        // a live-file diff while chasing the "rows still bold" report below)
-        // with this session's ensureTab/clearRowFormatting/upsertRowsByKey
-        // additions, which had the opposite problem: built and mock-tested
-        // in my sandbox but never actually delivered to the live device.
-        // Neither half should be dropped in favor of the other.
         const itemCode = (container.item_code || '').trim();
-        const codeWithItem = (itemCode && !containerCode.toUpperCase().startsWith(`${itemCode.toUpperCase()}_`))
-            ? `${itemCode}_${containerCode}`
+        // Strip a glued item-code prefix so it is not repeated once per
+        // container in the joined list ("AC_26JY96,AC_26JY97"). Same
+        // double-prefix guard as before, just applied per code — an older
+        // client that still sends "AC_26JY19" therefore yields the identical
+        // Inv No. it always did.
+        const bare = (itemCode && containerCode.toUpperCase().startsWith(`${itemCode.toUpperCase()}_`))
+            ? containerCode.slice(itemCode.length + 1)
             : containerCode;
-        const invNo = containerCode ? `${invDateCompact}_${codeWithItem}`.trim() : (body.inv_no || '');
-        for (const item of (container.items || [])) {
-            const rate = Number(item.rate) || 0;
-            const desc = (item.desc || '').trim();
-            const row = blankRow();
-            row[0] = consignee;
-            row[1] = invNo;
-            row[8] = terms;
-            row[9] = customerName;
-            row[10] = proformaDate;
-            row[12] = desc;
-            row[14] = rate || '';
-            rows.push(row);
-        }
+        const key = itemCode.toUpperCase();
+        if (!groups.has(key)) groups.set(key, { itemCode, codes: [], containers: [] });
+        const g = groups.get(key);
+        if (bare && !g.codes.includes(bare)) g.codes.push(bare); // de-dup a repeated container
+        g.containers.push(container);
     }
+
+    // rowGroups keeps each group's rows together so the uniqueness check
+    // below can run ONCE per invoice rather than once per row.
+    const rowGroups = [];
+    for (const g of groups.values()) {
+        const joined = g.codes.join(',');
+        const codeWithItem = g.itemCode && joined ? `${g.itemCode}_${joined}` : joined;
+        const invNo = joined ? `${invDateCompact}_${codeWithItem}`.trim() : (body.inv_no || '');
+        const groupRows = [];
+        for (const container of g.containers) {
+            for (const item of (container.items || [])) {
+                const rate = Number(item.rate) || 0;
+                const desc = (item.desc || '').trim();
+                const row = blankRow();
+                row[0] = consignee;
+                row[1] = invNo;
+                row[8] = terms;
+                row[9] = customerName;
+                row[10] = proformaDate;
+                row[12] = desc;
+                row[14] = rate || '';
+                groupRows.push(row);
+            }
+        }
+        if (groupRows.length) rowGroups.push({ invNo, rows: groupRows });
+    }
+    const rows = rowGroups.flatMap((g) => g.rows);
+
     if (!rows.length) return { logged: 0 };
 
     const spreadsheetId = await getOrCreateSpreadsheetId();
@@ -596,15 +619,31 @@ async function logProformaToSheet(body) {
 
     const existing = await getExistingInvNos(sheets, spreadsheetId);
     const duplicatesBumped = [];
-    for (const row of rows) {
-        const original = row[1];
+    // Uniqueness is resolved ONCE PER INVOICE, not once per row.
+    //
+    // REAL BUG this fixes (found 2026-08-22 while implementing the
+    // multi-container format): the old loop ran per row and did
+    // `existing.add(unique)` after each one, so the SECOND line item of a
+    // container collided with the first and got bumped to a different
+    // number. A container with two items was logged as two unrelated
+    // invoices — and the invented number ("...26JY96" bumped to
+    // "...26JY98") could be one that genuinely belongs to another
+    // container, silently corrupting the sheet. Verified by replaying the
+    // old logic before changing it.
+    //
+    // Rows of the SAME invoice are supposed to share a number — that is how
+    // helpers/invoiceSheet.js groups them back into one document — so
+    // "already used" must mean "already in the sheet, or used by a
+    // DIFFERENT invoice in this batch", never "used by my own earlier row".
+    for (const g of rowGroups) {
+        const original = g.invNo;
         const unique = bumpInvNoUntilUnique(original, existing);
         if (unique !== original) {
             duplicatesBumped.push({ was: original, now: unique });
             console.warn(`[proforma] Edge Metals sheet: Inv No. "${original}" already existed — logged as "${unique}" instead`);
         }
-        row[1] = unique;
-        existing.add(unique); // also guards against duplicates WITHIN this same batch
+        for (const row of g.rows) row[1] = unique;
+        existing.add(unique); // guards against a DIFFERENT invoice in this same batch
     }
 
     const appendRes = await sheets.spreadsheets.values.append({
