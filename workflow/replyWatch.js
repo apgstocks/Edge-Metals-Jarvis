@@ -185,6 +185,56 @@ const NEVER_REPLY_PATTERNS = [
     /automated@/i, /system@/i, /support@.*\.zendesk\.com/i, /calendar-notification@/i,
 ];
 
+// ── Marketing / bulk mail ───────────────────────────────────────────────────
+// Apsara, 2026-08-22: "if its marketing email, ignore."
+//
+// The sender-address list above only catches marketing sent from an obviously
+// automated address. Plenty arrives from a perfectly human-looking one — a
+// rep's own name at a real company — and that is exactly the kind that reads
+// to an LLM like a genuine business enquiry ("can we discuss your freight
+// rates?") and lands in her digest as work that does not exist.
+//
+// Judged on RFC headers rather than body text, same reasoning as isAutoReply:
+// headers are what the sending system asserts about itself, and bulk senders
+// set them as a matter of course. Two tiers, because the signals differ in
+// strength:
+//
+//   DEFINITIVE — mailing-list infrastructure. `List-Id`, or `Precedence:
+//   bulk|list|junk`, means the message went to a LIST, not to her. Nobody
+//   sends a one-to-one business email through a list. Skipped outright, which
+//   also saves the Gemini call.
+//
+//   SUGGESTIVE — `List-Unsubscribe` or an ESP campaign header on its own.
+//   Deliberately NOT auto-skipped: a real customer whose company runs its
+//   mail through HubSpot or Outreach can carry List-Unsubscribe on a genuine
+//   one-to-one message, and silently dropping a customer's email is far worse
+//   than showing one piece of marketing. Passed to Gemini as context instead,
+//   with the prompt telling it to answer needs_reply:false for promotional
+//   mail. The expensive mistake here is a false positive, not a false
+//   negative — so only the unambiguous case skips without being read.
+const BULK_PRECEDENCE = /^(bulk|list|junk|auto_generated)$/i;
+const ESP_HEADERS = [
+    'x-campaign-id', 'x-campaignid', 'x-mailchimp-id', 'x-mc-user',
+    'x-sg-eid', 'x-sendgrid-eid', 'x-ses-outgoing', 'x-mailgun-sid',
+    'x-hubspot-id', 'x-marketo-id', 'x-constantcontact-id', 'feedback-id',
+];
+function headerValue(headers, name) {
+    const h = (headers || []).find((x) => String(x.name || '').toLowerCase() === name);
+    return h ? String(h.value || '') : '';
+}
+// Returns 'definitive' | 'suggestive' | null.
+function bulkMailSignal(headers) {
+    const names = new Set((headers || []).map((h) => String(h.name || '').toLowerCase()));
+    if (names.has('list-id')) return 'definitive';
+    if (BULK_PRECEDENCE.test(headerValue(headers, 'precedence').trim())) return 'definitive';
+    const hasUnsub = names.has('list-unsubscribe');
+    const hasEsp = ESP_HEADERS.some((h) => names.has(h));
+    // Campaign mail sets both; together they stop being ambiguous.
+    if (hasUnsub && hasEsp) return 'definitive';
+    if (hasUnsub || hasEsp) return 'suggestive';
+    return null;
+}
+
 // Store shape: { seen: {messageId: assessedAtISO}, lastDigest: [item, ...] }.
 // `seen` is a map rather than a list so entries can be aged out — an
 // unbounded id list would grow forever on a busy mailbox. `lastDigest` is
@@ -300,7 +350,9 @@ ${FENCE_END}
 
 Judge by what the sender actually wants:
 - needs_reply TRUE when the sender is waiting on something only she can give: a question, a quote or price request, a confirmation, a decision, a document, a date, an approval, or a chase-up on something already asked. "Let me know", "please confirm", "can you send", "are you able to", "thoughts?", and a question mark aimed at her all point this way. A polite closing like "thanks!" does not cancel a real question earlier in the message.
-- needs_reply FALSE for anything that closes the loop or wants nothing: a confirmation of something already settled, a receipt or invoice sent for records, an automated notification, a newsletter or marketing mail, a delivery or tracking update, "thanks, received", an FYI or a CC where someone else is clearly the one being asked.
+- needs_reply FALSE for anything that closes the loop or wants nothing: a confirmation of something already settled, a receipt or invoice sent for records, an automated notification, a delivery or tracking update, "thanks, received", an FYI or a CC where someone else is clearly the one being asked.
+- needs_reply FALSE for MARKETING or SALES OUTREACH, always, however personal it looks. This is the case to get right: cold outreach is written to read like a real enquiry, often from a real person's name at a real company, and often ending in a genuine question ("do you have 15 minutes this week?", "can I send over our rate card?", "who handles logistics procurement?"). It is still marketing. The tell is that the sender wants to sell HER something or start a relationship, rather than needing something from an existing one: unsolicited introductions to a company she has no dealings with, offers of services/software/financing/freight rates she did not ask for, webinar or conference invitations, "just following up on my last email" from someone she never replied to, newsletters, product announcements, recruitment pitches, SEO/marketing/lead-generation offers. A genuine enquiry references something real and shared — an actual booking, container, invoice, shipment, quote she gave, or an existing arrangement. If nothing in the message ties to real business between them, it is outreach: needs_reply false.
+- The exception: a CUSTOMER or SUPPLIER she actually deals with is not doing marketing just because their message is upbeat or mentions a new service. Judge by whether there is a real, existing thread of business, not by tone.${email.bulkHint ? `\n\nMAIL-SYSTEM SIGNAL: this message carries bulk/campaign email headers (${email.bulkHint}), which legitimate one-to-one business mail usually does not. That is evidence toward marketing, though not proof on its own — a real customer whose company sends through a marketing platform can carry them too. Weigh it with the content.` : ''}
 
 urgency:
 - "high" — a stated deadline inside about two days, an explicit chase ("following up again", "still waiting", "urgent"), a truck/vessel/container or cutoff at risk, or money at risk.
@@ -721,6 +773,16 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             continue;
         }
 
+        // Marketing / bulk mail — see bulkMailSignal. Only the definitive
+        // tier skips without being read; 'suggestive' falls through and is
+        // handed to Gemini as context below.
+        const bulkSignal = bulkMailSignal(hs);
+        if (bulkSignal === 'definitive') {
+            console.log(`[REPLYWATCH] skipping bulk/marketing mail from ${from}`);
+            seen[ref.id] = new Date().toISOString();
+            continue;
+        }
+
         // If she has ALREADY replied, the thread is not waiting on her. Gmail
         // orders thread messages oldest-first, so the last entry is the most
         // recent — if that is from her, she has answered. Without this the
@@ -749,7 +811,9 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         checked++;
         let a = null;
         try {
-            a = await assess({ from, subject, date: parseEmailDate(header(msg, 'Date')), body: visible });
+            // bulkHint is only ever 'suggestive' here — the definitive tier
+            // already skipped above without an assessment.
+            a = await assess({ from, subject, date: parseEmailDate(header(msg, 'Date')), body: visible, bulkHint: bulkSignal ? 'List-Unsubscribe / campaign headers' : null });
         } catch (err) {
             console.error('[REPLYWATCH] assess failed:', err.message);
         }
@@ -998,7 +1062,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
