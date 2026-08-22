@@ -524,9 +524,23 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
         cb.fieldsAgree('cutoff_date', '08/21/2026', '08/28/2026'), false);
     ck('vessel formatting is not a mismatch',
         cb.fieldsAgree('vessel_voyage', 'MSC ISABELLA / 328W', 'MSC Isabella 328W'), true);
-    ckTrue('verify never writes to the booking store',
-        !/mutateJson/.test(src('helpers/cutoffBackfill.js').split('async function verifyOne')[1] || ''),
-        'verify must report only — overwriting a hand-corrected value is destructive');
+    // Apsara, 2026-08-22: "if there is a discrepancy, last mail about the
+    // booking with pdf - modify the bookings in dashboard with updated pdf in
+    // drive." She overrode the old report-only rule, so the invariant is now
+    // narrower rather than gone: the CHECK still never writes; only the
+    // explicit apply path does, and only the four schedule dates.
+    ckTrue('the verify CHECK still never writes to the booking store',
+        !/mutateJson/.test(
+            (src('helpers/cutoffBackfill.js').split('async function verifyOne')[1] || '')
+                .split('// ── APPLY')[0]),
+        'the read path must stay read-only — the write is a separate, asked-for step');
+    ck('only the four schedule dates she named are auto-correctable',
+        cb.SCHEDULE_FIELDS, ['cutoff_date', 'erd_date', 'etd', 'eta'],
+        'ports and vessel must never be auto-written — that is where MARTINEZ came from');
+    ckTrue('ports and vessel are excluded from auto-correction',
+        !cb.SCHEDULE_FIELDS.includes('port_of_loading')
+        && !cb.SCHEDULE_FIELDS.includes('port_of_discharge')
+        && !cb.SCHEDULE_FIELDS.includes('vessel_voyage'));
 
     // Apsara, 2026-08-22: "but nothing fired yet" — verify opened with "this
     // takes a moment" and then went silent forever. A long job that can end in

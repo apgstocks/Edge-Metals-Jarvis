@@ -253,67 +253,185 @@ function fieldsAgree(field, stored, fromMail) {
     return looseEqual(stored, fromMail);
 }
 
-// Pulls the schedule fields for one booking out of its mail, using the SAME
-// PDF-first-then-body order as backfillOne — see that function's comment for
-// why the order matters. Returns the extracted fields, or null.
+// ── verify's mail reader ────────────────────────────────────────────────
+// USED BY verifyOne() ONLY. run()/backfillOne have their own reader — this
+// file's blast radius for anything below is the verify path alone, so the
+// nightly backfill cron is untouched by all of it.
+//
+// Apsara, 2026-08-22, on a live verify report:
+//     "what the hell   DALA20928700 — POL
+//        stored: LOS ANGELES
+//        mail:   MARTINEZ"
+//
+// She is right that this is garbage, and it was three of my bugs compounding:
+//
+//  1. listMessages(gmail, bkgNo, 3) returns Gmail's order — NEWEST FIRST. So
+//     this read the three most RECENT mails mentioning the booking number,
+//     which is almost never the original booking confirmation. The message
+//     verifyBookings sends ("against the original booking mail") was a lie.
+//  2. First message that yielded any field won. No preference for a document
+//     that actually IS a booking confirmation.
+//  3. The PDF path checks `is_booking_confirmation`. The BODY-TEXT path
+//     checked nothing at all — so a casual reply in the thread ("truck is at
+//     Martinez") was treated as authoritative, and Gemini, asked to fill a
+//     port_of_loading field, dutifully filled it.
+//
+// Backfill survived all three because it only ever fills BLANKS — a stray
+// value lands only where there was nothing. Verify CONTRADICTS a stored
+// value, so the same sloppiness turns into a false accusation against
+// correct data. This file's own header already excluded carrier/shipper/
+// consignee from BACKFILL_FIELDS for exactly this reason and judged the port
+// fields "lower-risk". That judgement was made for backfill and is wrong for
+// verify.
+//
+// The rule now: EVIDENCE IS GRADED, and identity-ish fields need the strong
+// grade before verify is allowed to call a stored value wrong.
+//   'confirmation' — a real booking-confirmation document (PDF, or body text
+//                    that both restates this booking number and reads as a
+//                    confirmation). Trusted for every field.
+//   'mention'      — the booking number appeared in some thread mail. Trusted
+//                    for dates only; dates get restated consistently across a
+//                    thread, place and vessel names get mentioned in passing.
+// A mail that names a DIFFERENT booking number is rejected outright.
+
+// Fields verify will only contradict on 'confirmation'-grade evidence.
+// Deliberately NOT a change to BACKFILL_FIELDS — backfill's behaviour must
+// not move.
+const STRONG_EVIDENCE_ONLY = new Set(['port_of_loading', 'port_of_discharge', 'vessel_voyage']);
+
+// How many thread mails verify is willing to read per booking. Was 3, and
+// they were the newest 3; now we read a few more and CHOOSE, rather than
+// taking whichever answered first.
+const VERIFY_MAIL_CANDIDATES = 5;
+
+function headerValue(headers, name) {
+    const h = (headers || []).find((x) => (x.name || '').toLowerCase() === name.toLowerCase());
+    return h ? h.value : '';
+}
+
+// Does this mail actually restate the booking number we asked about? Gmail
+// matched it somewhere, but that could be a quoted signature or an unrelated
+// digit run.
+function restatesBooking(text, bkgNo) {
+    if (!text || !bkgNo) return false;
+    const norm = (x) => String(x).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return norm(text).includes(norm(bkgNo));
+}
+
+// Returns { fields, grade, source } or null.
+//   grade: 'confirmation' | 'mention'
+//   source: { date, subject, kind } — shown in the report so a bad line is
+//           traceable to the mail that produced it instead of just being wrong.
+async function readOneMailForVerify(bkgNo, gmail, m) {
+    const full = await getMessage(gmail, m.id);
+    const headers = full.payload && full.payload.headers;
+    const source = {
+        subject: headerValue(headers, 'Subject') || '(no subject)',
+        date: headerValue(headers, 'Date') || '',
+        kind: 'body',
+    };
+    const { body, pdfParts } = getEmailContent(full.payload);
+
+    // PDF first — a booking confirmation attachment is the strongest evidence
+    // there is, and it self-identifies via is_booking_confirmation.
+    if (pdfParts && pdfParts.length) {
+        for (const part of pdfParts) {
+            try {
+                const att = await downloadAttachment(gmail, m.id, part);
+                const pdfFields = await extractPdfFields(att.base64);
+                if (!pdfFields || !pdfFields.is_booking_confirmation) continue;
+                // A confirmation for a DIFFERENT booking is worse than no
+                // evidence — it is confidently wrong. Reject it.
+                if (pdfFields.booking_number && !restatesBooking(pdfFields.booking_number, bkgNo)) {
+                    console.warn(`[${AGENT}] ${bkgNo}: ignoring PDF for a different booking (${pdfFields.booking_number})`);
+                    continue;
+                }
+                if (BACKFILL_FIELDS.some((f) => pdfFields[f])) {
+                    return { fields: pdfFields, grade: 'confirmation', source: { ...source, kind: 'PDF booking confirmation' } };
+                }
+            } catch (err) {
+                console.error(`[${AGENT}] Attachment read failed for ${bkgNo}:`, err.message);
+            }
+        }
+    }
+
+    if (!body || !body.trim()) return null;
+    const fields = await extractBookingFieldsFromText(body);
+    if (!fields || !BACKFILL_FIELDS.some((f) => fields[f])) return null;
+    if (fields.booking_number && !restatesBooking(fields.booking_number, bkgNo)) {
+        console.warn(`[${AGENT}] ${bkgNo}: ignoring mail about a different booking (${fields.booking_number})`);
+        return null;
+    }
+    // The text extractor does not report is_booking_confirmation (see the
+    // note in helpers/gemini.js). Best available proxy: the mail restates
+    // this booking number in its own text AND the subject reads like a
+    // confirmation rather than a reply.
+    const subj = source.subject;
+    const looksConfirming = /\b(booking\s*(confirmation|confirmed)|shipping\s*instruction)\b/i.test(subj)
+        && !/^\s*(re|fwd|fw)\s*:/i.test(subj);
+    const grade = (looksConfirming && restatesBooking(body, bkgNo)) ? 'confirmation' : 'mention';
+    return { fields, grade, source };
+}
+
+// Reads several candidate mails and returns the BEST evidence, not the first.
+// Returns { fields, grade, source } or null.
 async function extractFieldsFromMail(bkgNo, gmail) {
     let messages;
     try {
-        messages = await listMessages(gmail, bkgNo, 3);
+        messages = await listMessages(gmail, bkgNo, VERIFY_MAIL_CANDIDATES);
     } catch (err) {
         console.error(`[${AGENT}] Search failed for ${bkgNo}:`, err.message);
         return null;
     }
     if (!messages.length) return null;
+
+    let best = null;
     for (const m of messages) {
-        try {
-            const full = await getMessage(gmail, m.id);
-            const { body, pdfParts } = getEmailContent(full.payload);
-            let fields = null;
-            if (pdfParts && pdfParts.length) {
-                for (const part of pdfParts) {
-                    try {
-                        const att = await downloadAttachment(gmail, m.id, part);
-                        const pdfFields = await extractPdfFields(att.base64);
-                        if (pdfFields && pdfFields.is_booking_confirmation && BACKFILL_FIELDS.some((f) => pdfFields[f])) {
-                            fields = pdfFields; break;
-                        }
-                    } catch (err) {
-                        console.error(`[${AGENT}] Attachment read failed for ${bkgNo}:`, err.message);
-                    }
-                }
-            }
-            const hasAnyFromPdf = fields && BACKFILL_FIELDS.some((f) => fields[f]);
-            if (!hasAnyFromPdf && body && body.trim()) {
-                fields = await extractBookingFieldsFromText(body);
-            }
-            if (fields && BACKFILL_FIELDS.some((f) => fields[f])) return fields;
-        } catch (err) {
-            console.error(`[${AGENT}] Verify read failed for ${bkgNo}:`, err.message);
-        }
+        let got = null;
+        try { got = await readOneMailForVerify(bkgNo, gmail, m); }
+        catch (err) { console.error(`[${AGENT}] Verify read failed for ${bkgNo}:`, err.message); }
+        if (!got) continue;
+        // A confirmation ends the search; nothing outranks it.
+        if (got.grade === 'confirmation') return got;
+        if (!best) best = got;
     }
-    return null;
+    return best;
 }
 
 // One booking. Returns:
 //   { bkgNo, status: 'no_mail' }                      nothing to compare against
-//   { bkgNo, status: 'checked', mismatches, confirmed, blank }
+//   { bkgNo, status: 'checked', mismatches, confirmed, blank, weak, grade, source }
+// `weak` holds disagreements that were NOT reported as mismatches because the
+// evidence was only a passing mention. Surfaced, never silently dropped —
+// hiding them would be the same mistake in the other direction.
 async function verifyOne(bkgNo, gmail) {
     const bookings = loadBookings();
     const b = bookings[bkgNo];
     if (!b) return { bkgNo, status: 'not_found' };
-    const fields = await extractFieldsFromMail(bkgNo, gmail);
-    if (!fields) return { bkgNo, status: 'no_mail' };
+    const got = await extractFieldsFromMail(bkgNo, gmail);
+    if (!got) return { bkgNo, status: 'no_mail' };
+    const { fields, grade, source } = got;
 
-    const mismatches = [], confirmed = [], blank = [];
+    const mismatches = [], confirmed = [], blank = [], weak = [], skippedFields = [];
     for (const f of BACKFILL_FIELDS) {
-        const stored = b[f], fromMail = fields[f];
+        const stored = b[f];
+        const { value: fromMail, skipped } = mailValueFor(f, fields);
+        if (skipped) { skippedFields.push({ field: f, why: skipped }); continue; }
         if (!fromMail) continue;                       // mail says nothing — no opinion
-        if (!stored || !String(stored).trim()) { blank.push({ field: f, fromMail }); continue; }
-        if (fieldsAgree(f, stored, fromMail)) confirmed.push({ field: f, value: stored });
-        else mismatches.push({ field: f, stored, fromMail });
+        if (!stored || !String(stored).trim()) {
+            // Filling a blank from a passing mention is what backfill already
+            // does safely, so a blank is still worth reporting at any grade.
+            blank.push({ field: f, fromMail, grade });
+            continue;
+        }
+        if (fieldsAgree(f, stored, fromMail)) { confirmed.push({ field: f, value: stored }); continue; }
+        if (grade !== 'confirmation' && STRONG_EVIDENCE_ONLY.has(f)) {
+            weak.push({ field: f, stored, fromMail, source });
+            continue;
+        }
+        mismatches.push({ field: f, stored, fromMail, source });
     }
-    return { bkgNo, status: 'checked', mismatches, confirmed, blank };
+    return { bkgNo, status: 'checked', mismatches, confirmed, blank, weak, skippedFields, grade, source };
 }
 
 // Every active booking. Deliberately sequential, like run() — each booking
@@ -378,4 +496,227 @@ async function verify(bookingNumbers = null, onProgress = null) {
     return { results, total: list.length };
 }
 
-module.exports = { run, verify, verifyOne, withTimeout, VERIFY_BOOKING_TIMEOUT_MS, extractFieldsFromMail, fieldsAgree, normaliseDate, looseEqual, BACKFILL_FIELDS, FIELD_LABELS, DATE_FIELDS };
+// ── APPLY: correct a booking from the latest confirmation PDF ───────────
+// Apsara, 2026-08-22: "Check everythig erd,cuttoff,eta,etd reverify all
+// these..if there is a discrepancy,last mail about the booking with pdf-
+// modify the bookings in dashboard with updated pdf in drive"
+//
+// This is the first thing in this file that WRITES to a booking on the
+// strength of a mail, and the header above spends a paragraph explaining why
+// that was deliberately never done. She is the manager and has overruled it,
+// so it is built — but narrowly, because an unattended overwrite of a
+// hand-corrected value is the one failure here nobody would notice:
+//
+//   * SCHEDULE DATES ONLY. cutoff/ERD/ETD/ETA — the four she named. Ports,
+//     vessel, carrier, shipper, consignee are NOT touched by this, at any
+//     confidence. Those are the fields the MARTINEZ bug came from.
+//   * PDF BOOKING CONFIRMATIONS ONLY, never body text, never a "mention".
+//     "last mail about the booking with pdf" — her words, and the strongest
+//     evidence that exists.
+//   * The PDF must restate THIS booking number.
+//   * Newest wins, by the mail's own internalDate — not Gmail's result order.
+//   * If Drive already holds a PDF uploaded AFTER that mail arrived, the
+//     write is skipped. A newer document already superseded this one, and
+//     reverting to an older confirmation would be worse than doing nothing.
+//   * Every change is audit-logged old -> new and reported old -> new, so
+//     any wrong call is visible and reversible rather than silent.
+const SCHEDULE_FIELDS = ['cutoff_date', 'erd_date', 'etd', 'eta'];
+
+// Apsara, 2026-08-22, asked directly: "cutoff date means-port_cutoff_date".
+//
+// The pipeline already honours that: helpers/gemini.js runs
+// resolveCutoffDate() = port_cutoff_date || cutoff_date over BOTH extractors
+// before anything here sees the fields, so a booking's cutoff_date is
+// already the PORT cutoff. Nothing needed changing for that.
+//
+// What her answer DID expose is the fallback half of that OR. When a
+// document has no Port row, resolveCutoffDate falls back to the model's own
+// generic cutoff_date — which that prompt itself calls a "best single guess",
+// and there is a recorded incident of Gemini returning the DOC cutoff there
+// despite an explicit instruction not to.
+//
+// That was survivable while this file only ever filled blanks. It is not
+// survivable now that verify FLAGS and apply OVERWRITES: a doc cutoff
+// mistaken for a port cutoff would accuse a correct gate date of being
+// wrong, then replace it with a paperwork deadline that is typically days
+// EARLIER. The visible symptom would be a container sent to the terminal on
+// the wrong day — the exact class of error verify exists to prevent.
+//
+// So verify and apply do not accept the fallback when the document plainly
+// broke its cutoffs out by label and simply had no Port row:
+//   port_cutoff_date present                  -> trust it
+//   neither port_ nor doc_ present            -> trust the generic (a
+//                                                single-cutoff document; no
+//                                                competing label to confuse)
+//   doc_cutoff_date present, port_ missing    -> NO OPINION on cutoff. The
+//                                                generic is probably the doc
+//                                                date. Skip the field.
+// Backfill's own run() is deliberately left alone — filling a blank is a
+// different risk from overwriting a value, and changing the nightly cron is
+// not what she asked for. Flagged in the project notes instead.
+function portCutoffFromFields(fields) {
+    if (!fields) return { value: null, skipped: null };
+    if (fields.port_cutoff_date) return { value: fields.port_cutoff_date, skipped: null };
+    if (fields.doc_cutoff_date) {
+        return { value: null, skipped: 'the document lists a Doc cutoff but no Port cutoff' };
+    }
+    return { value: fields.cutoff_date || null, skipped: null };
+}
+
+// The value verify/apply should compare or write for a given field.
+function mailValueFor(field, fields) {
+    if (field !== 'cutoff_date') return { value: fields[field] || null, skipped: null };
+    return portCutoffFromFields(fields);
+}
+
+// The newest mail carrying a booking-confirmation PDF for this booking.
+// Returns { fields, pdfBase64, filename, source, when } or null.
+async function latestConfirmationPdf(bkgNo, gmail) {
+    let messages;
+    try { messages = await listMessages(gmail, bkgNo, VERIFY_MAIL_CANDIDATES); }
+    catch (err) {
+        console.error(`[${AGENT}] Search failed for ${bkgNo}:`, err.message);
+        return null;
+    }
+    const found = [];
+    for (const m of messages) {
+        try {
+            const full = await getMessage(gmail, m.id);
+            const headers = full.payload && full.payload.headers;
+            const { pdfParts } = getEmailContent(full.payload);
+            if (!pdfParts || !pdfParts.length) continue;
+            for (const part of pdfParts) {
+                const att = await downloadAttachment(gmail, m.id, part);
+                const pdfFields = await extractPdfFields(att.base64);
+                if (!pdfFields || !pdfFields.is_booking_confirmation) continue;
+                if (pdfFields.booking_number && !restatesBooking(pdfFields.booking_number, bkgNo)) continue;
+                if (!SCHEDULE_FIELDS.some((f) => pdfFields[f])) continue;
+                found.push({
+                    fields: pdfFields,
+                    pdfBase64: att.base64,
+                    filename: part.filename || `${bkgNo}.pdf`,
+                    when: Number(full.internalDate) || 0,
+                    source: {
+                        subject: headerValue(headers, 'Subject') || '(no subject)',
+                        date: headerValue(headers, 'Date') || '',
+                        kind: 'PDF booking confirmation',
+                    },
+                });
+                break;                                  // one confirmation per mail is enough
+            }
+        } catch (err) {
+            console.error(`[${AGENT}] PDF read failed for ${bkgNo}:`, err.message);
+        }
+    }
+    if (!found.length) return null;
+    // Newest by the mail's own timestamp. Gmail's result ORDER is not a
+    // contract, and "last mail" is the whole basis of her instruction.
+    found.sort((a, b) => b.when - a.when);
+    return found[0];
+}
+
+// Applies the latest confirmation PDF to one booking. Returns a record of
+// what happened — it never throws for a per-booking problem, so one bad
+// booking cannot abort an apply pass mid-way and leave half the fleet done.
+async function applyScheduleFromPdf(bkgNo, gmail) {
+    let doc;
+    try { doc = await latestConfirmationPdf(bkgNo, gmail); }
+    catch (err) { return { bkgNo, status: 'error', error: err.message }; }
+    if (!doc) return { bkgNo, status: 'no_pdf' };
+
+    const before = loadBookings()[bkgNo];
+    if (!before) return { bkgNo, status: 'not_found' };
+
+    // Drive already has something newer than this mail — do not go backwards.
+    const driveAt = before.pdf_uploaded_at ? Date.parse(before.pdf_uploaded_at) : 0;
+    if (driveAt && doc.when && driveAt > doc.when) {
+        return { bkgNo, status: 'superseded', source: doc.source };
+    }
+
+    let changed = null;
+    const skippedWrites = [];
+    await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
+        const b = all[bkgNo];
+        if (!b) return all;
+        const updates = {};
+        for (const f of SCHEDULE_FIELDS) {
+            const { value: fromPdf, skipped } = mailValueFor(f, doc.fields);
+            if (skipped) { skippedWrites.push({ field: f, why: skipped }); continue; }
+            if (!fromPdf) continue;                     // PDF silent on it — no opinion
+            if (b[f] && fieldsAgree(f, b[f], fromPdf)) continue;   // already right
+            updates[f] = { from: b[f] || '(blank)', to: fromPdf };
+        }
+        if (Object.keys(updates).length) {
+            for (const f of Object.keys(updates)) b[f] = updates[f].to;
+            b.schedule_verified_at = new Date().toISOString();
+            changed = updates;
+        }
+        return all;
+    });
+
+    let drive = 'unchanged';
+    if (changed) {
+        try {
+            await syncBookingToSheet(bkgNo);
+        } catch (err) {
+            console.error(`[${AGENT}] Sheet sync failed for ${bkgNo}:`, err.message);
+            drive = 'sheet_sync_failed';
+        }
+        try {
+            const { uploadPdfToDrive } = require('./drive');
+            const up = await uploadPdfToDrive(bkgNo, doc.pdfBase64, doc.filename);
+            const fileId = up && (up.id || up.fileId);
+            if (fileId) {
+                await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
+                    if (all[bkgNo]) {
+                        all[bkgNo].pdf_drive_id = fileId;
+                        all[bkgNo].pdf_uploaded_at = new Date().toISOString();
+                    }
+                    return all;
+                });
+            }
+            drive = 'updated';
+        } catch (err) {
+            // uploadPdfToDrive refuses to overwrite with anything that does not
+            // classify as a booking confirmation. That refusal is a feature —
+            // report it, keep the field corrections, do not unwind them.
+            console.error(`[${AGENT}] Drive update failed for ${bkgNo}:`, err.message);
+            drive = `drive_failed: ${err.message}`;
+        }
+        try {
+            await appendAuditLog({
+                source: 'verify_apply', bkgNo, intent: 'booking_corrected',
+                resolvedBy: 'manager', actionTaken: 'updated_from_confirmation_pdf',
+                fields: changed, mail: doc.source,
+            });
+        } catch (err) { console.error(`[${AGENT}] Audit log failed:`, err.message); }
+    }
+    return { bkgNo, status: changed ? 'updated' : 'already_correct', changed, skippedWrites, drive, source: doc.source };
+}
+
+// Apply pass over many bookings. Same resilience contract as verify():
+// per-booking timeout, per-booking isolation, always returns.
+async function applySchedules(bookingNumbers, onProgress = null) {
+    let gmail;
+    try { gmail = getGmailRead(); }
+    catch (err) { return { error: 'Gmail not configured', results: [] }; }
+    const list = bookingNumbers || [];
+    const results = [];
+    for (let i = 0; i < list.length; i++) {
+        const bkgNo = list[i];
+        let r;
+        try {
+            r = await withTimeout(applyScheduleFromPdf(bkgNo, gmail),
+                VERIFY_BOOKING_TIMEOUT_MS, { bkgNo, status: 'timeout' });
+        } catch (err) { r = { bkgNo, status: 'error', error: err.message }; }
+        console.log(`[${AGENT}] apply ${i + 1}/${list.length} ${bkgNo} -> ${r.status}`);
+        results.push(r);
+        if (typeof onProgress === 'function') {
+            try { await onProgress({ done: i + 1, total: list.length, result: r }); }
+            catch (e) { }
+        }
+    }
+    return { results };
+}
+
+module.exports = { run, verify, verifyOne, applySchedules, portCutoffFromFields, mailValueFor, applyScheduleFromPdf, latestConfirmationPdf, SCHEDULE_FIELDS, withTimeout, VERIFY_BOOKING_TIMEOUT_MS, extractFieldsFromMail, readOneMailForVerify, restatesBooking, STRONG_EVIDENCE_ONLY, VERIFY_MAIL_CANDIDATES, fieldsAgree, normaliseDate, looseEqual, BACKFILL_FIELDS, FIELD_LABELS, DATE_FIELDS };

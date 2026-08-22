@@ -764,6 +764,14 @@ function policyDecide(ctx) {
     // ── A. Pending action always wins — never chat-history string matching ────
     if (ctx.isManagerOrTeam && ctx.pendingAction) {
         const p = ctx.pendingAction;
+        // "apply" is the word the verify report itself tells her to use, so
+        // it has to be a yes for THAT pending. Scoped deliberately rather
+        // than added to YES — "apply" is a normal verb elsewhere ("apply the
+        // credit", "apply for the permit") and a global yes-word that fires
+        // on any open question is exactly how a wrong pending gets answered.
+        if (p.type === 'await_verify_apply' && /^\s*(apply|fix|fix them|correct|correct them|update|update them)\s*$/i.test(ctx.text)) {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
+        }
         if (YES.includes(t)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
         if (NO.includes(t))  return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
         // REAL BUG (found 2026-08-04, live): with an already-drafted
@@ -1433,6 +1441,7 @@ CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and
 "get_contact_quote" is the other shape: a quote request TO a named contact FOR something, rather than along a lane — "send a quote request to Eccomelt for junk cars". Set recipient_query and details.
 "send_pricelist_city" sends the price list for a city — set city. "learn_domain" scans a company's mail domain to learn its contacts — set term to the company word she used.
 "verify_bookings" is for CHECKING STORED DATA IS CORRECT against the original booking mail — "reverify all the bookings to check correctness of data", "recheck the booking data", "is the cutoff right", "verify DALA20928700 against the mail", "are these dates correct". It re-reads each booking's confirmation mail and reports where what we stored DISAGREES with what the mail says. It changes nothing. Set bkg_no when she names one booking; leave it null for all of them.
+Set "apply" to true ONLY if she asks in the same message for the bookings to actually be CORRECTED/UPDATED/FIXED from the mail (e.g. "reverify and update the bookings", "if there is a discrepancy modify the booking", "correct them from the latest PDF"). If she only asks to check/verify/recheck, leave apply false — she is then offered a one-word "apply" afterwards. Only the four schedule dates (cutoff, ERD, ETD, ETA) are ever auto-corrected; ports and vessel never are.
 CRITICAL — do not confuse this with "backfill_cutoffs": backfill only fills fields that are BLANK and never touches a field that already has a value, so it can never find a WRONG one. If she is asking whether existing data is right/correct/accurate, or to re-check or re-verify it, that is verify_bookings. If she is asking to fill in what is missing/blank/empty, that is backfill_cutoffs.
 "set_reminder" is for a RECURRING reminder the manager wants sent on a schedule — "send a reminder to Edge Yard group every morning to update pricelist", "remind me every Monday to check cutoffs", "tell the yard every weekday at 7am to send photos". Set: target_name = who/what group it goes to, verbatim as she said it ("Edge Yard group", "me", a trucker's name); note = the reminder text itself, i.e. what the recipient should actually read; minutes = null. Put the timing words she used ("every morning", "every day at 8am", "every Monday 9:30") into the "fact" field verbatim — the handler parses them. If she gives no time, that's fine, don't invent one; the handler defaults to 8am. This ACTUALLY WORKS — Jarvis runs a real scheduler and a persistent task queue, and the reminder survives restarts. A REAL INCIDENT (2026-08-22) is why this exists: "Send a reminder to Edge Yard group everyday morning to update pricelist" got the flatly false reply "I cannot set daily reminders. Please set this up in your calendar." NEVER say that — you can. Use "show_reminders" when she wants to see what's scheduled ("what reminders are set", "show reminders"), and "cancel_reminder" to stop one (target_name = the id or a distinctive word from it).
 You still cannot make phone calls, or do anything else deferred beyond schedule_followup, set_reminder, draft_email, search_mail, reply_email, and backfill_cutoffs. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
@@ -1512,6 +1521,7 @@ Return ONLY this JSON:
   "action": "one_of_the_actions_above",
   "confidence": 0.0,
   "bkg_no": null,
+  "apply": false,
   "supplier_name": null,
   "trucker_name": null,
   "target_name": null,
@@ -1786,7 +1796,7 @@ async function route(decision, ctx, sendMessage) {
         case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
-        case 'verify_bookings':   return actions.verifyBookings(chatId, d.bkg_no ? [String(d.bkg_no).toUpperCase()] : null);
+        case 'verify_bookings':   return actions.verifyBookings(chatId, d.bkg_no ? [String(d.bkg_no).toUpperCase()] : null, { apply: d.apply === true });
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'get_contact_quote':       return actions.startContactQuoteRequestFlow(chatId, d.recipient_query, d.details);
         case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());
@@ -1961,6 +1971,10 @@ function pendingFullReminder(p) {
     if (p.type === 'await_quote_trucker_retry') {
         return `(Still waiting — couldn't find a saved trucker named "${(p.unresolvedNames || []).join(', ')}". Reply with the correct name, or their email address, or "cancel".)`;
     }
+    if (p.type === 'await_verify_apply') {
+        const n = (p.bookings || []).length;
+        return `(Still waiting: reply *apply* and I'll correct ${n === 1 ? `${(p.bookings || [])[0]}` : `those ${n} bookings`} from the latest confirmation PDF, or "no" to leave them.)`;
+    }
     if (p.type === 'await_payment_confirm') {
         const m = `$${(Math.round((Number(p.amount) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         return `(Still waiting: a payment of ${m} looks like it arrived for ${p.inv_no}${p.source_from ? ` — from "${String(p.source_from).slice(0, 40)}"` : ''}. Record it? Reply yes or no — nothing is credited until you say yes.)`;
@@ -2091,6 +2105,7 @@ async function process(rawEvent, sendMessage) {
                 origin: ai.origin, destination: ai.destination, names_text: ai.names_text,
                 recipient_query: ai.recipient_query, details: ai.details,
                 city: ai.city, term: ai.term,
+                apply: ai.apply === true,
             },
         };
     }

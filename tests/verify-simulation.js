@@ -54,33 +54,65 @@ function installStub(modPath, exports) {
 //   'slow'      Gemini returns just in time   -> must NOT be a false timeout
 //   {fields}    Gemini returns these fields
 let MAIL = {};
+// A scenario's MAIL[bkgNo] is either a shorthand string ('hang', 'nomail',
+// 'searchdie', 'geminidie', 'slow'), a plain fields object (one body-text
+// mail), or an ARRAY of mails newest-first — a real Gmail thread, which is
+// what the MARTINEZ bug needed to be reproducible at all.
+const SHORTHAND = { hang: 'hang', geminidie: 'die', slow: 'slow' };
+function thread(q) {
+    const beh = MAIL[q];
+    if (Array.isArray(beh)) return beh;
+    if (typeof beh === 'string') return [{ text: SHORTHAND[beh] || null }];
+    return [{ text: beh || null }];
+}
+function parseId(id) { const m = id.match(/^m_(.+)_(\d+)$/); return { q: m[1], i: Number(m[2]) }; }
 let LOAD_BOOKINGS = () => ({});
 let loadCallCount = 0;
+let BRAIN_STORE = { pending_actions: {} };
+let BOOKING_STORE = {};
+let ALLOW_BOOKING_WRITES = false;
 let THROW_ON_LOAD_CALL = 0;      // make verifyOne itself explode, for status:'error'
 
 installStub('helpers/gmail', {
     getGmailRead: () => ({ fake: true }),
-    listMessages: async (_g, q) => {
+    listMessages: async (_g, q, max) => {
         const beh = MAIL[q];
         if (beh === 'searchdie') throw new Error('gmail search 500');
         if (beh === 'nomail' || beh === undefined) return [];
-        return [{ id: 'm_' + q }];
+        return thread(q).slice(0, max || 5).map((_, i) => ({ id: `m_${q}_${i}` }));
     },
-    getMessage: async (_g, id) => ({ payload: { bkg: id.slice(2) } }),
-    getEmailContent: (payload) => ({ body: 'BODY:' + payload.bkg, pdfParts: [] }),
-    downloadAttachment: async () => { throw new Error('no attachments in sim'); },
+    getMessage: async (_g, id) => {
+        const { q, i } = parseId(id);
+        const mail = thread(q)[i] || {};
+        // internalDate is what "last mail" is decided on — Gmail's result
+        // ORDER is not a contract, so the code must not depend on it.
+        return { internalDate: String(mail.when != null ? mail.when : 1000000 - i),
+                 payload: { bkg: q, idx: i, headers: [
+            { name: 'Subject', value: mail.subject || 'Re: container update' },
+            { name: 'Date', value: 'Mon, 18 Aug 2026 10:00:00 -0700' }] } };
+    },
+    getEmailContent: (payload) => {
+        const mail = thread(payload.bkg)[payload.idx] || {};
+        return { body: mail.body === '' ? '' : `BODY:${payload.bkg}:${payload.idx}`,
+                 pdfParts: mail.pdf ? [{ filename: 'booking.pdf' }] : [] };
+    },
+    downloadAttachment: async (_g, id) => ({ base64: 'PDF:' + id }),
 });
 
 installStub('helpers/gemini', {
     extractBookingFieldsFromText: async (body) => {
-        const bkg = String(body).slice(5);
-        const beh = MAIL[bkg];
-        if (beh === 'hang') return new Promise(() => { });          // never resolves
-        if (beh === 'geminidie') throw new Error('gemini 429');
-        if (beh === 'slow') { await new Promise((r) => setTimeout(r, 40)); return { cutoff_date: '08/21/2026' }; }
-        return beh || null;
+        const m = String(body).match(/^BODY:(.+):(\d+)$/);
+        const q = m[1], i = Number(m[2]);
+        const mail = thread(q)[i] || {};
+        if (mail.text === 'hang') return new Promise(() => { });
+        if (mail.text === 'die') throw new Error('gemini 429');
+        if (mail.text === 'slow') { await new Promise((r) => setTimeout(r, 40)); return { cutoff_date: '08/28/2026' }; }
+        return mail.text || null;
     },
-    extractPdfFields: async () => null,
+    extractPdfFields: async (b64) => {
+        const m = String(b64).match(/^PDF:m_(.+)_(\d+)$/);
+        return (thread(m[1])[Number(m[2])] || {}).pdf || null;
+    },
 });
 
 installStub('helpers/json', {
@@ -89,11 +121,37 @@ installStub('helpers/json', {
         if (THROW_ON_LOAD_CALL && loadCallCount === THROW_ON_LOAD_CALL) throw new Error('booking store unreadable');
         return LOAD_BOOKINGS();
     },
-    mutateJson: () => { throw new Error('verify must never write'); },
+    // The CHECK must never write to bookings — if it does, this throws.
+    // The apply path is exercised separately, where writes are the point.
+    mutateJson: async (file, _d, fn) => {
+        if (String(file).includes('booking')) {
+            if (!ALLOW_BOOKING_WRITES) throw new Error('the verify check must never write to bookings');
+            BOOKING_STORE = fn(BOOKING_STORE) || BOOKING_STORE;
+            return BOOKING_STORE;
+        }
+        BRAIN_STORE = fn(BRAIN_STORE) || BRAIN_STORE;
+        return BRAIN_STORE;
+    },
+    // pending state lives in the brain store, which setPending reads/writes
+    loadBrain: () => BRAIN_STORE,
+    saveBrain: (v) => { BRAIN_STORE = v; },
+    mutateBrain: async (fn) => { BRAIN_STORE = fn(BRAIN_STORE) || BRAIN_STORE; return BRAIN_STORE; },
+    updateWorkflow: async () => { }, archiveBooking: async () => { }, addFact: async () => { },
     loadJson: () => ({}), saveJson: () => { },
 });
-installStub('helpers/auditlog', { appendAuditLog: () => { } });
-installStub('helpers/bookingTracker', { syncBookingToSheet: () => { } });
+let DRIVE = { uploads: [], fail: null };
+installStub('helpers/drive', {
+    uploadPdfToDrive: async (bkgNo, b64, name) => {
+        if (DRIVE.fail) { const e = new Error(DRIVE.fail); e.code = 'NOT_A_BOOKING_CONFIRMATION'; throw e; }
+        DRIVE.uploads.push({ bkgNo, name });
+        return { id: 'drivefile_' + bkgNo };
+    },
+    findPdfByBooking: async () => null,
+});
+installStub('helpers/bookingTracker', { syncBookingToSheet: async () => { SHEET_SYNCS.push(1); } });
+let SHEET_SYNCS = [];
+installStub('helpers/auditlog', { appendAuditLog: async (e) => { AUDIT.push(e); } });
+let AUDIT = [];
 
 // ── the driver ───────────────────────────────────────────────────────────
 const actions = require(R('workflow/actions.js'));
@@ -105,6 +163,8 @@ async function runVerify({ bookings = {}, mail = {}, timeoutMs = 120,
     LOAD_BOOKINGS = () => JSON.parse(JSON.stringify(bookings));
     loadCallCount = 0;
     THROW_ON_LOAD_CALL = throwOnLoadCall;
+    BRAIN_STORE = { pending_actions: {} };
+    BOOKING_STORE = JSON.parse(JSON.stringify(bookings));
     process.env.JARVIS_VERIFY_TIMEOUT_MS = String(timeoutMs);
     delete require.cache[require.resolve(R('helpers/cutoffBackfill.js'))];
 
@@ -122,6 +182,26 @@ async function runVerify({ bookings = {}, mail = {}, timeoutMs = 120,
     try { ret = await actions.verifyBookings('sim@chat', bookingNumbers); }
     catch (err) { threw = err; }
     return { sent, ret, threw, ms: Date.now() - t0, all: sent.join('\n') };
+}
+
+// Drives the real applyVerifiedSchedules and returns what changed on disk.
+async function runApply({ bookings, mail, list, driveFail = null, timeoutMs = 2000 }) {
+    MAIL = mail;
+    LOAD_BOOKINGS = () => JSON.parse(JSON.stringify(BOOKING_STORE));
+    BOOKING_STORE = JSON.parse(JSON.stringify(bookings));
+    BRAIN_STORE = { pending_actions: {} };
+    ALLOW_BOOKING_WRITES = true;
+    DRIVE = { uploads: [], fail: driveFail };
+    SHEET_SYNCS = []; AUDIT = [];
+    process.env.JARVIS_VERIFY_TIMEOUT_MS = String(timeoutMs);
+    delete require.cache[require.resolve(R('helpers/cutoffBackfill.js'))];
+    const sent = [];
+    actions.init({ sendMessage: async (_c, t) => sent.push(String(t)), sendToManager: async () => { }, sendToTeam: async () => { }, pushAlert: () => { } });
+    let ret, threw = null;
+    try { ret = await actions.applyVerifiedSchedules('sim@chat', list); }
+    catch (err) { threw = err; }
+    ALLOW_BOOKING_WRITES = false;
+    return { sent, ret, threw, all: sent.join('\n'), store: BOOKING_STORE, drive: DRIVE, audit: AUDIT, syncs: SHEET_SYNCS.length };
 }
 
 // The single invariant every scenario is measured against.
@@ -327,6 +407,332 @@ const B = (extra = {}) => ({ cutoff_date: '08/21/2026', erd_date: '08/18/2026', 
         assertAlwaysSpeaks('read-only', out);
         ckTrue('read-only: a mismatch is reported, not silently corrected',
             /WRONG/.test(out.all) && /Nothing was changed/i.test(out.all));
+    }
+
+    section('13. THE MARTINEZ BUG — a stray reply must not accuse correct data');
+    // Apsara, 2026-08-22, on a live report:
+    //   "what the hell   DALA20928700 — POL
+    //      stored: LOS ANGELES / mail: MARTINEZ"
+    // Gmail returns NEWEST FIRST. The old reader took the first of the three
+    // most recent mails that yielded any field — so a chatty reply outranked
+    // the actual booking confirmation, and the body-text path never checked
+    // whether the mail was a confirmation at all.
+    const CONFIRM_PDF = {
+        is_booking_confirmation: true, booking_number: 'DALA20928700',
+        port_of_loading: 'LOS ANGELES', cutoff_date: '08/28/2026', erd_date: '08/25/2026',
+    };
+    const STORED = { port_of_loading: 'LOS ANGELES', cutoff_date: '08/28/2026', erd_date: '08/25/2026' };
+    {
+        // newest-first thread: chatty reply, THEN the real confirmation
+        const out = await runVerify({
+            bookings: { DALA20928700: { ...STORED } },
+            mail: {
+                DALA20928700: [
+                    { subject: 'Re: DALA20928700 pickup', text: { port_of_loading: 'MARTINEZ' } },
+                    { subject: 'Booking Confirmation DALA20928700', pdf: CONFIRM_PDF },
+                ],
+            },
+        });
+        assertAlwaysSpeaks('martinez', out);
+        ckTrue('martinez: a stray reply does NOT produce a POL disagreement',
+            !/MARTINEZ/.test(out.all) || !/disagree with the mail/.test(out.all.split('MARTINEZ')[0]),
+            'accusing correct data of being wrong is how the whole report loses its credibility');
+        ckTrue('martinez: the confirmation PDF is what got used',
+            /No disagreements/i.test(out.all) && !/MARTINEZ/.test(out.all),
+            'stored data matches the confirmation, so the report should be clean and never mention the stray value');
+        ck('martinez: nothing flagged', out.ret.mismatches, 0);
+    }
+    {
+        // the reply is the ONLY mail — no confirmation anywhere
+        const out = await runVerify({
+            bookings: { DALA20928700: { ...STORED } },
+            mail: { DALA20928700: [{ subject: 'Re: DALA20928700 pickup', text: { port_of_loading: 'MARTINEZ' } }] },
+        });
+        assertAlwaysSpeaks('martinez-only-mention', out);
+        ck('martinez-only-mention: still not flagged as a disagreement', out.ret.mismatches, 0);
+        ckTrue('martinez-only-mention: but it IS surfaced, not swallowed',
+            /passing mention/i.test(out.all) && /MARTINEZ/.test(out.all),
+            'hiding it would be the same bug in reverse — a real error could be in there');
+    }
+    {
+        // a REAL port change, stated by a real confirmation — must still flag
+        const out = await runVerify({
+            bookings: { DALA20928700: { ...STORED, port_of_loading: 'LOS ANGELES' } },
+            mail: {
+                DALA20928700: [{
+                    subject: 'Booking Confirmation DALA20928700',
+                    pdf: { ...CONFIRM_PDF, port_of_loading: 'LONG BEACH' },
+                }],
+            },
+        });
+        assertAlwaysSpeaks('real-port-change', out);
+        ck('real-port-change: a confirmation CAN still flag a port', out.ret.mismatches, 1);
+        ckTrue('real-port-change: it names the port from the confirmation', /LONG BEACH/.test(out.all));
+        ckTrue('real-port-change: and says which mail said so',
+            /from:\s+confirmation PDF/.test(out.all), 'an unfalsifiable claim is not actionable');
+    }
+    {
+        // dates are restated consistently in threads, so a plain mail may flag one
+        const out = await runVerify({
+            bookings: { B1: { cutoff_date: '08/21/2026' } },
+            mail: { B1: [{ subject: 'Re: B1 schedule', text: { cutoff_date: '08/28/2026' } }] },
+        });
+        assertAlwaysSpeaks('date-from-mention', out);
+        ck('date-from-mention: a date mismatch is still reported from ordinary mail',
+            out.ret.mismatches, 1,
+            'over-correcting would make verify useless — dates are the whole point of it');
+    }
+    {
+        // a confirmation for a DIFFERENT booking must be ignored outright
+        const out = await runVerify({
+            bookings: { MINE111: { port_of_loading: 'LOS ANGELES' } },
+            mail: {
+                MINE111: [{
+                    subject: 'Booking Confirmation OTHER999',
+                    pdf: { is_booking_confirmation: true, booking_number: 'OTHER999', port_of_loading: 'OAKLAND' },
+                }],
+            },
+        });
+        assertAlwaysSpeaks('wrong-booking-doc', out);
+        ck('wrong-booking-doc: another booking\'s confirmation is never used', out.ret.mismatches, 0);
+        ckTrue('wrong-booking-doc: and OAKLAND never appears as a claim', !/OAKLAND/.test(out.all));
+    }
+    {
+        // the confirmation is buried BELOW newer chatter — order must not decide
+        const out = await runVerify({
+            bookings: { DEEP1: { cutoff_date: '08/28/2026', port_of_loading: 'LOS ANGELES' } },
+            mail: {
+                DEEP1: [
+                    { subject: 'Re: DEEP1', text: { port_of_loading: 'MARTINEZ' } },
+                    { subject: 'Fwd: DEEP1 trucking', text: { port_of_loading: 'STOCKTON' } },
+                    { subject: 'Booking Confirmation DEEP1',
+                      pdf: { is_booking_confirmation: true, booking_number: 'DEEP1',
+                             cutoff_date: '08/28/2026', port_of_loading: 'LOS ANGELES' } },
+                ],
+            },
+        });
+        assertAlwaysSpeaks('buried-confirmation', out);
+        ck('buried-confirmation: the confirmation wins over two newer replies', out.ret.mismatches, 0);
+        ckTrue('buried-confirmation: neither stray port is claimed',
+            !/STOCKTON/.test(out.all) || /passing mention/i.test(out.all));
+    }
+    {
+        // blanks: a mention is still good enough to SUGGEST filling a blank
+        const out = await runVerify({
+            bookings: { BLANKY: { cutoff_date: '', port_of_loading: '' } },
+            mail: { BLANKY: [{ subject: 'Re: BLANKY', text: { cutoff_date: '08/28/2026', port_of_loading: 'LOS ANGELES' } }] },
+        });
+        assertAlwaysSpeaks('blank-from-mention', out);
+        ckTrue('blank-from-mention: blanks are still reported at mention grade',
+            /Blank here/i.test(out.all) && /08\/28\/2026/.test(out.all),
+            'backfill already fills blanks from ordinary mail safely — verify should still point them out');
+    }
+
+    section('14. APPLY — "modify the bookings with the updated pdf in drive"');
+    // Apsara, 2026-08-22: "Check everythig erd,cuttoff,eta,etd reverify all
+    // these..if there is a discrepancy,last mail about the booking with pdf-
+    // modify the bookings in dashboard with updated pdf in drive"
+    // This is the first path in this repo that rewrites live booking data
+    // from a mail, so every one of these is about what it must NOT do.
+    const pdfDoc = (bkg, extra = {}) => ({
+        is_booking_confirmation: true, booking_number: bkg,
+        cutoff_date: '09/04/2026', erd_date: '09/01/2026', etd: '09/06/2026', eta: '09/28/2026',
+        ...extra,
+    });
+    {
+        const out = await runApply({
+            bookings: { A1: { cutoff_date: '08/28/2026', erd_date: '08/25/2026', port_of_loading: 'LOS ANGELES' } },
+            mail: { A1: [{ subject: 'Booking Confirmation A1', pdf: pdfDoc('A1', { port_of_loading: 'MARTINEZ' }) }] },
+            list: ['A1'],
+        });
+        ckTrue('apply: it does not crash', !out.threw, out.threw && out.threw.message);
+        ck('apply: the cutoff is corrected', out.store.A1.cutoff_date, '09/04/2026');
+        ck('apply: the ERD is corrected', out.store.A1.erd_date, '09/01/2026');
+        ck('apply: ETD is filled from the PDF', out.store.A1.etd, '09/06/2026');
+        ck('apply: POL is NOT touched, even by a real confirmation',
+            out.store.A1.port_of_loading, 'LOS ANGELES',
+            'ports are excluded from auto-correction on purpose — MARTINEZ');
+        ckTrue('apply: the report shows old -> new', /08\/28\/2026 → 09\/04\/2026/.test(out.all),
+            'a silent change to a cutoff is unreviewable');
+        ck('apply: the PDF went to Drive', out.drive.uploads.length, 1);
+        ck('apply: the tracker sheet was synced', out.syncs, 1);
+        ck('apply: it was audit-logged', out.audit.length, 1);
+        ckTrue('apply: the audit log keeps the old value',
+            JSON.stringify(out.audit[0]).includes('08/28/2026'), 'without the old value it is not reversible');
+        ckTrue('apply: pdf_drive_id is recorded on the booking', !!out.store.A1.pdf_drive_id);
+    }
+    {
+        // Drive already holds something NEWER — correcting from an old mail
+        // would walk the data backwards.
+        const out = await runApply({
+            bookings: { A2: { cutoff_date: '09/10/2026', pdf_uploaded_at: '2026-08-20T00:00:00Z' } },
+            mail: { A2: [{ subject: 'Booking Confirmation A2', pdf: pdfDoc('A2') }] },
+            list: ['A2'],
+        });
+        ck('apply: an older mail cannot revert a newer Drive PDF', out.store.A2.cutoff_date, '09/10/2026');
+        ckTrue('apply: and it says why', /newer than that mail|Skipped/i.test(out.all));
+        ck('apply: nothing was uploaded', out.drive.uploads.length, 0);
+    }
+    {
+        // No PDF anywhere — body text must never be enough to write.
+        const out = await runApply({
+            bookings: { A3: { cutoff_date: '08/28/2026' } },
+            mail: { A3: [{ subject: 'Re: A3 schedule', text: { cutoff_date: '09/04/2026' } }] },
+            list: ['A3'],
+        });
+        ck('apply: body text alone NEVER rewrites a booking', out.store.A3.cutoff_date, '08/28/2026',
+            'she said "last mail with pdf" — a chatty reply is not evidence enough to write');
+        ckTrue('apply: it reports finding no confirmation PDF', /No confirmation PDF/i.test(out.all));
+    }
+    {
+        // A confirmation for someone else's booking.
+        const out = await runApply({
+            bookings: { A4: { cutoff_date: '08/28/2026' } },
+            mail: { A4: [{ subject: 'Booking Confirmation OTHER', pdf: pdfDoc('OTHER999') }] },
+            list: ['A4'],
+        });
+        ck('apply: another booking\'s PDF never writes', out.store.A4.cutoff_date, '08/28/2026');
+    }
+    {
+        // Newest PDF wins, not Gmail's ordering luck.
+        const out = await runApply({
+            bookings: { A5: { cutoff_date: '08/01/2026' } },
+            mail: {
+                A5: [
+                    { subject: 'Booking Confirmation A5 (old)', pdf: pdfDoc('A5', { cutoff_date: '08/10/2026' }), when: 1 },
+                    { subject: 'Booking Confirmation A5 (new)', pdf: pdfDoc('A5', { cutoff_date: '09/04/2026' }), when: 999 },
+                ],
+            },
+            list: ['A5'],
+        });
+        ck('apply: the LAST confirmation wins, by mail date', out.store.A5.cutoff_date, '09/04/2026',
+            'her words were "last mail about the booking with pdf"');
+    }
+    {
+        // Drive refuses the overwrite (its own classification guard).
+        const out = await runApply({
+            bookings: { A6: { cutoff_date: '08/28/2026' } },
+            mail: { A6: [{ subject: 'Booking Confirmation A6', pdf: pdfDoc('A6') }] },
+            list: ['A6'], driveFail: 'looks like an arrival notice',
+        });
+        ck('apply: a Drive failure does not roll back the field fix', out.store.A6.cutoff_date, '09/04/2026');
+        ckTrue('apply: and the Drive failure is reported, not hidden',
+            /Drive NOT updated/i.test(out.all));
+        ckTrue('apply: it still does not crash', !out.threw);
+    }
+    {
+        // Already correct — no write, no upload, no noise.
+        const out = await runApply({
+            bookings: { A7: { cutoff_date: '09/04/2026', erd_date: '09/01/2026', etd: '09/06/2026', eta: '09/28/2026' } },
+            mail: { A7: [{ subject: 'Booking Confirmation A7', pdf: pdfDoc('A7') }] },
+            list: ['A7'],
+        });
+        ck('apply: an already-correct booking is not rewritten', out.drive.uploads.length, 0);
+        ck('apply: and nothing is audit-logged', out.audit.length, 0);
+        ckTrue('apply: it says they matched', /already matched/i.test(out.all));
+    }
+    {
+        // One bad booking must not abort the rest.
+        const out = await runApply({
+            bookings: { B1: { cutoff_date: '08/28/2026' }, B2: { cutoff_date: '08/28/2026' } },
+            mail: { B1: 'nomail', B2: [{ subject: 'Booking Confirmation B2', pdf: pdfDoc('B2') }] },
+            list: ['B1', 'B2'],
+        });
+        ck('apply: a booking with no mail does not stop the others', out.store.B2.cutoff_date, '09/04/2026');
+        ckTrue('apply: always ends with a report', out.sent.length >= 2);
+    }
+
+    section('15. The brake — a check never writes unless she says apply');
+    {
+        const out = await runVerify({
+            bookings: { C1: { cutoff_date: '08/21/2026' } },
+            mail: { C1: [{ subject: 'Re: C1', text: { cutoff_date: '08/28/2026' } }] },
+        });
+        ckTrue('brake: a plain verify writes nothing', true,
+            'the json stub throws on any booking write during a check — reaching here proves it');
+        ckTrue('brake: it offers the one-word apply', /Say \*apply\*/.test(out.all));
+        ck('brake: and stages a pending so "apply" is understood',
+            BRAIN_STORE.pending_actions['sim@chat']?.type, 'await_verify_apply');
+        ck('brake: the pending remembers which bookings',
+            BRAIN_STORE.pending_actions['sim@chat']?.bookings, ['C1']);
+    }
+    {
+        // no date discrepancy -> no offer, no pending
+        const out = await runVerify({
+            bookings: { C2: { cutoff_date: '08/28/2026' } },
+            mail: { C2: [{ subject: 'Re: C2', text: { cutoff_date: '08/28/2026' } }] },
+        });
+        ckTrue('brake: nothing to fix means no apply offer', !/Say \*apply\*/.test(out.all));
+        ck('brake: and no pending is left hanging',
+            BRAIN_STORE.pending_actions['sim@chat'], undefined);
+    }
+    {
+        // a port-only disagreement is NOT offered for auto-correction
+        const out = await runVerify({
+            bookings: { C3: { port_of_loading: 'LOS ANGELES' } },
+            mail: { C3: [{ subject: 'Booking Confirmation C3', pdf: { is_booking_confirmation: true, booking_number: 'C3', port_of_loading: 'LONG BEACH' } }] },
+        });
+        ckTrue('brake: a port mismatch is reported but never offered for auto-fix',
+            /LONG BEACH/.test(out.all) && !/Say \*apply\*/.test(out.all),
+            'only the four schedule dates are auto-correctable');
+    }
+
+    section('16. "cutoff date means-port_cutoff_date" — and the fallback hole it exposed');
+    // Her answer, 2026-08-22. The pipeline already resolved port_cutoff_date
+    // into cutoff_date (helpers/gemini.js resolveCutoffDate), so nothing had
+    // to change for the answer itself. What it exposed: the OR-fallback to
+    // the model's generic guess. Harmless while this only filled blanks;
+    // dangerous now that it overwrites, because a doc cutoff is typically
+    // DAYS EARLIER than the port cutoff.
+    const cbm = require(R('helpers/cutoffBackfill.js'));
+    ck('a Port row is what cutoff means', cbm.portCutoffFromFields(
+        { port_cutoff_date: '09/04/2026', cutoff_date: '09/01/2026', doc_cutoff_date: '09/01/2026' }).value,
+        '09/04/2026');
+    ck('a single-cutoff document is still usable', cbm.portCutoffFromFields({ cutoff_date: '09/04/2026' }).value,
+        '09/04/2026');
+    ck('a Doc row with no Port row yields NO cutoff opinion',
+        cbm.portCutoffFromFields({ cutoff_date: '09/01/2026', doc_cutoff_date: '09/01/2026' }).value, null,
+        'guessing here means sending a container to the terminal days early');
+    ck('the other three dates are unaffected by the cutoff rule',
+        cbm.mailValueFor('erd_date', { erd_date: '09/01/2026', doc_cutoff_date: '09/01/2026' }).value, '09/01/2026');
+    {
+        // apply must not overwrite a correct port cutoff with a doc cutoff
+        const out = await runApply({
+            bookings: { D1: { cutoff_date: '09/04/2026', erd_date: '08/01/2026' } },
+            mail: { D1: [{ subject: 'Booking Confirmation D1', pdf: {
+                is_booking_confirmation: true, booking_number: 'D1',
+                cutoff_date: '09/01/2026', doc_cutoff_date: '09/01/2026', erd_date: '09/01/2026' } }] },
+            list: ['D1'],
+        });
+        ck('apply: a doc cutoff never overwrites the port cutoff', out.store.D1.cutoff_date, '09/04/2026');
+        ck('apply: but the ERD on the same PDF is still corrected', out.store.D1.erd_date, '09/01/2026');
+        ckTrue('apply: and it says the cutoff was left alone', /Cutoff left alone/i.test(out.all),
+            'silently skipping a field reads identically to checking it and finding it fine');
+    }
+    {
+        // verify must not FLAG a correct port cutoff off a doc-only document
+        const out = await runVerify({
+            bookings: { D2: { cutoff_date: '09/04/2026' } },
+            mail: { D2: [{ subject: 'Booking Confirmation D2', pdf: {
+                is_booking_confirmation: true, booking_number: 'D2',
+                cutoff_date: '09/01/2026', doc_cutoff_date: '09/01/2026' } }] },
+        });
+        ck('verify: a doc-only document raises no cutoff disagreement', out.ret.mismatches, 0);
+        ckTrue('verify: and it reports that the cutoff went unchecked',
+            /Cutoff not checked/i.test(out.all));
+        ckTrue('verify: so it is not offered for auto-fix either', !/Say \*apply\*/.test(out.all));
+    }
+    {
+        // a REAL port cutoff change must still flag and still apply
+        const out = await runApply({
+            bookings: { D3: { cutoff_date: '08/28/2026' } },
+            mail: { D3: [{ subject: 'Booking Confirmation D3', pdf: {
+                is_booking_confirmation: true, booking_number: 'D3',
+                port_cutoff_date: '09/04/2026', doc_cutoff_date: '09/01/2026', cutoff_date: '09/04/2026' } }] },
+            list: ['D3'],
+        });
+        ck('apply: a real Port-row change is still applied', out.store.D3.cutoff_date, '09/04/2026',
+            'over-correcting would make the whole feature useless');
     }
 
     console.log(`\n${'='.repeat(64)}`);

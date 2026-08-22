@@ -1060,6 +1060,21 @@ switch (pending.type) {
         }
     }
 
+    // "apply" after a verify report that found schedule-date discrepancies.
+    // The report itself never writes; this answer is the only thing that
+    // rewrites live booking data from a mail. Same posture as
+    // await_payment_confirm above and for the same reason: the wrong outcome
+    // here is SILENT — a corrected cutoff quietly reverting to a stale one
+    // would only surface when a container missed the gate.
+    case 'await_verify_apply': {
+        await clearPending(chatId);
+        if (answer === 'no') {
+            await _send(chatId, 'Left them as they are — nothing was changed.');
+            return { action_taken: 'booking_apply_declined' };
+        }
+        return applyVerifiedSchedules(chatId, pending.bookings || []);
+    }
+
     // Picked one of the ambiguous address-book matches shown for the quote
     // request's origin or destination — same options/matches pattern as
     // await_contact_disambiguation above. Resumes continueQuoteFlow with
@@ -3177,8 +3192,8 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
 //
 // Reports only; never writes. See helpers/cutoffBackfill.js's verify() header
 // for why overwriting an existing value unattended is the wrong call.
-async function verifyBookings(chatId, bookingNumbers) {
-    const { verify, FIELD_LABELS } = require('../helpers/cutoffBackfill');
+async function verifyBookings(chatId, bookingNumbers, opts = {}) {
+    const { verify, FIELD_LABELS, SCHEDULE_FIELDS } = require('../helpers/cutoffBackfill');
     const scope = bookingNumbers && bookingNumbers.length ? `${bookingNumbers.length} booking(s)` : 'every active booking';
     // Every send in this function goes through say(). Found by simulation
     // 2026-08-22: a WhatsApp send that throws (client reconnecting, rate
@@ -3228,6 +3243,17 @@ async function verifyBookings(chatId, bookingNumbers) {
     const confirmedCount = checked.reduce((n, r) => n + r.confirmed.length, 0);
     const blanks = checked.filter((r) => r.blank.length);
 
+    // Provenance on every claim. Apsara, 2026-08-22, on "POL stored: LOS
+    // ANGELES / mail: MARTINEZ": a bare "the mail says X" is unfalsifiable —
+    // she cannot tell a real disagreement from a stray line in a reply
+    // without being told WHICH mail said it. Naming the source makes a bad
+    // line self-evidently bad instead of just wrong.
+    const srcNote = (m) => {
+        if (!m.source) return '';
+        const subj = String(m.source.subject || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+        const kind = m.source.kind === 'PDF booking confirmation' ? 'confirmation PDF' : 'mail';
+        return `   from:   ${kind} — "${subj}"`;
+    };
     const lines = [];
     if (withMismatch.length) {
         lines.push(`*${withMismatch.length} booking(s) disagree with the mail:*`);
@@ -3236,6 +3262,8 @@ async function verifyBookings(chatId, bookingNumbers) {
                 lines.push(`• ${r.bkgNo} — ${FIELD_LABELS[m.field] || m.field}`);
                 lines.push(`   stored: ${m.stored}`);
                 lines.push(`   mail:   ${m.fromMail}`);
+                const note = srcNote(m);
+                if (note) lines.push(note);
             }
         }
         lines.push('');
@@ -3255,6 +3283,30 @@ async function verifyBookings(chatId, bookingNumbers) {
         lines.push('');
         lines.push(`*Couldn't check ${noMail.length}* — no booking mail found: ${noMail.map((r) => r.bkgNo).join(', ')}`);
     }
+    // A cutoff verify refused to judge because the document had a Doc row and
+    // no Port row. Saying nothing would read as "cutoff checked, fine".
+    const skippedCutoff = checked.filter((r) => (r.skippedFields || []).length);
+    if (skippedCutoff.length) {
+        lines.push('');
+        lines.push(`*Cutoff not checked on ${skippedCutoff.length} booking(s)* — ${skippedCutoff[0].skippedFields[0].why}, so I can't tell the port cutoff from the paperwork one: ${skippedCutoff.map((r) => r.bkgNo).join(', ')}`);
+    }
+
+    // Disagreements that were downgraded because the only evidence was a
+    // passing mention in a thread mail, not a booking confirmation. Shown,
+    // never dropped — a real error hiding in here is still a real error, and
+    // silently swallowing it would just be the MARTINEZ bug in reverse.
+    const weakOnes = checked.filter((r) => (r.weak || []).length);
+    if (weakOnes.length) {
+        lines.push('');
+        lines.push('*Not flagged — only a passing mention, no booking confirmation to back it:*');
+        for (const r of weakOnes) {
+            for (const w of r.weak) {
+                lines.push(`• ${r.bkgNo} — ${FIELD_LABELS[w.field] || w.field}: stored ${w.stored}, a mail said ${w.fromMail}`);
+            }
+        }
+        lines.push('(Ports and vessel names get mentioned in passing all the time, so I won\'t call stored data wrong on that alone.)');
+    }
+
     // A booking that timed out or errored is NOT the same as one that matched.
     // Saying nothing about it would quietly report a clean bill of health for
     // data nobody actually looked at.
@@ -3268,9 +3320,101 @@ async function verifyBookings(chatId, bookingNumbers) {
     // If even the report cannot be delivered, log loudly and still return a
     // clean outcome — throwing here would take the brain down with it and
     // lose the fact that the work was actually done.
+    // Apsara, 2026-08-22: "if there is a discrepancy, last mail about the
+    // booking with pdf - modify the bookings in dashboard with updated pdf in
+    // drive." Only the four schedule dates she named are auto-correctable —
+    // ports and vessel are excluded on purpose (that is where MARTINEZ came
+    // from). Anything else stays report-only.
+    const SCHED = new Set(SCHEDULE_FIELDS);
+    const fixable = withMismatch
+        .filter((r) => r.mismatches.some((m) => SCHED.has(m.field)))
+        .map((r) => r.bkgNo);
+
+    if (fixable.length && !opts.apply) {
+        // A brake, deliberately. Applying rewrites live booking data from a
+        // mail; doing that unprompted on a scheduled run is how a manual
+        // correction disappears with nobody watching. One word turns it on.
+        lines.push('');
+        lines.push(`Say *apply* and I'll correct ${fixable.length === 1 ? 'that booking' : `those ${fixable.length} bookings`} from the latest confirmation PDF, and put that PDF in Drive.`);
+    }
+
     const delivered = await say(lines.join('\n'));
     if (!delivered) console.error('[ACTIONS] verify report UNDELIVERED:', lines.join(' | '));
-    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length, stalled: stalled.length, delivered, undelivered };
+
+    if (fixable.length && !opts.apply) {
+        await setPending(chatId, { type: 'await_verify_apply', bookings: fixable });
+    }
+
+    let applied = null;
+    if (fixable.length && opts.apply) applied = await applyVerifiedSchedules(chatId, fixable);
+
+    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length,
+        stalled: stalled.length, delivered, undelivered, fixable: fixable.length, applied };
+}
+
+// Corrects bookings from their latest confirmation PDF and reports every
+// change old -> new. Split out from verifyBookings so the "apply" answer to
+// a pending can call it directly without re-running the whole verification.
+async function applyVerifiedSchedules(chatId, bookingNumbers) {
+    const { applySchedules, FIELD_LABELS } = require('../helpers/cutoffBackfill');
+    const say = async (text) => {
+        try { await _send(chatId, text); return true; }
+        catch (err) { console.error('[ACTIONS] apply send failed:', err.message); return false; }
+    };
+    await say(`Correcting ${bookingNumbers.length} booking(s) from the latest confirmation PDF...`);
+    let out;
+    try { out = await applySchedules(bookingNumbers); }
+    catch (err) {
+        console.error('[ACTIONS] applyVerifiedSchedules failed:', err.message);
+        await say(`Couldn't apply the corrections: ${err.message}`);
+        return { action_taken: 'booking_apply_failed' };
+    }
+    if (out.error) {
+        await say(`Can't apply: ${out.error}.`);
+        return { action_taken: 'booking_apply_failed' };
+    }
+    const results = out.results || [];
+    const updated = results.filter((r) => r.status === 'updated');
+    const noPdf = results.filter((r) => r.status === 'no_pdf');
+    const superseded = results.filter((r) => r.status === 'superseded');
+    const fine = results.filter((r) => r.status === 'already_correct');
+    const bad = results.filter((r) => ['timeout', 'error', 'not_found'].includes(r.status));
+
+    const lines = [];
+    if (updated.length) {
+        lines.push(`*Updated ${updated.length} booking(s):*`);
+        for (const r of updated) {
+            lines.push(`• ${r.bkgNo}`);
+            for (const [f, ch] of Object.entries(r.changed || {})) {
+                lines.push(`   ${FIELD_LABELS[f] || f}: ${ch.from} → ${ch.to}`);
+            }
+            for (const sk of r.skippedWrites || []) {
+                lines.push(`   Cutoff left alone — ${sk.why}.`);
+            }
+            if (r.drive === 'updated') lines.push('   PDF in Drive replaced with the newer confirmation.');
+            else if (String(r.drive).startsWith('drive_failed')) lines.push(`   Drive NOT updated — ${String(r.drive).replace('drive_failed: ', '')}`);
+            else if (r.drive === 'sheet_sync_failed') lines.push('   Booking updated, but the tracker sheet did not sync.');
+            lines.push(`   source: "${String(r.source?.subject || '').slice(0, 60)}"`);
+        }
+        lines.push('');
+        lines.push('The dashboard shows these already. Tell me if any of it is wrong and I\'ll put it back.');
+    }
+    if (fine.length) lines.push(`${fine.length} already matched the confirmation — left alone.`);
+    if (superseded.length) {
+        lines.push('');
+        lines.push(`*Skipped ${superseded.length}* — Drive already holds a PDF newer than that mail, so correcting from it would go backwards: ${superseded.map((r) => r.bkgNo).join(', ')}`);
+    }
+    if (noPdf.length) {
+        lines.push('');
+        lines.push(`*No confirmation PDF found* for ${noPdf.map((r) => r.bkgNo).join(', ')} — nothing solid enough to correct from, so they were left as they are.`);
+    }
+    if (bad.length) {
+        lines.push('');
+        lines.push(`*Couldn't process ${bad.length}*: ${bad.map((r) => r.bkgNo).join(', ')}`);
+    }
+    if (!lines.length) lines.push('Nothing needed correcting.');
+    await say(lines.join('\n'));
+    return { action_taken: 'booking_apply_done', updated: updated.length, skipped: superseded.length + noPdf.length };
 }
 
 async function backfillCutoffs(chatId) {
@@ -4564,6 +4708,7 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
     lookupAddress, sendMessageTo,
     showReceivables, recordPayment, showOrphanPayments, setReceivablesStart, trackOldInvoiceCmd,
 verifyBookings,
+applyVerifiedSchedules,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
 };
