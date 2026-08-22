@@ -130,43 +130,14 @@ async function createSheet(drive) {
     return res.data.id;
 }
 
+// Delegates to the generic ensureTab below (same logic this function used
+// to inline itself, now shared) — kept as its own named function since
+// getOrCreateSpreadsheetId() below already calls it by name, and other
+// files may too. Behavior is unchanged: create-or-find the Proforma tab,
+// write its header if blank. ensureTab additionally applies header
+// formatting (bold/shaded/frozen row) — see that function's comment.
 async function ensureProformaTab(sheets, spreadsheetId) {
-    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
-    const sheetsList = meta.data.sheets || [];
-    const tab = sheetsList.find((s) => s.properties.title === TAB_NAME);
-
-    if (!tab) {
-        if (sheetsList.length === 1) {
-            // Freshly-created spreadsheet has exactly one default tab
-            // ("Sheet1") — rename it in place rather than leaving a stray
-            // extra tab around.
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId,
-                requestBody: { requests: [{
-                    updateSheetProperties: {
-                        properties: { sheetId: sheetsList[0].properties.sheetId, title: TAB_NAME },
-                        fields: 'title',
-                    },
-                }] },
-            });
-        } else {
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId,
-                requestBody: { requests: [{ addSheet: { properties: { title: TAB_NAME } } }] },
-            });
-        }
-    }
-
-    // Only write the header row if row 1 is currently empty — never
-    // clobber a header that's already there (e.g. if Apsara edits it by
-    // hand later).
-    const headerCheck = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${TAB_NAME}!A1:Z1` });
-    if (!headerCheck.data.values || !headerCheck.data.values.length) {
-        await sheets.spreadsheets.values.update({
-            spreadsheetId, range: `${TAB_NAME}!A1`, valueInputOption: 'RAW',
-            requestBody: { values: [HEADER_ROW] },
-        });
-    }
+    await ensureTab(sheets, spreadsheetId, TAB_NAME, HEADER_ROW);
 }
 
 async function getOrCreateSpreadsheetId() {
@@ -177,6 +148,318 @@ async function getOrCreateSpreadsheetId() {
     await ensureProformaTab(getSheets(), id);
     cachedSpreadsheetId = id;
     return id;
+}
+
+// 1-based column index -> spreadsheet column letters (1 -> "A", 26 -> "Z",
+// 27 -> "AA", ...). Used by ensureTab's header-backfill path below to know
+// where to start writing newly-added trailing columns without touching
+// what's already there.
+function columnLetter(n) {
+    let s = '';
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        s = String.fromCharCode(65 + rem) + s;
+        n = Math.floor((n - 1) / 26);
+    }
+    return s;
+}
+
+// Generic version of ensureProformaTab's create-tab-if-missing /
+// write-header-if-blank logic, extracted so OTHER logging modules that
+// share this same "Edge Metals" spreadsheet (e.g. helpers/panMetalSheetLog.js)
+// don't have to duplicate the Sheets API calls. ensureProformaTab itself is
+// left untouched above — this is purely additive, nothing about the
+// existing Proforma logging path changed.
+async function ensureTab(sheets, spreadsheetId, tabName, headerRow) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const sheetsList = meta.data.sheets || [];
+    const tab = sheetsList.find((s) => s.properties.title === tabName);
+    let sheetId = tab ? tab.properties.sheetId : null;
+
+    if (!tab) {
+        if (sheetsList.length === 1 && sheetsList[0].properties.title === 'Sheet1') {
+            // Freshly-created spreadsheet's untouched default tab — rename
+            // rather than leave a stray "Sheet1" around.
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: { requests: [{
+                    updateSheetProperties: {
+                        properties: { sheetId: sheetsList[0].properties.sheetId, title: tabName },
+                        fields: 'title',
+                    },
+                }] },
+            });
+            sheetId = sheetsList[0].properties.sheetId;
+        } else {
+            const created = await sheets.spreadsheets.batchUpdate({
+                spreadsheetId,
+                requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] },
+            });
+            sheetId = created.data.replies[0].addSheet.properties.sheetId;
+        }
+    }
+
+    const headerCheck = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    const existingHeader = (headerCheck.data.values && headerCheck.data.values[0]) || [];
+    if (!existingHeader.length) {
+        await sheets.spreadsheets.values.update({
+            spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW',
+            requestBody: { values: [headerRow] },
+        });
+    } else if (existingHeader.length < headerRow.length) {
+        // A tab whose header was already written (rows may already be logged
+        // under it) later got new trailing columns added to its schema in
+        // code — e.g. AJ Transport's "Others" column, added per Apsara after
+        // she'd already been running verifications. Backfill ONLY the
+        // missing trailing header cells, starting right after the last
+        // existing one — never touch or reorder what's already there, since
+        // that would misalign every row already logged under the old header.
+        const missingLabels = headerRow.slice(existingHeader.length);
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${tabName}!${columnLetter(existingHeader.length + 1)}1`,
+            valueInputOption: 'RAW',
+            requestBody: { values: [missingLabels] },
+        });
+    }
+
+    // Header formatting — bold text, a shaded background, and the header
+    // row frozen so it stays visible while scrolling. Per Apsara: "headers
+    // in tab should be differentiated in my edge metals sheet." Applied on
+    // EVERY call, not just when the tab/header is first created, so it
+    // reaches tabs that already existed before this was added (Proforma,
+    // Pan metal, Jio, Sher) — not just brand-new ones. Cheap and
+    // idempotent: re-applying the same formatting to an already-formatted
+    // header is a no-op in effect.
+    if (sheetId != null) {
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId,
+            requestBody: { requests: [
+                {
+                    repeatCell: {
+                        range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+                        cell: {
+                            userEnteredFormat: {
+                                backgroundColor: { red: 0.85, green: 0.89, blue: 0.95 },
+                                textFormat: { bold: true },
+                            },
+                        },
+                        fields: 'userEnteredFormat(backgroundColor,textFormat)',
+                    },
+                },
+                {
+                    updateSheetProperties: {
+                        properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+                        fields: 'gridProperties.frozenRowCount',
+                    },
+                },
+            ] },
+        });
+    }
+}
+
+// Physically moves an existing column (header cell AND every data value
+// beneath it, as one unit) to a new position — used when Apsara wants a
+// column's ORDER changed, not just relabeled or appended. Per her Jio
+// follow-up (column list ending "...Invoice No." followed by "--> date,
+// invoice no ,etc.." — read as: Invoice No. should sit right after Date,
+// not trailing at the end where it got appended): unlike
+// renameHeaderCellIfMatches (label only) or ensureTab's trailing backfill
+// (append only), this uses the Sheets API's moveDimension request, which
+// carries a column's data along with it — nothing gets separated from the
+// row it belongs to, unlike a naive "read everything, rewrite in new
+// order" approach would risk.
+//
+// Guarded and self-verifying: does nothing if the column's already in the
+// right spot; after moving, re-reads the header and throws if it doesn't
+// land exactly where expected, rather than letting the caller silently
+// start writing new rows in an order that no longer matches the sheet's
+// real layout.
+async function reorderColumnToPosition(sheets, spreadsheetId, tabName, columnLabel, desiredIndex0Based) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const tab = (meta.data.sheets || []).find((s) => s.properties.title === tabName);
+    if (!tab) return { moved: false, reason: 'tab not found' };
+    const sheetId = tab.properties.sheetId;
+
+    const headerRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    const header = (headerRes.data.values && headerRes.data.values[0]) || [];
+    const currentIndex = header.indexOf(columnLabel);
+    if (currentIndex === -1) return { moved: false, reason: 'column not found', header };
+    if (currentIndex === desiredIndex0Based) return { moved: false, reason: 'already in position' };
+
+    await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{
+            moveDimension: {
+                source: { sheetId, dimension: 'COLUMNS', startIndex: currentIndex, endIndex: currentIndex + 1 },
+                destinationIndex: desiredIndex0Based,
+            },
+        }] },
+    });
+
+    const verifyRes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!A1:Z1` });
+    const newHeader = (verifyRes.data.values && verifyRes.data.values[0]) || [];
+    if (newHeader[desiredIndex0Based] !== columnLabel) {
+        throw new Error(
+            `reorderColumnToPosition: moved "${columnLabel}" on "${tabName}" but it landed at index ${newHeader.indexOf(columnLabel)}, `
+            + `not the expected ${desiredIndex0Based} — header is now [${newHeader.join(', ')}]. Stopping rather than writing rows `
+            + `in an order that may no longer match the sheet.`
+        );
+    }
+    return { moved: true, header: newHeader };
+}
+
+// A deliberate, narrow exception to ensureTab's "never touch an existing
+// header cell" rule above — for the rare case a column needs relabeling
+// in place, not just a new trailing column appended. Per Apsara's AJ
+// Transport column list ("...Rate, Line Haul, Others, Dry Run, Extra
+// Scale, Total amount"): the column that used to say "Amount" is now
+// "Line Haul" — same column, same underlying figures, purely a label
+// change, so unlike inserting/reordering a column this can't misalign any
+// row already logged under it. Still guarded: only fires if the cell
+// currently holds EXACTLY `expectedOldLabel` — if it holds anything else
+// (already renamed, or something unexpected), it's left untouched and
+// `renamed: false` comes back so the caller can decide whether that's
+// worth surfacing, rather than this silently overwriting a cell that
+// might not be what the caller assumed it was.
+async function renameHeaderCellIfMatches(sheets, spreadsheetId, tabName, colLetter, expectedOldLabel, newLabel) {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!${colLetter}1` });
+    const current = (res.data.values && res.data.values[0] && res.data.values[0][0]) || '';
+    if (current !== expectedOldLabel) return { renamed: false, current };
+    await sheets.spreadsheets.values.update({
+        spreadsheetId, range: `${tabName}!${colLetter}1`, valueInputOption: 'RAW',
+        requestBody: { values: [[newLabel]] },
+    });
+    return { renamed: true, current: newLabel };
+}
+
+// Per Apsara ("see only header should be in bold and colour" — reported
+// against a real screenshot where every data row in the AJ Transport tab
+// had picked up the header's bold+shaded look, not just row 1): the header
+// formatting above is scoped to row 1 ONLY (startRowIndex:0, endRowIndex:1
+// — never touches row 2 onward), so that's not where it comes from.
+// Google Sheets itself carries a formatted row's style onto NEW rows
+// inserted directly adjacent to it (both the UI and the API's
+// insertDataOption:'INSERT_ROWS' do this) — since every data row gets
+// inserted right below either the bold header or another already-bled row,
+// the formatting cascades down the whole tab over successive verification
+// runs even though the code never asked for that. Fix: explicitly reset
+// (not just leave alone) the formatting on every row this code just wrote
+// — both freshly appended ones and ones overwritten in place by
+// upsertRowsByKey below — back to plain/default right after writing it.
+// rowRanges: array of [startRow1Indexed, endRow1IndexedInclusive].
+async function clearRowFormatting(sheets, spreadsheetId, tabName, rowRanges) {
+    if (!rowRanges.length) return;
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const tab = (meta.data.sheets || []).find((s) => s.properties.title === tabName);
+    if (!tab) return; // tab vanished between write and here — nothing to clean up
+    const sheetId = tab.properties.sheetId;
+    const requests = rowRanges.map(([start, end]) => ({
+        repeatCell: {
+            range: { sheetId, startRowIndex: start - 1, endRowIndex: end },
+            cell: { userEnteredFormat: {} },
+            fields: 'userEnteredFormat(backgroundColor,textFormat)',
+        },
+    }));
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } });
+}
+
+// Shared by the verification-log modules (Pan Metal, Jio, Sher, AJ
+// Transport) — NOT used by Proforma logging above, which has its own
+// deliberately different dedupe rule (bump a colliding Inv No. to a new
+// unique one, since that's a running per-container-item ledger, not an
+// audit log keyed on one natural key per row).
+//
+// Per Apsara: "When we rerun verification,why it is rows/columns not
+// getting updated?" — every verification tab used to SKIP a row whose key
+// (Inv No./Container/Booking No.) was already logged, so re-running
+// verification on something already in the sheet (e.g. after a real
+// correction, or after a schema change added a new column like AJ
+// Transport's Others) never refreshed it. This replaces skip-on-duplicate
+// with update-in-place: a key that's already on the sheet gets that exact
+// row overwritten with the latest verification result; a new key gets
+// appended as before. `candidates` is `[{ key, row }]` — key already
+// normalized by the caller (trim-only for Pan Metal's Inv No., trim+
+// uppercase for the container/booking-keyed tabs) so this doesn't
+// second-guess each tab's existing normalization. Same-key collisions
+// WITHIN one batch (e.g. the same container appearing twice on one PDF)
+// collapse to the LAST occurrence before writing, so one call never emits
+// two conflicting writes for the same key.
+//
+// normalizeSheetValue: applied to whatever's already written in the sheet's
+// key column before comparing against `candidates`' keys — MUST match
+// however the caller normalized its own keys (default trim-only, matching
+// Pan Metal; container/booking-keyed tabs pass a trim+uppercase version),
+// otherwise e.g. a lowercase-typed container already on the sheet would
+// never be recognized as the same key and would get double-logged instead
+// of updated.
+async function upsertRowsByKey(sheets, spreadsheetId, tabName, keyColLetter, candidates, normalizeSheetValue) {
+    if (!candidates.length) return { logged: 0, updated: 0 };
+    const normalize = normalizeSheetValue || ((v) => (v || '').trim());
+
+    const byKey = new Map();
+    for (const c of candidates) byKey.set(c.key, c.row);
+    const deduped = [...byKey.entries()].map(([key, row]) => ({ key, row }));
+
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${tabName}!${keyColLetter}2:${keyColLetter}` });
+    const values = res.data.values || [];
+    const rowNumberByKey = new Map();
+    values.forEach((r, i) => {
+        const k = normalize(r[0]);
+        // First occurrence wins if a key somehow appears twice already on
+        // the sheet (shouldn't happen going forward, but a row from before
+        // this dedupe existed could) — never guess which of two existing
+        // rows is "the real one".
+        if (k && !rowNumberByKey.has(k)) rowNumberByKey.set(k, i + 2); // +2: 1-based rows, plus the header row
+    });
+
+    const toAppend = [];
+    const updateData = [];
+    const updatedRowNumbers = [];
+    for (const c of deduped) {
+        const existingRowNum = rowNumberByKey.get(c.key);
+        if (existingRowNum) {
+            const lastCol = columnLetter(c.row.length);
+            updateData.push({ range: `${tabName}!A${existingRowNum}:${lastCol}${existingRowNum}`, values: [c.row] });
+            updatedRowNumbers.push(existingRowNum);
+        } else {
+            toAppend.push(c.row);
+        }
+    }
+
+    if (updateData.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId,
+            requestBody: { valueInputOption: 'USER_ENTERED', data: updateData },
+        });
+    }
+
+    const clearRanges = updatedRowNumbers.map((n) => [n, n]);
+    if (toAppend.length) {
+        const appendRes = await sheets.spreadsheets.values.append({
+            spreadsheetId, range: `${tabName}!A:A`,
+            valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+            requestBody: { values: toAppend },
+        });
+        // updatedRange looks like "'AJ Transport'!A7:L11" — pull the row
+        // span so ONLY the rows actually just written get their formatting
+        // reset, nothing above or below.
+        const updatedRange = appendRes.data.updates && appendRes.data.updates.updatedRange;
+        const m = updatedRange && updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
+        if (m) clearRanges.push([parseInt(m[1], 10), parseInt(m[2], 10)]);
+    }
+    // See clearRowFormatting's comment above: Sheets bleeds the header's
+    // bold+shaded look onto newly-inserted adjacent rows on its own — reset
+    // every row this call just touched back to plain, every time.
+    await clearRowFormatting(sheets, spreadsheetId, tabName, clearRanges);
+
+    // rowRanges: every row number this call actually wrote to (both
+    // overwritten-in-place and freshly appended), as [start,end] pairs —
+    // handed back so a caller that needs to do its own row-specific
+    // follow-up (e.g. AJ Transport writing a live SUM formula into a cell
+    // whose row number wasn't known until the append actually happened)
+    // doesn't have to re-derive it.
+    return { logged: toAppend.length, updated: updateData.length, rowRanges: clearRanges };
 }
 
 function todayStr() {
@@ -279,6 +562,14 @@ async function logProformaToSheet(body) {
         // always did — the startsWith guard stops a double prefix like
         // "AC_AC_26JY19" — and a container whose material matched no item-code
         // rule simply logs without that segment rather than inventing one.
+        //
+        // NOTE: this merges the item-code splicing that landed directly on
+        // the live server on 2026-08-22 (never pushed through me — found via
+        // a live-file diff while chasing the "rows still bold" report below)
+        // with this session's ensureTab/clearRowFormatting/upsertRowsByKey
+        // additions, which had the opposite problem: built and mock-tested
+        // in my sandbox but never actually delivered to the live device.
+        // Neither half should be dropped in favor of the other.
         const itemCode = (container.item_code || '').trim();
         const codeWithItem = (itemCode && !containerCode.toUpperCase().startsWith(`${itemCode.toUpperCase()}_`))
             ? `${itemCode}_${containerCode}`
@@ -316,12 +607,24 @@ async function logProformaToSheet(body) {
         existing.add(unique); // also guards against duplicates WITHIN this same batch
     }
 
-    await sheets.spreadsheets.values.append({
+    const appendRes = await sheets.spreadsheets.values.append({
         spreadsheetId, range: `${TAB_NAME}!A:A`,
         valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
         requestBody: { values: rows },
     });
+    // Same header-bleed fix as upsertRowsByKey (see clearRowFormatting's
+    // comment) — Proforma's own append path doesn't go through that shared
+    // function, so it needs this call too, or its new rows would pick up
+    // the header's bold+shaded look exactly the way AJ Transport's did.
+    const updatedRange = appendRes.data.updates && appendRes.data.updates.updatedRange;
+    const m = updatedRange && updatedRange.match(/![A-Z]+(\d+):[A-Z]+(\d+)/);
+    if (m) await clearRowFormatting(sheets, spreadsheetId, TAB_NAME, [[parseInt(m[1], 10), parseInt(m[2], 10)]]);
+
     return { logged: rows.length, spreadsheetId, duplicates_bumped: duplicatesBumped };
 }
 
-module.exports = { logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME };
+module.exports = {
+    logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
+    getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches, clearRowFormatting,
+    reorderColumnToPosition,
+};
