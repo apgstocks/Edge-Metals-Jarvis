@@ -3961,6 +3961,17 @@ async function resolveReminderTarget(query, managerChatId) {
     return { notFound: true };
 }
 
+// RESTORED 2026-08-22 — lost to a file overwrite, same as the cargo
+// validation and the scale-tickets question. Its absence made setReminder
+// throw ReferenceError at the moment she used it, so EVERY reminder crashed.
+// Caught by testing, not by boot: the constant is only touched on the code
+// path that runs when a reminder is actually created.
+// Same LA anchor as every other schedule in this app — freight deadlines are
+// US port dates. RESTORED alongside NAMED_TIMES (both lost to the same
+// overwrite; both only referenced on the create-a-reminder path, so nothing
+// failed until she actually set one).
+const REMINDER_TZ = 'America/Los_Angeles';
+const NAMED_TIMES = { morning: '08:00', afternoon: '14:00', evening: '18:00', night: '20:00', noon: '12:00', midday: '12:00' };
 function parseReminderTime(text) {
     const s = String(text || '').toLowerCase().trim();
     if (!s) return null;
@@ -4273,18 +4284,116 @@ async function sendMessageTo(chatId, { target, message }) {
     return { action_taken: 'message_sent' };
 }
 
+// Dates for a ONE-OFF reminder — "on 8/27", "27 Aug", "tomorrow", "Friday".
+// Separate from parseArDate (which expects a settings-style date) because the
+// phrasings she uses in chat are looser. Returns YYYY-MM-DD or null.
+function parseOnceDate(text, now = new Date()) {
+    const s = String(text || '').toLowerCase().trim();
+    if (!s) return null;
+    const iso = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    const todayUTC = () => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    // ISO first. "on 2020-01-01" would otherwise hit the M/D branch below,
+    // which reads "20-01" out of the middle of the year and invents a date —
+    // a past-date guard can't work if the date silently becomes a future one.
+    let m = /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/.exec(s);
+    if (m) {
+        const mo = +m[2], d = +m[3];
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return iso(new Date(Date.UTC(+m[1], mo - 1, d)));
+    }
+    m = /\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/.exec(s);
+    if (m) {
+        const mo = +m[1], d = +m[2];
+        let y = m[3] ? +m[3] : now.getUTCFullYear();
+        if (y < 100) y += 2000;
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+            const dt = new Date(Date.UTC(y, mo - 1, d));
+            // No year given and it already passed → they mean next year.
+            if (!m[3] && dt.getTime() < todayUTC().getTime()) dt.setUTCFullYear(y + 1);
+            return iso(dt);
+        }
+    }
+    if (/\btomorrow\b/.test(s)) return iso(new Date(todayUTC().getTime() + 86400000));
+    if (/\btoday\b/.test(s)) return iso(todayUTC());
+    const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+    for (const [name, mo] of Object.entries(MONTHS)) {
+        if (!s.includes(name)) continue;
+        const day = (/\b(\d{1,2})\b(?!\d)/.exec(s.replace(/\b(19|20)\d{2}\b/, '')) || [])[1];
+        if (!day) continue;
+        const yr = +((/\b((?:19|20)\d{2})\b/.exec(s) || [])[1] || now.getUTCFullYear());
+        const dt = new Date(Date.UTC(yr, mo - 1, +day));
+        if (dt.getTime() < todayUTC().getTime() && !/\b(19|20)\d{2}\b/.test(s)) dt.setUTCFullYear(yr + 1);
+        return iso(dt);
+    }
+    const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    for (const [name, idx] of Object.entries(WD)) {
+        if (!new RegExp(`\\b${name}\\b`).test(s)) continue;
+        let delta = (idx - now.getUTCDay() + 7) % 7;
+        if (delta === 0) delta = 7;
+        return iso(new Date(todayUTC().getTime() + delta * 86400000));
+    }
+    return null;
+}
+
 async function setReminder(chatId, { target, message, when }) {
+
     const tasksHelper = require('../helpers/tasks');
-    const text = String(message || '').trim();
+    let text = String(message || '').trim();
+    let targetOverride = null;
+
+    // ── "3-remind on 8/27" — a reminder ABOUT a digest item ────────────────
+    // REAL BUG (2026-08-22, live). She wrote "3-remind on 8/27" meaning item 3
+    // of the email digest. Two things went wrong:
+    //   1. Nothing connected the "3" to the digest, so it asked what the
+    //      reminder should say.
+    //   2. She pasted the item text back — which names Andy Park, the SENDER —
+    //      and the target resolver then hunted for a contact called "Andy
+    //      Park" to MESSAGE. She wanted a note to herself about that email,
+    //      not an outbound message to him.
+    // So a bare digest index is resolved here, and a reminder built from a
+    // digest item always goes to HER unless she named a different recipient.
+    const digestRef = /(?:^|\b)(?:item\s*)?#?(\d{1,2})\b[\s,;:-]*(?:remind|reminder|follow\s*up)|(?:remind|reminder|follow\s*up)[\s,;:-]*(?:me\s*)?(?:about|on|for)?\s*(?:item\s*)?#?(\d{1,2})\b/i;
+    const refSource = `${target || ''} ${when || ''} ${message || ''}`;
+    const refMatch = digestRef.exec(refSource);
+    if (refMatch) {
+        const n = parseInt(refMatch[1] || refMatch[2], 10);
+        try {
+            const { resolveDigestIndex } = require('./replyWatch');
+            const item = resolveDigestIndex(n);
+            if (item) {
+                text = `Follow up: ${item.asked_for || item.summary || item.subject} (from ${item.fromName})`;
+                targetOverride = 'me';
+            } else {
+                await _send(chatId, `I don't have an item ${n} from the last email digest. Ask "what needs my reply" for a fresh list.`);
+                return { action_taken: 'reminder_bad_digest_ref' };
+            }
+        } catch (e) {
+            console.warn('[ACTIONS] digest ref lookup failed:', e.message);
+        }
+    }
+
     if (!text) {
         await _send(chatId, `What should the reminder say?`);
         return { action_taken: 'reminder_no_message' };
     }
-    const repeatBase = parseReminderRepeat(when) || parseReminderRepeat(target) || { kind: 'daily' };
     const at = parseReminderTime(when) || parseReminderTime(target) || '08:00';
-    const repeat = { ...repeatBase, at, tz: REMINDER_TZ };
 
-    const resolved = await resolveReminderTarget(target, chatId);
+    // ── One-off vs recurring ────────────────────────────────────────────────
+    // REAL BUG (2026-08-22, live): "3-remind on 8/27" found no recurrence
+    // words, and the old code fell back to `{ kind: 'daily' }`. A reminder for
+    // ONE date would have fired every morning forever, and the only way to
+    // notice would have been the second day's spam. A stated date is the
+    // clearest possible signal that she means ONCE — defaulting the other way
+    // was never defensible.
+    //
+    // So: recurrence words ("every day", "weekdays", "every Monday") make it
+    // recurring. A concrete date makes it one-off. Neither makes it one-off
+    // TOMORROW, not daily — the safe direction for a guess is the one that
+    // stops on its own.
+    const explicitRepeat = parseReminderRepeat(when) || parseReminderRepeat(target);
+    const onceDate = explicitRepeat ? null : (parseArDate(when) || parseOnceDate(when) || parseOnceDate(target));
+    const repeat = explicitRepeat ? { ...explicitRepeat, at, tz: REMINDER_TZ } : null;
+
+    const resolved = await resolveReminderTarget(targetOverride || target, chatId);
     if (resolved.ambiguous) {
         const list = resolved.ambiguous.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
         await _send(chatId, `More than one group matches "${target}":\n${list}\n\nAsk again with the exact group name.`);
@@ -4295,9 +4404,24 @@ async function setReminder(chatId, { target, message, when }) {
         return { action_taken: 'reminder_target_not_found' };
     }
 
-    const next = tasksHelper.nextFireAt(repeat, new Date());
+    let next;
+    if (repeat) {
+        next = tasksHelper.nextFireAt(repeat, new Date());
+    } else if (onceDate) {
+        // Fire at `at` on that date, in the same LA zone every other schedule
+        // in this app uses.
+        next = tasksHelper.nextFireAt({ kind: 'daily', at, tz: REMINDER_TZ }, new Date(`${onceDate}T00:00:00Z`));
+        // nextFireAt returns the NEXT slot strictly after its anchor, which
+        // for a midnight anchor is that same day at `at` — exactly what we
+        // want. If the date has already passed, say so rather than firing
+        // immediately or silently skipping to next year.
+        if (next && next.getTime() < Date.now()) {
+            await _send(chatId, `${onceDate} has already passed — give me a future date and I'll set it.`);
+            return { action_taken: 'reminder_date_past' };
+        }
+    }
     if (!next) {
-        await _send(chatId, `Couldn't work out a schedule from "${when || target}". Try something like "every day at 8am" or "every Monday 9:30".`);
+        await _send(chatId, `Couldn't work out when from "${when || target}". Try a date ("on 8/27", "27 Aug") or a repeat ("every day at 8am", "every Monday 9:30").`);
         return { action_taken: 'reminder_bad_schedule' };
     }
     const task = await tasksHelper.enqueue({
@@ -4307,11 +4431,13 @@ async function setReminder(chatId, { target, message, when }) {
         target_chat: resolved.chatId,
         message: text,
         fire_at: next.toISOString(),
-        repeat,
+        // Omitted entirely for a one-off, so scheduler.js archives it after
+        // firing instead of rescheduling — see its `if (task.repeat)` branch.
+        ...(repeat ? { repeat } : {}),
         created_by: 'brain',
         max_tries: 3,
     });
-    const whenText = tasksHelper.describeRepeat(repeat);
+    const whenText = repeat ? tasksHelper.describeRepeat(repeat) : `once, on ${onceDate}`;
     await _send(chatId, `Done — I'll message ${resolved.label} ${whenText} (LA time): "${text}"\n\nFirst one: ${next.toLocaleString('en-US', { timeZone: REMINDER_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.\nSay "show reminders" to see them, or "cancel reminder ${task.id.slice(0, 6)}" to stop it.`);
     return { action_taken: 'reminder_set' };
 }

@@ -936,7 +936,22 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
     const laHour = getLADate().getHours();
     const inAlertWindow = laHour >= ALERT_START_HOUR && laHour < ALERT_END_HOUR;
-    const hasUrgent = queued.some((q) => q.urgency === 'high');
+    // Only a GENUINELY urgent item bypasses the hourly gate.
+    //
+    // REAL BUG (2026-08-22, live): two digests went out five minutes apart
+    // (21:00 and 21:05). Cause was my own change earlier the same day —
+    // deadline-derived urgency correctly promotes anything due within two days
+    // to "high", which meant far more items counted as urgent, which meant far
+    // more immediate sends. A correct urgency signal was driving the wrong
+    // decision: "how alarming is this" and "does it justify interrupting her
+    // again five minutes later" are different questions.
+    //
+    // A deadline two days out does NOT need to break the hourly rhythm — it
+    // will still be there in an hour. What genuinely cannot wait is something
+    // the MODEL judged urgent on its own (an explicit chase, money at risk, a
+    // vessel about to sail) or a deadline that is today/tomorrow/overdue.
+    const hasUrgent = queued.some((q) => q.urgency === 'high'
+        && (q.daysToDeadline == null || q.daysToDeadline <= 1));
     const sinceLast = store.lastDigestAt ? (Date.now() - Date.parse(store.lastDigestAt)) : Infinity;
     const gapElapsed = !(sinceLast >= 0) || sinceLast >= DIGEST_MIN_GAP_MS;
 
