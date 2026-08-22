@@ -3636,6 +3636,474 @@ async function handleContactQuoteLegReply(chatId, text) {
     return { action_taken: result ? 'contact_quote_leg_reply_recorded' : 'contact_quote_leg_reply_no_match' };
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// RESTORED 2026-08-22 — receivables, reminders, address lookup, send-message,
+// and the quote scale-ticket resume.
+//
+// These eleven actions, and the five private helpers below them, were deleted
+// from this file by commit 7179955 ("Emailwatcher"). That commit added three
+// genuinely new functions (showPendingReplies, replyToDigestItem,
+// forwardOriginalToSelf) and, in doing so, wrote back a copy of actions.js
+// that predated this block — 740 lines removed, 93 added. Nothing referenced
+// them as gone: workflow/brain.js kept routing eleven intents straight at
+// functions that no longer existed, so every one of them answered users with
+// "Something broke while handling that: actions.X is not a function".
+//
+// Apsara hit it live asking "any payments today?" — show_receivables.
+//
+// Restored verbatim from 7179955^ rather than rewritten. Their dependencies
+// (helpers/receivables, helpers/tasks, helpers/quoteRequests,
+// helpers/addressBook) were all checked to still export what this code calls;
+// none of them were touched by that commit.
+//
+// See also the boot-time wiring check added in workflow/brain.js, which now
+// fails loudly if a routed action is missing, so this exact regression can
+// never again be discovered by a user in a WhatsApp thread.
+// ══════════════════════════════════════════════════════════════════════════
+
+// Strips the question wording off a lookup query, leaving just the place
+// name. This is NOT a command grammar — the AI still decides that a message
+// IS an address lookup (see brain.js). This only cleans up the NAME once that
+// decision is made, because the AI sometimes passes the whole message through
+// as target_name rather than isolating the place. Without it, "Junk car
+// address" reported "nothing saved" for a place that is very much saved.
+// Tried only as a FALLBACK, after the verbatim query has already failed, so a
+// real saved name that happens to contain one of these words still wins.
+function stripAddressQueryWording(text) {
+    let s = String(text || '').trim();
+    s = s.replace(/^(?:what(?:'?s| is)|where(?:'?s| is)|show|give|send|get|tell)\b\s*/i, '');
+    s = s.replace(/^(?:me|us)\b\s*/i, '');
+    s = s.replace(/^the\s+/i, '');
+    s = s.replace(/^(?:address|location|mobile|phone|number|contact)\s+(?:of|for)\s+/i, '');
+    s = s.replace(/[''`]s\s+(?:address|location|mobile|phone|number|contact)\b/i, '');
+    s = s.replace(/\s+(?:address|location|mobile|phone(?:\s+number)?|number|contact|details?|info)\b/i, '');
+    s = s.replace(/^(?:is|of|for|at)\s+/i, '');
+    return s.replace(/[?.!,]+$/, '').trim();
+}
+
+const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// Read-only address-book lookup. Reached ONLY via the AI classifier's
+// 'lookup_address' action — there is deliberately no regex/keyword grammar in
+// front of it (2026-08-22, per Apsara: "i cant hardcode everything. let jarvis
+// ai handle this"). Safe to be AI-first precisely because it sends nothing and
+// changes nothing; a misread costs a wrong address on screen, not a real
+// dispatch. See brain.js's SAFE_ACTIONS comment.
+//
+// REAL INCIDENT that prompted this (2026-08-22): "Junk car address" — a place
+// that IS in her address book — was answered with "I'm sorry, I can't help
+// with that. My purpose is to assist with freight operations for Edge Metals
+// Inc." There was no address-lookup action at all, so the classifier had
+// nothing to map it onto and fell through to a canned refusal, despite the
+// data being right there.
+//
+// Reuses quoteRequests' resolveLaneEntry rather than addressBook's
+// resolveAddress directly, so a lookup understands exactly the same names the
+// quote flow does — aliases, lane abbreviations ("LA"), and a raw-address text
+// search — instead of a second, subtly-different matcher drifting from it.
+function formatAddressEntry(entry) {
+    const name = (entry.aliases && entry.aliases[0]) || '(unnamed)';
+    const others = (entry.aliases || []).slice(1);
+    const lines = [`*${name}*`];
+    if (others.length) lines.push(`(also: ${others.join(', ')})`);
+    if (entry.raw) lines.push('', String(entry.raw).trim());
+    if (entry.mobile) lines.push('', `Mobile: ${entry.mobile}`);
+    if (entry.tags && entry.tags.length) lines.push(`Tagged: ${entry.tags.join(', ')}`);
+    return lines.join('\n');
+}
+
+// Resolves whoever/whatever the reminder should go to: a real WhatsApp group
+// by name first (that's what "Edge Yard group" means), then the saved
+// trucker/supplier/contact rosters, then the manager herself.
+async function resolveReminderTarget(query, managerChatId) {
+    const q = String(query || '').trim();
+    if (!q) return { chatId: managerChatId, label: 'you' };
+    const bare = q.replace(/\s*\bgroup\b\s*/gi, ' ').trim();
+    if (/^(me|manager|myself)$/i.test(q)) return { chatId: managerChatId, label: 'you' };
+
+    // 1. Live WhatsApp groups — the only path that can find "Edge Yard".
+    try {
+        const waState = require('../helpers/wa-state');
+        const groups = await waState.findGroups(bare || q);
+        if (groups && groups.length === 1) return { chatId: groups[0].id, label: groups[0].name || q };
+        if (groups && groups.length > 1) {
+            const exact = groups.find((g) => String(g.name || '').toLowerCase() === (bare || q).toLowerCase());
+            if (exact) return { chatId: exact.id, label: exact.name };
+            return { ambiguous: groups.slice(0, 8) };
+        }
+    } catch (e) {
+        // WhatsApp not ready / lookup unavailable — fall through to the saved
+        // rosters rather than failing outright.
+        console.warn('[ACTIONS] reminder group lookup unavailable:', e.message);
+    }
+
+    // 2. Saved rosters. Wrapped because loadTruckers/loadSuppliers are
+    // Supabase-backed and THROW outright when the DB is unreachable or
+    // unconfigured — found while testing 2026-08-22. Letting that propagate
+    // would turn a transient DB blip into an unhandled exception for the whole
+    // send/reminder, when the WhatsApp-group path above may well have been
+    // enough on its own. Degrade to "not found" instead, which the callers
+    // already report honestly.
+    const ql = (bare || q).toLowerCase();
+    try {
+        const [truckers, suppliers] = [await loadTruckers(), await loadSuppliers()];
+        const roster = [...truckers, ...suppliers];
+        const hit = roster.find((r) => String(r.name || '').toLowerCase() === ql)
+                 || roster.find((r) => String(r.name || '').toLowerCase().includes(ql));
+        if (hit) {
+            const chatId = hit.group_id || (hit.whatsapp ? `${hit.whatsapp}@c.us` : null);
+            if (chatId) return { chatId, label: hit.name };
+        }
+    } catch (e) {
+        console.warn('[ACTIONS] roster lookup unavailable during target resolve:', e.message);
+    }
+    try {
+        const { loadContacts } = require('../helpers/contacts');
+        const c = loadContacts().find((x) => String(x.name || '').toLowerCase().includes(ql));
+        if (c) {
+            const chatId = c.group_id || (c.whatsapp ? `${c.whatsapp}@c.us` : null);
+            if (chatId) return { chatId, label: c.name };
+        }
+    } catch { /* contacts store optional */ }
+    return { notFound: true };
+}
+
+function parseReminderTime(text) {
+    const s = String(text || '').toLowerCase().trim();
+    if (!s) return null;
+    let m = /(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)?/.exec(s);
+    if (m) {
+        let hh = +m[1]; const mm = +m[2];
+        if (m[3] === 'pm' && hh < 12) hh += 12;
+        if (m[3] === 'am' && hh === 12) hh = 0;
+        if (hh <= 23 && mm <= 59) return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+    m = /(\d{1,2})\s*(am|pm)/.exec(s);
+    if (m) {
+        let hh = +m[1];
+        if (m[2] === 'pm' && hh < 12) hh += 12;
+        if (m[2] === 'am' && hh === 12) hh = 0;
+        if (hh <= 23) return `${String(hh).padStart(2, '0')}:00`;
+    }
+    for (const [word, time] of Object.entries(NAMED_TIMES)) if (s.includes(word)) return time;
+    return null;
+}
+
+function parseReminderRepeat(text) {
+    const s = String(text || '').toLowerCase();
+    const DAYS = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    for (const [name, idx] of Object.entries(DAYS)) {
+        if (new RegExp(`every\\s+${name}|each\\s+${name}|${name}s\\b`).test(s)) return { kind: 'weekly', weekday: idx };
+    }
+    if (/weekday|working day|business day|mon(day)?\s*(-|to|–)\s*fri/.test(s)) return { kind: 'weekdays' };
+    if (/every\s*day|everyday|daily|each day/.test(s)) return { kind: 'daily' };
+    return null;
+}
+
+function getQueuedPendings(chatId) {
+return loadBrain().pending_queue[chatId] || [];
+}
+
+// Wipes the active pending AND everything queued behind it, in one shot.
+// Added 2026-08-20 for the "cancel all" escape — see resolvePending. Plain
+// clearPending only drops the ACTIVE one, which left Apsara in an endless
+// cancel loop against a queue several deep.
+async function clearAllPending(chatId) {
+    const active = getPending(chatId);
+    const queued = getQueuedPendings(chatId);
+    const count = (active ? 1 : 0) + queued.length;
+    await mutateBrain(b => {
+        delete b.pending_actions[chatId];
+        delete b.pending_queue[chatId];
+    });
+    return { count, active, queued };
+}
+
+async function lookupAddress(chatId, query) {
+    const q = String(query || '').trim();
+    if (!q) {
+        await _send(chatId, `Which place? Give me the name as you've saved it (e.g. "Eccomelt address").`);
+        return { action_taken: 'address_no_query' };
+    }
+    const quoteHelper = require('../helpers/quoteRequests');
+    // Verbatim first — a saved name wins even if it contains a word the
+    // stripper would otherwise remove. Only fall back to the cleaned-up form.
+    let hit = quoteHelper.resolveLaneEntry(q);
+    if (!hit) {
+        const stripped = stripAddressQueryWording(q);
+        if (stripped && stripped.toLowerCase() !== q.toLowerCase()) {
+            hit = quoteHelper.resolveLaneEntry(stripped);
+        }
+    }
+
+    if (!hit) {
+        // Honest miss — offer the closest saved names rather than a bare "not
+        // found", since the usual cause is a slightly different spelling of a
+        // name that IS saved.
+        let suggestion = '';
+        try {
+            const { loadAddressBook } = require('../helpers/addressBook');
+            const names = loadAddressBook().map((e) => (e.aliases && e.aliases[0]) || '').filter(Boolean);
+            const ql = q.toLowerCase();
+            const close = names.filter((n) => {
+                const nl = n.toLowerCase();
+                return nl.includes(ql) || ql.includes(nl) || nl[0] === ql[0];
+            }).slice(0, 6);
+            if (close.length) suggestion = `\n\nClosest saved names: ${close.join(', ')}`;
+            else if (names.length) suggestion = `\n\n${names.length} places are saved — "show contacts" won't list them, but the Address Book page on the dashboard will.`;
+        } catch (err) {
+            console.warn('[ACTIONS] address suggestion lookup failed:', err.message);
+        }
+        await _send(chatId, `Nothing saved in the address book matching "${q}".${suggestion}`);
+        return { action_taken: 'address_not_found' };
+    }
+
+    if (hit.type === 'ambiguous') {
+        const listText = hit.matches
+            .map((e, i) => `${i + 1}. ${(e.aliases && e.aliases[0]) || '(unnamed)'} — ${String(e.raw || '').split('\n')[0]}`)
+            .join('\n');
+        // Deliberately NOT staged as a pending: this is a read-only lookup, and
+        // parking a pending here would block the queue behind a question that
+        // doesn't need answering. She can just re-ask with the exact name.
+        await _send(chatId, `"${q}" matches more than one saved place:\n${listText}\n\nAsk again with the exact name for the full address.`);
+        return { action_taken: 'address_ambiguous' };
+    }
+
+    await _send(chatId, formatAddressEntry(hit.entry));
+    return { action_taken: 'address_shown' };
+}
+
+async function showReceivables(chatId, who) {
+    const ar = require('../helpers/receivables');
+    let ledger;
+    try {
+        ledger = await ar.buildLedger({ openOnly: true, consignee: who || null });
+    } catch (e) {
+        await _send(chatId, `Couldn't read the invoice sheet: ${e.message}`);
+        return { action_taken: 'receivables_failed' };
+    }
+    const { rows, totals, orphans } = ledger;
+    if (!rows.length) {
+        await _send(chatId, who
+            ? `Nothing outstanding from "${who}" — all their invoices are paid.`
+            : `Nothing outstanding. Every invoice on the sheet is paid.`);
+        return { action_taken: 'receivables_none' };
+    }
+    // Oldest first (buildLedger already sorts that way) — that's the chase list.
+    const lines = rows.slice(0, 15).map((r) => {
+        const age = r.days_old === null ? 'date unknown' : `${r.days_old}d`;
+        const partial = r.paid > 0 ? ` — ${money(r.paid)} paid` : '';
+        return `• ${money(r.balance)} — ${r.consignee || r.customer || '(no name)'}\n   ${r.inv_no} · ${age}${partial}`;
+    });
+    const bucketOrder = ['90+', '61-90', '31-60', 'current', 'unknown'];
+    const bucketLine = bucketOrder
+        .filter((b) => totals.buckets[b])
+        .map((b) => `${b === 'current' ? '0-30d' : b === 'unknown' ? 'no date' : b + 'd'}: ${money(totals.buckets[b])}`)
+        .join('  ·  ');
+    const more = rows.length > 15 ? `\n(+${rows.length - 15} more)` : '';
+    const orphanWarn = orphans && orphans.length
+        ? `\n\n⚠️ ${orphans.length} payment(s) recorded against an invoice number I can't find on the sheet — say "show orphan payments" to see them.`
+        : '';
+    await _send(chatId,
+        `Outstanding${who ? ` from ${who}` : ''}: *${money(totals.outstanding)}* across ${rows.length} invoice${rows.length === 1 ? '' : 's'}\n${bucketLine}\n\n${lines.join('\n')}${more}${orphanWarn}`);
+    return { action_taken: 'receivables_shown' };
+}
+
+async function recordPayment(chatId, { invoiceRef, amount, paidOn, method, note }, senderName) {
+    const ar = require('../helpers/receivables');
+    if (!invoiceRef) {
+        await _send(chatId, `Payment against which invoice? Give me the invoice number or the customer name.`);
+        return { action_taken: 'payment_no_invoice' };
+    }
+    if (ar.parseAmount(amount) === null) {
+        await _send(chatId, `How much was paid against ${invoiceRef}?`);
+        return { action_taken: 'payment_no_amount' };
+    }
+    let res;
+    try {
+        res = await ar.recordPaymentByRef(invoiceRef, {
+            amount, paid_on: paidOn || null, method: method || null, note: note || null,
+            recorded_by: senderName || null,
+        });
+    } catch (e) {
+        await _send(chatId, `Couldn't record that: ${e.message}`);
+        return { action_taken: 'payment_failed' };
+    }
+    if (res.candidates) {
+        const list = res.candidates.map((c) => `• ${c.inv_no} — ${c.consignee || c.customer} · ${money(c.balance)} open`).join('\n');
+        await _send(chatId, `"${invoiceRef}" matches more than one invoice:\n${list}\n\nTell me which invoice number and I'll record it.`);
+        return { action_taken: 'payment_ambiguous' };
+    }
+    if (res.notFound) {
+        await _send(chatId, `Couldn't find an invoice matching "${invoiceRef}". Check the invoice number — nothing has been recorded.`);
+        return { action_taken: 'payment_invoice_not_found' };
+    }
+    const inv = res.invoice;
+    const settled = inv.balance <= 0.01
+        ? `That clears it — ${inv.inv_no} is fully paid.`
+        : `${money(inv.balance)} still outstanding on ${inv.inv_no}.`;
+    await _send(chatId, `Recorded ${money(res.payment.amount)} against ${inv.inv_no} (${inv.consignee || inv.customer}). ${settled}`);
+    return { action_taken: 'payment_recorded' };
+}
+
+async function showOrphanPayments(chatId) {
+    const ar = require('../helpers/receivables');
+    const { orphans } = await ar.buildLedger({});
+    if (!orphans.length) {
+        await _send(chatId, `No orphaned payments — every recorded payment matches an invoice on the sheet.`);
+        return { action_taken: 'orphans_none' };
+    }
+    const lines = orphans.map((p) => `• ${money(p.amount)} recorded against "${p.inv_no}" on ${p.paid_on}${p.note ? ` (${p.note})` : ''}`);
+    await _send(chatId, `These payments don't match any invoice number on the sheet:\n${lines.join('\n')}\n\nEither the invoice number was mistyped, or that invoice isn't on the sheet yet.`);
+    return { action_taken: 'orphans_shown' };
+}
+
+// Send a WhatsApp message to a group/trucker/supplier/contact, right now.
+// Built 2026-08-22 — Apsara: "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY
+// CANT IT DO IT". Answer: there was no action for it. `ask_contact` sends a
+// QUESTION and stages a pending to relay the answer back; `draft_email` is
+// email. Nothing existed for the plainest possible request — "tell X this."
+// Third instance this week of the same root pattern (see
+// claude/jarvis-ai-first-map.md): the AI can only choose from an exhaustive
+// action list, so a missing capability reads to the user as a refusal.
+//
+// DELIBERATELY NOT gated behind a yes/no confirm, unlike draft_email. The
+// email gate exists because the AI DRAFTS the wording there — it invents
+// content that goes out over her name. Here she supplies the exact text and
+// the exact recipient; the AI only routes it. The one real risk left is a
+// wrong recipient, which is handled by resolving strictly (no guessing at
+// numbers she didn't name), refusing to send when the name is ambiguous, and
+// echoing back exactly what went where so a mistake is visible immediately
+// rather than discovered later. Adding a confirm step here would reintroduce
+// exactly the friction she's objecting to, for a risk that's already covered.
+async function sendMessageTo(chatId, { target, message }) {
+    const text = String(message || '').trim();
+    if (!target || !String(target).trim()) {
+        await _send(chatId, `Send it to whom? Give me a group or contact name.`);
+        return { action_taken: 'send_no_target' };
+    }
+    if (!text) {
+        await _send(chatId, `What should I send to ${target}?`);
+        return { action_taken: 'send_no_message' };
+    }
+    const resolved = await resolveReminderTarget(target, chatId);
+    if (resolved.ambiguous) {
+        const list = resolved.ambiguous.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
+        await _send(chatId, `More than one group matches "${target}":\n${list}\n\nSay it again with the exact name and I'll send it.`);
+        return { action_taken: 'send_target_ambiguous' };
+    }
+    if (resolved.notFound) {
+        await _send(chatId, `Couldn't find "${target}" — no WhatsApp group, trucker, supplier or contact by that name. Check the exact name (I have to be a member of the group) and I'll send it.`);
+        return { action_taken: 'send_target_not_found' };
+    }
+    const ok = await _send(resolved.chatId, text);
+    if (!ok) {
+        await _send(chatId, `Couldn't deliver that to ${resolved.label} — WhatsApp rejected the send. Nothing went out.`);
+        return { action_taken: 'send_failed' };
+    }
+    await _send(chatId, `Sent to ${resolved.label}: "${text}"`);
+    return { action_taken: 'message_sent' };
+}
+
+async function setReminder(chatId, { target, message, when }) {
+    const tasksHelper = require('../helpers/tasks');
+    const text = String(message || '').trim();
+    if (!text) {
+        await _send(chatId, `What should the reminder say?`);
+        return { action_taken: 'reminder_no_message' };
+    }
+    const repeatBase = parseReminderRepeat(when) || parseReminderRepeat(target) || { kind: 'daily' };
+    const at = parseReminderTime(when) || parseReminderTime(target) || '08:00';
+    const repeat = { ...repeatBase, at, tz: REMINDER_TZ };
+
+    const resolved = await resolveReminderTarget(target, chatId);
+    if (resolved.ambiguous) {
+        const list = resolved.ambiguous.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
+        await _send(chatId, `More than one group matches "${target}":\n${list}\n\nAsk again with the exact group name.`);
+        return { action_taken: 'reminder_target_ambiguous' };
+    }
+    if (resolved.notFound) {
+        await _send(chatId, `Couldn't find "${target}" — no WhatsApp group, trucker, supplier or contact by that name. Check the exact group name (I have to be a member of it) and ask again.`);
+        return { action_taken: 'reminder_target_not_found' };
+    }
+
+    const next = tasksHelper.nextFireAt(repeat, new Date());
+    if (!next) {
+        await _send(chatId, `Couldn't work out a schedule from "${when || target}". Try something like "every day at 8am" or "every Monday 9:30".`);
+        return { action_taken: 'reminder_bad_schedule' };
+    }
+    const task = await tasksHelper.enqueue({
+        type: 'generic_message',
+        target_kind: 'group',
+        target_name: resolved.label,
+        target_chat: resolved.chatId,
+        message: text,
+        fire_at: next.toISOString(),
+        repeat,
+        created_by: 'brain',
+        max_tries: 3,
+    });
+    const whenText = tasksHelper.describeRepeat(repeat);
+    await _send(chatId, `Done — I'll message ${resolved.label} ${whenText} (LA time): "${text}"\n\nFirst one: ${next.toLocaleString('en-US', { timeZone: REMINDER_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.\nSay "show reminders" to see them, or "cancel reminder ${task.id.slice(0, 6)}" to stop it.`);
+    return { action_taken: 'reminder_set' };
+}
+
+async function showReminders(chatId) {
+    const tasksHelper = require('../helpers/tasks');
+    const all = tasksHelper.loadTasks().filter((t) => t.repeat && t.status !== 'cancelled');
+    if (!all.length) {
+        await _send(chatId, `No recurring reminders set up. Set one with something like: "remind Edge Yard group every day at 8am to update the pricelist".`);
+        return { action_taken: 'reminders_none' };
+    }
+    const lines = all.map((t) => {
+        const next = t.fire_at ? new Date(t.fire_at).toLocaleString('en-US', { timeZone: REMINDER_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '?';
+        return `• [${t.id.slice(0, 6)}] ${t.target_name || t.target_chat} — ${tasksHelper.describeRepeat(t.repeat)}\n   "${t.message}"\n   next: ${next}`;
+    });
+    await _send(chatId, `Recurring reminders:\n\n${lines.join('\n\n')}\n\nCancel one with "cancel reminder <id>".`);
+    return { action_taken: 'reminders_shown' };
+}
+
+async function cancelReminder(chatId, idFragment) {
+    const tasksHelper = require('../helpers/tasks');
+    const frag = String(idFragment || '').trim().toLowerCase();
+    const all = tasksHelper.loadTasks().filter((t) => t.repeat);
+    if (!frag) {
+        await _send(chatId, `Which one? Say "show reminders" for the list, then "cancel reminder <id>".`);
+        return { action_taken: 'reminder_cancel_no_id' };
+    }
+    const matches = all.filter((t) => t.id.toLowerCase().startsWith(frag)
+        || String(t.target_name || '').toLowerCase().includes(frag)
+        || String(t.message || '').toLowerCase().includes(frag));
+    if (!matches.length) {
+        await _send(chatId, `No recurring reminder matching "${idFragment}". Say "show reminders" to see what's set.`);
+        return { action_taken: 'reminder_cancel_not_found' };
+    }
+    if (matches.length > 1) {
+        const list = matches.map((t) => `• [${t.id.slice(0, 6)}] ${t.target_name} — "${t.message}"`).join('\n');
+        await _send(chatId, `That matches more than one:\n${list}\n\nUse the id in brackets.`);
+        return { action_taken: 'reminder_cancel_ambiguous' };
+    }
+    await tasksHelper.cancel(matches[0].id, 'user_cancelled');
+    await _send(chatId, `Cancelled — no more "${matches[0].message}" to ${matches[0].target_name}.`);
+    return { action_taken: 'reminder_cancelled' };
+}
+
+// Mandatory yes/no — re-asks on anything that isn't recognizably a yes/no,
+// same "don't silently let an unanswered required field through" principle
+// as the cargo weight/value fix (resumeQuoteWithCargoDetails below).
+async function resumeQuoteWithScaleTickets(chatId, pending, scaleText) {
+    const clean = String(scaleText || '').trim().toLowerCase();
+    const isYes = /^(y|yes|yeah|yep|need|needed)$/i.test(clean);
+    const isNo  = /^(n|no|nope|not needed|don'?t need)$/i.test(clean);
+    if (!isYes && !isNo) {
+        await _send(chatId, `Just need a yes or no — do you need scale tickets for this haul?`);
+        return { action_taken: 'quote_scale_tickets_retry' };
+    }
+    await clearPending(chatId);
+    return continueQuoteFlow(chatId, { ...pending.state, scaleTicketsNeeded: isYes });
+}
+
 module.exports = {
     showPendingReplies, replyToDigestItem, forwardOriginalToSelf, sendDraftedEmail,
 init,
@@ -3654,4 +4122,13 @@ scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledg
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
     startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,
     startContactQuoteRequestFlow, resumeContactQuoteWithRetry, handleContactQuoteLegReply,
+    // Restored 2026-08-22 — dropped by commit 7179955 while brain.js kept
+    // routing to them. See the block comment above their definitions.
+    // getQueuedPendings/clearAllPending have no brain.js route; they're used
+    // by tests/cancel-loop.js, which has been failing to require them since.
+    getQueuedPendings, clearAllPending,
+    lookupAddress, sendMessageTo,
+    showReceivables, recordPayment, showOrphanPayments,
+    setReminder, showReminders, cancelReminder,
+    resumeQuoteWithScaleTickets,
 };

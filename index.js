@@ -15,6 +15,42 @@ const { sendCapture } = waState;
 
 const brain     = require('./workflow/brain');
 const actions   = require('./workflow/actions');
+
+// ── Action-wiring self-check ──────────────────────────────────────────────
+// Added 2026-08-22. Twice that day a file was written back from an older copy
+// and silently lost code — workflow/actions.js lost eleven functions, and
+// helpers/invoiceSheet.js lost listAllInvoices — while workflow/brain.js kept
+// routing intents at them. Nothing failed at boot, so the first sign was
+// Apsara asking "any payments today?" over WhatsApp and getting a raw
+// "actions.showReceivables is not a function" back, hours later.
+//
+// Deliberately a WARNING, not a fatal error: refusing to boot would take the
+// whole assistant down over a fault that affects a handful of intents, which
+// is a worse outcome than running with a known hole. The point is that the
+// hole is announced here, in the startup log, instead of being discovered by
+// whoever asks the wrong question first.
+//
+// Same check runs standalone via `npm run check` (scripts/check-action-wiring.js),
+// which DOES exit non-zero — that's the one to put in CI or a pre-commit hook.
+try {
+    const brainSrc = fs.readFileSync(path.join(__dirname, 'workflow/brain.js'), 'utf8');
+    const routed = [...new Set((brainSrc.match(/actions\.([a-zA-Z0-9_]+)\s*\(/g) || [])
+        .map((m) => m.slice(8, -1).trim()))].filter((n) => n !== 'js');
+    const missingActions = routed.filter((n) => typeof actions[n] !== 'function');
+    if (missingActions.length) {
+        console.error('════════════════════════════════════════════════════════════');
+        console.error(`[BOOT] WIRING BUG — ${missingActions.length} intent(s) route to actions that do not exist:`);
+        missingActions.forEach((n) => console.error(`[BOOT]   actions.${n}() is missing`));
+        console.error('[BOOT] Anyone hitting those intents gets an error instead of an answer.');
+        console.error('[BOOT] Usual cause: workflow/actions.js was written back from an older copy.');
+        console.error('[BOOT] Run `npm run check` for details.');
+        console.error('════════════════════════════════════════════════════════════');
+    } else {
+        console.log(`[BOOT] Action wiring OK — all ${routed.length} routed actions present.`);
+    }
+} catch (e) {
+    console.warn('[BOOT] Could not run the action-wiring check:', e.message);
+}
 const alerts    = require('./alerts');
 const scheduler = require('./scheduler');
 const pricelist = require('./helpers/pricelist');

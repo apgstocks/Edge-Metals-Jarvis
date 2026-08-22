@@ -2011,7 +2011,28 @@ async function process(rawEvent, sendMessage) {
         result = await route(decision, ctx, sendMessage);
     } catch (err) {
         console.error('[BRAIN] Route failed:', err);
-        if (inbound.isManagerOrTeam) await sendMessage(inbound.chatId, `Something broke while handling that: ${err.message}`);
+        if (inbound.isManagerOrTeam) {
+            // A missing action is a WIRING bug, not a runtime failure, and it
+            // deserves different wording. Added 2026-08-22 after Apsara asked
+            // "any payments today?" and got back
+            // "actions.showReceivables is not a function" — eleven intents
+            // had been routing at functions a bad merge deleted hours
+            // earlier (see the restored block in workflow/actions.js).
+            //
+            // Two things were wrong with that reply. It reads like the
+            // request was malformed rather than the code, so the natural
+            // response is to rephrase and try again — which can't ever work.
+            // And it leaks an internal symbol name to someone who has no use
+            // for it. This says plainly that the feature is broken, so the
+            // next move is to report it rather than retry.
+            const wiring = /^actions\.([A-Za-z0-9_]+) is not a function$/.exec(err.message || '');
+            if (wiring) {
+                console.error(`[BRAIN] WIRING BUG: intent '${decision.intent}' routes to actions.${wiring[1]}(), which is not exported. Check workflow/actions.js.`);
+                await sendMessage(inbound.chatId, "That feature isn't working right now — it's a bug on my side, not something you said. I've logged it. Nothing was changed or saved.");
+            } else {
+                await sendMessage(inbound.chatId, `Something broke while handling that: ${err.message}`);
+            }
+        }
     }
 
     // If this message's own handling freed up the pending slot on this chat
