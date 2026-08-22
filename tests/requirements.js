@@ -517,6 +517,7 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
 
     // ── Verification must not cry wolf ───────────────────────────────────
     const cb = require(R('helpers/cutoffBackfill.js'));
+    const verifyActionsSrc = src('workflow/actions.js');
     ck('08/21/2026 and 2026-08-21 are the SAME date, not a mismatch',
         cb.fieldsAgree('cutoff_date', '08/21/2026', '2026-08-21'), true);
     ck('a genuinely different date IS a mismatch',
@@ -526,6 +527,30 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
     ckTrue('verify never writes to the booking store',
         !/mutateJson/.test(src('helpers/cutoffBackfill.js').split('async function verifyOne')[1] || ''),
         'verify must report only — overwriting a hand-corrected value is destructive');
+
+    // Apsara, 2026-08-22: "but nothing fired yet" — verify opened with "this
+    // takes a moment" and then went silent forever. A long job that can end in
+    // silence is a broken job, so this proves it always ends and always speaks.
+    ckTrue('a booking that hangs cannot stall the whole verify run',
+        typeof cb.VERIFY_BOOKING_TIMEOUT_MS === 'number' && cb.VERIFY_BOOKING_TIMEOUT_MS > 0,
+        'one hung Gemini call used to stall every remaining booking, silently');
+    {
+        // one booking hangs forever, one answers — the run must still finish
+        const t0 = Date.now();
+        const slow = new Promise(() => { });
+        const raced = await cb.withTimeout(slow, 60, { bkgNo: 'X', status: 'timeout' });
+        ck('a hung booking resolves as a timeout, not a hang', raced.status, 'timeout');
+        ckTrue('the timeout actually fires quickly', Date.now() - t0 < 2000);
+    }
+    ckTrue('verify reports timed-out bookings instead of counting them as clean',
+        /status === 'timeout'/.test(verifyActionsSrc) && /could not be read/.test(verifyActionsSrc),
+        'a booking nobody could read must never be reported as matching');
+    ckTrue('verify always sends a final report, on every exit path',
+        (verifyActionsSrc.split('async function verifyBookings')[1] || '').split('async function ')[0]
+            .split('_send(').length - 1 >= 4,
+        'open + progress + failure + report; silence is not an allowed outcome');
+    ckTrue('verify reports progress while it runs',
+        /Still going/.test(verifyActionsSrc), 'a silent long job looks identical to a dead one');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -535,7 +560,7 @@ section('WIRING — a feature that nothing calls is a dead feature');
 {
     const scheduler = src('scheduler.js');
     const cfg = require(R('config.js'));
-    const actionsSrc = src('workflow/actions.js');
+    const verifyActionsSrc = src('workflow/actions.js');
     const brainSrc = src('workflow/brain.js');
 
     ckTrue('payment watcher is scheduled', /paymentWatcher\.run\(\)/.test(scheduler),
@@ -563,7 +588,7 @@ section('WIRING — a feature that nothing calls is a dead feature');
             'an action the AI can pick but nothing routes silently does nothing');
     }
     ckTrue('every pending type the AI can stage has a resolver',
-        /case 'await_payment_confirm'/.test(actionsSrc));
+        /case 'await_payment_confirm'/.test(verifyActionsSrc));
 }
 
 // ─────────────────────────────────────────────────────────────────────────

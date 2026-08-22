@@ -319,7 +319,27 @@ async function verifyOne(bkgNo, gmail) {
 // Every active booking. Deliberately sequential, like run() — each booking
 // costs a Gmail search plus a Gemini extraction, and firing dozens in parallel
 // is how you hit a rate limit halfway through and get a half-finished report.
-async function verify(bookingNumbers = null) {
+//
+// Apsara, 2026-08-22: "but nothing fired yet". The first version of this had
+// no timeout, no progress, and no guaranteed end. One hung Gemini call stalled
+// the whole run silently and forever. Now:
+//   - every booking is raced against VERIFY_BOOKING_TIMEOUT_MS, so one hang
+//     costs one booking, not the run;
+//   - onProgress fires as it goes, so the caller can show life;
+//   - the loop cannot throw out — every booking yields a result object, even
+//     if that result is { status: 'timeout' } or { status: 'error' }.
+const VERIFY_BOOKING_TIMEOUT_MS = 45000;
+
+function withTimeout(promise, ms, onTimeoutValue) {
+    let timer;
+    return Promise.race([
+        Promise.resolve(promise).then((v) => { clearTimeout(timer); return v; },
+            (e) => { clearTimeout(timer); throw e; }),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(onTimeoutValue), ms); }),
+    ]);
+}
+
+async function verify(bookingNumbers = null, onProgress = null) {
     let gmail;
     try {
         gmail = getGmailRead();
@@ -332,8 +352,28 @@ async function verify(bookingNumbers = null) {
         ? bookingNumbers.filter((n) => bookings[n])
         : Object.keys(bookings);
     const results = [];
-    for (const bkgNo of list) results.push(await verifyOne(bkgNo, gmail));
-    return { results };
+    const started = Date.now();
+    console.log(`[${AGENT}] verify start: ${list.length} booking(s)`);
+    for (let i = 0; i < list.length; i++) {
+        const bkgNo = list[i];
+        const t0 = Date.now();
+        let r;
+        try {
+            r = await withTimeout(verifyOne(bkgNo, gmail), VERIFY_BOOKING_TIMEOUT_MS,
+                { bkgNo, status: 'timeout' });
+        } catch (err) {
+            console.error(`[${AGENT}] verify ${bkgNo} threw:`, err.message);
+            r = { bkgNo, status: 'error', error: err.message };
+        }
+        console.log(`[${AGENT}] verify ${i + 1}/${list.length} ${bkgNo} -> ${r.status} (${Date.now() - t0}ms)`);
+        results.push(r);
+        if (typeof onProgress === 'function') {
+            try { await onProgress({ done: i + 1, total: list.length, bkgNo, result: r }); }
+            catch (e) { console.error(`[${AGENT}] verify progress hook failed:`, e.message); }
+        }
+    }
+    console.log(`[${AGENT}] verify done: ${results.length} booking(s) in ${Date.now() - started}ms`);
+    return { results, total: list.length };
 }
 
-module.exports = { run, verify, verifyOne, extractFieldsFromMail, fieldsAgree, normaliseDate, looseEqual, BACKFILL_FIELDS, FIELD_LABELS, DATE_FIELDS };
+module.exports = { run, verify, verifyOne, withTimeout, VERIFY_BOOKING_TIMEOUT_MS, extractFieldsFromMail, fieldsAgree, normaliseDate, looseEqual, BACKFILL_FIELDS, FIELD_LABELS, DATE_FIELDS };

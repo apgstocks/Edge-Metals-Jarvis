@@ -3181,9 +3181,23 @@ async function verifyBookings(chatId, bookingNumbers) {
     const { verify, FIELD_LABELS } = require('../helpers/cutoffBackfill');
     const scope = bookingNumbers && bookingNumbers.length ? `${bookingNumbers.length} booking(s)` : 'every active booking';
     await _send(chatId, `Re-checking ${scope} against the original booking mail — this takes a moment, it reads each booking's mail separately.`);
+    // Apsara, 2026-08-22: "but nothing fired yet". This used to open with that
+    // line and then, if a single Gemini call hung, say nothing ever again.
+    // Progress every few bookings proves it is alive; the helper's per-booking
+    // timeout guarantees the loop ends; and the report below is now sent on
+    // EVERY exit path, so silence is no longer a possible outcome.
     let out;
+    let lastPing = Date.now();
     try {
-        out = await verify(bookingNumbers);
+        out = await verify(bookingNumbers, async ({ done, total }) => {
+            const nearlyDone = done === total;
+            if (nearlyDone) return;                       // the report itself is the last word
+            if (done % 5 === 0 || Date.now() - lastPing > 60000) {
+                lastPing = Date.now();
+                try { await _send(chatId, `Still going — ${done}/${total} bookings checked.`); }
+                catch (e) { console.error('[ACTIONS] verify progress send failed:', e.message); }
+            }
+        });
     } catch (err) {
         console.error('[ACTIONS] verifyBookings failed:', err.message);
         await _send(chatId, `Verification failed: ${err.message}`);
@@ -3227,9 +3241,18 @@ async function verifyBookings(chatId, bookingNumbers) {
         lines.push('');
         lines.push(`*Couldn't check ${noMail.length}* — no booking mail found: ${noMail.map((r) => r.bkgNo).join(', ')}`);
     }
+    // A booking that timed out or errored is NOT the same as one that matched.
+    // Saying nothing about it would quietly report a clean bill of health for
+    // data nobody actually looked at.
+    const stalled = results.filter((r) => r.status === 'timeout' || r.status === 'error');
+    if (stalled.length) {
+        lines.push('');
+        lines.push(`*${stalled.length} booking(s) could not be read* (mail or AI took too long): ${stalled.map((r) => r.bkgNo).join(', ')}`);
+        lines.push('Ask again for just those and I\'ll retry them.');
+    }
     if (!lines.length) lines.push('Nothing to check — no bookings on file.');
     await _send(chatId, lines.join('\n'));
-    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length };
+    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length, stalled: stalled.length };
 }
 
 async function backfillCutoffs(chatId) {
