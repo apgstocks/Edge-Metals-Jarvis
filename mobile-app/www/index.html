@@ -399,6 +399,12 @@ body { overflow-y:auto; }
        someone actually taps it, per her earlier "unless user specifically
        opens, it should not open." -->
   <div id="mobileTabBar" style="display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid var(--steel-800);"></div>
+  <!-- Jarvis WhatsApp health banner. Sits ABOVE #viewRoot rather than inside
+       it, so a tab re-render (which replaces viewRoot's innerHTML wholesale)
+       can't wipe it — the whole point is that it stays put until the session
+       is actually back. Hidden by default; shown only for admin, and only
+       when the session is not ready. -->
+  <div id="waDownBanner" class="hidden" style="margin:10px 16px 0; padding:11px 13px; border-radius:var(--radius-sm); background:rgba(214,158,46,.12); border:1px solid var(--status-warning, #d69e2e);"></div>
   <div id="viewRoot"></div>
 </div>
 
@@ -3052,6 +3058,9 @@ async function bootLoads() {
   // remembering whatever was open last time.
   currentMobileTab = 'loads';
   renderMobileTabs();
+  // After ROLE is set — refreshWaBanner() reads it to decide whether to call
+  // the admin-only status endpoint at all.
+  startWaBannerPolling();
   try {
     await renderCurrentMobileTab();
   } catch (err) {
@@ -3081,6 +3090,11 @@ $('btnLogin').addEventListener('click', doLogin);
 $('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 $('btnSignout').addEventListener('click', () => {
   setToken(null);
+  // Stop the poller and clear the banner on the way out. Without this it
+  // keeps firing an admin-only request every 60s with a dead token, and the
+  // warning stays on screen behind the login form.
+  if (waBannerTimer) { clearInterval(waBannerTimer); waBannerTimer = null; }
+  if ($('waDownBanner')) { $('waDownBanner').classList.add('hidden'); $('waDownBanner').innerHTML = ''; }
   showLoginScreen();
 });
 
@@ -4113,6 +4127,103 @@ async function invSubmit(preview) {
   } finally {
     btn.disabled = false; btn.textContent = label;
   }
+}
+
+
+// ── Jarvis WhatsApp health banner ─────────────────────────────────────────
+// Added 2026-08-22 per Apsara: "in app, if whatsapp jarvis is down, allow
+// user to open their own whatsapp."
+//
+// WORTH BEING PRECISE ABOUT WHAT THIS DOES AND DOESN'T FIX, because the
+// premise turned out not to hold: nothing the app does goes through Jarvis's
+// WhatsApp session. "Send to seller" in both clients opens a wa.me deep link,
+// which hands off to whatever WhatsApp is installed on the phone and sends
+// from THAT account (changed 2026-08-17, and confirmed present in the shipped
+// APK asset). Generated documents go out through the Android share sheet.
+// POST /api/loads/:id/send-to-seller — the route that DID use Jarvis — has
+// been dead code since that change.
+//
+// So there is no in-app send to fall back FROM. What Jarvis's session still
+// owns is the unattended work: the 8pm yard report to the team group, price-
+// list changes to customers, and yard-group replies. When the session drops,
+// all of that silently stops, and the only way to find out was reading pm2
+// logs — the exact class of failure /api/health was built for.
+//
+// Hence: no send buttons (her call — "just the warning"), one honest banner
+// naming what has stopped.
+//
+// If a ticket ever appears to send from the Jarvis number, the cause is the
+// phone, not this code: wa.me sends from the account signed into WhatsApp on
+// that device, so on the handset that hosts the Jarvis number, "your own
+// WhatsApp" IS Jarvis. Sharing the ticket via the share sheet instead would
+// let you pick between WhatsApp and WhatsApp Business — not built, since it
+// wasn't asked for.
+let waBannerTimer = null;
+
+// Admin-only, and that's a server fact rather than a UI preference:
+// /api/whatsapp/status is requireAdmin, and staff are denied everything
+// outside STAFF_ALLOWED_PATH_PREFIXES. A non-admin call would 403, so it
+// isn't made at all.
+async function refreshWaBanner() {
+  const el = $('waDownBanner');
+  if (!el) return;
+  if (ROLE !== 'admin') { el.classList.add('hidden'); return; }
+  let st = null;
+  try { st = await api('/api/whatsapp/status'); }
+  catch (err) {
+    // A failed status check is NOT evidence the session is down — the
+    // server could simply be unreachable, and claiming WhatsApp is
+    // disconnected on the strength of a network blip is how a banner
+    // teaches people to ignore it. Leave whatever's showing.
+    return;
+  }
+  if (!st || st.status === 'ready') { el.classList.add('hidden'); el.innerHTML = ''; return; }
+
+  // 'initializing' is normal for the first seconds after a restart and
+  // resolves itself, so it gets softer wording than a real disconnect.
+  const booting = st.status === 'initializing';
+  const headline = {
+    initializing: 'Jarvis is still connecting to WhatsApp',
+    qr: 'Jarvis is signed out of WhatsApp',
+    disconnected: 'Jarvis is disconnected from WhatsApp',
+    auth_failure: 'Jarvis was rejected by WhatsApp',
+  }[st.status] || 'Jarvis is not connected to WhatsApp';
+
+  const fix = {
+    qr: 'Scan the QR code on the dashboard under Settings to sign it back in.',
+    auth_failure: 'The session was refused — re-scan the QR code on the dashboard under Settings.',
+    disconnected: 'It usually reconnects on its own. If it does not, re-scan the QR code on the dashboard under Settings.',
+  }[st.status] || '';
+
+  el.innerHTML = `
+    <div style="display:flex; align-items:start; gap:9px;">
+      <span style="font-size:14px; line-height:1.2;">⚠</span>
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:12.5px; font-weight:700; color:var(--text-strong);">${esc(headline)}</div>
+        <div style="font-size:11.5px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+          ${booting
+            ? 'Give it a moment. Until it finishes, automatic messages are queued or dropped.'
+            : 'The 8pm yard report, price-list updates and yard-group replies will not send until this is fixed.'}
+        </div>
+        ${fix ? `<div style="font-size:11.5px; color:var(--text-muted); margin-top:5px; line-height:1.5;">${esc(fix)}</div>` : ''}
+        <div style="font-size:11.5px; color:var(--text-faint); margin-top:6px; line-height:1.5;">
+          Sending a load ticket still works — that goes through the WhatsApp on this phone, not Jarvis.
+        </div>
+        ${st.lastError ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:6px; word-break:break-word;">${esc(st.lastError)}</div>` : ''}
+      </div>
+    </div>`;
+  el.classList.remove('hidden');
+}
+
+// Polled rather than checked once at boot: this app stays open on a phone in
+// a yard for hours, and a session that drops at 2pm would otherwise show a
+// clean screen until the next restart. 60s is frequent enough to notice
+// before the 8pm report and cheap enough to ignore — the endpoint reads an
+// in-memory object.
+function startWaBannerPolling() {
+  if (waBannerTimer) clearInterval(waBannerTimer);
+  refreshWaBanner();
+  waBannerTimer = setInterval(refreshWaBanner, 60000);
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────
