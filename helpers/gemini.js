@@ -705,6 +705,77 @@ If the image is blurry, cut off, glared, or not actually a scale ticket, still r
 }
 
 
+// ── Multimodal: transcribe a WhatsApp voice note ──────────────────────────────
+// Added per Apsara: "jarvis should talk" -> clarified to mean voice INPUT —
+// she (or her team) sends a WhatsApp voice note instead of typing, and Jarvis
+// understands and acts on it the same as a typed message. Deliberately the
+// SMALLEST possible integration: this function only turns audio into text:
+// index.js's message handler downloads a 'ptt'/'audio' message's bytes, calls
+// this, and feeds the result into brain.process()'s existing `text` field —
+// nothing about intent routing, pending-state handling, or any action in
+// workflow/brain.js or workflow/actions.js needs to know a message started as
+// audio at all. Same reasoning as the yard scale-ticket photo path just above
+// this in the file: reuse the pipeline that already works for text, don't
+// build a second one.
+//
+// Returns English text specifically (not just a verbatim transcript) — every
+// downstream intent-matching/AI-decide step in brain.js already assumes
+// English, and Apsara's team includes non-English speakers (Korean suppliers
+// etc. show up throughout this codebase's real data). Translating here, once,
+// keeps that assumption true for voice the same way it already happens to be
+// true for typed messages (people already type to Jarvis in English).
+//
+// Non-fatal by construction, like every other Gemini extraction in this file
+// — if this throws, index.js's caller catches it and falls back to treating
+// the message as if it had no usable text, exactly like a genuinely blank
+// message would already be handled, rather than crashing the whole handler.
+async function transcribeVoiceNote(audioBase64, mimeType, retries = 2) {
+    if (!audioBase64) throw new Error('audioBase64 required');
+
+    const prompt = `You are transcribing a WhatsApp voice note sent to a logistics/export company's assistant. Return ONLY raw JSON — no markdown, no prose.
+
+Schema:
+{
+  "transcript": null,     // verbatim transcription, in whatever language was actually spoken
+  "language": null,       // best guess at the spoken language, e.g. "English", "Hindi", "Korean"
+  "english_text": null    // the same content translated into English (if already English, just repeat the transcript as-is — do not paraphrase or summarize, translate as literally as possible so instructions/numbers/names stay exact)
+}
+
+If the audio is silent, unintelligible, or just noise, return all three fields as null rather than guessing or refusing. Never return prose outside the JSON object.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: mimeType || 'audio/ogg', data: audioBase64 } },
+            ]);
+            const fields = extractJson(result.response.text());
+            if (fields) {
+                console.log(`[GEMINI] Voice note transcribed (${fields.language || '?'}): "${String(fields.english_text || fields.transcript || '').slice(0, 80)}"`);
+                return fields;
+            }
+            console.warn(`[GEMINI] Voice note transcription returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Voice note transcription failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (attempt >= retries) throw err;
+            if (!transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
+
 // ── Multimodal: read a single weight number off a digital scale display ──────
 // Used by the dashboard's Add New Load form — the gross/tare camera capture
 // buttons snapshot the scale readout and POST here (via /api/vision/read-weight
@@ -3660,4 +3731,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords };
+module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };

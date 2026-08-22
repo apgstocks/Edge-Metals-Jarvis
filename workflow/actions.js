@@ -395,15 +395,25 @@ async function resolveReminderTarget(query, managerChatId) {
         console.warn('[ACTIONS] reminder group lookup unavailable:', e.message);
     }
 
-    // 2. Saved rosters.
+    // 2. Saved rosters. Wrapped because loadTruckers/loadSuppliers are
+    // Supabase-backed and THROW outright when the DB is unreachable or
+    // unconfigured — found while testing 2026-08-22. Letting that propagate
+    // would turn a transient DB blip into an unhandled exception for the whole
+    // send/reminder, when the WhatsApp-group path above may well have been
+    // enough on its own. Degrade to "not found" instead, which the callers
+    // already report honestly.
     const ql = (bare || q).toLowerCase();
-    const [truckers, suppliers] = [await loadTruckers(), await loadSuppliers()];
-    const roster = [...truckers, ...suppliers];
-    let hit = roster.find((r) => String(r.name || '').toLowerCase() === ql)
-           || roster.find((r) => String(r.name || '').toLowerCase().includes(ql));
-    if (hit) {
-        const chatId = hit.group_id || (hit.whatsapp ? `${hit.whatsapp}@c.us` : null);
-        if (chatId) return { chatId, label: hit.name };
+    try {
+        const [truckers, suppliers] = [await loadTruckers(), await loadSuppliers()];
+        const roster = [...truckers, ...suppliers];
+        const hit = roster.find((r) => String(r.name || '').toLowerCase() === ql)
+                 || roster.find((r) => String(r.name || '').toLowerCase().includes(ql));
+        if (hit) {
+            const chatId = hit.group_id || (hit.whatsapp ? `${hit.whatsapp}@c.us` : null);
+            if (chatId) return { chatId, label: hit.name };
+        }
+    } catch (e) {
+        console.warn('[ACTIONS] roster lookup unavailable during target resolve:', e.message);
     }
     try {
         const { loadContacts } = require('../helpers/contacts');
@@ -415,6 +425,142 @@ async function resolveReminderTarget(query, managerChatId) {
     } catch { /* contacts store optional */ }
     return { notFound: true };
 }
+// ── Accounts receivable ─────────────────────────────────────────────────────
+// Built 2026-08-22. Jarvis could already generate invoices end to end but had
+// no idea whether any had been PAID — no balance, no ageing, no "who owes me".
+// See helpers/receivables.js for why payments live in their own store rather
+// than as columns on the Invoice Google Sheet.
+const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+async function showReceivables(chatId, who) {
+    const ar = require('../helpers/receivables');
+    let ledger;
+    try {
+        ledger = await ar.buildLedger({ openOnly: true, consignee: who || null });
+    } catch (e) {
+        await _send(chatId, `Couldn't read the invoice sheet: ${e.message}`);
+        return { action_taken: 'receivables_failed' };
+    }
+    const { rows, totals, orphans } = ledger;
+    if (!rows.length) {
+        await _send(chatId, who
+            ? `Nothing outstanding from "${who}" — all their invoices are paid.`
+            : `Nothing outstanding. Every invoice on the sheet is paid.`);
+        return { action_taken: 'receivables_none' };
+    }
+    // Oldest first (buildLedger already sorts that way) — that's the chase list.
+    const lines = rows.slice(0, 15).map((r) => {
+        const age = r.days_old === null ? 'date unknown' : `${r.days_old}d`;
+        const partial = r.paid > 0 ? ` — ${money(r.paid)} paid` : '';
+        return `• ${money(r.balance)} — ${r.consignee || r.customer || '(no name)'}\n   ${r.inv_no} · ${age}${partial}`;
+    });
+    const bucketOrder = ['90+', '61-90', '31-60', 'current', 'unknown'];
+    const bucketLine = bucketOrder
+        .filter((b) => totals.buckets[b])
+        .map((b) => `${b === 'current' ? '0-30d' : b === 'unknown' ? 'no date' : b + 'd'}: ${money(totals.buckets[b])}`)
+        .join('  ·  ');
+    const more = rows.length > 15 ? `\n(+${rows.length - 15} more)` : '';
+    const orphanWarn = orphans && orphans.length
+        ? `\n\n⚠️ ${orphans.length} payment(s) recorded against an invoice number I can't find on the sheet — say "show orphan payments" to see them.`
+        : '';
+    await _send(chatId,
+        `Outstanding${who ? ` from ${who}` : ''}: *${money(totals.outstanding)}* across ${rows.length} invoice${rows.length === 1 ? '' : 's'}\n${bucketLine}\n\n${lines.join('\n')}${more}${orphanWarn}`);
+    return { action_taken: 'receivables_shown' };
+}
+async function recordPayment(chatId, { invoiceRef, amount, paidOn, method, note }, senderName) {
+    const ar = require('../helpers/receivables');
+    if (!invoiceRef) {
+        await _send(chatId, `Payment against which invoice? Give me the invoice number or the customer name.`);
+        return { action_taken: 'payment_no_invoice' };
+    }
+    if (ar.parseAmount(amount) === null) {
+        await _send(chatId, `How much was paid against ${invoiceRef}?`);
+        return { action_taken: 'payment_no_amount' };
+    }
+    let res;
+    try {
+        res = await ar.recordPaymentByRef(invoiceRef, {
+            amount, paid_on: paidOn || null, method: method || null, note: note || null,
+            recorded_by: senderName || null,
+        });
+    } catch (e) {
+        await _send(chatId, `Couldn't record that: ${e.message}`);
+        return { action_taken: 'payment_failed' };
+    }
+    if (res.candidates) {
+        const list = res.candidates.map((c) => `• ${c.inv_no} — ${c.consignee || c.customer} · ${money(c.balance)} open`).join('\n');
+        await _send(chatId, `"${invoiceRef}" matches more than one invoice:\n${list}\n\nTell me which invoice number and I'll record it.`);
+        return { action_taken: 'payment_ambiguous' };
+    }
+    if (res.notFound) {
+        await _send(chatId, `Couldn't find an invoice matching "${invoiceRef}". Check the invoice number — nothing has been recorded.`);
+        return { action_taken: 'payment_invoice_not_found' };
+    }
+    const inv = res.invoice;
+    const settled = inv.balance <= 0.01
+        ? `That clears it — ${inv.inv_no} is fully paid.`
+        : `${money(inv.balance)} still outstanding on ${inv.inv_no}.`;
+    await _send(chatId, `Recorded ${money(res.payment.amount)} against ${inv.inv_no} (${inv.consignee || inv.customer}). ${settled}`);
+    return { action_taken: 'payment_recorded' };
+}
+async function showOrphanPayments(chatId) {
+    const ar = require('../helpers/receivables');
+    const { orphans } = await ar.buildLedger({});
+    if (!orphans.length) {
+        await _send(chatId, `No orphaned payments — every recorded payment matches an invoice on the sheet.`);
+        return { action_taken: 'orphans_none' };
+    }
+    const lines = orphans.map((p) => `• ${money(p.amount)} recorded against "${p.inv_no}" on ${p.paid_on}${p.note ? ` (${p.note})` : ''}`);
+    await _send(chatId, `These payments don't match any invoice number on the sheet:\n${lines.join('\n')}\n\nEither the invoice number was mistyped, or that invoice isn't on the sheet yet.`);
+    return { action_taken: 'orphans_shown' };
+}
+
+// Send a WhatsApp message to a group/trucker/supplier/contact, right now.
+// Built 2026-08-22 — Apsara: "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY
+// CANT IT DO IT". Answer: there was no action for it. `ask_contact` sends a
+// QUESTION and stages a pending to relay the answer back; `draft_email` is
+// email. Nothing existed for the plainest possible request — "tell X this."
+// Third instance this week of the same root pattern (see
+// claude/jarvis-ai-first-map.md): the AI can only choose from an exhaustive
+// action list, so a missing capability reads to the user as a refusal.
+//
+// DELIBERATELY NOT gated behind a yes/no confirm, unlike draft_email. The
+// email gate exists because the AI DRAFTS the wording there — it invents
+// content that goes out over her name. Here she supplies the exact text and
+// the exact recipient; the AI only routes it. The one real risk left is a
+// wrong recipient, which is handled by resolving strictly (no guessing at
+// numbers she didn't name), refusing to send when the name is ambiguous, and
+// echoing back exactly what went where so a mistake is visible immediately
+// rather than discovered later. Adding a confirm step here would reintroduce
+// exactly the friction she's objecting to, for a risk that's already covered.
+async function sendMessageTo(chatId, { target, message }) {
+    const text = String(message || '').trim();
+    if (!target || !String(target).trim()) {
+        await _send(chatId, `Send it to whom? Give me a group or contact name.`);
+        return { action_taken: 'send_no_target' };
+    }
+    if (!text) {
+        await _send(chatId, `What should I send to ${target}?`);
+        return { action_taken: 'send_no_message' };
+    }
+    const resolved = await resolveReminderTarget(target, chatId);
+    if (resolved.ambiguous) {
+        const list = resolved.ambiguous.map((g, i) => `${i + 1}. ${g.name}`).join('\n');
+        await _send(chatId, `More than one group matches "${target}":\n${list}\n\nSay it again with the exact name and I'll send it.`);
+        return { action_taken: 'send_target_ambiguous' };
+    }
+    if (resolved.notFound) {
+        await _send(chatId, `Couldn't find "${target}" — no WhatsApp group, trucker, supplier or contact by that name. Check the exact name (I have to be a member of the group) and I'll send it.`);
+        return { action_taken: 'send_target_not_found' };
+    }
+    const ok = await _send(resolved.chatId, text);
+    if (!ok) {
+        await _send(chatId, `Couldn't deliver that to ${resolved.label} — WhatsApp rejected the send. Nothing went out.`);
+        return { action_taken: 'send_failed' };
+    }
+    await _send(chatId, `Sent to ${resolved.label}: "${text}"`);
+    return { action_taken: 'message_sent' };
+}
+
 async function setReminder(chatId, { target, message, when }) {
     const tasksHelper = require('../helpers/tasks');
     const text = String(message || '').trim();
@@ -1420,6 +1566,36 @@ switch (pending.type) {
     case 'await_email_confirm':
         await clearPending(chatId);
         return pending.scheduled_for ? scheduleDraftedEmail(chatId, pending) : sendDraftedEmail(chatId, pending);
+    // Payment detected in the mailbox by workflow/paymentWatcher.js. It never
+    // writes to the ledger itself — this yes is the only thing that credits
+    // money, on purpose: a wrongly-credited payment is silent (the invoice
+    // simply stops appearing in "who owes me") and would have her stop
+    // chasing a customer who never paid. See that file's header.
+    case 'await_payment_confirm': {
+        await clearPending(chatId);
+        const ar = require('../helpers/receivables');
+        try {
+            const payment = await ar.addPayment({
+                inv_no: pending.inv_no,
+                amount: pending.amount,
+                paid_on: pending.paid_on || null,
+                method: pending.method || null,
+                note: pending.source_subject ? `auto-detected: ${pending.source_subject}` : 'auto-detected from email',
+                recorded_by: 'paymentWatcher',
+            });
+            const { rows } = await ar.buildLedger({});
+            const inv = rows.find((r) => ar.normaliseInvNo(r.inv_no) === ar.normaliseInvNo(pending.inv_no));
+            const m = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const tail = inv
+                ? (inv.balance <= 0.01 ? ` That clears ${inv.inv_no}.` : ` ${m(inv.balance)} still open on ${inv.inv_no}.`)
+                : '';
+            await _send(chatId, `Recorded ${m(payment.amount)} against ${pending.inv_no}.${tail}`);
+            return { action_taken: 'payment_recorded' };
+        } catch (e) {
+            await _send(chatId, `Couldn't record that payment: ${e.message}. Nothing was credited.`);
+            return { action_taken: 'payment_failed' };
+        }
+    }
 
     // Picked one of the ambiguous address-book matches shown for the quote
     // request's origin or destination — same options/matches pattern as
@@ -4004,7 +4180,8 @@ module.exports = {
 init,
 setPending, clearPending, clearAllPending, getPending, getQueuedPendings, resolvePending, promoteQueued,
 showMenu, showBookingsMenu, showBookingStatus, showContacts, lookupAddress,
-setReminder, showReminders, cancelReminder,
+setReminder, showReminders, cancelReminder, sendMessageTo,
+showReceivables, recordPayment, showOrphanPayments,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,
 assignSupplier, executeAssign,

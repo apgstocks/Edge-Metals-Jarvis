@@ -531,11 +531,78 @@ function findPackingRow(packingRows, itemDesc) {
     return packingRows[0];
 }
 
+// ── Every invoice on the sheet, with its total ──────────────────────────────
+// Built 2026-08-22 for the receivables ledger (helpers/receivables.js). Lives
+// HERE, not there, on purpose: the invoice total is real money, and the rule
+// for it — sum(weight × inv price), then subtract freight ONCE per invoice —
+// already exists twice in this file (buildContainerInvoiceData and
+// buildMultiContainerInvoiceData, which agree exactly). A third copy in
+// another file would be a place for the three to silently drift apart, and
+// the symptom would be an AR balance that disagrees with the invoice PDF the
+// customer is holding.
+//
+// Grouped by INV NO. rather than by container, because that's the unit a
+// customer actually owes against: one invoice can cover several containers
+// (see buildMultiContainerInvoiceData), and freight applies once to the
+// invoice, not once per container.
+//
+// Rows with no invoice number are skipped rather than lumped together — an
+// unnumbered row is a draft or a spacer, not a debt.
+async function listAllInvoices(forceRefresh) {
+    const { headers, rows } = await fetchRawSheet(forceRefresh);
+    const colMap = buildColumnMap(headers);
+    if (colMap.inv_no === -1) {
+        throw new Error('Invoice sheet header layout changed — expected an "Inv No." column');
+    }
+    const byInvNo = new Map();
+    for (const row of rows) {
+        const d = rowToDict(row, colMap);
+        const invNo = safeStr(d.inv_no);
+        if (!invNo) continue;
+        if (!byInvNo.has(invNo)) {
+            byInvNo.set(invNo, {
+                inv_no: invNo,
+                consignee: safeStr(d.consignee),
+                customer: safeStr(d.customer),
+                inv_date: safeStr(d.inv_date),
+                terms: safeStr(d.terms),
+                containers: [],
+                subtotal: 0,
+                freight: 0,
+                line_count: 0,
+            });
+        }
+        const inv = byInvNo.get(invNo);
+        inv.subtotal += safeFloat(d.weight) * safeFloat(d.inv_price);
+        inv.line_count += 1;
+        const c = safeStr(d.container_no).toUpperCase();
+        if (c && !inv.containers.includes(c)) inv.containers.push(c);
+        // First non-zero freight wins, exactly as the two builders above do.
+        if (!inv.freight) {
+            const fv = evalFreight(d.freight_charge);
+            if (fv > 0) inv.freight = fv;
+        }
+        // Keep the first non-empty header value seen for the invoice — later
+        // rows of a multi-container invoice often leave these blank and carry
+        // only line-item data.
+        if (!inv.consignee) inv.consignee = safeStr(d.consignee);
+        if (!inv.customer) inv.customer = safeStr(d.customer);
+        if (!inv.inv_date) inv.inv_date = safeStr(d.inv_date);
+        if (!inv.terms) inv.terms = safeStr(d.terms);
+    }
+    return Array.from(byInvNo.values()).map((inv) => ({
+        ...inv,
+        subtotal: Math.round(inv.subtotal * 100) / 100,
+        final_amount: Math.round((inv.subtotal - inv.freight) * 100) / 100,
+    }));
+}
+
 module.exports = {
     findContainersForBuyer,
     findContainersByNumber,
     buildContainerInvoiceData,
     buildMultiContainerInvoiceData,
+    listAllInvoices,
     fetchPackingLookup,
     findPackingRow,
     resolveItemDesc,

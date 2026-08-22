@@ -473,12 +473,42 @@ client.on('message', async (msg) => {
             } catch (e) { console.warn('[WA] Yard media download failed:', e.message); }
         }
 
+        // Voice notes ("ptt" — WhatsApp's push-to-talk type — and plain audio
+        // attachments): per Apsara ("jarvis should talk" -> voice INPUT, she
+        // can speak instead of type). Transcribed to English text via
+        // helpers/gemini.js's transcribeVoiceNote and dropped straight into
+        // the same `text` field a typed message would populate below —
+        // brain.js never needs to know the message started as audio. No
+        // sender allowlist here (unlike the yard-photo path above) since
+        // this is meant to work for anyone whose typed messages already
+        // reach Jarvis; normalize()/policyDecide() in brain.js already gate
+        // who's authorized regardless of how the text got there.
+        let voiceText = null;
+        if (msg.hasMedia && (msg.type === 'ptt' || msg.type === 'audio')) {
+            try {
+                const media = await msg.downloadMedia();
+                if (media?.data) {
+                    const { transcribeVoiceNote } = require('./helpers/gemini');
+                    const transcribed = await transcribeVoiceNote(media.data, media.mimetype);
+                    voiceText = transcribed?.english_text || transcribed?.transcript || null;
+                    if (!voiceText) {
+                        await sendMessage(chat?.id?._serialized || msg.from, `Couldn't make out that voice note — mind typing it instead?`);
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.error('[WA] Voice note transcription failed:', e.message);
+                await sendMessage(chat?.id?._serialized || msg.from, `Had trouble understanding that voice note (${e.message}) — mind typing it instead?`);
+                return;
+            }
+        }
+
         await brain.process({
             messageId   : msg.id?._serialized,
             chatId      : chat?.id?._serialized || msg.from,
             senderNumber,
             senderName  : contact?.pushname || contact?.name || contact?.number || 'Unknown',
-            text        : msg.body || '',
+            text        : voiceText ?? (msg.body || ''),
             hasMedia    : msg.hasMedia,
             mediaType   : msg.type,
             mediaBase64,

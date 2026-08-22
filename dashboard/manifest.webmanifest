@@ -1,11 +1,11 @@
 {
-  "name": "Edge Yard",
-  "short_name": "Edge Yard",
-  "description": "Weigh-in, scale photo capture and load tickets for Edge Trading.",
+  "name": "Jarvis",
+  "short_name": "Jarvis",
+  "description": "Jarvis — Edge Metals operations dashboard: bookings, quotes, documents, and the Jarvis command terminal.",
   "start_url": "/?source=homescreen",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#0C0E10",
   "theme_color": "#0C0E10",
   "icons": [

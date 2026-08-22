@@ -2273,6 +2273,39 @@ function createApi() {
         }
     });
 
+    // Voice input for the dashboard's "Jarvis terminal" — per Apsara ("is it
+    // possible to integrate [voice] into this website?"), a follow-up to the
+    // WhatsApp voice-note feature (helpers/gemini.js's transcribeVoiceNote,
+    // wired into index.js's WhatsApp message handler). Deliberately reuses
+    // that SAME transcription function rather than a second implementation.
+    //
+    // Deliberately does NOT auto-fire through brain.process() the way the
+    // WhatsApp path does — this only returns the transcribed text for the
+    // browser to drop into the terminal's input box, same as if she'd typed
+    // it. The terminal's own UI already warns "Commands fire for real —
+    // same effect as messaging Jarvis on WhatsApp"; a WhatsApp voice note is
+    // usually a deliberate, quiet recording, while a dashboard mic click is
+    // more likely to pick up office background noise, so a review-before-
+    // send step here is the safer default for something that fires REAL
+    // trucker/supplier messages. If this turns out to be annoying in
+    // practice, auto-send is a one-line change (call /api/bot/command's
+    // logic with the transcript instead of just returning it).
+    app.post('/api/bot/voice-command', async (req, res) => {
+        const audioBase64 = req.body?.audio_base64;
+        const mimeType = req.body?.mime_type || 'audio/webm';
+        if (!audioBase64) return res.status(400).json({ error: 'audio_base64 required' });
+        try {
+            const { transcribeVoiceNote } = require('./helpers/gemini');
+            const result = await transcribeVoiceNote(audioBase64, mimeType);
+            const text = result?.english_text || result?.transcript || '';
+            if (!text) return res.status(422).json({ error: "couldn't make out that recording — try again or type it" });
+            res.json({ ok: true, text, language: result?.language || null });
+        } catch (err) {
+            console.error('[API] bot/voice-command failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     // Address book — standalone page, not part of index.html's SPA tab
     // system (explicit request 2026-08-05). Registered before the static
     // mount below so the route is unambiguous; inherits the same session/

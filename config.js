@@ -44,13 +44,6 @@ const FILES = {
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
     TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),
-    // Review & Generate screen's edit-state history, per container — NOT
-    // the saved PDF archive (see helpers/documentsSaved.js for that, a
-    // different thing: the finished file vs. the form fields that produced
-    // it). Added per Apsara's "Load previous edits" mockup — every real
-    // Generate & Download saves the full form state here so a returning
-    // visit to the same container can restore it instead of starting blank.
-    INVOICE_VERSIONS_FILE: path.join(DATA_DIR, 'invoice_versions.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
     MEMORY_EMBEDDINGS_FILE: path.join(MEMORY_DIR, 'embeddings.json'),
@@ -115,6 +108,17 @@ const FILES = {
     // flag onto loads.json would mean special-casing every existing
     // consumer — getInventoryReport, the PDFs, the workbooks — for no gain.
     EXPENSES_FILE: path.join(DATA_DIR, 'expenses.json'),
+    // Payments received against invoices — the other half of the receivables
+    // ledger (helpers/receivables.js). Deliberately its own append-only store
+    // rather than new columns on the Invoice Google Sheet: that sheet is read
+    // by several other tools, one invoice can be paid in instalments (a list,
+    // not a column), and a payment record must survive an accidental sheet
+    // edit. Joined to the sheet by invoice number. See receivables.js's header.
+    PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
+    // Gmail message ids the payment watcher has already judged — same
+    // dedupe pattern as EMAIL_PROCESSED_FILE. Kept separate from that one so
+    // the two watchers can never mark each other's mail as handled.
+    PAYMENT_EMAILS_PROCESSED_FILE: path.join(DATA_DIR, 'payment_emails_processed.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads
@@ -369,10 +373,6 @@ function getSettings() {
         yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
         yard_whatsapp_group_id : '',
         yard_whatsapp_contacts : '',
-        // Kept in sync with helpers/json.js's loadSettings() defaults, same
-        // reason as yard_report_emails above — see that file's comment.
-        gmail_watch_enabled    : GMAIL_WATCH_ENABLED,
-        gmail_watcher_last_run : null,
     };
     try {
         if (fs.existsSync(FILES.SETTINGS_FILE)) {
