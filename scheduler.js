@@ -730,7 +730,10 @@ async function contactQuoteEmailReplyWatch() {
 async function replyWatch() {
     try {
         const { run } = require('./workflow/replyWatch');
-        const result = await run({ sendToManager: _sendToManager });
+        // sendMessage is passed so deadline reminders can go to the internal
+        // team group rather than only to the manager — see replyWatch's
+        // deadline block.
+        const result = await run({ sendToManager: _sendToManager, sendMessage: _sendMessage });
         if (result.flagged) console.log(`[SCHED] reply-watch: ${result.flagged}/${result.checked} email(s) need a reply`);
     } catch (err) {
         console.error('[SCHED] reply-watch:', err.message);

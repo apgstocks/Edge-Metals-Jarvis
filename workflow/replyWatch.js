@@ -357,9 +357,17 @@ const URGENCY_MARK = { high: '!!', normal: '·', low: '·' };
 // Parses the deadline string Gemini copied verbatim out of the email. Returns
 // a Date, or null when it genuinely can't tell — null means "leave the
 // model's urgency alone", never "assume there's time".
-function parseDeadline(text, now = new Date()) {
+// `anchor` is when the EMAIL ARRIVED; `now` is when we're checking. They
+// differ for relative wording, and getting that wrong is a real bug found in
+// testing 2026-08-22: an email received Friday saying "by Monday noon",
+// re-evaluated ON Monday, resolved to the NEXT Monday — because "by Monday"
+// said on a Monday sensibly means a week away. Anchored to arrival it stays
+// the Monday the sender meant, so the reminder actually fires. Absolute dates
+// ("8/24") are unaffected either way.
+function parseDeadline(text, now = new Date(), anchor = null) {
     const s = String(text || '').trim().toLowerCase();
     if (!s) return null;
+    const base = anchor instanceof Date && !isNaN(anchor.getTime()) ? anchor : now;
 
     // "8/24", "8/24/26", "08-24-2026" — US month/day, the format in her mail.
     const m = /\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/.exec(s);
@@ -374,14 +382,14 @@ function parseDeadline(text, now = new Date()) {
             return dt;
         }
     }
-    const todayUTC = () => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const todayUTC = () => new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
     if (/\b(asap|immediately|urgent(ly)?|right away|today|eod|end of day|cob)\b/.test(s)) return todayUTC();
     if (/\btomorrow\b/.test(s)) return new Date(todayUTC().getTime() + DAY_MS);
     // A bare weekday ("by Monday", "Friday noon") — the NEXT one from today.
     const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
     for (const [name, idx] of Object.entries(WD)) {
         if (new RegExp(`\\b${name}\\b`).test(s)) {
-            let delta = (idx - now.getUTCDay() + 7) % 7;
+            let delta = (idx - base.getUTCDay() + 7) % 7;
             if (delta === 0) delta = 7; // "by Monday" said ON Monday means the next one
             return new Date(todayUTC().getTime() + delta * DAY_MS);
         }
@@ -393,15 +401,15 @@ function parseDeadline(text, now = new Date()) {
     return null;
 }
 // Whole days from today until the deadline. Negative = already overdue.
-function daysUntilDeadline(text, now = new Date()) {
-    const d = parseDeadline(text, now);
+function daysUntilDeadline(text, now = new Date(), anchor = null) {
+    const d = parseDeadline(text, now, anchor);
     if (!d) return null;
     const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     return Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - startOfToday) / DAY_MS);
 }
 // The urgency an item deserves once its stated deadline is accounted for.
 function applyDeadlineUrgency(item, now = new Date()) {
-    const days = daysUntilDeadline(item.deadline, now);
+    const days = daysUntilDeadline(item.deadline, now, item.receivedAt ? new Date(item.receivedAt) : null);
     if (days === null) return item;
     const deserved = days <= 2 ? 'high' : (days <= 5 ? 'normal' : null);
     const urgency = deserved && URGENCY_RANK[deserved] < URGENCY_RANK[item.urgency] ? deserved : item.urgency;
@@ -524,6 +532,80 @@ async function collectChaseUps(gmail, myAddress, tracked) {
     return due;
 }
 
+// ── Deadline reminders into the internal group ──────────────────────────────
+// Apsara, 2026-08-22, about "Please transfer cargo to RadMetals by Monday
+// noon": "If request like this comes, send a reminder mail / put a reminder in
+// internal group."
+//
+// The distinction that makes this worth having: the digest tells her an email
+// is WAITING. It says nothing when the thing it asked for is about to be DUE.
+// "Transfer cargo by Monday noon" is not a reply she owes — it's a job someone
+// has to do, and the person who does it may not be her.
+//
+// Built on the tracked list rather than as scheduled tasks, deliberately:
+//   - It self-cancels. hasSheReplied already tells us she's dealt with the
+//     thread, and a handled thread stops nudging with no task to clean up. A
+//     scheduled task would keep firing after the fact unless separately
+//     cancelled — and a reminder for something already done is exactly the
+//     noise that makes people stop reading reminders.
+//   - The deadline is re-read from tracked state each pass, so a corrected or
+//     re-stated deadline in a later email is picked up automatically.
+//
+// Fires at most ONCE PER DAY per email (lastDeadlineNudgeOn), from the day
+// before the deadline onwards, and keeps going while it's overdue — an
+// overdue cargo transfer matters more the day after, not less.
+// Apsara, 2026-08-22: "in between, if a reply is sent already before this
+// time, cancel n mark as completed." So an answered thread is not merely
+// skipped — it is CLOSED OUT and removed from tracking, which stops both the
+// deadline nudge and the later chase-up, and keeps the tracked list from
+// growing forever with things that are long done. Returns the items it
+// completed alongside the ones actually due, so the caller can drop them and
+// say what it cleared.
+const DEADLINE_NUDGE_WINDOW_DAYS = 1; // nudge when due within this many days
+async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Date()) {
+    const todayKey = now.toISOString().slice(0, 10);
+    const due = [], completed = [];
+    for (const t of tracked) {
+        if (!t.deadline) continue;
+        const days = daysUntilDeadline(t.deadline, now, t.firstFlaggedAt ? new Date(t.firstFlaggedAt) : null);
+        if (days === null) continue;                      // couldn't read the date
+        if (days > DEADLINE_NUDGE_WINDOW_DAYS) continue;  // not yet — check again tomorrow
+
+        // Check "has she answered" BEFORE the once-a-day gate, so a thread
+        // she answered this morning is closed out today rather than sitting
+        // tracked until tomorrow's pass.
+        const answered = await hasSheReplied(gmail, t.threadId, myAddress);
+        if (answered === true) { completed.push({ ...t, daysToDeadline: days }); continue; }
+
+        if (t.lastDeadlineNudgeOn === todayKey) continue; // already nudged today
+        due.push({ ...t, daysToDeadline: days });
+        t.lastDeadlineNudgeOn = todayKey;
+    }
+    // Drop the completed ones from tracking entirely — mutating in place, the
+    // same contract collectChaseUps already uses on this array.
+    if (completed.length) {
+        const doneIds = new Set(completed.map((c) => c.id));
+        const keep = tracked.filter((t) => !doneIds.has(t.id));
+        tracked.length = 0;
+        tracked.push(...keep);
+    }
+    return { due, completed };
+}
+function buildDeadlineMessage(due) {
+    const lines = [due.length === 1 ? 'Due now — needs doing:' : `${due.length} things due now:`, ''];
+    for (const d of due) {
+        const when = d.daysToDeadline < 0
+            ? `OVERDUE — was due ${d.deadline} (${Math.abs(d.daysToDeadline)}d ago)`
+            : d.daysToDeadline === 0 ? `due TODAY — ${d.deadline}` : `due tomorrow — ${d.deadline}`;
+        lines.push(`• ${when}`);
+        lines.push(`   ${d.asked_for || d.summary || d.subject}`);
+        lines.push(`   asked by ${d.fromName}`);
+        lines.push('');
+    }
+    lines.push('This clears itself once the sender gets a reply.');
+    return lines.join('\n');
+}
+
 function buildChaseMessage(due) {
     const lines = [`${due.length} email${due.length === 1 ? '' : 's'} still unanswered:`, ''];
     for (const d of due) {
@@ -579,7 +661,7 @@ function senderLabel(from) {
 
 // dryRun: assess and return, send nothing. Used by tests and by a manual
 // "what's waiting on me" check that shouldn't fire a WhatsApp message.
-async function run({ sendToManager, dryRun = false } = {}) {
+async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = false } = {}) {
     const gmail = await getGmailRead();
     if (!gmail) {
         console.warn('[REPLYWATCH] Gmail not authorized — skipping');
@@ -737,6 +819,10 @@ async function run({ sendToManager, dryRun = false } = {}) {
         store.tracked.push({
             id: f.id, threadId: f.threadId, fromName: f.fromName, subject: f.subject,
             summary: f.summary, firstFlaggedAt: new Date().toISOString(), chases: 0, lastChasedAt: null,
+            // Carried so deadline reminders can fire off tracked state without
+            // re-reading the mailbox — see collectDeadlineReminders.
+            deadline: f.deadline || null, asked_for: f.asked_for || null,
+            lastDeadlineNudgeOn: null,
         });
     }
 
@@ -768,6 +854,20 @@ async function run({ sendToManager, dryRun = false } = {}) {
         chaseUps = await collectChaseUps(gmail, me, store.tracked);
     } catch (err) {
         console.error('[REPLYWATCH] chase-up pass failed (non-fatal):', err.message);
+    }
+
+    // Deadline pass — runs BEFORE the chase-up send below so an item that is
+    // both overdue-for-a-reply and due-today produces the deadline nudge (the
+    // more actionable of the two) rather than only a "still unanswered" note.
+    let deadlineDue = [], deadlineDone = [];
+    try {
+        const res = await collectDeadlineReminders(gmail, me, store.tracked);
+        deadlineDue = res.due; deadlineDone = res.completed;
+        if (deadlineDone.length) {
+            console.log(`[REPLYWATCH] closed ${deadlineDone.length} tracked item(s) — already answered before the deadline`);
+        }
+    } catch (err) {
+        console.error('[REPLYWATCH] deadline pass failed (non-fatal):', err.message);
     }
 
     const laHour = getLADate().getHours();
@@ -835,6 +935,41 @@ async function run({ sendToManager, dryRun = false } = {}) {
         console.log(`[REPLYWATCH] holding ${queued.length} flagged email(s) — ${!inAlertWindow ? `outside alert window (LA hour ${laHour})` : 'waiting for the hourly digest slot'}`);
     }
 
+    // Deadline nudges go to the INTERNAL TEAM GROUP, not just to her — per
+    // Apsara: "put a reminder in internal group". That's the right audience:
+    // "transfer cargo to RadMetals by Monday noon" is a job someone has to do,
+    // and it isn't necessarily her. Falls back to her own chat when no team
+    // group is configured, so the reminder is never silently dropped.
+    //
+    // Sent regardless of the digest gap (this is a deadline, not a digest) but
+    // still inside the alert window — a 3am nudge helps nobody, and the
+    // once-a-day gate means it simply goes out at the start of the window.
+    if (deadlineDue.length && inAlertWindow) {
+        const settings = cfg.getSettings ? cfg.getSettings() : {};
+        const teamChat = settings.team_group_id || null;
+        const body = buildDeadlineMessage(deadlineDue);
+        let sentOk = false;
+        try {
+            if (teamChat && _sendMessage) {
+                sentOk = await _sendMessage(teamChat, body) !== false;
+            }
+            if (!sentOk && sendToManager) {
+                const res = await deliverToManager(sendToManager, body, {
+                    critical: true, subject: 'Deadline today', dedupeKey: 'reply-deadlines',
+                });
+                sentOk = !!res.delivered;
+            }
+            if (!sentOk) throw new Error('not delivered');
+        } catch (err) {
+            console.error('[REPLYWATCH] deadline nudge send failed:', err.message);
+            // Clear today's stamp so the next pass retries rather than
+            // treating a failed send as done — same reasoning as the
+            // chase-counter rollback below.
+            const failedIds = new Set(deadlineDue.map((d) => d.id));
+            store.tracked = store.tracked.map((t) => failedIds.has(t.id) ? { ...t, lastDeadlineNudgeOn: null } : t);
+        }
+    }
+
     // Chase-ups go out separately from the new-mail digest, and only inside
     // the alert window. Deliberately a distinct message: "you have new mail"
     // and "you still have not answered this from five days ago" are different
@@ -863,7 +998,7 @@ async function run({ sendToManager, dryRun = false } = {}) {
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, buildPrompt, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
