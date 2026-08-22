@@ -3441,6 +3441,7 @@ function wireDocTypeahead(inputId, listId, onPick, onType) {
 // ── PROFORMA — 3-step wizard ──────────────────────────────────────────────
 let pfw = null;
 function resetPfWizard() {
+  pfCustomerDescs = []; // last consignee's history must not leak into a new proforma
   pfw = {
     step: 1,
     consignee: '', consigneeEntry: null, consigneeTag: null,
@@ -3513,6 +3514,11 @@ function wirePfStep1() {
     // as the dashboard. It just means no address and no pricing memory.
     pfw.consignee = name;
     if (!pfw.consigneeTag) pfw.consigneeTag = name;
+    // Fire-and-forget: the material step opens immediately and the history
+    // lands a moment later. Suggestions appear on focus/typing, by which
+    // point this has almost always resolved; if it hasn't, the generic
+    // catalog still shows and nothing is blocked waiting on it.
+    pfPreloadCustomerDescs(pfw.consignee);
     pfw.step = 2; renderPfWizard();
   });
 }
@@ -3538,7 +3544,10 @@ function pfStep2Html() {
 function pfRenderItems() {
   $('pfwItems').innerHTML = pfw.items.map((it, i) => `
     <div class="pfw-item" data-i="${i}" style="display:grid; grid-template-columns:1fr 84px auto; gap:6px; align-items:center;">
-      <input class="pfw-desc" placeholder="material" value="${esc(it.desc)}" autocomplete="off">
+      <div style="position:relative; min-width:0;">
+      <input class="pfw-desc" placeholder="material" value="${esc(it.desc)}" autocomplete="off" style="width:100%;">
+      <div class="ac-dropdown pfw-desc-list hidden"></div>
+      </div>
       <input class="pfw-qty" type="number" step="any" placeholder="MT" value="${it.qty || ''}">
       <button type="button" class="btn btn-danger pfw-del" style="padding:6px 9px; font-size:10px;">✕</button>
     </div>`).join('');
@@ -3552,6 +3561,36 @@ function pfRenderItems() {
     }));
   };
   $('pfwItems').querySelectorAll('input').forEach(inp => inp.addEventListener('input', sync));
+
+  // Material suggestions per row.
+  $('pfwItems').querySelectorAll('.pfw-item').forEach(row => {
+    const input = row.querySelector('.pfw-desc');
+    const box = row.querySelector('.pfw-desc-list');
+    const close = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+    const show = async () => {
+      const generic = await pfLoadGenericDescs();
+      const items = pfDescSuggestions(input.value, pfCustomerDescs, generic);
+      // Don't cover the field with a list whose only entry is what's already
+      // typed in full.
+      if (!items.length || (items.length === 1 && items[0].text.toLowerCase() === input.value.trim().toLowerCase())) return close();
+      box.innerHTML = items.map((it, i) =>
+        `<div class="ac-item" data-i="${i}">${esc(it.text)}${it.fromHistory ? ' <span style="color:var(--status-success, #3fae55); font-size:9.5px; font-family:var(--font-mono);">● known price</span>' : ''}</div>`
+      ).join('');
+      box.classList.remove('hidden');
+      box.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
+        // mousedown + preventDefault: blur fires first on a click and would
+        // close the list before the click landed.
+        ev.preventDefault();
+        input.value = items[+el.dataset.i].text;
+        close();
+        sync(); // so Next reads the picked value, not the half-typed one
+      }));
+    };
+    input.addEventListener('input', show);
+    input.addEventListener('focus', show);
+    input.addEventListener('blur', () => setTimeout(close, 150));
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
+  });
   $('pfwItems').querySelectorAll('.pfw-del').forEach(btn => btn.addEventListener('click', () => {
     // Never leave zero rows — an empty step 2 has no way back to a usable
     // state except Start over.
@@ -3898,6 +3937,71 @@ function resetInvFlow() {
 // unusual, but a container with a blank invoice date is still a real
 // container, and silently hiding one is exactly the failure this cap could
 // otherwise cause.
+// ── Proforma material suggestions ─────────────────────────────────────────
+// Ported from dashboard/documents.html 2026-08-22 after Apsara: "in material
+// of proforma, the change i told is missing" — then "check my dashboard",
+// where it already existed. The phone's material box was plain text with no
+// suggestions at all, which is worst precisely on the step a proforma STARTS
+// from.
+//
+// TWO sources, in this order, matching the dashboard exactly:
+//   1. What THIS consignee has ordered before (from customer-pricing memory).
+//      Flagged "known price" because picking one also means a rate is already
+//      remembered for it, which is the difference between a suggestion worth
+//      taking and one that just saves typing.
+//   2. The shared item-description catalog (/api/item-types) — the same list
+//      the Loads screen uses. Sharing it is the dashboard's existing choice,
+//      not a new one I made here; keeping a separate proforma list would have
+//      meant the same material typed in the yard never appearing here.
+//
+// A description in both lists appears ONCE, as history, so the customer's own
+// wording wins over the generic entry.
+let pfGenericDescs = null, pfGenericDescsLoading = null, pfCustomerDescs = [];
+
+async function pfLoadGenericDescs() {
+  if (pfGenericDescs) return pfGenericDescs;
+  // One in-flight request shared by every row — several material rows all
+  // asking on first keystroke should not be several identical fetches.
+  if (!pfGenericDescsLoading) {
+    pfGenericDescsLoading = api('/api/item-types')
+      .then(l => { pfGenericDescs = Array.isArray(l) ? l : []; return pfGenericDescs; })
+      .catch(() => { pfGenericDescs = []; return pfGenericDescs; }) // offline: history still works
+      .finally(() => { pfGenericDescsLoading = null; });
+  }
+  return pfGenericDescsLoading;
+}
+
+// Read-only half of the pricing lookup. lookupPricingMemory's full version
+// also fills trade terms, port and invoice number — which must NOT happen at
+// step 1, a full step before those fields exist. Same split the dashboard
+// makes for the same reason.
+async function pfPreloadCustomerDescs(customer) {
+  const name = String(customer || '').trim();
+  if (!name) { pfCustomerDescs = []; return; }
+  try {
+    const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(name));
+    pfCustomerDescs = (info && info.items) ? Object.keys(info.items) : [];
+  } catch (e) { pfCustomerDescs = []; }
+}
+
+function pfDescSuggestions(q, customerDescs, genericDescs) {
+  const needle = String(q || '').trim().toLowerCase();
+  const seen = new Set();
+  const out = [];
+  const push = (text, fromHistory) => {
+    const key = String(text || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({ text: String(text).trim(), fromHistory });
+  };
+  // An empty box still lists this customer's history — on a blank field the
+  // most useful thing is what they always order.
+  const match = t => !needle || String(t).toLowerCase().includes(needle);
+  (customerDescs || []).filter(match).forEach(t => push(t, true));
+  (genericDescs || []).filter(match).forEach(t => push(t, false));
+  return out.slice(0, 12);
+}
+
 const INV_BUYER_LIMIT = 5;
 function invRecentFirst(containers) {
   const parse = (d) => {
