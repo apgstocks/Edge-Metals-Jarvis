@@ -63,10 +63,17 @@ async function dailyTruckerCheck() {
         // Something on this chat is already unresolved (e.g. last night's
         // learning digest never got answered) — don't show a live yes/no
         // prompt for a wizard that isn't actually the active pending yet.
-        await _sendToTeam(`(Morning trucker check queued — you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.)`);
+        await _sendToTeam(`(Trucker check queued — you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.)`);
         return;
     }
-    await _sendToTeam('Morning — any bookings need to go out to a trucker today? (yes/no)');
+    // TIME-OF-DAY WORDING (2026-08-22): these schedules are anchored to
+    // America/Los_Angeles because every freight deadline is a US port date —
+    // that is correct and stays. But Apsara reads them in IST, where 8:15 AM
+    // LA lands at 8:45 PM. A message opening with "Morning" at a quarter to
+    // nine in the evening reads as a bug even though the timing is right. The
+    // schedule is not the problem, the greeting is — so the greeting goes and
+    // the message says what it is about instead of what time it thinks it is.
+    await _sendToTeam('Trucker check for today — any bookings need to go out to a trucker? (yes/no)');
 }
 
 // ── 8AM — morning digest ──────────────────────────────────────────────────────
@@ -102,7 +109,8 @@ async function morningDigest() {
     };
 
     const lines = [
-        `Morning digest — ${active.length} active booking(s)`,
+        // See the time-of-day note in dailyTruckerCheck above.
+        `Daily digest — ${active.length} active booking(s)`,
         '',
         urgent.length ? 'URGENT CUTOFFS:' : 'No urgent cutoffs.',
         ...urgent.map(urgentLine),

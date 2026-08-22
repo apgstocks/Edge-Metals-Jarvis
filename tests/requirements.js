@@ -351,6 +351,108 @@ section('Digest: one row per MATTER, and deadlines rank consistently');
         it({ threadId: 'y', from: 'sue@gmail.com', asked_for: 'booking for 2x40 HC containers' })));
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────
+section('SIMULATED SCENARIOS — replaying real conversations end to end');
+// Apsara, 2026-08-22: "you shold simulate test case like this in regressiom."
+//
+// Everything above asserts on a function. That catches a broken function but
+// NOT a broken conversation — the 2026-08-22 evening transcript is the proof:
+// every individual piece worked, and the exchange as a whole still went
+// wrong, because the AI picked the neighbouring action. These replay real
+// transcripts message by message and assert on what Jarvis would DO.
+{
+    const brain = require(R('workflow/brain.js'));
+    const actions = require(R('workflow/actions.js'));
+
+    // Walks a scripted conversation through the deterministic layer, carrying
+    // pending state forward the way the live loop does. `null` intent means
+    // "policy had no opinion, this goes to the AI" — which is itself an
+    // assertion worth making: some messages MUST be caught deterministically.
+    function replay(turns) {
+        let pending = null;
+        const out = [];
+        for (const t of turns) {
+            const ctx = {
+                isManagerOrTeam: true, isManager: true,
+                pendingAction: t.pending !== undefined ? t.pending : pending,
+                text: t.say, textLower: t.say.toLowerCase(),
+                chatId: 'sim@c.us', session: {},
+            };
+            const d = brain.policyDecide(ctx);
+            out.push({ say: t.say, intent: d.needsAI ? null : d.intent });
+            if (t.thenPending !== undefined) pending = t.thenPending;
+        }
+        return out;
+    }
+
+    // ── The 2026-08-22 evening transcript ────────────────────────────────
+    // "recheck cutoff,erd in booking mail" correctly ran backfill. Then
+    // "Reverify all the bookings to check correctness of data" fell through
+    // and just LISTED bookings, because no verify action existed.
+    const wizard = { type: 'wizard_start' };
+    ck('wizard question + "yes" resolves the wizard, not a generic reply',
+        replay([{ say: 'yes', pending: wizard }])[0].intent, 'resolve_pending');
+    ck('"no" resolves it too',
+        replay([{ say: 'no', pending: wizard }])[0].intent, 'resolve_pending');
+    // If this ever returns null again, the daily trucker flow is dead at
+    // step one — which is exactly what the live transcript showed.
+    ckTrue('a wizard yes/no is NEVER left to the AI',
+        replay([{ say: 'yes', pending: wizard }])[0].intent !== null,
+        'the wizard answer fell through to the AI — the daily flow is broken');
+
+    // ── The full quote conversation, start to finish ─────────────────────
+    // Each step asserts the intent the live loop would route.
+    const quote = replay([
+        { say: 'Send quote request from Junk car to Eccomelt', pending: null },
+        { say: 'yes', pending: { type: 'await_quote_scale_tickets', state: {} } },
+        { say: '1', pending: { type: 'await_quote_truckers', options: ['NTG', 'TQL'], state: {} } },
+        { say: 'Aluminum scrap, 40000 lbs, $5000', pending: { type: 'await_quote_cargo_details', state: {} } },
+    ]);
+    ck('quote conversation routes correctly end to end',
+        quote.map((x) => x.intent),
+        ['get_quote', 'quote_scale_tickets_received', 'quote_truckers_selected', 'quote_cargo_details_received']);
+
+    // ── The cancel-loop transcript (2026-08-20 23:24) ────────────────────
+    // "cancel" must escape from wherever she is, every time.
+    const cancels = replay([
+        { say: 'cancel all', pending: { type: 'await_quote_scale_tickets', state: {} } },
+        { say: 'cancel', pending: { type: 'await_quote_cargo_details', state: {} } },
+        { say: 'cancel', pending: { type: 'await_quote_cargo_details', state: {} } },
+    ]);
+    ck('every cancel in the loop transcript escapes',
+        cancels.map((x) => x.intent), ['resolve_pending', 'resolve_pending', 'resolve_pending']);
+
+    // ── The stuck-pending transcript (2026-08-20 15:07) ──────────────────
+    ck('a fresh command sent into a stuck pending is heard as the command',
+        replay([{ say: 'Send quote request from Junk car to Eccomelt',
+            pending: { type: 'await_quote_cargo_details', state: {} } }])[0].intent, 'get_quote');
+
+    // ── verify vs backfill: the distinction the AI must not blur ─────────
+    // These are AI-classified, so assert the CAPABILITY exists and is
+    // described distinctly — the live failure was the AI reaching for the
+    // neighbouring action because the right one did not exist.
+    const brainSrc = src('workflow/brain.js');
+    ckTrue('verify_bookings exists as its own action', /['"]verify_bookings['"]/.test(brainSrc));
+    ckTrue('verify_bookings is routed', /case 'verify_bookings'/.test(brainSrc));
+    ckTrue('the AI is told verify != backfill',
+        /do not confuse this with "backfill_cutoffs"/i.test(brainSrc),
+        'without this the AI answers a correctness question by filling blanks');
+    ckTrue('actions.verifyBookings is implemented', typeof actions.verifyBookings === 'function');
+
+    // ── Verification must not cry wolf ───────────────────────────────────
+    const cb = require(R('helpers/cutoffBackfill.js'));
+    ck('08/21/2026 and 2026-08-21 are the SAME date, not a mismatch',
+        cb.fieldsAgree('cutoff_date', '08/21/2026', '2026-08-21'), true);
+    ck('a genuinely different date IS a mismatch',
+        cb.fieldsAgree('cutoff_date', '08/21/2026', '08/28/2026'), false);
+    ck('vessel formatting is not a mismatch',
+        cb.fieldsAgree('vessel_voyage', 'MSC ISABELLA / 328W', 'MSC Isabella 328W'), true);
+    ckTrue('verify never writes to the booking store',
+        !/mutateJson/.test(src('helpers/cutoffBackfill.js').split('async function verifyOne')[1] || ''),
+        'verify must report only — overwriting a hand-corrected value is destructive');
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 section('WIRING — a feature that nothing calls is a dead feature');
 // Three changes were silently lost on 2026-08-22 when parallel work

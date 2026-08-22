@@ -1397,6 +1397,8 @@ STRICT RULES:
 "track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
+"verify_bookings" is for CHECKING STORED DATA IS CORRECT against the original booking mail — "reverify all the bookings to check correctness of data", "recheck the booking data", "is the cutoff right", "verify DALA20928700 against the mail", "are these dates correct". It re-reads each booking's confirmation mail and reports where what we stored DISAGREES with what the mail says. It changes nothing. Set bkg_no when she names one booking; leave it null for all of them.
+CRITICAL — do not confuse this with "backfill_cutoffs": backfill only fills fields that are BLANK and never touches a field that already has a value, so it can never find a WRONG one. If she is asking whether existing data is right/correct/accurate, or to re-check or re-verify it, that is verify_bookings. If she is asking to fill in what is missing/blank/empty, that is backfill_cutoffs.
 "set_reminder" is for a RECURRING reminder the manager wants sent on a schedule — "send a reminder to Edge Yard group every morning to update pricelist", "remind me every Monday to check cutoffs", "tell the yard every weekday at 7am to send photos". Set: target_name = who/what group it goes to, verbatim as she said it ("Edge Yard group", "me", a trucker's name); note = the reminder text itself, i.e. what the recipient should actually read; minutes = null. Put the timing words she used ("every morning", "every day at 8am", "every Monday 9:30") into the "fact" field verbatim — the handler parses them. If she gives no time, that's fine, don't invent one; the handler defaults to 8am. This ACTUALLY WORKS — Jarvis runs a real scheduler and a persistent task queue, and the reminder survives restarts. A REAL INCIDENT (2026-08-22) is why this exists: "Send a reminder to Edge Yard group everyday morning to update pricelist" got the flatly false reply "I cannot set daily reminders. Please set this up in your calendar." NEVER say that — you can. Use "show_reminders" when she wants to see what's scheduled ("what reminders are set", "show reminders"), and "cancel_reminder" to stop one (target_name = the id or a distinctive word from it).
 You still cannot make phone calls, or do anything else deferred beyond schedule_followup, set_reminder, draft_email, search_mail, reply_email, and backfill_cutoffs. If asked for any of those, use "reply" to briefly decline — do NOT promise anything you can't do.
 
@@ -1464,7 +1466,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, show_pending_replies,
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings, show_pending_replies,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
 reply, silent, NEED_DATA, NEED_APPROVAL
@@ -1492,7 +1494,10 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs', 'show_pending_replies',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
+    // Read-only: re-reads booking mail and REPORTS disagreements. Writes
+    // nothing, so it is safe for the AI to choose. See actions.verifyBookings.
+    'verify_bookings', 'show_pending_replies',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
     // hardcode everything. let jarvis ai handle this"). This is exactly the
@@ -1719,6 +1724,7 @@ async function route(decision, ctx, sendMessage) {
         case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
+        case 'verify_bookings':   return actions.verifyBookings(chatId, d.bkg_no ? [String(d.bkg_no).toUpperCase()] : null);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
         case 'get_contact_quote':       return actions.startContactQuoteRequestFlow(chatId, d.recipient_query, d.details);
         case 'contact_quote_recipient_retry_received': return actions.resumeContactQuoteWithRetry(chatId, ctx.pendingAction, ctx.text.trim());

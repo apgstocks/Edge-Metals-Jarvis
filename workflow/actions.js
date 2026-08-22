@@ -3171,6 +3171,67 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
 // same posture as emailWatcher.js's own silent-fill-then-notify behavior.
 // The nightly cron in scheduler.js calls the same helper directly; this is
 // just the manager-triggered path into it.
+// Re-checks what is STORED against what the mail says — the correctness
+// question backfillCutoffs cannot answer, because that one only ever fills
+// blanks and never looks at a field that already has a value.
+//
+// Reports only; never writes. See helpers/cutoffBackfill.js's verify() header
+// for why overwriting an existing value unattended is the wrong call.
+async function verifyBookings(chatId, bookingNumbers) {
+    const { verify, FIELD_LABELS } = require('../helpers/cutoffBackfill');
+    const scope = bookingNumbers && bookingNumbers.length ? `${bookingNumbers.length} booking(s)` : 'every active booking';
+    await _send(chatId, `Re-checking ${scope} against the original booking mail — this takes a moment, it reads each booking's mail separately.`);
+    let out;
+    try {
+        out = await verify(bookingNumbers);
+    } catch (err) {
+        console.error('[ACTIONS] verifyBookings failed:', err.message);
+        await _send(chatId, `Verification failed: ${err.message}`);
+        return { action_taken: 'booking_verify_failed' };
+    }
+    if (out.error) {
+        await _send(chatId, `Can't verify: ${out.error}.`);
+        return { action_taken: 'booking_verify_failed' };
+    }
+    const results = out.results || [];
+    const withMismatch = results.filter((r) => r.status === 'checked' && r.mismatches.length);
+    const noMail = results.filter((r) => r.status === 'no_mail');
+    const checked = results.filter((r) => r.status === 'checked');
+    const confirmedCount = checked.reduce((n, r) => n + r.confirmed.length, 0);
+    const blanks = checked.filter((r) => r.blank.length);
+
+    const lines = [];
+    if (withMismatch.length) {
+        lines.push(`*${withMismatch.length} booking(s) disagree with the mail:*`);
+        for (const r of withMismatch) {
+            for (const m of r.mismatches) {
+                lines.push(`• ${r.bkgNo} — ${FIELD_LABELS[m.field] || m.field}`);
+                lines.push(`   stored: ${m.stored}`);
+                lines.push(`   mail:   ${m.fromMail}`);
+            }
+        }
+        lines.push('');
+        lines.push('Nothing was changed. Tell me which to correct and I\'ll update them.');
+    } else if (checked.length) {
+        lines.push(`No disagreements — ${confirmedCount} field(s) across ${checked.length} booking(s) match the mail.`);
+    }
+    if (blanks.length) {
+        lines.push('');
+        lines.push(`*Blank here, but the mail has a value:*`);
+        for (const r of blanks) {
+            lines.push(`• ${r.bkgNo} — ${r.blank.map((x) => `${FIELD_LABELS[x.field] || x.field}: ${x.fromMail}`).join(', ')}`);
+        }
+        lines.push('("backfill missing fields" fills these in.)');
+    }
+    if (noMail.length) {
+        lines.push('');
+        lines.push(`*Couldn't check ${noMail.length}* — no booking mail found: ${noMail.map((r) => r.bkgNo).join(', ')}`);
+    }
+    if (!lines.length) lines.push('Nothing to check — no bookings on file.');
+    await _send(chatId, lines.join('\n'));
+    return { action_taken: 'booking_verify_done', mismatches: withMismatch.length };
+}
+
 async function backfillCutoffs(chatId) {
     const { run, FIELD_LABELS } = require('../helpers/cutoffBackfill');
     await _send(chatId, 'Checking bookings for missing cutoff/ERD/ETD/ETA/vessel/route fields against existing mail — this can take a moment.');
@@ -3182,15 +3243,41 @@ async function backfillCutoffs(chatId) {
         await _send(chatId, `Backfill failed: ${err.message}`);
         return { action_taken: 'cutoff_backfill_failed' };
     }
+    // REAL GAP (2026-08-22, live): this reported "No missing fields found —
+    // either nothing was blank, or nothing in mail could fill what was" while
+    // the very next message listed bookings with a visibly blank Cutoff. Both
+    // halves of that sentence are true and the reader cannot tell which one
+    // applies, which is exactly the uncertainty that prompted her to ask
+    // "Reverify all the bookings to check correctness of data".
+    //
+    // So say WHICH. A blank field that mail could not fill is a real gap she
+    // needs to chase with the carrier — it is the useful half of this answer,
+    // and it was being hidden behind an ambiguous sentence.
+    const stillBlank = [];
+    try {
+        const { loadBookings } = require('../helpers/json');
+        const FIELDS = Object.keys(FIELD_LABELS);
+        for (const b of Object.values(loadBookings() || {})) {
+            const missing = FIELDS.filter((f) => !b[f] || !String(b[f]).trim());
+            if (missing.length) {
+                stillBlank.push(`${b.booking_number} — missing ${missing.map((f) => FIELD_LABELS[f] || f).join(', ')}`);
+            }
+        }
+    } catch (e) {
+        console.warn('[ACTIONS] post-backfill blank scan failed:', e.message);
+    }
     if (!results.length) {
-        await _send(chatId, 'No missing fields found in existing mail — either nothing was blank, or nothing in mail could fill what was.');
+        await _send(chatId, stillBlank.length
+            ? `Nothing in mail could fill any gaps. Still blank — these need chasing with the carrier:\n${stillBlank.join('\n')}`
+            : 'Nothing was blank — every booking already has cutoff, ERD, ETD, ETA, vessel and route filled in.');
         return { action_taken: 'cutoff_backfill_none' };
     }
     const lines = results.map((r) => {
         const parts = Object.entries(r.filled).map(([k, v]) => `${FIELD_LABELS[k] || k}: ${v}`);
         return `${r.bkgNo} — ${parts.join(', ')}`;
     });
-    await _send(chatId, `Backfilled from mail:\n${lines.join('\n')}`);
+    const tail = stillBlank.length ? `\n\nStill blank after the scan — mail had nothing for these:\n${stillBlank.join('\n')}` : '';
+    await _send(chatId, `Backfilled from mail:\n${lines.join('\n')}${tail}`);
     return { action_taken: 'cutoff_backfill_done', count: results.length };
 }
 
@@ -4309,6 +4396,7 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
     getQueuedPendings, clearAllPending,
     lookupAddress, sendMessageTo,
     showReceivables, recordPayment, showOrphanPayments, setReceivablesStart, trackOldInvoiceCmd,
+verifyBookings,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
 };

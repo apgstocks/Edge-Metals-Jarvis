@@ -185,4 +185,155 @@ async function run() {
     return results;
 }
 
-module.exports = { run, BACKFILL_FIELDS, FIELD_LABELS };
+// ── VERIFY: does what we stored still match what the mail says? ─────────────
+// Apsara, 2026-08-22: "Reverify all the bookings to check correctness of
+// data", then "what if i want to reverify all data against these bookings?"
+//
+// This is a DIFFERENT job from run() above, and the difference matters:
+//   run()    fills fields that are BLANK. It never looks at a field that
+//            already has a value, so a wrong cutoff stays wrong forever.
+//   verify() reads the same mail and COMPARES it to what is stored, to find
+//            values that disagree. That is the actual correctness question.
+//
+// ── It never writes ─────────────────────────────────────────────────────────
+// Backfilling a blank is safe — there was nothing there to lose, and Apsara
+// explicitly approved it running unattended ("I don't want any human to do
+// that"). OVERWRITING an existing value is not the same thing: that value may
+// have been typed deliberately, corrected by hand, or updated by a later
+// amendment the mail search did not pick up. Silently replacing it with
+// whatever an older email says would destroy the correction and look like the
+// system "fixing" itself. So verify reports, and she decides.
+//
+// ── Date comparison is the whole game ───────────────────────────────────────
+// "08/21/2026", "2026-08-21" and "21 Aug 2026" are the same date written three
+// ways, and the booking store, the PDFs and Gemini's extraction do not agree
+// on a format. A naive string compare would report a mismatch on essentially
+// every booking — a report that is wrong everywhere is worse than no report,
+// because the real mismatches drown in it. So date-ish fields are normalised
+// to YYYY-MM-DD before comparing, and only compared as strings when neither
+// side parses as a date.
+const DATE_FIELDS = new Set(['cutoff_date', 'erd_date', 'etd', 'eta']);
+
+function normaliseDate(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw) return '';
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(raw);
+    if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+    // US M/D/Y — the format the dashboard and most carrier PDFs use.
+    m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/.exec(raw);
+    if (m) {
+        let y = +m[3]; if (y < 100) y += 2000;
+        return `${y}-${String(+m[1]).padStart(2, '0')}-${String(+m[2]).padStart(2, '0')}`;
+    }
+    const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+    const lower = raw.toLowerCase();
+    for (const [name, mo] of Object.entries(MONTHS)) {
+        if (!lower.includes(name)) continue;
+        const day = (/\b(\d{1,2})\b(?!\d)/.exec(lower.replace(/\b(19|20)\d{2}\b/, '')) || [])[1];
+        const yr = (/\b((?:19|20)\d{2})\b/.exec(lower) || [])[1];
+        if (day && yr) return `${yr}-${String(mo).padStart(2, '0')}-${String(+day).padStart(2, '0')}`;
+    }
+    return '';   // not a date we recognise — caller falls back to text compare
+}
+// Text fields (vessel, ports) vary in punctuation and case far more than they
+// vary in meaning: "MSC ISABELLA / 328W" vs "MSC Isabella 328W" is the same
+// vessel. Compared on alphanumerics only, for the same reason the invoice
+// matcher does — otherwise the report cries wolf.
+function looseEqual(a, b) {
+    const strip = (v) => String(v == null ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
+    return strip(a) === strip(b);
+}
+function fieldsAgree(field, stored, fromMail) {
+    if (DATE_FIELDS.has(field)) {
+        const ns = normaliseDate(stored), nm = normaliseDate(fromMail);
+        if (ns && nm) return ns === nm;
+        // One or both unparseable — fall through to a loose text compare
+        // rather than declaring a mismatch on a formatting quirk.
+    }
+    return looseEqual(stored, fromMail);
+}
+
+// Pulls the schedule fields for one booking out of its mail, using the SAME
+// PDF-first-then-body order as backfillOne — see that function's comment for
+// why the order matters. Returns the extracted fields, or null.
+async function extractFieldsFromMail(bkgNo, gmail) {
+    let messages;
+    try {
+        messages = await listMessages(gmail, bkgNo, 3);
+    } catch (err) {
+        console.error(`[${AGENT}] Search failed for ${bkgNo}:`, err.message);
+        return null;
+    }
+    if (!messages.length) return null;
+    for (const m of messages) {
+        try {
+            const full = await getMessage(gmail, m.id);
+            const { body, pdfParts } = getEmailContent(full.payload);
+            let fields = null;
+            if (pdfParts && pdfParts.length) {
+                for (const part of pdfParts) {
+                    try {
+                        const att = await downloadAttachment(gmail, m.id, part);
+                        const pdfFields = await extractPdfFields(att.base64);
+                        if (pdfFields && pdfFields.is_booking_confirmation && BACKFILL_FIELDS.some((f) => pdfFields[f])) {
+                            fields = pdfFields; break;
+                        }
+                    } catch (err) {
+                        console.error(`[${AGENT}] Attachment read failed for ${bkgNo}:`, err.message);
+                    }
+                }
+            }
+            const hasAnyFromPdf = fields && BACKFILL_FIELDS.some((f) => fields[f]);
+            if (!hasAnyFromPdf && body && body.trim()) {
+                fields = await extractBookingFieldsFromText(body);
+            }
+            if (fields && BACKFILL_FIELDS.some((f) => fields[f])) return fields;
+        } catch (err) {
+            console.error(`[${AGENT}] Verify read failed for ${bkgNo}:`, err.message);
+        }
+    }
+    return null;
+}
+
+// One booking. Returns:
+//   { bkgNo, status: 'no_mail' }                      nothing to compare against
+//   { bkgNo, status: 'checked', mismatches, confirmed, blank }
+async function verifyOne(bkgNo, gmail) {
+    const bookings = loadBookings();
+    const b = bookings[bkgNo];
+    if (!b) return { bkgNo, status: 'not_found' };
+    const fields = await extractFieldsFromMail(bkgNo, gmail);
+    if (!fields) return { bkgNo, status: 'no_mail' };
+
+    const mismatches = [], confirmed = [], blank = [];
+    for (const f of BACKFILL_FIELDS) {
+        const stored = b[f], fromMail = fields[f];
+        if (!fromMail) continue;                       // mail says nothing — no opinion
+        if (!stored || !String(stored).trim()) { blank.push({ field: f, fromMail }); continue; }
+        if (fieldsAgree(f, stored, fromMail)) confirmed.push({ field: f, value: stored });
+        else mismatches.push({ field: f, stored, fromMail });
+    }
+    return { bkgNo, status: 'checked', mismatches, confirmed, blank };
+}
+
+// Every active booking. Deliberately sequential, like run() — each booking
+// costs a Gmail search plus a Gemini extraction, and firing dozens in parallel
+// is how you hit a rate limit halfway through and get a half-finished report.
+async function verify(bookingNumbers = null) {
+    let gmail;
+    try {
+        gmail = getGmailRead();
+    } catch (err) {
+        console.error(`[${AGENT}] Gmail not configured — skipping verify:`, err.message);
+        return { error: 'Gmail not configured', results: [] };
+    }
+    const bookings = loadBookings();
+    const list = bookingNumbers && bookingNumbers.length
+        ? bookingNumbers.filter((n) => bookings[n])
+        : Object.keys(bookings);
+    const results = [];
+    for (const bkgNo of list) results.push(await verifyOne(bkgNo, gmail));
+    return { results };
+}
+
+module.exports = { run, verify, verifyOne, extractFieldsFromMail, fieldsAgree, normaliseDate, looseEqual, BACKFILL_FIELDS, FIELD_LABELS, DATE_FIELDS };
