@@ -3866,7 +3866,74 @@ async function docShareSaved(kind, filename, label, containerNo) {
 // a booking-merged invoice can be found and re-checked on the dashboard.
 let invw = null;
 function resetInvFlow() {
-  invw = { step: 1, buyer: '', buyerTag: null, containers: [], data: null };
+  invw = {
+    step: 1, buyer: '', buyerTag: null, containers: [], data: null,
+    // Multi-container selection, added 2026-08-22 per Apsara ("multiple
+    // container selection not there in app inv"). I left this out of the
+    // original port on the grounds that getting a merged commercial invoice
+    // subtly wrong is worse than not offering it — she needs it, so it's
+    // ported from the dashboard's logic rather than reinvented.
+    picked: new Set(),   // container_no values ticked on step 2
+    mergeAll: false,     // manual override — see pickInvGroups
+    queue: [], queueIndex: 0,
+  };
+}
+
+// Decides how the ticked containers become invoices. Lifted from
+// dashboard/documents.html's groupSelectedContainersByBooking, deliberately
+// unchanged in behaviour — two clients producing different invoices from the
+// same tick boxes would be a genuinely dangerous divergence.
+//
+//   mergeAll ticked   -> everything selected becomes ONE invoice, whatever
+//                        their bookings. This is the manual override for
+//                        "merge these two even though they shipped apart".
+//   otherwise         -> containers sharing a booking # merge automatically;
+//                        a container with no booking # NEVER merges, not even
+//                        with another blank one, because there'd be no actual
+//                        basis for combining them.
+function pickInvGroups(containers) {
+  if (invw.mergeAll && containers.length > 1) {
+    const bookings = [...new Set(containers.map(c => (c.booking_no || '').trim().toUpperCase()).filter(Boolean))];
+    return [{
+      // Version history keys off booking_no, and a cross-booking merge has no
+      // single one — join them rather than picking the first, which would
+      // quietly overwrite another shipment's history.
+      booking_no: bookings.join('+'),
+      containers: containers.map(c => c.container_no),
+    }];
+  }
+  const groups = new Map();
+  let singleton = 0;
+  for (const c of containers) {
+    const booking = (c.booking_no || '').trim().toUpperCase();
+    const key = booking || `__single__${singleton++}`;
+    if (!groups.has(key)) groups.set(key, { booking_no: booking, containers: [] });
+    groups.get(key).containers.push(c.container_no);
+  }
+  return [...groups.values()];
+}
+
+// Loads the next group in the queue into the review screen. A group that
+// fails to load is reported and SKIPPED rather than aborting the batch —
+// one bad container shouldn't cost you the other four you selected.
+async function loadNextInvGroup() {
+  if (invw.queueIndex >= invw.queue.length) {
+    invw.queue = []; invw.queueIndex = 0;
+    invw.step = 2; renderInvFlow();
+    return;
+  }
+  const group = invw.queue[invw.queueIndex];
+  const multi = group.containers.length > 1;
+  try {
+    invw.data = multi
+      ? await api('/api/invoice/preview-multi?containers=' + encodeURIComponent(group.containers.join(',')))
+      : await api('/api/invoice/preview?container=' + encodeURIComponent(group.containers[0]));
+    invw.step = 3; renderInvFlow();
+  } catch (e) {
+    alert(`${group.containers.join(', ')}: ${e.message}`);
+    invw.queueIndex++;
+    await loadNextInvGroup();
+  }
 }
 
 function renderInvFlow() {
@@ -3956,34 +4023,96 @@ function wireInvStep1() {
 
 function invStep2Html() {
   return `
-    <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">${invw.containers.length} shipment${invw.containers.length === 1 ? '' : 's'} found. Pick one to invoice.</div>
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+      ${invw.containers.length} shipment${invw.containers.length === 1 ? '' : 's'} found.
+      Tap one to invoice it on its own, or tick several to do a batch.
+    </div>
     <div style="display:flex; flex-direction:column; gap:8px;">
       ${invw.containers.map((c, i) => `
-        <button class="btn inv-pick" data-i="${i}" style="text-align:left; padding:12px 14px; display:block; width:100%;">
-          <div style="font-family:var(--font-mono); font-size:13px; font-weight:700; color:var(--text-strong);">${esc(c.container_no)}</div>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px;">${esc(c.consignee || '')} · ${c.item_count} item row${c.item_count === 1 ? '' : 's'}</div>
-          <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:2px;">${esc(c.inv_no || '—')} ${esc(c.inv_date || '')}</div>
-        </button>`).join('')}
+        <div class="inv-row" data-i="${i}" style="display:flex; align-items:center; gap:11px; padding:11px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm);">
+          <input type="checkbox" class="inv-check" data-i="${i}" ${invw.picked.has(c.container_no) ? 'checked' : ''} style="width:20px; height:20px; flex-shrink:0; margin:0;">
+          <div class="inv-open" data-i="${i}" style="flex:1; min-width:0;">
+            <div style="font-family:var(--font-mono); font-size:13px; font-weight:700; color:var(--text-strong);">${esc(c.container_no)}</div>
+            <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px;">${esc(c.consignee || '')} · ${c.item_count} item row${c.item_count === 1 ? '' : 's'}</div>
+            <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:2px;">
+              ${esc(c.inv_no || '—')} ${esc(c.inv_date || '')}${c.booking_no ? ` · bkg ${esc(c.booking_no)}` : ''}
+            </div>
+          </div>
+        </div>`).join('')}
     </div>
+
+    <!-- Batch bar. Hidden until something is ticked, so the single-container
+         path (still the common one) looks exactly as it did. -->
+    <div id="invBatchBar" class="hidden" style="margin-top:14px; padding:12px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm); border:1px solid var(--border-default);">
+      <div id="invBatchCount" style="font-size:12.5px; font-weight:600; color:var(--text-strong);"></div>
+      <label style="display:flex; align-items:start; gap:9px; margin-top:10px; cursor:pointer;">
+        <input type="checkbox" id="invMergeAll" ${invw.mergeAll ? 'checked' : ''} style="width:18px; height:18px; margin:0; flex-shrink:0;">
+        <span style="font-size:12px; color:var(--text-muted); line-height:1.45;">
+          Merge everything selected into ONE invoice, even across bookings.
+        </span>
+      </label>
+      <div id="invBatchPlan" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:9px; line-height:1.55;"></div>
+      <button id="btnInvBatch" class="btn btn-primary" style="width:100%; margin-top:11px;">Review selected</button>
+    </div>
+
     <button id="btnInvBack2" class="btn" style="width:100%; margin-top:14px;">Back</button>`;
 }
 function wireInvStep2() {
   $('btnInvBack2').addEventListener('click', () => { invw.step = 1; renderInvFlow(); });
-  $('docBody').querySelectorAll('.inv-pick').forEach(btn => btn.addEventListener('click', async () => {
-    const c = invw.containers[Number(btn.dataset.i)];
-    btn.disabled = true;
-    $('invMsg').textContent = '';
+
+  // Shows, in plain terms, what the current ticks will actually produce
+  // BEFORE anything is generated. Worth the space: "3 selected" does not tell
+  // you whether that means one merged invoice or three separate ones, and
+  // that difference is the whole point of the feature.
+  const refreshBatchBar = () => {
+    const picked = invw.containers.filter(c => invw.picked.has(c.container_no));
+    const bar = $('invBatchBar');
+    if (!picked.length) { bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    $('invBatchCount').textContent = `${picked.length} container${picked.length === 1 ? '' : 's'} selected`;
+    const groups = pickInvGroups(picked);
+    $('invBatchPlan').innerHTML = groups.map(g => g.containers.length > 1
+      ? `→ one invoice for ${g.containers.length}: ${esc(g.containers.join(', '))}${g.booking_no ? ` (bkg ${esc(g.booking_no)})` : ''}`
+      : `→ one invoice for ${esc(g.containers[0])}`).join('<br>');
+    $('btnInvBatch').textContent = groups.length === 1
+      ? 'Review 1 invoice'
+      : `Review ${groups.length} invoices, one at a time`;
+  };
+
+  $('docBody').querySelectorAll('.inv-check').forEach(box => box.addEventListener('change', () => {
+    const c = invw.containers[Number(box.dataset.i)];
+    if (box.checked) invw.picked.add(c.container_no); else invw.picked.delete(c.container_no);
+    refreshBatchBar();
+  }));
+  $('invMergeAll').addEventListener('change', () => { invw.mergeAll = $('invMergeAll').checked; refreshBatchBar(); });
+  refreshBatchBar();
+
+  // Tapping the row body (not the checkbox) still opens that one container
+  // straight away — the single-invoice path is unchanged and stays one tap.
+  $('docBody').querySelectorAll('.inv-open').forEach(el => el.addEventListener('click', async () => {
+    const c = invw.containers[Number(el.dataset.i)];
+    $('invMsg').textContent = 'Loading…';
     try {
       // The server computes every figure from the Invoice sheet — weights,
       // rates, packing breakdown, the lot. Nothing here recalculates it.
       invw.data = await api('/api/invoice/preview?container=' + encodeURIComponent(c.container_no));
+      invw.queue = []; invw.queueIndex = 0; // a direct tap is not a batch
       invw.step = 3; renderInvFlow();
     } catch (e) {
       $('invMsg').style.color = 'var(--status-danger)';
       $('invMsg').textContent = e.message;
-      btn.disabled = false;
     }
   }));
+
+  $('btnInvBatch').addEventListener('click', async () => {
+    const picked = invw.containers.filter(c => invw.picked.has(c.container_no));
+    if (!picked.length) return;
+    const btn = $('btnInvBatch');
+    btn.disabled = true; btn.textContent = 'Loading…';
+    invw.queue = pickInvGroups(picked);
+    invw.queueIndex = 0;
+    await loadNextInvGroup();
+  });
 }
 
 // Step 3 — review and generate. The figures arrive computed; this screen
@@ -4001,7 +4130,20 @@ function invStep3Html() {
   const addr = (d.consignee_address && d.consignee_address.length)
     ? d.consignee_address.join('\n')
     : invLookupAddress(d.consignee || '');
+  const g = invw.queue[invw.queueIndex];
+  const inQueue = invw.queue.length > 0 && g;
+  const banner = inQueue ? `
+    <div style="padding:10px 13px; margin-bottom:14px; border-radius:var(--radius-sm); background:rgba(214,158,46,.12); border:1px solid var(--status-warning, #d69e2e);">
+      <div style="font-size:12px; font-weight:700; color:var(--text-strong);">Reviewing ${invw.queueIndex + 1} of ${invw.queue.length}</div>
+      <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px; line-height:1.45;">
+        ${g.containers.length > 1
+          ? `${g.containers.length} containers merged into this one invoice: ${esc(g.containers.join(', '))}${g.booking_no ? ` (booking ${esc(g.booking_no)})` : ''}`
+          : esc(g.containers[0])}
+      </div>
+      <button id="btnInvQueueCancel" class="btn" style="margin-top:9px; padding:5px 11px; font-size:10.5px;">Stop the batch</button>
+    </div>` : '';
   return `
+    ${banner}
     <div style="background:var(--surface-sunken); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:16px;">
       <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Consignee</div>
       <div style="font-size:13.5px; font-weight:600; color:var(--text-strong); margin-top:3px;">${esc(d.consignee || '—')}</div>
@@ -4149,7 +4291,16 @@ function wireInvStep3() {
     div.querySelector('.invw-note-del').addEventListener('click', () => { div.remove(); recalc(); });
   });
 
-  $('btnInvBack3').addEventListener('click', () => { invw.step = 2; renderInvFlow(); });
+  if ($('btnInvQueueCancel')) $('btnInvQueueCancel').addEventListener('click', async () => {
+    const left = invw.queue.length - invw.queueIndex;
+    if (left > 1 && !await askYesNo(`Stop the batch? ${left - 1} invoice${left - 1 === 1 ? '' : 's'} still to review.\n\nAnything already generated is saved and unaffected.`)) return;
+    invw.queue = []; invw.queueIndex = 0;
+    invw.step = 2; renderInvFlow();
+  });
+  // Back leaves the whole batch, not just this one — stepping "back" into a
+  // half-finished queue with no way to resume would be worse than restarting
+  // the selection, which is still ticked on step 2.
+  $('btnInvBack3').addEventListener('click', () => { invw.queue = []; invw.queueIndex = 0; invw.step = 2; renderInvFlow(); });
   $('btnInvPreview').addEventListener('click', () => invSubmit(true));
   $('btnInvGenerate').addEventListener('click', () => invSubmit(false));
 }
@@ -4183,6 +4334,16 @@ async function invSubmit(preview) {
       msg.textContent = '✓ Generated and saved.';
       if (result && result.saved_filename) {
         await docShareSaved('invoice', result.saved_filename, payload.inv_no, payload.container_no);
+      }
+      // Mid-batch: move to the next group rather than stranding you on a
+      // screen you've finished with. The pause is so the success line is
+      // actually readable before the form repopulates underneath it.
+      if (invw.queue.length > 0) {
+        btn.disabled = false; btn.textContent = label;
+        await new Promise(r => setTimeout(r, 900));
+        invw.queueIndex++;
+        await loadNextInvGroup();
+        return;
       }
     }
   } catch (err) {
