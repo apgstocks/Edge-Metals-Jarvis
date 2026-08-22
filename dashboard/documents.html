@@ -1501,6 +1501,106 @@ $('pf_consignee').addEventListener('blur', () => {
   lookupPricingMemory($('pf_consignee').value.trim());
 });
 
+// ── Item-description autocomplete ─────────────────────────────────────────
+// Apsara, 2026-08-22: "IN DESCRIPTION OF PROFORMA, START SHOWING DESCRIPTION
+// LIST AS SOON AS I TYPE. IF HISTORY OF THAT CONSIGNEE FOUND IN PROFORMA
+// DRIVE, START POPULATING DESCRIPTION AS SOON AS I TYPE... IF NO MATCH,
+// MATCH IT AGAINST GENERIC DESCRIPTION LIST."
+//
+// Two sources, in priority order:
+//   1. What THIS consignee has actually been invoiced for before, straight
+//      out of pricing memory (helpers/proformaPricing.js already stores it
+//      per customer — lookupPricingMemory stashes it in _pfCustomerDescs).
+//      Picking one of these also fills the rate, since a remembered
+//      description carries a remembered price.
+//   2. The shared catalog from /api/item-types — the fallback when a
+//      customer is new, or when what she is typing is something they have
+//      not bought before.
+// History entries are listed first and marked, so it is obvious which
+// suggestions carry a known price for this customer and which are generic.
+//
+// Kept deliberately simple: it filters on substring, caps the list, and
+// never auto-selects. An autocomplete that guesses on blur would put a
+// description she did not choose onto a financial document.
+const PF_PAYMENT_TERM_DEFAULT = 'T/T 100% Against Shipping Documents';
+let pfGenericDescs = null;      // cached catalog; null until first fetch
+let pfGenericDescsLoading = null;
+
+async function loadGenericDescs() {
+  if (pfGenericDescs) return pfGenericDescs;
+  // Share one in-flight request — every item row calls this on first
+  // keystroke, and eight rows should not mean eight identical fetches.
+  if (!pfGenericDescsLoading) {
+    pfGenericDescsLoading = api('/api/item-types')
+      .then((list) => { pfGenericDescs = Array.isArray(list) ? list : []; return pfGenericDescs; })
+      .catch(() => { pfGenericDescs = []; return pfGenericDescs; }) // offline: fall back to history only
+      .finally(() => { pfGenericDescsLoading = null; });
+  }
+  return pfGenericDescsLoading;
+}
+
+function pfDescSuggestions(q, customerDescs, genericDescs) {
+  const needle = String(q || '').trim().toLowerCase();
+  const seen = new Set();
+  const out = [];
+  const push = (text, fromHistory) => {
+    const key = String(text || '').trim().toLowerCase();
+    if (!key || seen.has(key)) return;   // a description in both lists is shown once, as history
+    seen.add(key);
+    out.push({ text: String(text).trim(), fromHistory });
+  };
+  // Empty query still lists this customer's own history — she asked for the
+  // list "as soon as I type", and on an empty box the most useful thing is
+  // what this customer always orders.
+  const match = (t) => !needle || String(t).toLowerCase().includes(needle);
+  (customerDescs || []).filter(match).forEach((t) => push(t, true));
+  (genericDescs || []).filter(match).forEach((t) => push(t, false));
+  return out.slice(0, 12);
+}
+
+function pfCloseDescList(row) {
+  const box = row.querySelector('.pf-desc-list');
+  if (box) box.remove();
+}
+
+async function pfShowDescList(row) {
+  const input = row.querySelector('.item-desc');
+  if (!input) return;
+  const generic = await loadGenericDescs();
+  const items = pfDescSuggestions(input.value, window._pfCustomerDescs || [], generic);
+  pfCloseDescList(row);
+  if (!items.length) return;
+  const box = document.createElement('div');
+  box.className = 'autocomplete-list pf-desc-list';
+  box.innerHTML = items.map((it, i) =>
+    `<div class="autocomplete-item" data-idx="${i}">${esc(it.text)}${it.fromHistory ? ' <span style="color:var(--leaf-400); font-size:10px;">● known price</span>' : ''}</div>`
+  ).join('');
+  // The row is the positioning context for .autocomplete-list (absolute).
+  if (getComputedStyle(row).position === 'static') row.style.position = 'relative';
+  row.appendChild(box);
+  box.querySelectorAll('.autocomplete-item').forEach((el) => {
+    // mousedown, not click — blur fires first and would close the list
+    // before a click ever lands.
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      input.value = items[+el.dataset.idx].text;
+      pfCloseDescList(row);
+      // A remembered description carries a remembered rate.
+      tryFillItemRate(row);
+      retrofitInvNoItemCode();
+    });
+  });
+}
+
+function wireDescAutocomplete(row) {
+  const input = row.querySelector('.item-desc');
+  if (!input) return;
+  input.addEventListener('input', () => pfShowDescList(row));
+  input.addEventListener('focus', () => pfShowDescList(row));
+  input.addEventListener('blur', () => setTimeout(() => pfCloseDescList(row), 150));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') pfCloseDescList(row); });
+}
+
 // ── Pricing memory auto-fill ──────────────────────────────────────────────
 // Apsara: "if its taewon/Daekwang/Dooin port of discharge South korea" — an
 // editable suggestion like the trade-terms/port auto-fill below, not a
@@ -1798,7 +1898,21 @@ async function lookupPricingMemory(customer) {
     $('pfMemoryChip').classList.remove('hidden');
     if (info.trade_terms && !$('pf_trade_terms').value) $('pf_trade_terms').value = info.trade_terms;
     if (info.port_discharge && !$('pf_port_discharge').value) $('pf_port_discharge').value = info.port_discharge;
+    // Payment Terms ships with a hardcoded default in the markup, so the
+    // "only fill when empty" rule the two above use would never fire for it.
+    // Overwrite only when the field still holds that untouched default —
+    // anything she has actually typed is left alone. Apsara, 2026-08-22:
+    // "PORT OF DISCHARGE, TRADE TERMS, PAYMENT TERMS SHOULD BE AUTO
+    // POPULATED."
+    const payEl = $('pf_payment_term');
+    if (info.payment_terms && payEl && (!payEl.value.trim() || payEl.value.trim() === PF_PAYMENT_TERM_DEFAULT)) {
+        payEl.value = info.payment_terms;
+    }
     window._pfLastPricing = info;
+    // Descriptions this customer has actually been invoiced for, newest
+    // rates first — the primary suggestion source for the item-description
+    // autocomplete below.
+    window._pfCustomerDescs = Object.keys(info.items || {});
     // fill any existing item rows that match by description
     // Scoped to #pfContainers on purpose — the guided wizard's own rows
     // (step 3/4 of #pfWizard) reuse the same grid CSS class for layout but
@@ -1859,6 +1973,9 @@ function wireItemRow(row) {
   row.querySelector('.item-desc').addEventListener('blur', () => {
     tryFillItemRate(row);
   });
+  // Suggestion list as she types — this customer's own history first, then
+  // the shared catalog. See wireDescAutocomplete above.
+  wireDescAutocomplete(row);
   // Backfills the item-code segment into this container's code and the top
   // Invoice No the moment enough of the material name is typed to match a
   // rule — was blur-only (only fired after clicking to another field), so

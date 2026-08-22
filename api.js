@@ -1779,6 +1779,7 @@ function createApi() {
                     body.trade_terms || '',
                     body.port_discharge || '',
                     (body.containers || []).flatMap((c) => c.items || []),
+                    body.payment_term || '',
                 );
             } catch (e) {
                 console.error('[proforma] pricing-memory record failed (non-fatal):', e.message);
@@ -1979,6 +1980,7 @@ function createApi() {
             const updated = await proformaPricing.upsert(body.customer || '', {
                 tradeTerms: body.trade_terms || '',
                 portDischarge: body.port_discharge || '',
+                paymentTerms: body.payment_terms || body.payment_term || '',
                 items: body.items || [],
             });
             res.json(updated);

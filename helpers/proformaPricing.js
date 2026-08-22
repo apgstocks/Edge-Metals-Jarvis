@@ -101,6 +101,12 @@ function lookup(customerName) {
         canonical_name: c.canonical_name || customerName,
         trade_terms: c.trade_terms || '',
         port_discharge: c.port_discharge || '',
+        // Apsara, 2026-08-22: "PORT OF DISCHARGE, TRADE TERMS, PAYMENT TERMS
+        // SHOULD BE AUTO POPULATED." The first two were already remembered
+        // per customer; payment terms never were, so the form fell back to a
+        // single hardcoded default for everyone regardless of what had
+        // actually been agreed with them.
+        payment_terms: c.payment_terms || '',
         items,
     };
 }
@@ -119,7 +125,7 @@ function lookupItemRate(customerName, itemDesc) {
 
 // items: [{desc, rate, unit}, ...]. Merges — an item not included keeps its
 // previously saved rate. Returns the updated customer record.
-async function upsert(customerName, { tradeTerms = '', portDischarge = '', items = [] } = {}) {
+async function upsert(customerName, { tradeTerms = '', portDischarge = '', paymentTerms = '', items = [] } = {}) {
     const key = norm(customerName);
     if (!key) throw new Error('Customer name is required.');
 
@@ -127,10 +133,14 @@ async function upsert(customerName, { tradeTerms = '', portDischarge = '', items
         if (!data.customers) data.customers = {};
         const existing = data.customers[key] || {
             canonical_name: String(customerName).trim(),
-            trade_terms: '', port_discharge: '', items: {},
+            trade_terms: '', port_discharge: '', payment_terms: '', items: {},
         };
         if (tradeTerms) existing.trade_terms = tradeTerms;
         if (portDischarge) existing.port_discharge = portDischarge;
+        // Only overwrite when a value is actually supplied — same merge rule
+        // as the two above, so an older client that does not send this yet
+        // never blanks what is already remembered.
+        if (paymentTerms) existing.payment_terms = paymentTerms;
         if (!existing.items) existing.items = {};
 
         const today = new Date().toISOString().slice(0, 10);
@@ -157,13 +167,25 @@ async function upsert(customerName, { tradeTerms = '', portDischarge = '', items
 // required once a customer's been generated for even once. Callers MUST
 // wrap this in try/catch: a failure here must never break PDF generation,
 // only the self-improvement side effect.
-async function recordFromGeneration(customerName, tradeTerms, portDischarge, lineItems) {
+// paymentTerms added 2026-08-22 as a trailing OPTIONAL argument, so the one
+// existing caller (api.js's /api/proforma/generate) keeps working unchanged
+// if it is ever called with the old four-argument shape.
+async function recordFromGeneration(customerName, tradeTerms, portDischarge, lineItems, paymentTerms) {
     if (!customerName) return;
     const items = (lineItems || [])
         .filter((it) => it.desc)
         .map((it) => ({ desc: it.desc || '', rate: it.rate || 0, unit: it.unit || 'MT' }));
-    if (!items.length) return;
-    await upsert(customerName, { tradeTerms, portDischarge, items });
+    // Header fields are worth remembering even when a proforma has no
+    // priceable line items — a generation with terms but no rates still
+    // teaches us this customer's terms. Previously this returned early and
+    // discarded them.
+    if (!items.length) {
+        if (tradeTerms || portDischarge || paymentTerms) {
+            await upsert(customerName, { tradeTerms, portDischarge, paymentTerms, items: [] });
+        }
+        return;
+    }
+    await upsert(customerName, { tradeTerms, portDischarge, paymentTerms, items });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
