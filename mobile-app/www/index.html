@@ -4153,21 +4153,54 @@ function invStep3Html() {
     <div class="field"><label>Invoice date</label><input id="invw_date" value="${esc(d.inv_date || '')}" autocomplete="off"></div>
     <div class="field"><label>Consignee address</label><textarea id="invw_address" rows="3" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:inherit; font-size:13px; resize:vertical;">${esc(addr)}</textarea></div>
 
-    <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Items</div>
-    <div id="invwItems" style="display:flex; flex-direction:column; gap:10px;">
-      ${items.map((it, i) => `
-        <div class="invw-item" data-i="${i}" style="background:var(--surface-sunken); border-radius:var(--radius-sm); padding:10px 12px;">
-          <input class="invw-desc" value="${esc(it.item_desc || '')}" placeholder="description" style="width:100%; margin-bottom:6px;">
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Weight (MT)</span><input class="invw-weight" type="number" step="any" value="${it.weight ?? ''}"></div>
-            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Rate</span><input class="invw-rate" type="number" step="any" value="${it.rate ?? ''}"></div>
-          </div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
-            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Container</span><input class="invw-container" value="${esc(it.container_no)}"></div>
-            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Seal</span><input class="invw-seal" value="${esc(it.seal_no)}"></div>
-          </div>
-          <div class="invw-amount" style="margin-top:8px; text-align:right; font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted);"></div>
-        </div>`).join('')}
+    <!-- Full line-items table, added 2026-08-22 per Apsara ("show item table
+         as well in inv"). It replaces a stacked card per item, which showed
+         only description/weight/rate/container/seal and carried the SIX
+         packing figures through invisibly from the server preview — gross,
+         truck, container tare, chassis, boxes and net lbs. Those figures are
+         printed on the finished invoice, so being unable to see or correct
+         them on the phone meant the one screen that exists to be checked
+         before a real commercial document goes out was hiding a third of what
+         goes on it.
+         Same 13 columns as the dashboard, in the same order. Scrolls
+         sideways rather than wrapping: a squeezed 13-column grid on a phone
+         is unreadable, and these are figures people check against paperwork,
+         so legibility beats fitting. -->
+    <div style="display:flex; justify-content:space-between; align-items:baseline; margin:18px 0 8px;">
+      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Line items &amp; packing weights</div>
+      <div style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint);">scroll →</div>
+    </div>
+    <div style="overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid var(--border-default); border-radius:var(--radius-sm);">
+      <table id="invwItems" style="border-collapse:collapse; min-width:920px; font-size:12px;">
+        <thead>
+          <tr style="background:var(--surface-sunken);">
+            ${['#', 'Container #', 'Seal #', 'Description', 'Qty MT', 'Rate', 'Amount', 'Gross lbs', 'Truck lbs', 'Tare lbs', 'Chassis lbs', 'Boxes lbs', 'Net lbs']
+              .map(h => `<th style="padding:7px 8px; text-align:left; font-family:var(--font-mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); white-space:nowrap; border-bottom:1px solid var(--border-default);">${h}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+        ${items.map((it, i) => {
+          const p = it.packing || {};
+          const cell = (inner) => `<td style="padding:5px 6px; border-bottom:1px solid var(--border-subtle);">${inner}</td>`;
+          const inp = (cls, val, w, type) => `<input class="${cls}" ${type ? `type="${type}" step="any"` : ''} value="${esc(val ?? '')}" style="width:${w}px; padding:6px 7px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:4px; color:var(--text-strong); outline:none; font-size:12px;">`;
+          return `<tr class="invw-item" data-i="${i}">
+            ${cell(`<span style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${i + 1}</span>`)}
+            ${cell(inp('invw-container', it.container_no, 92))}
+            ${cell(inp('invw-seal', it.seal_no, 78))}
+            ${cell(inp('invw-desc', it.item_desc, 150))}
+            ${cell(inp('invw-weight', it.weight, 72, 'number'))}
+            ${cell(inp('invw-rate', it.rate, 72, 'number'))}
+            ${cell(`<span class="invw-amount" style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted); white-space:nowrap;"></span>`)}
+            ${cell(inp('invw-p-gross', p.gross_weight_lbs, 78))}
+            ${cell(inp('invw-p-truck', p.truck_lbs, 78))}
+            ${cell(inp('invw-p-tare', p.container_tare_lbs, 78))}
+            ${cell(inp('invw-p-chassis', p.chassis_lbs, 78))}
+            ${cell(inp('invw-p-boxes', p.boxes_weight_lbs, 78))}
+            ${cell(inp('invw-p-net', p.net_weight_lbs, 84))}
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
     </div>
 
     <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Adjustments</div>
@@ -4215,13 +4248,30 @@ function invCollectPayload() {
       container_no: row.querySelector('.invw-container').value.trim(),
       seal_no: row.querySelector('.invw-seal').value.trim(),
       weight, rate, amount: weight * rate,
-      // Packing figures are carried through UNCHANGED from the server's
-      // preview rather than re-entered. They're a six-field breakdown
-      // (gross, truck, container tare, chassis, boxes, net) that nobody is
-      // going to retype on a phone, and they're already correct from the
-      // sheet. net_weight_mt is recomputed because it must agree with the
-      // weight above if that was edited.
-      packing: { ...(orig.packing || {}), net_weight_mt: weight ? weight.toFixed(3) : '' },
+      // Read back from the table now that the packing columns are visible
+      // (2026-08-22). Previously these were carried through blind from the
+      // server preview, which meant a wrong figure on the sheet could not be
+      // corrected from the phone even though it prints on the invoice.
+      //
+      // Spread `orig.packing` FIRST so any key the server sends that this
+      // table doesn't render survives — the six columns here are the ones the
+      // dashboard shows, not necessarily every key invoiceSheet.js may add
+      // later. Losing an unrendered field silently is exactly the class of
+      // bug this whole change is fixing.
+      //
+      // net_weight_mt stays derived rather than typed: it must agree with the
+      // Qty MT column, and two hand-editable fields that have to match is a
+      // contradiction waiting to be printed.
+      packing: {
+        ...(orig.packing || {}),
+        gross_weight_lbs: row.querySelector('.invw-p-gross').value.trim(),
+        truck_lbs: row.querySelector('.invw-p-truck').value.trim(),
+        container_tare_lbs: row.querySelector('.invw-p-tare').value.trim(),
+        chassis_lbs: row.querySelector('.invw-p-chassis').value.trim(),
+        boxes_weight_lbs: row.querySelector('.invw-p-boxes').value.trim(),
+        net_weight_lbs: row.querySelector('.invw-p-net').value.trim(),
+        net_weight_mt: weight ? weight.toFixed(3) : '',
+      },
     };
   }).filter(it => it.item_desc);
 
@@ -4277,6 +4327,9 @@ function wireInvStep3() {
       <div style="display:flex; justify-content:space-between; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); color:var(--text-strong); font-weight:700;"><span>Total</span><span>$${money(subtotal + notesTotal)}</span></div>`;
   };
   const wireNoteDel = () => $('invwNotes').querySelectorAll('.invw-note-del').forEach(b => b.addEventListener('click', () => { b.closest('.invw-note').remove(); recalc(); }));
+  // Includes the packing inputs, which don't affect totals but keep the
+  // recalc harmless — cheaper than maintaining a second, narrower selector
+  // that would silently stop matching if a column is ever added.
   $('docBody').querySelectorAll('#invwItems input, #invwNotes input').forEach(inp => inp.addEventListener('input', recalc));
   wireNoteDel();
   recalc();
