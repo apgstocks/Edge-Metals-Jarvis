@@ -3448,6 +3448,20 @@ function resetPfWizard() {
     containerCount: 1,
     invNo: '', invNoSuggestion: null, invDate: docTodayISO(),
     tradeTerms: '', portDischarge: '', reference: '', buyerPo: '', buyerPoDate: '',
+    // Editable as of 2026-08-22 per Apsara ("payment terms should be
+    // modifiable"). Seeded from the standard value rather than left blank —
+    // it's the same on most deals, and a blank required-ish field on a phone
+    // is a worse default than a correct one you can overwrite.
+    paymentTerm: PF_DEFAULTS.payment_term,
+    // Made editable at the same time, but for a CORRECTNESS reason rather
+    // than a request: trade terms are editable here, and helpers/proformaPdf.js
+    // derives the document's short term from trade_terms' first word while
+    // taking the freight wording from freight_label separately. With this
+    // pinned to CIF, typing "FOB Busan" into trade terms produced a proforma
+    // reading "FOB" in one place and "freight included" in another. It now
+    // follows trade terms by default (see pfSyncFreightToTradeTerms) and can
+    // still be overridden for the genuinely mixed cases.
+    freightLabel: PF_DEFAULTS.freight_label,
     containerSeq: null, containerNos: [],
   };
 }
@@ -3592,6 +3606,7 @@ async function pfLoadSuggestions() {
   } catch (e) { /* unknown customer — fields stay blank */ }
   // Same hardcoded default the dashboard applies for these three customers.
   if (/taewon|daekwang|dooin/i.test(pfw.consignee) && !pfw.portDischarge) pfw.portDischarge = 'South Korea';
+  pfSyncFreightToTradeTerms();
 
   try {
     const sug = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(tag));
@@ -3630,6 +3645,18 @@ async function pfLoadSuggestions() {
 // form. There's no full form here, so it also carries Invoice No, date,
 // trade terms, port and container numbers. Everything else comes from
 // PF_DEFAULTS.
+// Keeps the freight wording consistent with whatever trade terms say.
+// proformaPdf.js prints trade_terms' FIRST WORD as the document's term and
+// freight_label as the freight line, from two independent fields — so "FOB
+// Busan" with a CIF freight label yields a self-contradicting document.
+// Only ever changes the value when it currently disagrees, so a deliberate
+// override on step 3 survives.
+function pfSyncFreightToTradeTerms() {
+  const first = (pfw.tradeTerms || '').trim().split(/\s+/)[0].toUpperCase();
+  if (first === 'FOB' && !/^FOB/.test(pfw.freightLabel)) pfw.freightLabel = 'FOB (freight excluded)';
+  else if (first === 'CIF' && !/^CIF/.test(pfw.freightLabel)) pfw.freightLabel = 'CIF (freight included)';
+}
+
 function pfStep3Html() {
   const money = (n) => n ? Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
   const total = pfw.items.reduce((s, it) => s + (it.qty || 0) * (it.rate || 0), 0) * pfw.containerCount;
@@ -3658,11 +3685,17 @@ function pfStep3Html() {
     <div class="field"><label>Container numbers</label><input id="pfw_containerNos" value="${esc(pfw.containerNos.join(', '))}" placeholder="comma separated" autocomplete="off"></div>
     <div class="field"><label>Trade terms</label><input id="pfw_tradeTerms" value="${esc(pfw.tradeTerms)}" placeholder="e.g. CIF Busan, South Korea" autocomplete="off"></div>
     <div class="field"><label>Port of discharge</label><input id="pfw_portDischarge" value="${esc(pfw.portDischarge)}" autocomplete="off"></div>
+    <div class="field"><label>Payment terms</label><input id="pfw_paymentTerm" value="${esc(pfw.paymentTerm)}" autocomplete="off"></div>
+    <div class="field"><label>Freight basis</label>
+      <select id="pfw_freightLabel">
+        ${['CIF (freight included)', 'FOB (freight excluded)'].map(o => `<option value="${esc(o)}" ${pfw.freightLabel === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+      </select>
+    </div>
     <div class="field"><label>Reference (optional)</label><input id="pfw_reference" value="${esc(pfw.reference)}" autocomplete="off"></div>
     <div class="field"><label>Buyer PO (optional)</label><input id="pfw_buyerPo" value="${esc(pfw.buyerPo)}" autocomplete="off"></div>
 
     <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:16px; line-height:1.5;">
-      Payment terms, country of origin, freight basis and shipment allowance use your standard values. Change those on the dashboard if a deal needs different ones.
+      Country of origin and shipment allowance use your standard values (${esc(PF_DEFAULTS.country_of_origin)}, ${esc(PF_DEFAULTS.shipment_allowance)}). Change those on the dashboard if a deal needs different ones.
     </div>
 
     <div style="display:flex; gap:8px;">
@@ -3682,6 +3715,8 @@ function pfCollectStep3() {
   pfw.containerNos = $('pfw_containerNos').value.split(',').map(s => s.trim()).filter(Boolean);
   pfw.tradeTerms = $('pfw_tradeTerms').value.trim();
   pfw.portDischarge = $('pfw_portDischarge').value.trim();
+  pfw.paymentTerm = $('pfw_paymentTerm').value.trim();
+  pfw.freightLabel = $('pfw_freightLabel').value;
   pfw.reference = $('pfw_reference').value.trim();
   pfw.buyerPo = $('pfw_buyerPo').value.trim();
 }
@@ -3715,8 +3750,12 @@ function pfBuildPayload() {
       : [],
     trade_terms: pfw.tradeTerms,
     port_discharge: pfw.portDischarge,
-    payment_term: PF_DEFAULTS.payment_term,
-    freight_label: PF_DEFAULTS.freight_label,
+    // Both editable on step 3 now — fall back to the standard values only if
+    // the boxes were cleared entirely, since proformaPdf.js prints whatever
+    // it's given and a blank payment term on a real proforma is worse than
+    // the usual one.
+    payment_term: pfw.paymentTerm || PF_DEFAULTS.payment_term,
+    freight_label: pfw.freightLabel || PF_DEFAULTS.freight_label,
     buyer_po: pfw.buyerPo,
     buyer_po_date: pfw.buyerPoDate,
     country_of_origin: PF_DEFAULTS.country_of_origin,
@@ -3732,6 +3771,18 @@ function wirePfStep3() {
     $('pfwTotal').innerHTML = `Total across ${pfw.containerCount} container(s): <span style="color:var(--text-strong);">$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
   };
   $('pfwRates').querySelectorAll('.pfw-rate').forEach(inp => inp.addEventListener('input', retotal));
+
+  // Editing trade terms here re-syncs the freight basis, so switching a deal
+  // to "FOB Busan" on this screen doesn't leave a CIF freight line behind it.
+  // pfSyncFreightToTradeTerms only moves the value when the two disagree, so
+  // deliberately choosing FOB under CIF trade terms (or the reverse) sticks.
+  $('pfw_tradeTerms').addEventListener('blur', () => {
+    pfw.tradeTerms = $('pfw_tradeTerms').value.trim();
+    const before = pfw.freightLabel;
+    pfSyncFreightToTradeTerms();
+    if (pfw.freightLabel !== before) $('pfw_freightLabel').value = pfw.freightLabel;
+  });
+
   $('btnPfBack3').addEventListener('click', () => { pfCollectStep3(); pfw.step = 2; renderPfWizard(); });
 
   $('btnPfPreview').addEventListener('click', () => pfSubmit(true));
