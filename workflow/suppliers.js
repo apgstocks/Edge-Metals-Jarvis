@@ -4,6 +4,7 @@
 // every function here is now async as a result. All callers updated to match.
 
 const { loadSuppliers, loadWorkflow, loadBookings } = require('../helpers/json');
+const { findByNormalizedName } = require('../helpers/nameMatch');
 const cfg = require('../config');
 
 const digits = (v) => String(v || '').replace(/\D/g, '');
@@ -62,7 +63,10 @@ async function getSuppliersByName(name) {
     const all = await loadSuppliers();
     const exact = all.filter(x => (x.name || '').toLowerCase() === lower);
     if (exact.length) return exact;
-    return all.filter(x => (x.name || '').toLowerCase().includes(lower));
+    const sub = all.filter(x => (x.name || '').toLowerCase().includes(lower));
+    if (sub.length) return sub;
+    // See helpers/nameMatch.js — spacing/punctuation-tolerant last resort.
+    return findByNormalizedName(all, name);
 }
 
 async function getSupplierGroupIdForBooking(bkgNo) {

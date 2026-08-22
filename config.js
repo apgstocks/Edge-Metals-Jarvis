@@ -44,6 +44,13 @@ const FILES = {
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
     TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),
+    // Review & Generate screen's edit-state history, per container — NOT
+    // the saved PDF archive (see helpers/documentsSaved.js for that, a
+    // different thing: the finished file vs. the form fields that produced
+    // it). Added per Apsara's "Load previous edits" mockup — every real
+    // Generate & Download saves the full form state here so a returning
+    // visit to the same container can restore it instead of starting blank.
+    INVOICE_VERSIONS_FILE: path.join(DATA_DIR, 'invoice_versions.json'),
     MEMORY_SESSIONS_FILE: path.join(MEMORY_DIR, 'sessions.json'),
     MEMORY_CONTEXT_FILE : path.join(MEMORY_DIR, 'business_context.json'),
     MEMORY_EMBEDDINGS_FILE: path.join(MEMORY_DIR, 'embeddings.json'),
@@ -108,17 +115,6 @@ const FILES = {
     // flag onto loads.json would mean special-casing every existing
     // consumer — getInventoryReport, the PDFs, the workbooks — for no gain.
     EXPENSES_FILE: path.join(DATA_DIR, 'expenses.json'),
-    // Payments received against invoices — the other half of the receivables
-    // ledger (helpers/receivables.js). Deliberately its own append-only store
-    // rather than new columns on the Invoice Google Sheet: that sheet is read
-    // by several other tools, one invoice can be paid in instalments (a list,
-    // not a column), and a payment record must survive an accidental sheet
-    // edit. Joined to the sheet by invoice number. See receivables.js's header.
-    PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
-    // Gmail message ids the payment watcher has already judged — same
-    // dedupe pattern as EMAIL_PROCESSED_FILE. Kept separate from that one so
-    // the two watchers can never mark each other's mail as handled.
-    PAYMENT_EMAILS_PROCESSED_FILE: path.join(DATA_DIR, 'payment_emails_processed.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads
@@ -301,6 +297,11 @@ const GEMINI_API_KEY_BACKUP = process.env.GEMINI_API_KEY_BACKUP || '';
 const GROUP_TRUCKER  = process.env.GROUP_TRUCKER  || '';
 const GROUP_SUPPLIER = process.env.GROUP_SUPPLIER || '';
 const EMAIL_PROCESSED_FILE = path.join(DATA_DIR, 'email_processed.json');
+// Emails already assessed by workflow/replyWatch.js's needs-a-reply scan.
+// Separate from EMAIL_PROCESSED_FILE on purpose: that one tracks the
+// booking-PDF intake, and the two scans look at completely different mail.
+// Sharing one store would make each silently suppress the other's work.
+const REPLY_WATCH_FILE = path.join(DATA_DIR, 'reply_watch.json');
 const GMAIL_WATCH_ENABLED  = process.env.GMAIL_WATCH_ENABLED !== 'false'; // default ON — matches LLM_MANAGER_ENABLED's pattern in this same file
 const GMAIL_POLL_DAYS_BACK = parseInt(process.env.GMAIL_POLL_DAYS_BACK || '3', 10);
 // ── Workflow constants ────────────────────────────────────────────────────────
@@ -425,7 +426,7 @@ module.exports = {
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
     QUOTE_REQUESTS_FILE, CONTACT_QUOTE_REQUESTS_FILE, CONTACTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
-    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE,
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE, REPLY_WATCH_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,

@@ -1,6 +1,26 @@
 // ── helpers/time.js — Date / time utilities (LA timezone) ────────────────────
 // All freight dates are MM/DD/YYYY, all deadlines evaluated in America/Los_Angeles.
 
+// ── chrono-node (MIT) — fallback natural-language date parser ────────────────
+// Added 2026-08-22 with Apsara's approval. parseNaturalTime below is a
+// hand-rolled set of regexes, and it has the same failure mode that keeps
+// biting everywhere else in this codebase: it only understands the phrasings
+// somebody thought to write a pattern for. The live "@7am" bug is the
+// canonical example — every pattern recognized the WORD "at" and none
+// recognized the "@" shorthand she actually types.
+//
+// LOADED DEFENSIVELY, ON PURPOSE. If `npm install` has not been run on the
+// VM yet, require() throws, chrono stays null, and parseNaturalTime behaves
+// EXACTLY as it does today. A restart before installing must never take
+// Jarvis down — deploys here are a manual restart on a live ops system, and
+// a hard require would turn a forgotten install step into an outage.
+let chrono = null;
+try {
+    chrono = require('chrono-node');
+} catch (e) {
+    console.warn('[TIME] chrono-node not installed — falling back to built-in date patterns only. Run `npm install` to enable it.');
+}
+
 function getLADate() {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
 }
@@ -158,7 +178,114 @@ function parseNaturalTime(text) {
         return laWallClockToUTC(d.getFullYear(), d.getMonth(), d.getDate(), hour, min);
     }
 
-    return null;
+    // ── chrono fallback — ONLY reached when every pattern above missed ───────
+    // Deliberately last, not first. The patterns above encode real decisions
+    // this business has already made (bare weekday rolls to next week rather
+    // than risking a time that has already passed; no time given means 9AM
+    // LA), and chrono knows none of that. Running it first would silently
+    // change the meaning of phrasings that work correctly today. Running it
+    // last can only turn a null — a schedule that would simply have been
+    // rejected — into a parsed time.
+    if (!chrono) return null;
+    try {
+        // `lower` already has the redundant LA/PST/pacific qualifiers stripped
+        // (see above), which matters here too: chrono WOULD honour a timezone
+        // it recognizes and shift the result off LA time, which is never what
+        // is meant in this app.
+        //
+        // forwardDate:true resolves ambiguity toward the future, matching the
+        // deliberate "nobody schedules something for 30 minutes ago" rule the
+        // bare-clock branch above already applies.
+        const results = chrono.parse(lower, now, { forwardDate: true });
+        const start = results && results[0] && results[0].start;
+        if (!start) return null;
+
+        const y = start.get('year'), mo = start.get('month'), d = start.get('day');
+        // A time with no date attached is not enough to schedule anything —
+        // bail rather than guessing which day was meant.
+        if (y == null || mo == null || d == null) return null;
+
+        // ── CERTAINTY GUARD — caught a real bug during this integration ─────
+        // chrono ALWAYS returns a complete date. When it cannot actually
+        // resolve a component it silently fills in the reference date's value
+        // and flags it `isCertain(...) === false`. Reading the date without
+        // checking those flags produces confidently wrong answers:
+        //
+        //   "on the 15th at 2pm"     -> Aug 22 (today) 2pm, day NOT certain
+        //   "next month on the 3rd"  -> Sep 22        , day NOT certain
+        //
+        // Both silently drop the day-of-month she explicitly stated. For an
+        // app whose whole job is freight deadlines, scheduling an email for
+        // the 22nd when she said the 15th is far worse than admitting the
+        // phrase could not be parsed — a null just means she gets asked.
+        //
+        // So a chrono result is trusted in exactly two shapes:
+        //   (a) the calendar day is CERTAIN — chrono genuinely determined it
+        //       ("Sept 3 at 10am", "in 3 weeks", "2 days from now").
+        //   (b) it is a bare time-of-day with no date words at all — the day
+        //       matched the reference and the clock time is certain ("@7am").
+        //       This is the case the hand-rolled bare-clock branch above
+        //       already handles for digit-leading input; it exists here to
+        //       catch the "@" shorthand form that branch cannot match.
+        // Anything else is rejected as unparseable, which is the honest and
+        // safe outcome.
+        const dayCertain  = start.isCertain('day');
+        const hourCertain = start.isCertain('hour');
+        const sameDayAsNow = (y === now.getFullYear() && mo - 1 === now.getMonth() && d === now.getDate());
+
+        // Case (b) has to mean a GENUINELY bare time — "@7am" and nothing
+        // else. Certainty flags alone are not enough to establish that:
+        // "on the 15th at 2pm" also lands on today with a certain hour,
+        // because chrono matched only the "2pm" and quietly discarded the
+        // "the 15th" it could not resolve. Judging by the flags alone would
+        // have let exactly the case this guard exists to stop straight
+        // through — it did, on the first run of the test.
+        //
+        // So check what chrono actually consumed. Anything left over outside
+        // the matched span, once connector words and punctuation are
+        // removed, means part of what she wrote was silently ignored — and a
+        // date phrase that was ignored is never safe to act on.
+        const matchText = String(results[0].text || '');
+        const matchIdx  = typeof results[0].index === 'number' ? results[0].index : 0;
+        const outside   = (lower.slice(0, matchIdx) + ' ' + lower.slice(matchIdx + matchText.length));
+        const residue   = outside.replace(/\b(at|on|by|around|about|sharp|please)\b/g, '').replace(/[^a-z0-9]/g, '');
+        const bareTimeOnly = residue.length === 0;
+
+        if (!dayCertain && !(sameDayAsNow && hourCertain && bareTimeOnly)) {
+            console.warn(`[TIME] chrono could not confidently date "${text}" (day uncertain) — treating as unparseable rather than guessing`);
+            return null;
+        }
+
+        // Interpret chrono's components as LA WALL CLOCK and convert through
+        // the same helper every branch above uses. chrono itself parses
+        // relative to the process timezone, which on this VM is not
+        // guaranteed to be LA — routing through laWallClockToUTC is what
+        // keeps "7am" meaning 7am in Los Angeles regardless of how the
+        // server happens to be configured.
+        const h = start.get('hour');
+        const mi = start.get('minute');
+        // Same 9AM default the weekday branch above uses when no clock time
+        // was given, so the two paths cannot disagree.
+        const hour = h == null ? 9 : h;
+        const min  = h == null ? 0 : (mi || 0);
+
+        let parsed = laWallClockToUTC(y, mo - 1, d, hour, min);
+        if (!(parsed instanceof Date) || isNaN(parsed.getTime())) return null;
+
+        // Bare time-of-day that has already passed today means tomorrow —
+        // identical to the rule the hand-rolled bare-clock branch above
+        // applies, restated here so "@7am" and "7am" cannot disagree about
+        // which day they mean.
+        if (!dayCertain && sameDayAsNow && parsed.getTime() <= Date.now()) {
+            const nd = new Date(now); nd.setDate(nd.getDate() + 1);
+            parsed = laWallClockToUTC(nd.getFullYear(), nd.getMonth(), nd.getDate(), hour, min);
+        }
+        console.log(`[TIME] chrono parsed "${text}" -> ${parsed.toISOString()}`);
+        return parsed;
+    } catch (err) {
+        console.error('[TIME] chrono parse failed, treating as unparseable:', err.message);
+        return null;
+    }
 }
 
 module.exports = { getLADate, getLATime, daysUntil, parseUSDate, parseNaturalTime };

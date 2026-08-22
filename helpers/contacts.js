@@ -33,6 +33,7 @@
 // UPSERT-BY-NAME to match that factory's contract exactly.
 
 const cfg = require('../config');
+const { findByNormalizedName } = require('./nameMatch');
 const { loadJson, mutateJson } = require('./json');
 
 const loadContacts = () => loadJson(cfg.CONTACTS_FILE, []);
@@ -84,7 +85,12 @@ function getContactsByName(name) {
     const all = loadContacts();
     const exact = all.filter((c) => (c.name || '').toLowerCase() === lower);
     if (exact.length) return exact;
-    return all.filter((c) => (c.name || '').toLowerCase().includes(lower));
+    const sub = all.filter((c) => (c.name || '').toLowerCase().includes(lower));
+    if (sub.length) return sub;
+    // Last resort — same name, different spacing/punctuation ("mkmetaltrading"
+    // vs "MK Metal Trading"). Only reached when exact AND substring both found
+    // nothing, so no lookup that works today can change what it returns.
+    return findByNormalizedName(all, name);
 }
 
 // ── Chat-identity match — mirrors workflow/truckers.js's matchTruckerByChat

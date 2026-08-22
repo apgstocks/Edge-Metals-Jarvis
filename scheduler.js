@@ -12,7 +12,6 @@ const { stepLabel }               = require('./helpers/booking');
 const { pushAlert }               = require('./alerts');
 const cfg = require('./config');
 const emailWatcher = require('./workflow/emailWatcher');
-const paymentWatcher = require('./workflow/paymentWatcher');
 const { pickVariant } = require('./helpers/phrasing');
 const actions = require('./workflow/actions');
 
@@ -22,13 +21,6 @@ function init({ sendToManager, sendToTeam, sendMessage }) {
     _sendToTeam    = sendToTeam;
     if (sendMessage) _sendMessage = sendMessage;
     emailWatcher.init({ sendToManager });
-    // setPending is passed so a single clean payment match can stage a real
-    // yes/no confirm rather than just being described in a message.
-    paymentWatcher.init({ sendToManager, setPending: (action) => {
-        const settings = cfg.getSettings ? cfg.getSettings() : {};
-        const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
-        return actions.setPending(managerChatId, action);
-    } });
 }
 
 const TZ = { timezone: 'America/Los_Angeles' };
@@ -609,23 +601,8 @@ async function taskRunner() {
             }
             const ok = await _sendMessage(chatId, msg);
             if (ok) {
-                // Recurring task (2026-08-22) — advance to the next slot
-                // instead of archiving, so a daily reminder keeps firing.
-                // Falls back to archiving when the repeat spec can't produce a
-                // next time, so a malformed one can never wedge the queue or
-                // re-fire in a loop. See helpers/tasks.js's recurrence block.
-                if (task.repeat) {
-                    const next = await tasks.rescheduleRecurring(task.id, task.repeat, new Date());
-                    if (next) {
-                        console.log(`[TASK] Fired recurring ${task.id} → ${chatId}: "${task.message.slice(0, 60)}" — next ${next.toISOString()}`);
-                    } else {
-                        await tasks.archive(task.id, { status: 'done', result_note: 'fired_repeat_spec_unusable' });
-                        console.warn(`[TASK] Recurring ${task.id} fired but its repeat spec produced no next time — archived rather than looping`);
-                    }
-                } else {
-                    await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
-                    console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);
-                }
+                await tasks.archive(task.id, { status: 'done', result_note: 'fired' });
+                console.log(`[TASK] Fired ${task.id} → ${chatId}: "${task.message.slice(0, 60)}"`);
             } else {
                 const nextTries = (task.tries || 0) + 1;
                 if (nextTries >= (task.max_tries || 3)) {
@@ -691,6 +668,20 @@ async function contactQuoteEmailReplyWatch() {
 // see workflow/emailReplyWatch.js's own header. Kept as its own function/cron
 // entry (not folded into quoteEmailReplyWatch) so a failure or slowdown in
 // one poll can't affect the other.
+// Scans the inbox for mail that is waiting on HER — see
+// workflow/replyWatch.js. Distinct from the three *EmailReplyWatch functions
+// above: those follow up on threads Jarvis itself started, this one watches
+// inbound mail nobody asked for. Read-only; it only ever flags.
+async function replyWatch() {
+    try {
+        const { run } = require('./workflow/replyWatch');
+        const result = await run({ sendToManager: _sendToManager });
+        if (result.flagged) console.log(`[SCHED] reply-watch: ${result.flagged}/${result.checked} email(s) need a reply`);
+    } catch (err) {
+        console.error('[SCHED] reply-watch:', err.message);
+    }
+}
+
 async function generalEmailReplyWatch() {
     try {
         const { pollGeneralEmailReplies } = require('./workflow/emailReplyWatch');
@@ -754,10 +745,10 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // Reformatted 2026-08-16 per Apsara ("this looks ugly and unorganised" /
     // "show this in pdf"): the two "Inventory by item type" sections that
     // used to live here (today's breakdown + an ever-growing all-time list)
-    // are gone — that content now lives in the daily inventory PDF
-    // (helpers/pdf.js's generateInventoryReportPdf, already generated just
-    // below in eodYardReport and now actually attached to the email instead
-    // of only sitting in Drive). This text is WhatsApp's job: a quick
+    // are gone. UPDATED 2026-08-19: that content moved again — the daily
+    // inventory PDF this used to point at is no longer produced at all, and
+    // the item-type breakdown now lives in the live "Inventory-Overall"
+    // Google Sheet, whose link the email carries. This text is WhatsApp's job: a quick
     // same-night read, not the full record — see the "WhatsApp gets the
     // text summary only" comment further down for the email-vs-WhatsApp
     // split this follows. `*text*` renders bold on WhatsApp; email clients
@@ -843,25 +834,38 @@ async function eodYardReport() {
     // Hoisted so the email block below can attach it — see that block's
     // comment. Stays null if generation/upload fails; email send still
     // proceeds without it (best-effort, same as the try/catch already did).
-    let inventoryPdfBuffer = null;
+    // Rebuild the live Google Sheet + this month's per-day workbook, and keep
+    // their links for the email below. Changed 2026-08-19 per Apsara: the
+    // daily report no longer sends a PDF — "instead of pdf sending, i want
+    // you to create a google sheet for overall inventory maintenance and
+    // update on daily basis". The sheet is already kept current by the live
+    // sync on every load change (helpers/sheetSync.js); this nightly call is
+    // the belt-and-braces rebuild, and the thing that produces the links the
+    // email needs. syncNow never throws — it returns null on failure, and the
+    // email then simply goes out without links rather than not going at all.
+    let sheetLinks = null;
     try {
-        const { getInventoryReport } = require('./helpers/loads');
-        const { inventoryWorkbookBuffer } = require('./helpers/inventoryExcel');
-        const { generateInventoryReportPdf } = require('./helpers/pdf');
-        const { uploadInventoryBackupXlsx, uploadDailyInventoryPdf } = require('./helpers/drive');
-
-        const todayReport = getInventoryReport(allLoads, { from: dateKey, to: dateKey });
-        const overallReport = getInventoryReport(allLoads, {});
-
-        const xlsxBuffer = await inventoryWorkbookBuffer(allLoads);
-        await uploadInventoryBackupXlsx(xlsxBuffer);
-
-        inventoryPdfBuffer = await generateInventoryReportPdf(dateKey, todayReport, overallReport);
-        await uploadDailyInventoryPdf(dateKey, inventoryPdfBuffer);
-
-        console.log(`[SCHED] eod-yard-report: inventory backup (xlsx) + daily report (pdf) uploaded to Drive Reports folder for ${dateKey}`);
+        const { syncNow, monthKeyFor } = require('./helpers/sheetSync');
+        sheetLinks = await syncNow([monthKeyFor(dateKey)]);
+        if (sheetLinks) console.log(`[SCHED] eod-yard-report: Google Sheet + monthly workbook updated for ${dateKey}`);
     } catch (e) {
-        console.error('[SCHED] eod-yard-report: inventory Excel/PDF backup failed (email/WhatsApp send still proceeds):', e.message);
+        console.error('[SCHED] eod-yard-report: sheet sync failed (email/WhatsApp send still proceeds):', e.message);
+    }
+
+    // The legacy Inventory-Backup.xlsx is still written — it's a different
+    // artefact from the new per-month workbook (rolling "last 5 days +
+    // Overall" item-type rollup vs a chronological per-day record), nothing
+    // asked for its removal, and anyone with its link keeps working.
+    // The daily inventory PDF is NO LONGER generated or uploaded: it existed
+    // only to be attached to this email, and the email no longer carries
+    // attachments.
+    try {
+        const { inventoryWorkbookBuffer } = require('./helpers/inventoryExcel');
+        const { uploadInventoryBackupXlsx } = require('./helpers/drive');
+        await uploadInventoryBackupXlsx(await inventoryWorkbookBuffer(allLoads));
+        console.log(`[SCHED] eod-yard-report: inventory backup (xlsx) uploaded for ${dateKey}`);
+    } catch (e) {
+        console.error('[SCHED] eod-yard-report: inventory Excel backup failed (email/WhatsApp send still proceeds):', e.message);
     }
 
     // Make sure every one of today's loads actually HAS its PDFs before
@@ -884,32 +888,47 @@ async function eodYardReport() {
     // Email gets the actual PDF files as attachments — downloaded back from
     // Drive by ID via the same helper the rest of the app already uses to
     // re-read stored PDF bytes.
+    // LINKS ONLY, no attachments — per Apsara 2026-08-19. Previously this
+    // downloaded every load's ticket + weights PDF back out of Drive and
+    // attached them all, plus the inventory PDF; a busy day could produce a
+    // 20+ MB email. Now the email carries the summary text and links to the
+    // live Google Sheet, the month's per-day workbook, and each load's PDFs
+    // (which still exist in Drive exactly as before — only the attaching
+    // stopped, nothing was deleted).
     if (emails.length) {
         try {
-            const { downloadPdfById } = require('./helpers/drive');
-            const attachments = [];
+            const linkLines = [];
+            if (sheetLinks && sheetLinks.sheet && sheetLinks.sheet.webViewLink) {
+                linkLines.push(`Overall inventory (live Google Sheet): ${sheetLinks.sheet.webViewLink}`);
+            }
+            if (sheetLinks && sheetLinks.months) {
+                for (const m of sheetLinks.months) {
+                    if (m.file && m.file.webViewLink) linkLines.push(`Daily loads — ${m.monthKey}: ${m.file.webViewLink}`);
+                }
+            }
+            // Expense links only appear once expenses actually exist — see
+            // runSync in helpers/sheetSync.js, which skips building them
+            // entirely for a yard that doesn't use the tracker.
+            if (sheetLinks && sheetLinks.expenseSheet && sheetLinks.expenseSheet.webViewLink) {
+                linkLines.push(`Expenses (live Google Sheet): ${sheetLinks.expenseSheet.webViewLink}`);
+            }
+            if (sheetLinks && sheetLinks.expenseMonths) {
+                for (const m of sheetLinks.expenseMonths) {
+                    if (m.file && m.file.webViewLink) linkLines.push(`Daily expenses — ${m.monthKey}: ${m.file.webViewLink}`);
+                }
+            }
+            const pdfLines = [];
             for (const l of withPdfs) {
-                if (l.pdf_drive_id) {
-                    try { attachments.push({ filename: `${l.id}.pdf`, mimeType: 'application/pdf', base64: await downloadPdfById(l.pdf_drive_id) }); }
-                    catch (e) { console.error(`[SCHED] eod-yard-report: couldn't download ${l.id}.pdf to attach:`, e.message); }
-                }
-                if (l.weights_pdf_drive_id) {
-                    try { attachments.push({ filename: `weights_${l.id}.pdf`, mimeType: 'application/pdf', base64: await downloadPdfById(l.weights_pdf_drive_id) }); }
-                    catch (e) { console.error(`[SCHED] eod-yard-report: couldn't download weights_${l.id}.pdf to attach:`, e.message); }
-                }
+                if (l.pdf_link) pdfLines.push(`  ${l.id}: ${l.pdf_link}`);
+                if (l.weights_pdf_link) pdfLines.push(`  ${l.id} (weights): ${l.weights_pdf_link}`);
             }
-            // The daily inventory report (item-type breakdown, today + all-
-            // time) — per Apsara 2026-08-16 ("show this in pdf"), this is now
-            // the ONLY place that breakdown appears; buildYardReportText's
-            // WhatsApp/email text no longer includes it. Was already being
-            // generated and uploaded to Drive above (inventoryPdfBuffer) but
-            // never actually attached here before — this is the fix, not
-            // just a rename.
-            if (inventoryPdfBuffer) {
-                attachments.push({ filename: `inventory_${dateKey}.pdf`, mimeType: 'application/pdf', base64: inventoryPdfBuffer.toString('base64') });
-            }
+            const body = [
+                summaryText,
+                ...(linkLines.length ? ['', ...linkLines] : []),
+                ...(pdfLines.length ? ['', "Today's load tickets:", ...pdfLines] : []),
+            ].join('\n');
             const { sendEmail } = require('./helpers/gmail');
-            await sendEmail({ to: emails.join(', '), subject: `${cfg.COMPANY_NAME} — Yard Report — ${dateKey}`, body: summaryText, attachments });
+            await sendEmail({ to: emails.join(', '), subject: `${cfg.COMPANY_NAME} — Yard Report — ${dateKey}`, body });
         } catch (e) {
             console.error('[SCHED] eod-yard-report: email send failed:', e.message);
         }
@@ -939,11 +958,13 @@ function start() {
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => generalEmailReplyWatch().catch(e => console.error('[SCHED] general-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
-    // Payment detection (2026-08-22). Every 30 min rather than 15: payment
-    // notices are far rarer than booking mail, and each candidate costs a
-    // Gemini classification call. Its own in-process lock means a slow run
-    // can't overlap the next tick.
-    cron.schedule('*/30 * * * *', () => paymentWatcher.run().catch(e => console.error('[SCHED] payment-watch:', e)), TZ);
+    // Needs-a-reply inbox scan — hourly during the working day only. Hourly,
+    // not every 5 minutes like the reply watchers above, because this one
+    // costs a Gemini call per unseen email and a digest that arrives twelve
+    // times an hour is a digest nobody reads. Business hours only: an email
+    // landing at 3am does not want waking her, and it will be picked up by
+    // the 9am run anyway (LOOKBACK_DAYS covers it).
+    cron.schedule('0 9-18 * * 1-6', () => replyWatch().catch(e => console.error('[SCHED] reply-watch:', e)), TZ);
     cron.schedule('45 23 * * *', () => {
         const settings = cfg.getSettings ? cfg.getSettings() : {};
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';

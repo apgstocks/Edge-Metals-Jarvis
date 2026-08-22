@@ -26,6 +26,7 @@
 // records on purpose; nothing here touches Supabase.
 
 const crypto = require('crypto');
+const { findByNormalizedAlias } = require('./nameMatch');
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
@@ -169,6 +170,16 @@ function resolveAddress(nameOrAlias) {
     const partials = book.filter((e) => e.aliases.some((a) => a.toLowerCase().includes(raw)));
     if (partials.length === 1) return { type: 'partial', entry: partials[0] };
     if (partials.length > 1) return { type: 'ambiguous', matches: partials };
+
+    // Last resort — same alias, different spacing/punctuation ("mkmetaltrading"
+    // vs "MK Metal Trading"). Only reached when exact AND partial both found
+    // nothing, so no lookup that resolves today can be re-pointed by this.
+    // Reported as 'exact' because normalization is exact matching with
+    // formatting noise removed, not a fuzzy guess — the strings are
+    // character-identical once spaces and punctuation are gone.
+    const normalized = findByNormalizedAlias(book, nameOrAlias);
+    if (normalized.length === 1) return { type: 'exact', entry: normalized[0] };
+    if (normalized.length > 1) return { type: 'ambiguous', matches: normalized };
 
     return null;
 }

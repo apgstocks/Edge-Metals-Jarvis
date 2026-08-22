@@ -404,7 +404,29 @@ const ABBREVIATIONS = {
     mgr: 'manager',
     cntx: 'context', ctx: 'context',
 };
-function levenshtein(a, b) {
+// fastest-levenshtein (MIT) — same edit-distance metric, a faster
+// implementation. Added 2026-08-22 with Apsara's approval.
+//
+// Loaded defensively and with the original implementation kept intact
+// below as the fallback, for the same reason as chrono and zod: if
+// `npm install` has not been run on the VM, typo correction must keep
+// working rather than take Jarvis down on startup.
+//
+// Correctness note — this is a drop-in ONLY because both compute the
+// identical, standard Levenshtein distance (unit cost for insert, delete
+// and substitute). The result feeds fuzzyCorrectKeywords' maxAllowed
+// thresholds, so a library computing a DIFFERENT metric (Damerau, or a
+// normalized 0..1 similarity like Fuse.js) would silently change which
+// typos get corrected. Verified equal against the original on every
+// keyword pair before switching.
+let fastLevenshtein = null;
+try {
+    fastLevenshtein = require('fastest-levenshtein').distance;
+} catch (e) {
+    console.warn('[BRAIN] fastest-levenshtein not installed — using built-in implementation. Run `npm install` to enable it.');
+}
+
+function levenshteinFallback(a, b) {
     const m = a.length, n = b.length;
     const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
     for (let i = 0; i <= m; i++) dp[i][0] = i;
@@ -412,6 +434,10 @@ function levenshtein(a, b) {
     for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
         dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
     return dp[m][n];
+}
+
+function levenshtein(a, b) {
+    return fastLevenshtein ? fastLevenshtein(a, b) : levenshteinFallback(a, b);
 }
 function fuzzyCorrectKeywords(text) {
     return text.split(/(\s+)/).map(tok => {
@@ -509,7 +535,7 @@ function policyDecide(ctx) {
     // question, verbatim, is the answer. Same priority as A0 so it can't be
     // mis-routed to keyword grammar either.
     if (ctx.pendingAction?.type === 'await_container_number') {
-        return { intent: 'container_number_received', resolvedBy: 'policy', data: { container_number: ctx.text.trim() } };
+        return { intent: 'container_number_received', resolvedBy: 'policy', arbitrate: true, data: { container_number: ctx.text.trim() } };
     }
 
     // ── A0c. Relay-question reply — whatever the target says in response to
@@ -545,7 +571,7 @@ function policyDecide(ctx) {
         // this line at all — it's caught before this. route() still clears
         // this stale pending specifically when that happens (search for
         // "await_manual_email_address" there) — that part is unchanged.
-        return { intent: 'manual_email_address_received', resolvedBy: 'policy', data: { address_text: ctx.text.trim() } };
+        return { intent: 'manual_email_address_received', resolvedBy: 'policy', arbitrate: true, data: { address_text: ctx.text.trim() } };
     }
 
     // ── A0e. Domain-learn name pending — "learn radmetals contacts" found a
@@ -555,7 +581,7 @@ function policyDecide(ctx) {
     // replies IS the name (or names, comma-separated), not something to
     // reclassify. See workflow/actions.js's resolveDomainLearnName.
     if (ctx.pendingAction?.type === 'await_domain_learn_name') {
-        return { intent: 'domain_learn_name_received', resolvedBy: 'policy', data: { name_text: ctx.text.trim() } };
+        return { intent: 'domain_learn_name_received', resolvedBy: 'policy', arbitrate: true, data: { name_text: ctx.text.trim() } };
     }
 
     // ── A0f0. Cargo description/value prompt (2026-08-06, per Apsara: "I
@@ -568,7 +594,7 @@ function policyDecide(ctx) {
     // actions.js's resumeQuoteWithCargoDetails rather than here, so this
     // stays a plain pass-through like the others.
     if (ctx.pendingAction?.type === 'await_quote_cargo_details') {
-        return { intent: 'quote_cargo_details_received', resolvedBy: 'policy', data: { cargo_text: ctx.text.trim() } };
+        return { intent: 'quote_cargo_details_received', resolvedBy: 'policy', arbitrate: true, data: { cargo_text: ctx.text.trim() } };
     }
 
     // ── A0f-0b. Scale-tickets prompt (2026-08-20, per Apsara: "ask do you
@@ -580,7 +606,7 @@ function policyDecide(ctx) {
     // pass-through pattern as the cargo prompt above; actions.js's
     // resumeQuoteWithScaleTickets does the yes/no interpretation.
     if (ctx.pendingAction?.type === 'await_quote_scale_tickets') {
-        return { intent: 'quote_scale_tickets_received', resolvedBy: 'policy', data: { scale_text: ctx.text.trim() } };
+        return { intent: 'quote_scale_tickets_received', resolvedBy: 'policy', arbitrate: true, data: { scale_text: ctx.text.trim() } };
     }
 
     // ── A0f-1. Reply to "couldn't find a trucker named X — correct name or
@@ -589,7 +615,7 @@ function policyDecide(ctx) {
     // name, or an email address; actions.js's resumeQuoteWithTruckerRetry
     // sorts out which.
     if (ctx.pendingAction?.type === 'await_quote_trucker_retry') {
-        return { intent: 'quote_trucker_retry_received', resolvedBy: 'policy', data: { retry_text: ctx.text.trim() } };
+        return { intent: 'quote_trucker_retry_received', resolvedBy: 'policy', arbitrate: true, data: { retry_text: ctx.text.trim() } };
     }
 
     // ── A0f-2. Contact quote-request pending (2026-08-16, see
@@ -605,7 +631,7 @@ function policyDecide(ctx) {
     // setMobileVerified), not a per-request chat prompt. If you're looking
     // for that flow, it no longer exists on purpose.
     if (ctx.pendingAction?.type === 'await_contact_quote_recipient_retry') {
-        return { intent: 'contact_quote_recipient_retry_received', resolvedBy: 'policy', data: {} };
+        return { intent: 'contact_quote_recipient_retry_received', resolvedBy: 'policy', arbitrate: true, data: {} };
     }
 
     // ── A0f. Multi-select reply to "who should I ask?" (quote request with
@@ -645,7 +671,7 @@ function policyDecide(ctx) {
             }
         }
         if (picked.length) return { intent: 'quote_truckers_selected', resolvedBy: 'policy', data: { names: [...new Set(picked)] } };
-        return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Didn\'t catch a name/number — reply with names or numbers (comma-separated for more than one), or "cancel".' } };
+        return { intent: 'reply', resolvedBy: 'policy', arbitrate: true, data: { reply: 'Didn\'t catch a name/number — reply with names or numbers (comma-separated for more than one), or "cancel".' } };
     }
 
     // ── A0g. Active quote-request leg reply — a message from a chat that's
@@ -705,7 +731,34 @@ function policyDecide(ctx) {
         const nums = tt.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
         if (nums.length)
             return { intent: 'resolve_fact_batch', resolvedBy: 'policy', data: { selection: nums } };
-        return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply with numbers (e.g. "1,3"), "all", or "no".' } };
+        // 2026-08-22, second pass: this now falls through by default (see
+        // below), and the arbiter additionally protects every OTHER pending.
+        // Kept as a fallthrough rather than an arbitrated nag because this
+        // pending's valid answers are a fully closed set already checked
+        // above — there is nothing left for the arbiter to weigh, so
+        // spending a Gemini call here would buy nothing.
+        //
+        // REAL BUG (found 2026-08-22, live): Apsara asked "Do we have any
+        // booking available for Houston?" while this end-of-day review was
+        // open. This block used to hard-return a fixed "reply with numbers"
+        // nag for ANY non-matching text — so her real question never got
+        // answered at all, twice over (this nag, then the reminder tail
+        // below repeating the review). Unlike the verbatim-capture
+        // pendings elsewhere in this file (cargo description, container
+        // number, a corrected name — see A(-1)'s comment for why THOSE
+        // can't safely fall through), this pending's valid answers are a
+        // closed, unambiguous set already fully checked above (digits /
+        // "all" / "no"/"skip"/"cancel"). Anything that doesn't match one
+        // of those is by definition not a plausible answer to "which
+        // suggestions do you want to keep" — so instead of forcing a fixed
+        // nag, let it fall through to the exact same Section B / AI
+        // classification any other message gets. The fact-batch pending
+        // itself is left untouched (not cleared, not answered), so the
+        // existing reminder-tail logic further down in route() still
+        // nudges her to finish the review right after she gets her real
+        // answer — same "queue behind, don't block" principle as A(-1)'s
+        // fresh-command carve-out above, just scoped to this one pending
+        // type since it alone is safe to widen this way.
     }
 
     // ── A. Pending action always wins — never chat-history string matching ────
@@ -749,7 +802,7 @@ function policyDecide(ctx) {
             // behavior hasn't been audited here and may be relied on
             // elsewhere.
             if (p.type === 'confirm_quote_lane' || p.type === 'confirm_quote_trucker') {
-                return { intent: 'reply', resolvedBy: 'policy', data: { reply: `Didn't catch which one — reply with the number (1-${p.options.length}), or "cancel".` } };
+                return { intent: 'reply', resolvedBy: 'policy', arbitrate: true, data: { reply: `Didn't catch which one — reply with the number (1-${p.options.length}), or "cancel".` } };
             }
         }
         if (p.type === 'await_bkg_no') {
@@ -762,7 +815,7 @@ function policyDecide(ctx) {
         if (p.type === 'await_pricelist_city') {
             const cityMatch = resolveListSelection(ctx.text, ['Los Angeles', 'Houston', 'San Antonio']);
             if (cityMatch) return { intent: 'send_pricelist_city', resolvedBy: 'policy', data: { city: cityMatch, target_name: p.target_name || null } };
-            return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Reply 1 for Los Angeles, 2 for Houston, or 3 for San Antonio.' } };
+            return { intent: 'reply', resolvedBy: 'policy', arbitrate: true, data: { reply: 'Reply 1 for Los Angeles, 2 for Houston, or 3 for San Antonio.' } };
         }
         // fall through — the manager may be asking something else mid-pending
     }
@@ -932,6 +985,19 @@ function policyDecide(ctx) {
             }
         }
 
+        // "reply to 2" / "reply 2" / "reply to 2: confirmed for Friday" —
+        // answers a numbered entry from the last needs-a-reply digest.
+        // Checked BEFORE the general "reply to <name>" rule below so a bare
+        // digit is read as a digest reference rather than as a contact called
+        // "2". The two cannot collide: this requires digits only, that one
+        // requires a name.
+        if ((m = ctx.text.trim().match(/^(?:please\s+)?reply\s+(?:to\s+)?#?(\d{1,2})\b(?:\s*[:\-—]\s*(.+)|\s+(?:saying|with|about)\s+(.+))?$/i))) {
+            return {
+                intent: 'reply_to_digest_item', resolvedBy: 'policy',
+                data: { index: m[1], details: (m[2] || m[3] || '').trim() || null },
+            };
+        }
+
         // "reply to X about Y" / "reply to X's email about Y: Z" / "reply to X saying Z" —
         // finds a REAL prior email from X and replies inside that thread, not
         // a fresh compose. Deliberately checked before search_mail/draft_email
@@ -942,6 +1008,20 @@ function policyDecide(ctx) {
                 intent: 'reply_email', resolvedBy: 'policy',
                 data: { target_name: m[1].trim(), email_details: m[2].trim(), bkg_no: detailsBkg || ctx.activeBooking || null },
             };
+        }
+
+        // "what needs my reply" / "any emails waiting on me" / "check my inbox"
+        // — the on-demand version of the hourly scan in workflow/replyWatch.js.
+        // Deterministic because the phrasing set here really is small and
+        // closed (she is asking one specific question about her own inbox),
+        // and it must never be confused with search_mail, which looks for
+        // mail from a NAMED sender. The distinction that keeps them apart:
+        // this rule requires NO sender name anywhere, so "any mail from
+        // zimex" cannot match it.
+        if (/^(?:what|which|any|anything)?\s*(?:emails?|mails?)?\s*(?:do\s+i\s+|that\s+)?(?:needs?|requires?|waiting\s+(?:on|for))\s*(?:my\s+|a\s+)?(?:reply|response|answer|attention)\b/i.test(ctx.text.trim())
+            || /^(?:check|show|list)\s+(?:my\s+)?(?:inbox|unreplied|pending\s+emails?)\b/i.test(ctx.text.trim())
+            || /^(?:what|anything)\s+(?:is\s+)?(?:waiting|pending)\s+on\s+me\b/i.test(ctx.text.trim())) {
+            return { intent: 'show_pending_replies', resolvedBy: 'policy', data: {} };
         }
 
         // "did X reply about Y" / "has X replied" / "search mail for X about Y" /
@@ -955,6 +1035,20 @@ function policyDecide(ctx) {
                 data: { target_name: m[1].trim(), note: m[2] ? m[2].trim() : null, bkg_no: detailsBkg || ctx.activeBooking || null },
             };
         }
+
+        // NOTE (2026-08-22, per Apsara: "I don't want to hardcode anything.
+        // Let AI decide. both are same meaning"): a regex for the phrasing
+        // "check whether we received any mail from zimex recently" was
+        // written here and then deliberately REMOVED. It worked, but it was
+        // the wrong layer — "did zimex reply" and "did we receive any mail
+        // from zimex" mean the same thing, and adding a new pattern for
+        // every way of saying the same thing is an endless treadmill that
+        // still loses to the next unanticipated phrasing. Semantic
+        // equivalence is exactly what the AI classifier is for; the two
+        // patterns above are kept only because they already existed and
+        // work, not as a model to extend. Anything they don't match now
+        // falls through to aiDecide, whose prompt carries explicit guidance
+        // for recognizing mail-receipt questions in ANY phrasing.
 
         // "email X about Y" / "email X re Y" / "please email X regarding Y" —
         // manager explicitly instructing an outbound email. Uses ctx.text (not
@@ -1295,7 +1389,7 @@ STRICT RULES:
 - Never return free text outside the JSON.
 - Do not assume media exists unless hasMedia is true.
 - Do not assume a booking is active unless activeBooking is set.
-- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. CRITICAL: target_name is ALWAYS exactly the name/company the manager said, verbatim — a bare first name like "Mike" stays "Mike". If the manager typed a company name as ONE compressed word (e.g. "mkmetaltrading"), keep it as that exact one word — do NOT split or "clean up" it into separate words (e.g. "mk metal trading"); a real incident already happened where doing this broke address lookup entirely, because the search then went looking for a phrase that doesn't actually appear anywhere in real mail. Preserve the manager's exact spelling and spacing, whatever it is. NEVER invent, guess, or auto-complete an email address into target_name (e.g. turning "Mike" into "mike@example.com" or "mike@gmail.com") — you do not know their real address, and a fabricated one silently sent to would be a serious mistake. target_name may ONLY be a full email address if that literal address string is actually present in the manager's message. Actual address lookup (saved contacts, mail search, or asking the manager directly) is handled separately, after your classification — that is not your job here. SAME RULE for email_details: it is ONLY what the manager actually said the email should say — if they gave no content at all (e.g. "send mail to radmetals" with nothing else), email_details MUST be null. Do NOT invent a plausible-sounding reason or message ("just checking in", "I miss you", or similar filler) — a real incident already happened where this produced a fabricated "I miss you" email nobody asked for. Leaving email_details null is always correct when nothing was actually said; a downstream step handles that case properly (grounds the draft in real past correspondence, or asks a concrete question) — it does not need you to paper over the gap. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. "lookup_address" is for ANY question about where a saved place IS, or its contact details on file — the address book holds yards, buyers, sellers, ports and facilities under short names Apsara uses daily ("Junk car", "Eccomelt", "Inesh yard", "LA"). Set target_name to the place she named, VERBATIM, and nothing else. Recognize this in whatever phrasing she uses: "Junk car address", "address of Eccomelt", "where is Inesh yard", "what's the address for LA", "send me Junk car's address", "Ecco addres" (typo), "junk car location", "Junk car mobile", "Junk car phone number". This is READ-ONLY — it just looks up and shows what's saved, nothing is sent to anyone and nothing is changed, so use it confidently rather than falling back to NEED_DATA or a refusal. A REAL INCIDENT (2026-08-22) is exactly why this action exists: "Junk car address" — a place that IS in the address book — got the generic "I'm sorry, I can't help with that. My purpose is to assist with freight operations" refusal, which was both wrong and absurd, since the data was sitting right there. If she names a place you don't recognize, still use lookup_address with her exact wording — the lookup itself reports honestly when nothing matches and offers close matches; that is not your job to pre-judge. Do NOT use draft_email/search_mail for these — she is asking what's on file, not asking to email anyone or search mail.
+- The AVAILABLE ACTIONS list is EXHAUSTIVE — never invent an action name not on it, even one that seems reasonable. If the manager wants a question relayed to a trucker/supplier and an answer brought back ("ask him whether X", "check with the supplier about Y"), use "ask_contact": target_name = who to ask, bkg_no = the booking if relevant, note = the exact question to send. This sets up a proper pending so their reply gets relayed back to whoever asked, instead of silently landing as an unrelated ambiguous message. "schedule_followup" is a WhatsApp nudge sent later to a trucker or supplier. "draft_email" is for when the manager explicitly asks you to email someone (e.g. "email Zimex about DALA123's cutoff") — target_name = who to email, email_details = what it should say, bkg_no = the booking if relevant. CRITICAL: target_name is ALWAYS exactly the name/company the manager said, verbatim — a bare first name like "Mike" stays "Mike". If the manager typed a company name as ONE compressed word (e.g. "mkmetaltrading"), keep it as that exact one word rather than respacing it to "mk metal trading" — not because the expansion is wrong (MK Metal Trading is the real company; reading it that way is correct), but because passing her spelling through unchanged is simply the most faithful thing to do, and lookup now handles either form. Name matching ignores spacing and punctuation entirely (see helpers/nameMatch.js), so both spellings resolve to the same record and nothing breaks either way. Preserve the manager's exact spelling and spacing. To be clear about what "verbatim" governs: it fixes HOW you spell the name once you have identified it — never widen it into HOW MUCH of the sentence you copy. Decide which words are the name by understanding the sentence, then reproduce exactly those words unaltered. "any mail from Zimex recently" is Zimex; "recently" is her telling you when, not part of the company's name, and no rule here asks you to keep it. Reproduce faithfully, do not over-copy, whatever it is. NEVER invent, guess, or auto-complete an email address into target_name (e.g. turning "Mike" into "mike@example.com" or "mike@gmail.com") — you do not know their real address, and a fabricated one silently sent to would be a serious mistake. target_name may ONLY be a full email address if that literal address string is actually present in the manager's message. Actual address lookup (saved contacts, mail search, or asking the manager directly) is handled separately, after your classification — that is not your job here. SAME RULE for email_details: it is ONLY what the manager actually said the email should say — if they gave no content at all (e.g. "send mail to radmetals" with nothing else), email_details MUST be null. Do NOT invent a plausible-sounding reason or message ("just checking in", "I miss you", or similar filler) — a real incident already happened where this produced a fabricated "I miss you" email nobody asked for. Leaving email_details null is always correct when nothing was actually said; a downstream step handles that case properly (grounds the draft in real past correspondence, or asks a concrete question) — it does not need you to paper over the gap. This only DRAFTS and stages the email for the manager's yes/no confirmation — it is never sent without that confirmation, and you must never treat it as already sent. "search_mail" is for a QUESTION about mail that already exists (e.g. "did Zimex reply about DALA123's cutoff", "check email for anything from Eaglebrit about ERD") — target_name = who to check, note = what to look for, bkg_no = the booking if relevant. This is read-only and answers directly, no confirmation needed, and is a completely separate action from draft_email — never use draft_email to answer a question about existing mail, and never use search_mail when the manager wants something SENT. RECOGNIZE THIS IN ANY PHRASING — do not pattern-match on particular wording. All of these mean exactly the same thing and are ALL search_mail: "did Zimex reply", "check whether we received any mail from Zimex recently", "have we heard back from Zimex", "any mail from Zimex", "did we get anything from Zimex", "anything come in from Zimex lately", "has Zimex sent us anything", "was there an email from Zimex", "check my inbox for Zimex". Asking whether mail ARRIVED and asking whether someone REPLIED are the same question — treat them identically. A REAL INCIDENT (2026-08-22) is why this note exists: "check whether we received any mail from zimex recently" was not recognized, purely because it was phrased as a receipt question rather than a reply question. If the manager is asking about mail that may already be sitting in the inbox, it is search_mail — classify it confidently rather than falling back to NEED_DATA or a generic reply. target_name is WHO, and only who. Work out from the plain meaning of the sentence which words actually name the sender and which are just the manager describing when or what she's asking about — you understand English, so infer this rather than matching set phrases. Put timing in note or drop it, put any subject qualifier in note, and leave target_name as the sender alone. "show_pending_replies" scans her INBOX for mail that is waiting on a reply FROM HER and reports what it finds — use it for "what needs my reply", "any emails waiting on me", "anything I have not replied to", "check my inbox", "what is pending on me". No target_name and no note: it looks at the whole inbox, not one sender. This is the on-demand version of a scan that also runs hourly on its own. READ-ONLY — it flags and reports, it never replies to anyone. Do NOT confuse it with search_mail: search_mail answers a question about mail from a NAMED person ("did Zimex reply"), while this one answers "who is waiting on me" with no sender named at all. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. "lookup_address" is for ANY question about where a saved place IS, or its contact details on file — the address book holds yards, buyers, sellers, ports and facilities under short names Apsara uses daily ("Junk car", "Eccomelt", "Inesh yard", "LA"). Set target_name to the place she named, VERBATIM, and nothing else. Recognize this in whatever phrasing she uses: "Junk car address", "address of Eccomelt", "where is Inesh yard", "what's the address for LA", "send me Junk car's address", "Ecco addres" (typo), "junk car location", "Junk car mobile", "Junk car phone number". This is READ-ONLY — it just looks up and shows what's saved, nothing is sent to anyone and nothing is changed, so use it confidently rather than falling back to NEED_DATA or a refusal. A REAL INCIDENT (2026-08-22) is exactly why this action exists: "Junk car address" — a place that IS in the address book — got the generic "I'm sorry, I can't help with that. My purpose is to assist with freight operations" refusal, which was both wrong and absurd, since the data was sitting right there. If she names a place you don't recognize, still use lookup_address with her exact wording — the lookup itself reports honestly when nothing matches and offers close matches; that is not your job to pre-judge. Do NOT use draft_email/search_mail for these — she is asking what's on file, not asking to email anyone or search mail.
 "show_receivables" answers "who owes me money" — outstanding invoice balances, oldest first, with ageing. Use it for "who owes me", "what's outstanding", "receivables", "unpaid invoices", "how much is Taewon behind", "aging report". If she names a customer, put that name in target_name; otherwise leave target_name null for everyone. Read-only.
 "record_payment" logs money RECEIVED against an invoice — "Taewon paid 5000", "received $18,000 for 26JY52", "Eccomelt cleared invoice 260819_AC_26JY52", "mark 26JY40 paid". Set target_name = the invoice number OR the customer name, verbatim; fact = the amount exactly as she wrote it ("5000", "$8,000", "5k"); note = anything else she said (method, date, reference). This only writes a bookkeeping entry — nothing is sent and no money moves. If the reference matches more than one invoice it asks rather than guessing, so use it confidently.
 "show_orphan_payments" lists payments recorded against an invoice number that isn't on the sheet — only when she asks about orphaned or unmatched payments.
@@ -1368,7 +1462,7 @@ show_booking_status, show_bookings_all, show_bookings_urgent,
 show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
-ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs,
+ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, show_pending_replies,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message,
 show_receivables, record_payment, show_orphan_payments,
 reply, silent, NEED_DATA, NEED_APPROVAL
@@ -1396,7 +1490,7 @@ const SAFE_ACTIONS = new Set([
     'show_bookings_urgent', 'show_bookings_available', 'show_bookings_week',
     'show_contacts', 'check_supplier', 'remember_fact', 'add_business_context',
     'trucker_ask_erd', 'supplier_ask_erd', 'trucker_ask_cutoff', 'supplier_ask_cutoff',
-    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs',
+    'ask_contact', 'draft_email', 'search_mail', 'reply_email', 'backfill_cutoffs', 'show_pending_replies',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
     // hardcode everything. let jarvis ai handle this"). This is exactly the
@@ -1614,6 +1708,8 @@ async function route(decision, ctx, sendMessage) {
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);
+        case 'show_pending_replies':    return actions.showPendingReplies(chatId);
+        case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'get_quote':               return actions.startQuoteRequestFlow(chatId, d.origin, d.destination, d.names_text, d.emails);
@@ -1855,6 +1951,51 @@ async function process(rawEvent, sendMessage) {
     const ctx     = await buildContext(inbound, pending);
 
     let decision = policyDecide(ctx);
+
+    // ── Pending arbiter — "is this an answer, or has she moved on?" ─────────
+    // policyDecide is synchronous and cannot call Gemini, so the trap points
+    // inside it just TAG themselves with `arbitrate: true` and the actual
+    // judgement happens here, where we can await. See helpers/pendingArbiter.js
+    // for the full reasoning; the short version is that deciding whether a
+    // sentence answers a question is a question of MEANING, and the two
+    // regex grammars detectFreshCommand knows about will never cover the
+    // ways a person actually phrases things.
+    //
+    // Only ever fires when a pending is genuinely open AND policy was about
+    // to either capture the message verbatim as the answer or reject it with
+    // a canned nag — i.e. exactly the spots where Apsara's real questions
+    // were being lost. Costs one Gemini call in that narrow case and nothing
+    // at all the rest of the time.
+    //
+    // NEW_REQUEST is the only verdict that changes anything: it drops the
+    // policy decision and reclassifies the message from scratch, exactly as
+    // if no pending existed. The pending itself is deliberately left OPEN —
+    // it is not answered and not cancelled — so the existing reminder tail
+    // further down still brings it back after she gets her real answer.
+    // That is the "answer the fresh query, then show the pending" behaviour
+    // she asked for on 2026-08-20, generalized to any phrasing.
+    if (decision.arbitrate && ctx.pendingAction && inbound.isManagerOrTeam) {
+        try {
+            const { classifyAgainstPending } = require('../helpers/pendingArbiter');
+            const question = pendingFullReminder(ctx.pendingAction)
+                || `${ctx.pendingAction.type.replace(/_/g, ' ')} — ${pendingHint(ctx.pendingAction)}`;
+            const verdict = await classifyAgainstPending(ctx.text, question);
+            if (verdict === 'NEW_REQUEST') {
+                console.log(`[BRAIN] Arbiter: treating as a new request, "${ctx.pendingAction.type}" left open`);
+                // Re-run policy with the pending hidden, so any deterministic
+                // grammar that WOULD have matched still gets its chance
+                // before falling back to the AI classifier. Without this a
+                // plain "menu" or "urgent" would needlessly cost a second
+                // Gemini round-trip.
+                decision = policyDecide({ ...ctx, pendingAction: null });
+            }
+        } catch (e) {
+            // Never let the arbiter break message handling — on any failure
+            // the original policy decision stands untouched.
+            console.error('[BRAIN] Arbiter threw, keeping original decision:', e.message);
+        }
+    }
+
     if (decision.needsAI) {
         const ai = await aiDecide(ctx);
         decision = {

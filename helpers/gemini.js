@@ -64,7 +64,21 @@ function resolveCutoffDate(fields) {
     return fields.port_cutoff_date || fields.cutoff_date || null;
 }
 
-async function callGeminiJSON(prompt, retries = 2) {
+// `schema` is an OPTIONAL zod schema. When given, a response that parses as
+// JSON but has the wrong SHAPE is treated exactly like unparseable output —
+// it burns a retry instead of being handed back to the caller.
+//
+// Added 2026-08-22 with Apsara's approval. Until now every caller checked
+// Gemini's output by hand, inconsistently: some verified a field existed,
+// some assumed, and a response missing a field or carrying a string where a
+// number belonged flowed straight into business logic. A retry is nearly
+// free here and usually succeeds, since malformed output is typically a
+// one-off generation glitch rather than a persistent failure.
+//
+// Deliberately OPTIONAL so this can spread gradually. Every existing caller
+// passes no schema and behaves precisely as before — this cannot regress
+// any current flow, only harden the calls that opt in.
+async function callGeminiJSON(prompt, retries = 2, schema = null) {
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const model  = getClient().getGenerativeModel({
@@ -73,6 +87,16 @@ async function callGeminiJSON(prompt, retries = 2) {
             });
             const result = await model.generateContent(prompt);
             const parsed = extractJson(result.response.text());
+            if (parsed && schema) {
+                const check = schema.safeParse(parsed);
+                if (check.success) return check.data;
+                // Log the shape complaint, not the payload — responses can
+                // carry customer names, addresses and prices.
+                const why = (check.error?.issues || []).map(i => `${(i.path || []).join('.') || '(root)'}: ${i.message}`).join('; ');
+                console.warn(`[GEMINI] Response failed schema (attempt ${attempt + 1}): ${why}`);
+                if (attempt < retries) { await new Promise(r => setTimeout(r, 400 * (attempt + 1))); continue; }
+                return null;
+            }
             if (parsed) return parsed;
             console.warn(`[GEMINI] Unparseable response (attempt ${attempt + 1})`);
         } catch (err) {
