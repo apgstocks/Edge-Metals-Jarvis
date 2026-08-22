@@ -2116,10 +2116,12 @@ function renderBot() {
       <div style="background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); overflow:hidden;">
         <div style="display:flex; align-items:center; gap:10px; padding:10px 18px; background:var(--steel-900); border-bottom:1px solid var(--steel-800);">
           <span style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--steel-300);">Commands fire for real — same effect as messaging Jarvis on WhatsApp</span>
+          <span id="wakeStatus" style="margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--steel-500); white-space:nowrap;">Wake word off</span>
         </div>
         <div id="botLogEl" style="height:380px; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:10px;"></div>
         <div style="display:flex; gap:10px; padding:14px 18px; background:var(--steel-900); border-top:1px solid var(--steel-800);">
           <input id="botInput" placeholder="forward DALA23991600 to Dave" style="flex:1; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-xs); padding:10px 14px; font-family:var(--font-mono); font-size:12.5px; color:var(--steel-100); outline:none;">
+          <button id="btnWakeWord" class="btn" title="Toggle always-on 'Jarvis' wake word" style="min-width:44px;">🎙️</button>
           <button id="btnBotMic" class="btn" title="Speak a command" style="min-width:44px;">🎤</button>
           <button id="btnBotSend" class="btn btn-primary">Send</button>
         </div>
@@ -2129,6 +2131,15 @@ function renderBot() {
   $('btnBotSend').addEventListener('click', sendBotCommand);
   $('botInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendBotCommand(); });
   $('btnBotMic').addEventListener('click', toggleBotMic);
+  $('btnWakeWord').addEventListener('click', toggleWakeWord);
+  // Reflect existing wake-word state (it keeps running across view
+  // switches — re-rendering this view just rebuilds the DOM, it doesn't
+  // stop the background recognizer).
+  if (wakeWordEnabled) {
+    $('btnWakeWord').textContent = '🔴';
+    $('btnWakeWord').style.background = 'var(--status-danger)';
+    setWakeStatus(wakeAwaitingCommand ? 'Yes? Listening…' : 'Listening for "Jarvis"…', wakeAwaitingCommand ? 'var(--leaf-400)' : 'var(--copper-400)');
+  }
 }
 
 // Voice input for the terminal — per Apsara, a follow-up to the WhatsApp
@@ -2186,6 +2197,106 @@ async function toggleBotMic() {
     botLog.push({ prompt: 'error', color: 'var(--status-danger)', text: `Mic access failed: ${e.message}` });
     renderBotLog();
   }
+}
+// ── WAKE WORD ("say 'Jarvis'") ──────────────────────────────────────────
+// Always-on listening via the browser's Web Speech API (Chrome/Edge —
+// Safari's continuous-mode support is unreliable so it's feature-detected,
+// not blocked). OFF by default and only ever starts from an explicit click
+// on btnWakeWord: mic permission needs a user gesture regardless, and
+// always-listening in a shared office is a real privacy trade-off that
+// shouldn't just turn itself on. While enabled, audio is streamed to the
+// browser's speech-recognition backend (Google's, in Chrome) to be
+// transcribed — there's no offline/on-device mode for Web Speech API, so
+// this is NOT audio staying local to the machine.
+//
+// Heard commands are filled into botInput for review, exactly like the
+// mic button — deliberately NOT auto-sent. A false wake or a mis-heard
+// word here would fire a real WhatsApp message to a trucker/supplier with
+// nobody having read it first, which is a worse failure mode than the
+// mic button's (where she already chose to record).
+let wakeRecognition = null;
+let wakeWordEnabled = false;
+let wakeAwaitingCommand = false;
+
+function getSpeechRecognitionCtor() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+function setWakeStatus(text, color) {
+  const el = $('wakeStatus');
+  if (el) { el.textContent = text; el.style.color = color || 'var(--steel-500)'; }
+}
+function toggleWakeWord() {
+  const btn = $('btnWakeWord');
+  if (wakeWordEnabled) {
+    wakeWordEnabled = false;
+    wakeAwaitingCommand = false;
+    if (wakeRecognition) { try { wakeRecognition.stop(); } catch (e) {} }
+    if (btn) { btn.textContent = '🎙️'; btn.style.background = ''; }
+    setWakeStatus('Wake word off', 'var(--steel-500)');
+    return;
+  }
+  const Ctor = getSpeechRecognitionCtor();
+  if (!Ctor) {
+    botLog.push({ prompt: 'error', color: 'var(--status-danger)', text: "This browser doesn't support always-on voice recognition (Web Speech API) — try Chrome or Edge." });
+    renderBotLog();
+    return;
+  }
+  wakeWordEnabled = true;
+  if (btn) { btn.textContent = '🔴'; btn.style.background = 'var(--status-danger)'; }
+  setWakeStatus('Listening for "Jarvis"…', 'var(--copper-400)');
+  startWakeRecognition();
+}
+function startWakeRecognition() {
+  if (!wakeWordEnabled) return;
+  const Ctor = getSpeechRecognitionCtor();
+  wakeRecognition = new Ctor();
+  wakeRecognition.continuous = true;
+  wakeRecognition.interimResults = false;
+  wakeRecognition.lang = 'en-US';
+  wakeRecognition.onresult = (event) => {
+    const last = event.results[event.results.length - 1];
+    if (!last || !last.isFinal) return;
+    const heard = (last[0]?.transcript || '').trim();
+    if (!heard) return;
+    if (wakeAwaitingCommand) {
+      wakeAwaitingCommand = false;
+      setWakeStatus('Listening for "Jarvis"…', 'var(--copper-400)');
+      fillBotFromVoice(heard);
+      return;
+    }
+    const lower = heard.toLowerCase();
+    const idx = lower.indexOf('jarvis');
+    if (idx === -1) return;
+    const remainder = heard.slice(idx + 'jarvis'.length).replace(/^[\s,.:-]+/, '').trim();
+    if (remainder.length > 2) {
+      fillBotFromVoice(remainder);
+    } else {
+      wakeAwaitingCommand = true;
+      setWakeStatus('Yes? Listening…', 'var(--leaf-400)');
+      botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: 'Yes? Go ahead.' });
+      renderBotLog();
+    }
+  };
+  wakeRecognition.onerror = (event) => {
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      wakeWordEnabled = false;
+      const btn = $('btnWakeWord');
+      if (btn) { btn.textContent = '🎙️'; btn.style.background = ''; }
+      setWakeStatus('Mic permission denied', 'var(--status-danger)');
+    }
+    // 'no-speech' / 'network' / 'aborted' — onend below restarts it as long
+    // as wakeWordEnabled is still true, so a transient hiccup self-heals.
+  };
+  wakeRecognition.onend = () => {
+    if (wakeWordEnabled) setTimeout(() => { if (wakeWordEnabled) startWakeRecognition(); }, 300);
+  };
+  try { wakeRecognition.start(); } catch (e) { /* already running — ignore */ }
+}
+function fillBotFromVoice(text) {
+  $('botInput').value = text;
+  $('botInput').focus();
+  botLog.push({ prompt: 'heard', color: 'var(--leaf-400)', text: `"${text}" — review and hit Send` });
+  renderBotLog();
 }
 function renderBotLog() {
   const el = $('botLogEl');
