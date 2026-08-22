@@ -2579,7 +2579,12 @@ function renderMobileTabs() {
   $('mobileTabBar').innerHTML = [
     tabBtn('loads', 'Loads'),
     tabBtn('inventory', 'Inventory'),
-    ...(ROLE === 'admin' ? [tabBtn('expenses', 'Expenses')] : []),
+    // Expenses and Documents are admin-only. Hiding the button is UX only,
+    // NOT the security boundary: /api/expenses is requireAdmin-gated and the
+    // proforma/invoice routes are denied to staff by omission from
+    // STAFF_ALLOWED_PATH_PREFIXES in api.js. A non-admin session that forged
+    // its way to these screens would get 403s from every call they make.
+    ...(ROLE === 'admin' ? [tabBtn('expenses', 'Expenses'), tabBtn('documents', 'Docs')] : []),
   ].join('');
   $('mobileTabBar').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     if (b.dataset.tab === currentMobileTab) return;
@@ -2735,6 +2740,7 @@ async function renderCurrentMobileTab() {
     if (currentMobileTab === 'loads') { renderLoads(await api('/api/loads')); return; }
     if (currentMobileTab === 'inventory') { await renderInventoryTab(); return; }
     if (currentMobileTab === 'expenses') { await renderExpensesTab(); return; }
+    if (currentMobileTab === 'documents') { await renderDocumentsTab(); return; }
   } catch (err) {
     // api() already routes a 401 to the login screen; anything else
     // (network error, 500, etc.) surfaces here instead of a blank screen.
@@ -3250,6 +3256,864 @@ async function renderItemTypeManager(prefix) {
   btn.addEventListener('click', add);
   input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } });
 });
+
+
+// ══════════════════════════════════════════════════════════════════════
+// DOCUMENTS TAB — Proforma + Invoice (admin only)
+// ══════════════════════════════════════════════════════════════════════
+// Added 2026-08-22 per Apsara: "integrate proforma/invoice creation into
+// mobile app admin access."
+//
+// SCOPE, decided with her before building: Proforma and Invoice only —
+// Verification stays on the dashboard, because all five carrier checks are
+// driven by uploading spreadsheet/PDF statements, which is desk work. And
+// the PROFORMA side is the 3-step wizard only, not the full form.
+//
+// That second decision is the important one. On the dashboard the wizard is
+// a fast path that hands off to a 14-field form for the final pass. Porting
+// that whole form to a phone would produce a screen nobody could fill in
+// standing in a yard. Instead the wizard's step 3 here does double duty:
+// rates AND the handful of document fields that actually vary, with the
+// same defaults the full form applies (see PF_DEFAULTS). Everything else —
+// multi-container blocks, per-container item lists, pricing-memory
+// browsing — stays on the dashboard, which is the right tool for it.
+//
+// What this deliberately REUSES rather than reimplements: every calculation
+// that ends up on a legal document is server-side already
+// (helpers/proformaPdf.js, helpers/invoicePdf.js, helpers/invoiceSheet.js).
+// This screen only collects fields and POSTs the same payload shape the
+// dashboard sends. The one thing that had to be copied is deriveItemCode()
+// and its rule table, because the invoice-number format depends on it and
+// it lives in dashboard/documents.html as client code. That duplication is
+// a real risk — flagged in DOC_ITEM_CODE_RULES' comment.
+
+let docsSubTab = 'proforma';
+let docsAddressBook = [];
+
+// ── Copied from dashboard/documents.html ──────────────────────────────────
+// DUPLICATED CODE, KNOWINGLY. These four functions are the item-code and
+// address-book-label rules that decide what the Invoice No looks like
+// ("260820_AC_26JY95"). They live as client-side code in
+// dashboard/documents.html, so there is no server endpoint to call for
+// them. Copying is the lesser evil against a phone that silently produces a
+// DIFFERENT invoice number format than the dashboard for the same material.
+//
+// If the material list or the code map ever changes, BOTH copies must
+// change. The right long-term fix is to move deriveItemCode server-side and
+// expose it — worth doing the next time this table is touched.
+const DOC_ITEM_CODE_RULES = [
+  ['AW', ['ALUMINUM WHEEL', 'ALUMINIUM WHEEL', 'AL WHEEL', 'ALLOY WHEEL']],
+  ['CW', ['CHROME WHEEL']],
+  ['AL', ['ALUMINIUM COMBO', 'ALUMINUM COMBO', 'AL COMBO']],
+  ['AC', ['AUTO CAST']],
+  ['AP', ['SCRAP AUTO PART', 'AUTO PART']],
+  ['RC', ['REGULAR COMBO']],
+  ['BT', ['BATTERY', 'BATTERIES']],
+  ['HW', ['HARNESS WIRE', 'HARNESS']],
+  ['TT', ['TAINT TABOUR', 'TAINT TABOR', 'TOUGH TABOO', 'TAINT TABOO']],
+  ['ML', ['MIXED LOAD']],
+  ['SU', ['SEALED UNIT']],
+  ['MM', ['MIXED MOTOR']],
+  ['RD', ['ROTOR', 'DRUM']],
+  ['MC', ['MIXED COMBO']],
+];
+// Letters only, so "AUTOCAST", "AUTO-CAST" and "AUTO CAST" all match the
+// same rule — the dashboard learned this the hard way.
+function docNormalizeForItemMatch(s) { return (s || '').toUpperCase().replace(/[^A-Z]/g, ''); }
+function docDeriveItemCode(desc) {
+  const norm = docNormalizeForItemMatch(desc);
+  if (!norm) return null;
+  for (const [code, keywords] of DOC_ITEM_CODE_RULES) {
+    if (keywords.some(k => norm.includes(docNormalizeForItemMatch(k)))) return code;
+  }
+  return null;
+}
+function docSearchAddressBook(q) {
+  const aliasHits = [], rawOnlyHits = [];
+  docsAddressBook.forEach(e => {
+    if ((e.aliases || []).some(a => a.toLowerCase().includes(q))) aliasHits.push(e);
+    else if ((e.raw || '').toLowerCase().includes(q)) rawOnlyHits.push(e);
+  });
+  return aliasHits.concat(rawOnlyHits);
+}
+// "Joey/Taewon" -> "Taewon": some entries store a contact name and the
+// company name as aliases. The company is what belongs on the document;
+// the contact is only there to search by.
+function docConsigneeName(entry) {
+  const combined = (entry.aliases || []).join('/');
+  if (combined.includes('/')) {
+    const parts = combined.split('/').map(s => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return ((entry.aliases || [])[0] || '').trim();
+}
+function docEntryLabel(entry) {
+  const aliases = entry.aliases || [];
+  const rawFirst = (entry.raw || '').split('\n')[0].trim();
+  const aliasText = aliases.join(' / ');
+  if (rawFirst && !aliases.some(a => a.toLowerCase() === rawFirst.toLowerCase())) {
+    return aliasText ? `${aliasText} — ${rawFirst}` : rawFirst;
+  }
+  return aliasText;
+}
+
+// Same values the dashboard's full form ships with as its input defaults.
+// The wizard on this side never shows that form, so without these a phone
+// proforma would go out missing payment terms and country of origin.
+const PF_DEFAULTS = {
+  payment_term: 'T/T 100% Against Shipping Documents',
+  country_of_origin: 'USA',
+  shipment_allowance: '+/- 10% on weights',
+  freight_label: 'CIF (freight included)',
+  qty_unit: 'MT',
+};
+
+function docTodayISO() { return new Date().toISOString().slice(0, 10); }
+
+// ── Tab shell ─────────────────────────────────────────────────────────────
+async function renderDocumentsTab() {
+  // Address book backs the consignee/buyer typeaheads on both sub-tabs.
+  // Fetched once per tab entry, not per keystroke; a failure leaves the
+  // typeahead empty but every field still typeable by hand, which is how
+  // the dashboard behaves too.
+  if (!docsAddressBook.length) {
+    try { docsAddressBook = await api('/api/address-book'); } catch (e) { docsAddressBook = []; }
+  }
+  $('viewRoot').innerHTML = `
+    <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
+      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">Documents</div>
+      <div style="display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--border-subtle);">
+        ${[['proforma', 'Proforma'], ['invoice', 'Invoice']].map(([id, label]) => `
+          <button class="btn doc-subtab-btn" data-subtab="${id}" style="flex:1; border:none; border-radius:0; border-bottom:2px solid ${docsSubTab === id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:9px 10px; font-size:12.5px; font-weight:${docsSubTab === id ? '700' : '500'}; color:${docsSubTab === id ? 'var(--text-strong)' : 'var(--text-muted)'};">${label}</button>`).join('')}
+      </div>
+      <div id="docBody"></div>
+    </section>`;
+  $('viewRoot').querySelectorAll('.doc-subtab-btn').forEach(btn => btn.addEventListener('click', () => {
+    if (btn.dataset.subtab === docsSubTab) return;
+    docsSubTab = btn.dataset.subtab;
+    renderDocumentsTab();
+  }));
+  if (docsSubTab === 'proforma') renderPfWizard(); else renderInvFlow();
+}
+
+// Reusable consignee/buyer typeahead. Returns the picked address-book entry
+// through onPick so the caller can keep the full alias tag ("Joey/Taewon"),
+// which the server needs for pricing memory and invoice-number history even
+// though only the company name goes on the document.
+function wireDocTypeahead(inputId, listId, onPick, onType) {
+  const input = $(inputId), box = $(listId);
+  if (!input || !box) return;
+  const close = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  input.addEventListener('input', () => {
+    if (onType) onType();
+    const q = input.value.trim().toLowerCase();
+    if (!q) return close();
+    const matches = docSearchAddressBook(q).slice(0, 8);
+    if (!matches.length) return close();
+    box.innerHTML = matches.map((m, i) => `<div class="ac-item" data-idx="${i}">${esc(docEntryLabel(m))}</div>`).join('');
+    box.classList.remove('hidden');
+    box.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
+      // mousedown + preventDefault: a click would blur the input first and
+      // close this list before the click landed. The dashboard hit this
+      // exact bug twice ("consignee not clickable").
+      ev.preventDefault();
+      onPick(matches[Number(el.dataset.idx)]);
+      close();
+    }));
+  });
+  input.addEventListener('blur', () => setTimeout(close, 150));
+}
+
+// ── PROFORMA — 3-step wizard ──────────────────────────────────────────────
+let pfw = null;
+function resetPfWizard() {
+  pfw = {
+    step: 1,
+    consignee: '', consigneeEntry: null, consigneeTag: null,
+    items: [{ desc: '', qty: 21, rate: 0 }],
+    containerCount: 1,
+    invNo: '', invNoSuggestion: null, invDate: docTodayISO(),
+    tradeTerms: '', portDischarge: '', reference: '', buyerPo: '', buyerPoDate: '',
+    containerSeq: null, containerNos: [],
+  };
+}
+
+function renderPfWizard() {
+  if (!pfw) resetPfWizard();
+  const stepBody = { 1: pfStep1Html, 2: pfStep2Html, 3: pfStep3Html }[pfw.step]();
+  $('docBody').innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Step ${pfw.step} of 3</div>
+      <button id="btnPfReset" class="btn" style="padding:4px 10px; font-size:10px;">Start over</button>
+    </div>
+    ${stepBody}
+    <div id="pfMsg" style="margin-top:14px; font-family:var(--font-mono); font-size:11px;"></div>`;
+  $('btnPfReset').addEventListener('click', async () => {
+    if (!await askYesNo('Discard this proforma and start over?')) return;
+    resetPfWizard(); renderPfWizard();
+  });
+  ({ 1: wirePfStep1, 2: wirePfStep2, 3: wirePfStep3 }[pfw.step])();
+}
+
+// Step 1 — who is it for.
+function pfStep1Html() {
+  return `
+    <div class="field" style="position:relative;">
+      <label>Consignee</label>
+      <input id="pfw_consignee" placeholder="Start typing a customer" autocomplete="off" value="${esc(pfw.consignee)}">
+      <div id="pfwConsigneeList" class="ac-dropdown hidden"></div>
+    </div>
+    <div style="font-size:12px; color:var(--text-muted); margin:-4px 0 16px;">Picked from your address book, so the address and pricing history come with it.</div>
+    <button id="btnPfNext1" class="btn btn-primary" style="width:100%;">Next</button>`;
+}
+function wirePfStep1() {
+  wireDocTypeahead('pfw_consignee', 'pfwConsigneeList',
+    (entry) => {
+      pfw.consigneeEntry = entry;
+      pfw.consignee = docConsigneeName(entry);
+      // FULL alias tag, not the display name — the server groups
+      // agent-tagged consignees by what's BEFORE the "/", so it needs
+      // "Joey" to find Joey's other customers' invoice numbers.
+      pfw.consigneeTag = (entry.aliases || []).join('/') || pfw.consignee;
+      $('pfw_consignee').value = pfw.consignee;
+    },
+    () => { pfw.consigneeEntry = null; pfw.consigneeTag = null; });
+  $('btnPfNext1').addEventListener('click', () => {
+    const name = $('pfw_consignee').value.trim();
+    if (!name) { $('pfMsg').style.color = 'var(--status-danger)'; $('pfMsg').textContent = 'Pick or type a consignee first.'; return; }
+    // A hand-typed consignee with no address-book match is allowed — same
+    // as the dashboard. It just means no address and no pricing memory.
+    pfw.consignee = name;
+    if (!pfw.consigneeTag) pfw.consigneeTag = name;
+    pfw.step = 2; renderPfWizard();
+  });
+}
+
+// Step 2 — what's in it. Freeform material rows, defaulting to 21 MT, per
+// Apsara on the dashboard build: "no matter whatever it is 21 MT just ask
+// user to enter the material" — there are no material presets by design.
+function pfStep2Html() {
+  return `
+    <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Material</div>
+    <div id="pfwItems" style="display:flex; flex-direction:column; gap:8px;"></div>
+    <button id="btnPfAddItem" class="btn" style="width:100%; margin-top:10px; font-size:11px;">+ Add material</button>
+    <div class="field" style="margin-top:18px;">
+      <label>How many containers</label>
+      <input id="pfw_containerCount" type="number" min="1" value="${pfw.containerCount}">
+    </div>
+    <div style="font-size:12px; color:var(--text-muted); margin:-4px 0 16px;">Each container gets the same materials. Container numbers are filled in automatically on the next step.</div>
+    <div style="display:flex; gap:8px;">
+      <button id="btnPfBack2" class="btn" style="flex:1;">Back</button>
+      <button id="btnPfNext2" class="btn btn-primary" style="flex:2;">Next</button>
+    </div>`;
+}
+function pfRenderItems() {
+  $('pfwItems').innerHTML = pfw.items.map((it, i) => `
+    <div class="pfw-item" data-i="${i}" style="display:grid; grid-template-columns:1fr 84px auto; gap:6px; align-items:center;">
+      <input class="pfw-desc" placeholder="material" value="${esc(it.desc)}" autocomplete="off">
+      <input class="pfw-qty" type="number" step="any" placeholder="MT" value="${it.qty || ''}">
+      <button type="button" class="btn btn-danger pfw-del" style="padding:6px 9px; font-size:10px;">✕</button>
+    </div>`).join('');
+  // Read the DOM back into state on every keystroke, so switching steps or
+  // adding a row can never silently drop what was just typed.
+  const sync = () => {
+    pfw.items = Array.from($('pfwItems').querySelectorAll('.pfw-item')).map(row => ({
+      desc: row.querySelector('.pfw-desc').value,
+      qty: parseFloat(row.querySelector('.pfw-qty').value) || 0,
+      rate: pfw.items[Number(row.dataset.i)] ? pfw.items[Number(row.dataset.i)].rate : 0,
+    }));
+  };
+  $('pfwItems').querySelectorAll('input').forEach(inp => inp.addEventListener('input', sync));
+  $('pfwItems').querySelectorAll('.pfw-del').forEach(btn => btn.addEventListener('click', () => {
+    // Never leave zero rows — an empty step 2 has no way back to a usable
+    // state except Start over.
+    if (pfw.items.length <= 1) return;
+    sync();
+    pfw.items.splice(Number(btn.closest('.pfw-item').dataset.i), 1);
+    pfRenderItems();
+  }));
+}
+function wirePfStep2() {
+  pfRenderItems();
+  $('btnPfAddItem').addEventListener('click', () => { pfw.items.push({ desc: '', qty: 21, rate: 0 }); pfRenderItems(); });
+  $('btnPfBack2').addEventListener('click', () => { pfw.step = 1; renderPfWizard(); });
+  $('btnPfNext2').addEventListener('click', async () => {
+    pfw.items = pfw.items.filter(it => it.desc.trim());
+    if (!pfw.items.length) {
+      $('pfMsg').style.color = 'var(--status-danger)';
+      $('pfMsg').textContent = 'Enter at least one material.';
+      pfw.items = [{ desc: '', qty: 21, rate: 0 }]; pfRenderItems();
+      return;
+    }
+    pfw.containerCount = Math.max(1, parseInt($('pfw_containerCount').value, 10) || 1);
+    const btn = $('btnPfNext2');
+    btn.disabled = true; btn.textContent = 'Looking up pricing…';
+    try { await pfLoadSuggestions(); } finally { btn.disabled = false; btn.textContent = 'Next'; }
+    pfw.step = 3; renderPfWizard();
+  });
+}
+
+// Everything the dashboard's full form would have auto-filled on arrival:
+// pricing memory, trade terms, port of discharge, the next invoice number,
+// and the running container-number sequence. All of it is a SUGGESTION —
+// every field stays editable on step 3, same rule as the dashboard.
+async function pfLoadSuggestions() {
+  const tag = pfw.consigneeTag || pfw.consignee;
+
+  // Per-item rates from what this customer paid last time.
+  await Promise.all(pfw.items.map(async (it) => {
+    if (it.rate) return; // already typed by hand — never overwrite
+    try {
+      const r = await api(`/api/customer-pricing/item-rate?customer=${encodeURIComponent(pfw.consignee)}&item=${encodeURIComponent(it.desc)}`);
+      if (r && r.rate) { it.rate = r.rate; it.rateFromMemory = true; }
+    } catch (e) { /* no history for this item — stays manual */ }
+  }));
+
+  try {
+    const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(pfw.consignee));
+    if (info && info.canonical_name) {
+      if (info.trade_terms && !pfw.tradeTerms) pfw.tradeTerms = info.trade_terms;
+      if (info.port_discharge && !pfw.portDischarge) pfw.portDischarge = info.port_discharge;
+    }
+  } catch (e) { /* unknown customer — fields stay blank */ }
+  // Same hardcoded default the dashboard applies for these three customers.
+  if (/taewon|daekwang|dooin/i.test(pfw.consignee) && !pfw.portDischarge) pfw.portDischarge = 'South Korea';
+
+  try {
+    const sug = await api('/api/proforma/next-inv-no?consignee=' + encodeURIComponent(tag));
+    if (sug && sug.inv_no) {
+      const dateStr = sug.inv_no.split(' ')[0];
+      const itemCode = docDeriveItemCode(pfw.items[0] && pfw.items[0].desc);
+      // "[date]_[item]_[code]" when the material is known, which on this
+      // wizard it always is by step 3 — unlike the dashboard's full form,
+      // where the consignee is often picked before any item is typed and a
+      // retrofit pass is needed later. Here the order is fixed, so the
+      // retrofit machinery isn't needed at all.
+      pfw.invNo = itemCode ? `${dateStr}_${itemCode}_${sug.code_only}` : sug.inv_no;
+      pfw.invNoSuggestion = { highest: sug.highest_existing };
+      pfw.containerSeq = {
+        yy: sug.year_prefix, letterCode: sug.letter_code, nextNumber: sug.next_number,
+        numberDigits: sug.number_digits, numberHadLeadingZero: sug.number_had_leading_zero,
+      };
+    }
+  } catch (e) { /* no history — invoice number stays manual */ }
+
+  // Container numbers: bare "26JY52" with no item code, per Apsara
+  // 2026-08-22 on the dashboard. The item code still reaches the Edge
+  // Metals sheet, but as its own field (see the payload below).
+  pfw.containerNos = [];
+  for (let i = 0; i < pfw.containerCount; i++) {
+    if (!pfw.containerSeq) { pfw.containerNos.push(''); continue; }
+    const n = pfw.containerSeq.nextNumber++;
+    const numStr = pfw.containerSeq.numberHadLeadingZero
+      ? String(n).padStart(pfw.containerSeq.numberDigits, '0') : String(n);
+    pfw.containerNos.push(`${pfw.containerSeq.yy}${pfw.containerSeq.letterCode}${numStr}`);
+  }
+}
+
+// Step 3 — rates + the document fields that actually vary, then generate.
+// On the dashboard this step only sets rates and then hands off to the full
+// form. There's no full form here, so it also carries Invoice No, date,
+// trade terms, port and container numbers. Everything else comes from
+// PF_DEFAULTS.
+function pfStep3Html() {
+  const money = (n) => n ? Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
+  const total = pfw.items.reduce((s, it) => s + (it.qty || 0) * (it.rate || 0), 0) * pfw.containerCount;
+  return `
+    <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Rate per ${PF_DEFAULTS.qty_unit}</div>
+    <div id="pfwRates" style="display:flex; flex-direction:column; gap:8px;">
+      ${pfw.items.map((it, i) => `
+        <div class="pfw-rate-row" data-i="${i}" style="display:grid; grid-template-columns:1fr 96px; gap:8px; align-items:center;">
+          <div style="font-size:13px; color:var(--text-strong); min-width:0;">
+            ${esc(it.desc)}
+            <span style="color:var(--text-faint); font-size:11px;"> · ${it.qty} ${PF_DEFAULTS.qty_unit}</span>
+            ${it.rateFromMemory ? '<span style="display:block; font-size:9.5px; color:var(--status-success, #3fae55); font-family:var(--font-mono);">from pricing memory</span>' : ''}
+          </div>
+          <input class="pfw-rate" type="number" step="any" placeholder="rate" value="${it.rate || ''}">
+        </div>`).join('')}
+    </div>
+    <div id="pfwTotal" style="margin-top:10px; text-align:right; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);">
+      Total across ${pfw.containerCount} container(s): <span style="color:var(--text-strong);">$${money(total)}</span>
+    </div>
+
+    <div style="height:1px; background:var(--border-subtle); margin:20px 0;"></div>
+
+    <div class="field"><label>Invoice No</label><input id="pfw_invNo" value="${esc(pfw.invNo)}" autocomplete="off"></div>
+    ${pfw.invNoSuggestion ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--status-success, #3fae55); margin:-6px 0 12px;">● suggested — last was ${esc(pfw.invNoSuggestion.highest)}</div>` : ''}
+    <div class="field"><label>Invoice date</label><input id="pfw_invDate" type="date" value="${esc(pfw.invDate)}"></div>
+    <div class="field"><label>Container numbers</label><input id="pfw_containerNos" value="${esc(pfw.containerNos.join(', '))}" placeholder="comma separated" autocomplete="off"></div>
+    <div class="field"><label>Trade terms</label><input id="pfw_tradeTerms" value="${esc(pfw.tradeTerms)}" placeholder="e.g. CIF Busan, South Korea" autocomplete="off"></div>
+    <div class="field"><label>Port of discharge</label><input id="pfw_portDischarge" value="${esc(pfw.portDischarge)}" autocomplete="off"></div>
+    <div class="field"><label>Reference (optional)</label><input id="pfw_reference" value="${esc(pfw.reference)}" autocomplete="off"></div>
+    <div class="field"><label>Buyer PO (optional)</label><input id="pfw_buyerPo" value="${esc(pfw.buyerPo)}" autocomplete="off"></div>
+
+    <div style="font-size:11.5px; color:var(--text-faint); margin-bottom:16px; line-height:1.5;">
+      Payment terms, country of origin, freight basis and shipment allowance use your standard values. Change those on the dashboard if a deal needs different ones.
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      <button id="btnPfBack3" class="btn" style="flex:1;">Back</button>
+      <button id="btnPfPreview" class="btn" style="flex:1;">Preview</button>
+      <button id="btnPfGenerate" class="btn btn-primary" style="flex:2;">Generate</button>
+    </div>`;
+}
+
+function pfCollectStep3() {
+  $('pfwRates').querySelectorAll('.pfw-rate-row').forEach(row => {
+    const it = pfw.items[Number(row.dataset.i)];
+    if (it) it.rate = parseFloat(row.querySelector('.pfw-rate').value) || 0;
+  });
+  pfw.invNo = $('pfw_invNo').value.trim();
+  pfw.invDate = $('pfw_invDate').value;
+  pfw.containerNos = $('pfw_containerNos').value.split(',').map(s => s.trim()).filter(Boolean);
+  pfw.tradeTerms = $('pfw_tradeTerms').value.trim();
+  pfw.portDischarge = $('pfw_portDischarge').value.trim();
+  pfw.reference = $('pfw_reference').value.trim();
+  pfw.buyerPo = $('pfw_buyerPo').value.trim();
+}
+
+// Builds the SAME payload shape dashboard/documents.html's
+// collectProformaPayload() sends. Field names and nesting are load-bearing:
+// helpers/proformaPdf.js and helpers/proformaSheetLog.js read them directly,
+// so a rename here silently produces a blank column on her Edge Metals sheet
+// rather than an error.
+function pfBuildPayload() {
+  const containers = pfw.containerNos.map(no => ({
+    container_no: no,
+    // Sent ALONGSIDE container_no, not glued into it — the Container # box
+    // stays bare, but proformaSheetLog.js still needs the code to build its
+    // "Inv No." column as [date]_[item]_[code].
+    item_code: docDeriveItemCode(pfw.items[0] && pfw.items[0].desc) || null,
+    items: pfw.items.map(it => ({ desc: it.desc.trim(), qty: it.qty || 0, rate: it.rate || 0, unit: PF_DEFAULTS.qty_unit })),
+  })).filter(c => c.container_no && c.items.length);
+
+  return {
+    inv_no: pfw.invNo,
+    inv_date: pfw.invDate,
+    reference: pfw.reference,
+    qty_unit: PF_DEFAULTS.qty_unit,
+    consignee: pfw.consignee,
+    // Full alias tag for the sheet log; falls back to the plain name for a
+    // hand-typed consignee with no address-book entry.
+    consignee_sheet_tag: pfw.consigneeTag || pfw.consignee,
+    consignee_address: pfw.consigneeEntry
+      ? (pfw.consigneeEntry.raw || '').split('\n').map(l => l.trim()).filter(Boolean)
+      : [],
+    trade_terms: pfw.tradeTerms,
+    port_discharge: pfw.portDischarge,
+    payment_term: PF_DEFAULTS.payment_term,
+    freight_label: PF_DEFAULTS.freight_label,
+    buyer_po: pfw.buyerPo,
+    buyer_po_date: pfw.buyerPoDate,
+    country_of_origin: PF_DEFAULTS.country_of_origin,
+    shipment_allowance: PF_DEFAULTS.shipment_allowance,
+    containers,
+  };
+}
+
+function wirePfStep3() {
+  const retotal = () => {
+    pfCollectStep3();
+    const total = pfw.items.reduce((s, it) => s + (it.qty || 0) * (it.rate || 0), 0) * pfw.containerCount;
+    $('pfwTotal').innerHTML = `Total across ${pfw.containerCount} container(s): <span style="color:var(--text-strong);">$${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
+  };
+  $('pfwRates').querySelectorAll('.pfw-rate').forEach(inp => inp.addEventListener('input', retotal));
+  $('btnPfBack3').addEventListener('click', () => { pfCollectStep3(); pfw.step = 2; renderPfWizard(); });
+
+  $('btnPfPreview').addEventListener('click', () => pfSubmit(true));
+  $('btnPfGenerate').addEventListener('click', () => pfSubmit(false));
+}
+
+async function pfSubmit(preview) {
+  pfCollectStep3();
+  const payload = pfBuildPayload();
+  const msg = $('pfMsg');
+  // Validate before spending a round trip. The server would reject these
+  // too, but a 500 with a stack-trace message is not an answer anyone can
+  // act on while standing in a yard.
+  if (!payload.inv_no) { msg.style.color = 'var(--status-danger)'; msg.textContent = 'Invoice No is required.'; return; }
+  if (!payload.containers.length) { msg.style.color = 'var(--status-danger)'; msg.textContent = 'Enter at least one container number.'; return; }
+  if (payload.containers.some(c => c.items.some(it => !it.rate))) {
+    if (!await askYesNo('Some materials have no rate, so they will show as $0 on the proforma.\n\nGenerate anyway?')) return;
+  }
+
+  const btn = preview ? $('btnPfPreview') : $('btnPfGenerate');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = preview ? 'Building…' : 'Generating…';
+  msg.textContent = '';
+  try {
+    if (preview) {
+      // preview=1 returns the PDF inline and archives nothing — the same
+      // "look before you commit" step the dashboard has.
+      const res = await fetch(API_BASE + '/api/proforma/generate?preview=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await docErrText(res));
+      const blob = await res.blob();
+      if (!blob.size) throw new Error('the server returned an empty PDF');
+      await deliverExportedFile(blob, `proforma-preview-${payload.inv_no.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');
+    } else {
+      const result = await api('/api/proforma/generate', { method: 'POST', body: JSON.stringify(payload) });
+      msg.style.color = 'var(--status-success, #3fae55)';
+      msg.textContent = '✓ Generated and saved.';
+      if (result && result.saved_filename) {
+        await docShareSaved('proforma', result.saved_filename, payload.inv_no, '');
+      }
+    }
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+// Server error bodies are JSON {error}; fall back to the status code when
+// the response isn't JSON at all (a proxy error page, say).
+async function docErrText(res) {
+  try { const j = await res.json(); if (j && j.error) return j.error; } catch (e) {}
+  return `request failed (${res.status})`;
+}
+
+// The non-preview routes archive the PDF server-side and return only a
+// filename, so the actual bytes have to be fetched back through the
+// documents-download route before they can be shared.
+async function docShareSaved(kind, filename, label, containerNo) {
+  try {
+    const qs = `?kind=${kind}&file=${encodeURIComponent(filename)}&date=${docTodayISO()}` +
+      (containerNo ? `&container=${encodeURIComponent(containerNo)}` : '');
+    const res = await fetch(API_BASE + '/api/documents/download' + qs, { headers: { Authorization: 'Bearer ' + getToken() } });
+    if (!res.ok) return; // saved fine, just can't hand it over — message above already says "saved"
+    const blob = await res.blob();
+    if (!blob.size) return;
+    await deliverExportedFile(blob, filename, 'pdf');
+  } catch (e) { /* sharing is a convenience; the document is already saved */ }
+}
+
+// ── INVOICE — search, pick, review, generate ──────────────────────────────
+// Deliberately single-container. The dashboard's multi-select batch queue
+// (several containers under one booking merged into one invoice, reviewed
+// one group at a time) is not ported: it's a desk workflow, and getting it
+// subtly wrong would produce a WRONG commercial invoice rather than a
+// cosmetic bug. Search by container number still accepts anything typed, so
+// a booking-merged invoice can be found and re-checked on the dashboard.
+let invw = null;
+function resetInvFlow() {
+  invw = { step: 1, buyer: '', buyerTag: null, containers: [], data: null };
+}
+
+function renderInvFlow() {
+  if (!invw) resetInvFlow();
+  const body = { 1: invStep1Html, 2: invStep2Html, 3: invStep3Html }[invw.step]();
+  $('docBody').innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Step ${invw.step} of 3</div>
+      ${invw.step > 1 ? '<button id="btnInvReset" class="btn" style="padding:4px 10px; font-size:10px;">Start over</button>' : ''}
+    </div>
+    ${body}
+    <div id="invMsg" style="margin-top:14px; font-family:var(--font-mono); font-size:11px;"></div>`;
+  if ($('btnInvReset')) $('btnInvReset').addEventListener('click', () => { resetInvFlow(); renderInvFlow(); });
+  ({ 1: wireInvStep1, 2: wireInvStep2, 3: wireInvStep3 }[invw.step])();
+}
+
+function invStep1Html() {
+  return `
+    <div class="field" style="position:relative;">
+      <label>Buyer</label>
+      <input id="invw_buyer" placeholder="Start typing a customer" autocomplete="off" value="${esc(invw.buyer)}">
+      <div id="invwBuyerList" class="ac-dropdown hidden"></div>
+    </div>
+    <button id="btnInvSearchBuyer" class="btn btn-primary" style="width:100%;">Find their shipments</button>
+    <div style="display:flex; align-items:center; gap:10px; margin:18px 0;">
+      <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+      <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">OR</span>
+      <div style="flex:1; height:1px; background:var(--border-subtle);"></div>
+    </div>
+    <div class="field"><label>Container number</label><input id="invw_containerSearch" placeholder="e.g. 26JY52" autocomplete="off"></div>
+    <button id="btnInvSearchContainer" class="btn" style="width:100%;">Search by container</button>`;
+}
+function wireInvStep1() {
+  wireDocTypeahead('invw_buyer', 'invwBuyerList',
+    (entry) => {
+      // The sheet is queried by the FULL alias tag, matching the dashboard —
+      // the buyer column there holds the tagged form.
+      invw.buyerTag = (entry.aliases || []).join('/') || docConsigneeName(entry);
+      invw.buyer = docConsigneeName(entry);
+      $('invw_buyer').value = invw.buyer;
+    },
+    () => { invw.buyerTag = null; });
+
+  const search = async (btn, url, label) => {
+    btn.disabled = true; const old = btn.textContent; btn.textContent = 'Searching…';
+    $('invMsg').textContent = '';
+    try {
+      const { containers } = await api(url);
+      if (!containers || !containers.length) {
+        $('invMsg').style.color = 'var(--status-warning)';
+        $('invMsg').textContent = `No shipments found for ${label}. Check the spelling, or it may not be logged in the Invoice sheet yet.`;
+        return;
+      }
+      invw.containers = containers; invw.step = 2; renderInvFlow();
+    } catch (e) {
+      $('invMsg').style.color = 'var(--status-danger)';
+      $('invMsg').textContent = e.message;
+    } finally { btn.disabled = false; btn.textContent = old; }
+  };
+
+  $('btnInvSearchBuyer').addEventListener('click', () => {
+    const buyer = invw.buyerTag || $('invw_buyer').value.trim();
+    if (!buyer) return;
+    invw.buyer = $('invw_buyer').value.trim();
+    search($('btnInvSearchBuyer'), '/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer), invw.buyer);
+  });
+  $('btnInvSearchContainer').addEventListener('click', () => {
+    const q = $('invw_containerSearch').value.trim();
+    if (!q) return;
+    search($('btnInvSearchContainer'), '/api/invoice/by-container?q=' + encodeURIComponent(q), q);
+  });
+  $('invw_containerSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvSearchContainer').click(); });
+}
+
+function invStep2Html() {
+  return `
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">${invw.containers.length} shipment${invw.containers.length === 1 ? '' : 's'} found. Pick one to invoice.</div>
+    <div style="display:flex; flex-direction:column; gap:8px;">
+      ${invw.containers.map((c, i) => `
+        <button class="btn inv-pick" data-i="${i}" style="text-align:left; padding:12px 14px; display:block; width:100%;">
+          <div style="font-family:var(--font-mono); font-size:13px; font-weight:700; color:var(--text-strong);">${esc(c.container_no)}</div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:3px;">${esc(c.consignee || '')} · ${c.item_count} item row${c.item_count === 1 ? '' : 's'}</div>
+          <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:2px;">${esc(c.inv_no || '—')} ${esc(c.inv_date || '')}</div>
+        </button>`).join('')}
+    </div>
+    <button id="btnInvBack2" class="btn" style="width:100%; margin-top:14px;">Back</button>`;
+}
+function wireInvStep2() {
+  $('btnInvBack2').addEventListener('click', () => { invw.step = 1; renderInvFlow(); });
+  $('docBody').querySelectorAll('.inv-pick').forEach(btn => btn.addEventListener('click', async () => {
+    const c = invw.containers[Number(btn.dataset.i)];
+    btn.disabled = true;
+    $('invMsg').textContent = '';
+    try {
+      // The server computes every figure from the Invoice sheet — weights,
+      // rates, packing breakdown, the lot. Nothing here recalculates it.
+      invw.data = await api('/api/invoice/preview?container=' + encodeURIComponent(c.container_no));
+      invw.step = 3; renderInvFlow();
+    } catch (e) {
+      $('invMsg').style.color = 'var(--status-danger)';
+      $('invMsg').textContent = e.message;
+      btn.disabled = false;
+    }
+  }));
+}
+
+// Step 3 — review and generate. The figures arrive computed; this screen
+// exists so a human looks before a real commercial invoice goes out, which
+// is the same principle the old Flask tool's generate.html had.
+function invStep3Html() {
+  const d = invw.data || {};
+  const items = (d.line_items || []).map(it => ({
+    ...it,
+    container_no: it.container_no || d.container_no || '',
+    seal_no: it.seal_no || d.seal_no || '',
+  }));
+  const notes = Array.isArray(d.notes) ? d.notes
+    : (Number(d.freight) > 0 ? [{ label: 'Less: Freight Charges', amount: -Number(d.freight) }] : []);
+  const addr = (d.consignee_address && d.consignee_address.length)
+    ? d.consignee_address.join('\n')
+    : invLookupAddress(d.consignee || '');
+  return `
+    <div style="background:var(--surface-sunken); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:16px;">
+      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Consignee</div>
+      <div style="font-size:13.5px; font-weight:600; color:var(--text-strong); margin-top:3px;">${esc(d.consignee || '—')}</div>
+    </div>
+
+    <div class="field"><label>Invoice No</label><input id="invw_no" value="${esc(d.inv_no || '')}" autocomplete="off"></div>
+    <div class="field"><label>Invoice date</label><input id="invw_date" value="${esc(d.inv_date || '')}" autocomplete="off"></div>
+    <div class="field"><label>Consignee address</label><textarea id="invw_address" rows="3" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:inherit; font-size:13px; resize:vertical;">${esc(addr)}</textarea></div>
+
+    <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Items</div>
+    <div id="invwItems" style="display:flex; flex-direction:column; gap:10px;">
+      ${items.map((it, i) => `
+        <div class="invw-item" data-i="${i}" style="background:var(--surface-sunken); border-radius:var(--radius-sm); padding:10px 12px;">
+          <input class="invw-desc" value="${esc(it.item_desc || '')}" placeholder="description" style="width:100%; margin-bottom:6px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Weight (MT)</span><input class="invw-weight" type="number" step="any" value="${it.weight ?? ''}"></div>
+            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Rate</span><input class="invw-rate" type="number" step="any" value="${it.rate ?? ''}"></div>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Container</span><input class="invw-container" value="${esc(it.container_no)}"></div>
+            <div><span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); text-transform:uppercase;">Seal</span><input class="invw-seal" value="${esc(it.seal_no)}"></div>
+          </div>
+          <div class="invw-amount" style="margin-top:8px; text-align:right; font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted);"></div>
+        </div>`).join('')}
+    </div>
+
+    <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin:18px 0 8px;">Adjustments</div>
+    <div id="invwNotes" style="display:flex; flex-direction:column; gap:8px;">
+      ${notes.map((n, i) => `
+        <div class="invw-note" data-i="${i}" style="display:grid; grid-template-columns:1fr 104px auto; gap:6px; align-items:center;">
+          <input class="invw-note-label" value="${esc(n.label || '')}" placeholder="e.g. Less: Freight">
+          <input class="invw-note-amount" type="number" step="any" value="${n.amount ?? ''}">
+          <button type="button" class="btn btn-danger invw-note-del" style="padding:6px 9px; font-size:10px;">✕</button>
+        </div>`).join('')}
+    </div>
+    <button id="btnInvAddNote" class="btn" style="width:100%; margin-top:8px; font-size:11px;">+ Add adjustment</button>
+    <div style="font-size:11.5px; color:var(--text-faint); margin-top:6px;">Use a negative amount to deduct, e.g. freight.</div>
+
+    <div id="invwTotals" style="margin-top:16px; padding:12px 14px; background:var(--surface-sunken); border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px;"></div>
+
+    <div style="display:flex; gap:8px; margin-top:16px;">
+      <button id="btnInvBack3" class="btn" style="flex:1;">Back</button>
+      <button id="btnInvPreview" class="btn" style="flex:1;">Preview</button>
+      <button id="btnInvGenerate" class="btn btn-primary" style="flex:2;">Generate</button>
+    </div>`;
+}
+
+// The Invoice sheet has no address columns, so a fresh preview carries only
+// the consignee tag — the address is looked up from the address book, same
+// as the dashboard does.
+function invLookupAddress(consigneeTag) {
+  const parts = consigneeTag.split('/').map(s => s.trim()).filter(Boolean);
+  const term = (parts[parts.length - 1] || consigneeTag).toLowerCase();
+  if (!term) return consigneeTag;
+  const entries = docSearchAddressBook(term);
+  const match = entries.find(e => (e.aliases || []).join('/').toLowerCase() === consigneeTag.toLowerCase()) || entries[0];
+  return match ? (match.raw || '') : consigneeTag;
+}
+
+function invCollectPayload() {
+  const d = invw.data || {};
+  const items = Array.from($('invwItems').querySelectorAll('.invw-item')).map(row => {
+    const weight = parseFloat(row.querySelector('.invw-weight').value) || 0;
+    const rate = parseFloat(row.querySelector('.invw-rate').value) || 0;
+    const i = Number(row.dataset.i);
+    const orig = (d.line_items || [])[i] || {};
+    return {
+      item_desc: row.querySelector('.invw-desc').value.trim(),
+      container_no: row.querySelector('.invw-container').value.trim(),
+      seal_no: row.querySelector('.invw-seal').value.trim(),
+      weight, rate, amount: weight * rate,
+      // Packing figures are carried through UNCHANGED from the server's
+      // preview rather than re-entered. They're a six-field breakdown
+      // (gross, truck, container tare, chassis, boxes, net) that nobody is
+      // going to retype on a phone, and they're already correct from the
+      // sheet. net_weight_mt is recomputed because it must agree with the
+      // weight above if that was edited.
+      packing: { ...(orig.packing || {}), net_weight_mt: weight ? weight.toFixed(3) : '' },
+    };
+  }).filter(it => it.item_desc);
+
+  const notes = Array.from($('invwNotes').querySelectorAll('.invw-note')).map(row => ({
+    label: row.querySelector('.invw-note-label').value.trim(),
+    amount: parseFloat(row.querySelector('.invw-note-amount').value) || 0,
+  })).filter(n => n.label && n.amount !== 0);
+
+  const subtotal = items.reduce((s, it) => s + it.amount, 0);
+  const notesTotal = notes.reduce((s, n) => s + n.amount, 0);
+
+  return {
+    inv_no: $('invw_no').value.trim(),
+    inv_date: $('invw_date').value.trim(),
+    // Shipment fields aren't editable on the phone — they come from the
+    // sheet and are carried straight through. Editing vessel/port/booking
+    // is a desk correction, and dropping them would blank real fields on
+    // the PDF.
+    reference: d.reference || '',
+    terms: d.terms || '',
+    container_no: d.container_no || '',
+    booking_no: d.booking_no || '',
+    seal_no: d.seal_no || '',
+    place_of_receipt: d.place_of_receipt || '',
+    port_loading: d.port_loading || '',
+    port_discharge: d.port_discharge || '',
+    vessel: d.vessel || '',
+    country_of_origin: d.country_of_origin || 'USA',
+    consignee: d.consignee || '',
+    consignee_address: $('invw_address').value.split('\n').map(l => l.trim()).filter(Boolean),
+    proforma_date: d.proforma_date || '',
+    notes,
+    subtotal,
+    final_amount: subtotal + notesTotal,
+    line_items: items,
+  };
+}
+
+function wireInvStep3() {
+  const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const recalc = () => {
+    let subtotal = 0;
+    $('invwItems').querySelectorAll('.invw-item').forEach(row => {
+      const amt = (parseFloat(row.querySelector('.invw-weight').value) || 0) * (parseFloat(row.querySelector('.invw-rate').value) || 0);
+      subtotal += amt;
+      row.querySelector('.invw-amount').textContent = '$' + money(amt);
+    });
+    let notesTotal = 0;
+    $('invwNotes').querySelectorAll('.invw-note').forEach(row => { notesTotal += parseFloat(row.querySelector('.invw-note-amount').value) || 0; });
+    $('invwTotals').innerHTML = `
+      <div style="display:flex; justify-content:space-between; color:var(--text-muted);"><span>Subtotal</span><span>$${money(subtotal)}</span></div>
+      ${notesTotal ? `<div style="display:flex; justify-content:space-between; color:var(--text-muted); margin-top:4px;"><span>Adjustments</span><span>$${money(notesTotal)}</span></div>` : ''}
+      <div style="display:flex; justify-content:space-between; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); color:var(--text-strong); font-weight:700;"><span>Total</span><span>$${money(subtotal + notesTotal)}</span></div>`;
+  };
+  const wireNoteDel = () => $('invwNotes').querySelectorAll('.invw-note-del').forEach(b => b.addEventListener('click', () => { b.closest('.invw-note').remove(); recalc(); }));
+  $('docBody').querySelectorAll('#invwItems input, #invwNotes input').forEach(inp => inp.addEventListener('input', recalc));
+  wireNoteDel();
+  recalc();
+
+  $('btnInvAddNote').addEventListener('click', () => {
+    const div = document.createElement('div');
+    div.className = 'invw-note';
+    div.style.cssText = 'display:grid; grid-template-columns:1fr 104px auto; gap:6px; align-items:center;';
+    div.innerHTML = `<input class="invw-note-label" placeholder="e.g. Less: Freight"><input class="invw-note-amount" type="number" step="any"><button type="button" class="btn btn-danger invw-note-del" style="padding:6px 9px; font-size:10px;">✕</button>`;
+    $('invwNotes').appendChild(div);
+    div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', recalc));
+    div.querySelector('.invw-note-del').addEventListener('click', () => { div.remove(); recalc(); });
+  });
+
+  $('btnInvBack3').addEventListener('click', () => { invw.step = 2; renderInvFlow(); });
+  $('btnInvPreview').addEventListener('click', () => invSubmit(true));
+  $('btnInvGenerate').addEventListener('click', () => invSubmit(false));
+}
+
+async function invSubmit(preview) {
+  const payload = invCollectPayload();
+  const msg = $('invMsg');
+  if (!payload.inv_no || !payload.line_items.length) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = 'Invoice No and at least one item are required.';
+    return;
+  }
+  const btn = preview ? $('btnInvPreview') : $('btnInvGenerate');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = preview ? 'Building…' : 'Generating…';
+  msg.textContent = '';
+  try {
+    if (preview) {
+      const res = await fetch(API_BASE + '/api/invoice/generate?preview=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await docErrText(res));
+      const blob = await res.blob();
+      if (!blob.size) throw new Error('the server returned an empty PDF');
+      await deliverExportedFile(blob, `invoice-preview-${payload.inv_no.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');
+    } else {
+      const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+      msg.style.color = 'var(--status-success, #3fae55)';
+      msg.textContent = '✓ Generated and saved.';
+      if (result && result.saved_filename) {
+        await docShareSaved('invoice', result.saved_filename, payload.inv_no, payload.container_no);
+      }
+    }
+  } catch (err) {
+    msg.style.color = 'var(--status-danger)';
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────
 (async function boot() {
