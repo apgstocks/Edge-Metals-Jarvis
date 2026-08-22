@@ -3453,20 +3453,75 @@ async function askForCargoDetails(chatId, state) {
         await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask for cargo details once that's resolved.`);
         return { action_taken: 'quote_awaiting_cargo_queued' };
     }
-    await _send(chatId, `What's the cargo — description and value? (e.g. "Aluminum scrap, approx $5,000") Reply "skip" to send without it.`);
+    // Mandatory — no "skip". Per Apsara 2026-08-20: "its mandatory for every
+    // quote .just ask manager", then "NO.IT DIDNT ASK FOR DESCRIPTION".
+    await _send(chatId, `What's the cargo — description, weight, and value? All three are required (e.g. "Aluminum scrap, 40,000 lbs, approx $5,000").`);
     return { action_taken: 'quote_awaiting_cargo' };
 }
 
-// Verbatim capture, same "no fixed format to validate against" reasoning as
-// the other single-shot quote-request prompts — "skip"/"none"/"n/a" (any
-// casing) sends without cargo info; anything else is used as-is in the
-// outbound message.
+// RESTORED 2026-08-22 (second time — the whole validation block was lost to a
+// file overwrite and this reverted to accepting anything, including "skip").
+//
+// Description AND weight AND value are all required. Three live bugs produced
+// this rule, in order:
+//   1. "Al" sailed through as complete cargo details — nothing checked at all.
+//   2. The first fix only looked for ANY digit, so "42000 lbs" (a weight, no
+//      value) passed. Apsara: "manager typed only 42000 lbs not the cargo
+//      value.but jarvis ignored that."
+//   3. Requiring an explicit unit for each created an INFINITE LOOP —
+//      "40000,42000" satisfied neither check and could never be answered.
+//      Worse than the bug it replaced.
+// Hence the current rule: units are ONE way to prove a number is a weight or
+// a value, not the only way. Two DISTINCT numbers anywhere means one of each,
+// because nobody types the same fact twice. Only a single bare number is
+// genuinely ambiguous.
+const WEIGHT_RE = /\d[\d,]*\s*(lbs?|pounds?|kgs?|kilograms?|tons?)\b/i;
+const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
+// Matches a thousands-separated number as ONE token, but "40000,42000" (no
+// space) as TWO — a greedy [\d,]* class merged those into a single match and
+// silently re-created the infinite loop.
+const NUMBER_RE = /\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g;
+const UNIT_OR_CURRENCY_WORDS = new Set(['lbs', 'lb', 'pounds', 'pound', 'kgs', 'kg', 'kilograms', 'kilogram', 'tons', 'ton', 'dollars', 'dollar', 'usd']);
+const FILLER_WORDS = new Set(['ok', 'okay', 'yes', 'yeah', 'yep', 'sure', 'please', 'here', 'its', 'it', 'is', 'are', 'the', 'a', 'an', 'and', 'for', 'of', 'to', 'about', 'approx', 'around']);
+// A description is any real word left once numbers, units and filler are
+// stripped. "ok 40000 lbs $5000" has no description; "Al combo" does not
+// either (too short to be meaningful), but "Aluminum scrap" does.
+function hasCargoDescription(text) {
+    const stripped = String(text || '')
+        .replace(/\$\s?[\d,]+(\.\d+)?/g, ' ')
+        .replace(/\d[\d,]*(\.\d+)?/g, ' ');
+    const words = stripped.split(/[^a-zA-Z']+/).map((w) => w.toLowerCase()).filter(Boolean);
+    return words.some((w) => w.length >= 3 && !UNIT_OR_CURRENCY_WORDS.has(w) && !FILLER_WORDS.has(w));
+}
+function analyzeCargoNumbers(text) {
+    const numCount = (String(text || '').match(NUMBER_RE) || []).length;
+    const hasWeight = numCount >= 2 ? true : WEIGHT_RE.test(text);
+    const hasValue  = numCount >= 2 ? true : VALUE_RE.test(text);
+    return { hasWeight, hasValue, hasDescription: hasCargoDescription(text) };
+}
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
-    await clearPending(chatId);
     const clean = String(cargoText || '').trim();
-    const skipped = /^(skip|none|no|n\/a|na)$/i.test(clean);
-    const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails } = pending.state;
-    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, skipped ? null : clean);
+    // Answers accumulate across turns, so a partial reply is never discarded.
+    const combined = [pending.state.cargoSoFar, clean].filter(Boolean).join(', ');
+    const { hasWeight, hasValue, hasDescription } = analyzeCargoNumbers(combined);
+    if (!hasWeight || !hasValue || !hasDescription) {
+        await setPending(chatId, { type: 'await_quote_cargo_details', state: { ...pending.state, cargoSoFar: combined } });
+        const missing = [];
+        if (!hasDescription) missing.push('a description');
+        if (!hasWeight) missing.push('a weight');
+        if (!hasValue) missing.push('a value');
+        const list = missing.length === 1 ? missing[0]
+            : missing.length === 2 ? `${missing[0]} and ${missing[1]}`
+                : `${missing[0]}, ${missing[1]}, and ${missing[2]}`;
+        await _send(chatId, `Still need ${list} — description, weight, and value are all required for every quote. What ${missing.length > 1 ? 'are they' : 'is it'}?`);
+        return { action_taken: 'quote_cargo_details_retry' };
+    }
+    await clearPending(chatId);
+    const { originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, scaleTicketsNeeded } = pending.state;
+    const scaleLine = scaleTicketsNeeded === true ? 'scale tickets needed'
+        : scaleTicketsNeeded === false ? 'scale tickets not needed' : null;
+    const finalCargo = [combined, scaleLine].filter(Boolean).join(' | ');
+    return dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, resolvedTruckers, unresolvedNames, directEmails, finalCargo);
 }
 
 // Everything's resolved — actually send. Truckers with no usable channel
@@ -3513,11 +3568,31 @@ async function dispatchQuoteToTruckers(chatId, originQuery, destinationQuery, re
 // array of one-off recipients parsed out of an "...email addr[, addr2]"
 // clause — independent of (and combinable with) names/"ask ___".
 async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, namesText, emails) {
-    return continueQuoteFlow(chatId, {
+    // Scale tickets is asked FIRST, before recipients or cargo — per Apsara
+    // 2026-08-20 ("why didnt it ask from manager whether scale ticket neede at
+    // the start of convo"). It used to be folded into the cargo-details
+    // sentence, where it went unenforced and got silently skipped.
+    return askForScaleTickets(chatId, {
         originQuery, destinationQuery,
         names: namesText ? splitQuoteNames(namesText) : null,
         directEmails: emails && emails.length ? emails : null,
     });
+}
+
+// RESTORED 2026-08-22 (second time). This function was silently deleted by a
+// file overwrite, which left resumeQuoteWithScaleTickets exported but
+// UNREACHABLE — nothing staged the pending it resolves, so the question was
+// simply never asked. scripts/check-action-wiring.js could not see it: the
+// export existed, so its check passed. It now also checks pending types for
+// exactly this shape of break.
+async function askForScaleTickets(chatId, state) {
+    const staged = await setPending(chatId, { type: 'await_quote_scale_tickets', state });
+    if (staged.queued) {
+        await _send(chatId, `Ready to start on ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask about scale tickets once that's resolved.`);
+        return { action_taken: 'quote_awaiting_scale_tickets_queued' };
+    }
+    await _send(chatId, `Do you need scale tickets for this haul? (yes/no)`);
+    return { action_taken: 'quote_awaiting_scale_tickets' };
 }
 
 // Entry point from brain.js's 'quote_leg_reply_received' intent — a message
@@ -4235,5 +4310,5 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
     lookupAddress, sendMessageTo,
     showReceivables, recordPayment, showOrphanPayments, setReceivablesStart, trackOldInvoiceCmd,
     setReminder, showReminders, cancelReminder,
-    resumeQuoteWithScaleTickets,
+    askForScaleTickets, resumeQuoteWithScaleTickets,
 };
