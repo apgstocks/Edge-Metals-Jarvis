@@ -115,6 +115,17 @@ const FILES = {
     // flag onto loads.json would mean special-casing every existing
     // consumer — getInventoryReport, the PDFs, the workbooks — for no gain.
     EXPENSES_FILE: path.join(DATA_DIR, 'expenses.json'),
+    // Payments received against invoices — the other half of the receivables
+    // ledger (helpers/receivables.js). Deliberately its own append-only store
+    // rather than new columns on the Invoice Google Sheet: that sheet is read
+    // by several other tools, one invoice can be paid in instalments (a list,
+    // not a column), and a payment record must survive an accidental sheet
+    // edit. Joined to the sheet by invoice number.
+    PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
+    // Gmail message ids the payment watcher has already judged — same dedupe
+    // pattern as EMAIL_PROCESSED_FILE, kept separate so the two watchers can
+    // never mark each other's mail as handled.
+    PAYMENT_EMAILS_PROCESSED_FILE: path.join(DATA_DIR, 'payment_emails_processed.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads

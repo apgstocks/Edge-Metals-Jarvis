@@ -12,6 +12,7 @@ const { stepLabel }               = require('./helpers/booking');
 const { pushAlert }               = require('./alerts');
 const cfg = require('./config');
 const emailWatcher = require('./workflow/emailWatcher');
+const paymentWatcher = require('./workflow/paymentWatcher');
 const { pickVariant } = require('./helpers/phrasing');
 const actions = require('./workflow/actions');
 
@@ -21,6 +22,13 @@ function init({ sendToManager, sendToTeam, sendMessage }) {
     _sendToTeam    = sendToTeam;
     if (sendMessage) _sendMessage = sendMessage;
     emailWatcher.init({ sendToManager });
+    // setPending is passed so a single clean payment match can stage a real
+    // yes/no confirm rather than only being described in a message.
+    paymentWatcher.init({ sendToManager, setPending: (action) => {
+        const settings = cfg.getSettings ? cfg.getSettings() : {};
+        const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
+        return actions.setPending(managerChatId, action);
+    } });
 }
 
 const TZ = { timezone: 'America/Los_Angeles' };
@@ -1005,6 +1013,11 @@ function start() {
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => generalEmailReplyWatch().catch(e => console.error('[SCHED] general-email-poll:', e)), TZ);
     cron.schedule('*/15 * * * *', () => emailWatcher.run().catch(e => console.error('[SCHED] email:', e)), TZ);
+    // Payment detection (2026-08-22). Every 30 min rather than 15: payment
+    // notices are far rarer than booking mail, and each candidate costs a
+    // Gemini classification call. Its own in-process lock stops a slow run
+    // overlapping the next tick.
+    cron.schedule('*/30 * * * *', () => paymentWatcher.run().catch(e => console.error('[SCHED] payment-watch:', e)), TZ);
     // Needs-a-reply inbox scan — every 5 minutes, around the clock. Apsara,
     // 2026-08-22: "i want email to be monitored all the time."
     //

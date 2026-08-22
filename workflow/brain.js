@@ -1393,6 +1393,8 @@ STRICT RULES:
 "show_receivables" answers "who owes me money" — outstanding invoice balances, oldest first, with ageing. Use it for "who owes me", "what's outstanding", "receivables", "unpaid invoices", "how much is Taewon behind", "aging report". If she names a customer, put that name in target_name; otherwise leave target_name null for everyone. Read-only.
 "record_payment" logs money RECEIVED against an invoice — "Taewon paid 5000", "received $18,000 for 26JY52", "Eccomelt cleared invoice 260819_AC_26JY52", "mark 26JY40 paid". Set target_name = the invoice number OR the customer name, verbatim; fact = the amount exactly as she wrote it ("5000", "$8,000", "5k"); note = anything else she said (method, date, reference). This only writes a bookkeeping entry — nothing is sent and no money moves. If the reference matches more than one invoice it asks rather than guessing, so use it confidently.
 "show_orphan_payments" lists payments recorded against an invoice number that isn't on the sheet — only when she asks about orphaned or unmatched payments.
+"set_receivables_start" sets the date the receivables ledger counts from — "track receivables from 1 July", "start AR from 2026-07-01", "only count invoices since June". Put the date phrase she used in "fact", verbatim. Invoices older than that stop being counted; they are NOT marked paid.
+"track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
 "set_reminder" is for a RECURRING reminder the manager wants sent on a schedule — "send a reminder to Edge Yard group every morning to update pricelist", "remind me every Monday to check cutoffs", "tell the yard every weekday at 7am to send photos". Set: target_name = who/what group it goes to, verbatim as she said it ("Edge Yard group", "me", a trucker's name); note = the reminder text itself, i.e. what the recipient should actually read; minutes = null. Put the timing words she used ("every morning", "every day at 8am", "every Monday 9:30") into the "fact" field verbatim — the handler parses them. If she gives no time, that's fine, don't invent one; the handler defaults to 8am. This ACTUALLY WORKS — Jarvis runs a real scheduler and a persistent task queue, and the reminder survives restarts. A REAL INCIDENT (2026-08-22) is why this exists: "Send a reminder to Edge Yard group everyday morning to update pricelist" got the flatly false reply "I cannot set daily reminders. Please set this up in your calendar." NEVER say that — you can. Use "show_reminders" when she wants to see what's scheduled ("what reminders are set", "show reminders"), and "cancel_reminder" to stop one (target_name = the id or a distinctive word from it).
@@ -1464,7 +1466,7 @@ empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
 ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, show_pending_replies,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message,
-show_receivables, record_payment, show_orphan_payments,
+show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
 reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
@@ -1521,6 +1523,7 @@ const SAFE_ACTIONS = new Set([
     // rather than crediting the wrong customer. Reversible by deleting the
     // payment record. See helpers/receivables.js.
     'show_receivables', 'record_payment', 'show_orphan_payments',
+    'set_receivables_start', 'track_old_invoice',
 ]);
 
 async function aiDecide(ctx) {
@@ -1698,6 +1701,10 @@ async function route(decision, ctx, sendMessage) {
         case 'show_receivables':       return actions.showReceivables(chatId, d.target_name || null);
         case 'record_payment':         return actions.recordPayment(chatId, { invoiceRef: d.target_name, amount: d.fact, paidOn: null, method: null, note: d.note }, ctx.senderName);
         case 'show_orphan_payments':   return actions.showOrphanPayments(chatId);
+        // Opening-date watermark for the ledger (2026-08-22) — see
+        // helpers/receivables.js. `fact` carries the date phrase.
+        case 'set_receivables_start':  return actions.setReceivablesStart(chatId, d.fact || d.note || ctx.text);
+        case 'track_old_invoice':      return actions.trackOldInvoiceCmd(chatId, d.target_name || d.note);
         case 'set_reminder':           return actions.setReminder(chatId, { target: d.target_name, message: d.note || d.email_details, when: d.fact || ctx.text });
         case 'show_reminders':         return actions.showReminders(chatId);
         case 'cancel_reminder':        return actions.cancelReminder(chatId, d.target_name || d.note || '');

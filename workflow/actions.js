@@ -1029,6 +1029,36 @@ switch (pending.type) {
     case 'await_email_confirm':
         await clearPending(chatId);
         return pending.scheduled_for ? scheduleDraftedEmail(chatId, pending) : sendDraftedEmail(chatId, pending);
+    // Payment detected in the mailbox by workflow/paymentWatcher.js. That
+    // watcher never writes to the ledger itself — this yes is the only thing
+    // that credits money, deliberately: a wrongly-credited payment is silent
+    // (the invoice simply stops appearing in "who owes me") and would have
+    // her stop chasing a customer who never paid. See that file's header.
+    case 'await_payment_confirm': {
+        await clearPending(chatId);
+        const ar = require('../helpers/receivables');
+        try {
+            const payment = await ar.addPayment({
+                inv_no: pending.inv_no,
+                amount: pending.amount,
+                paid_on: pending.paid_on || null,
+                method: pending.method || null,
+                note: pending.source_subject ? `auto-detected: ${pending.source_subject}` : 'auto-detected from email',
+                recorded_by: 'paymentWatcher',
+            });
+            const { rows } = await ar.buildLedger({});
+            const inv = rows.find((r) => ar.normaliseInvNo(r.inv_no) === ar.normaliseInvNo(pending.inv_no));
+            const m = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const tail = inv
+                ? (inv.balance <= 0.01 ? ` That clears ${inv.inv_no}.` : ` ${m(inv.balance)} still open on ${inv.inv_no}.`)
+                : '';
+            await _send(chatId, `Recorded ${m(payment.amount)} against ${pending.inv_no}.${tail}`);
+            return { action_taken: 'payment_recorded' };
+        } catch (e) {
+            await _send(chatId, `Couldn't record that payment: ${e.message}. Nothing was credited.`);
+            return { action_taken: 'payment_failed' };
+        }
+    }
 
     // Picked one of the ambiguous address-book matches shown for the quote
     // request's origin or destination — same options/matches pattern as
@@ -3883,7 +3913,18 @@ async function showReceivables(chatId, who) {
         await _send(chatId, `Couldn't read the invoice sheet: ${e.message}`);
         return { action_taken: 'receivables_failed' };
     }
-    const { rows, totals, orphans } = ledger;
+    const { rows, totals, orphans, excluded } = ledger;
+    // First live run reported $17.2M across 495 invoices — every invoice ever
+    // issued, because no payments had been recorded yet. If no opening date is
+    // set and the list is clearly historical, say so instead of presenting a
+    // meaningless total as if it were her receivables.
+    if (!excluded?.openingDate && rows.length > 40) {
+        const oldest = rows[0];
+        await _send(chatId,
+            `That's ${rows.length} invoices totalling ${money(totals.outstanding)} — but that's every invoice on the sheet, not what you're actually owed. No payments have been recorded yet, so nothing has been marked paid.\n\n` +
+            `The oldest is ${oldest.days_old}d old (${oldest.inv_no}). Tell me where to start tracking from — e.g. "track receivables from 1 July" — and I'll only count invoices from then. I won't mark the older ones paid, because I don't know that they were; they'll just sit outside the ledger, and you can pull any one back with "track <invoice no>".`);
+        return { action_taken: 'receivables_needs_opening_date' };
+    }
     if (!rows.length) {
         await _send(chatId, who
             ? `Nothing outstanding from "${who}" — all their invoices are paid.`
@@ -3905,9 +3946,73 @@ async function showReceivables(chatId, who) {
     const orphanWarn = orphans && orphans.length
         ? `\n\n⚠️ ${orphans.length} payment(s) recorded against an invoice number I can't find on the sheet — say "show orphan payments" to see them.`
         : '';
+    // Never let the watermark hide money silently — say what's outside it.
+    const excludedNote = excluded && excluded.count
+        ? `\n\n(Not counted: ${excluded.count} invoice${excluded.count === 1 ? '' : 's'} dated before ${excluded.openingDate}, ${money(excluded.total)}. Not marked paid — just outside the ledger. "track <invoice no>" pulls one back in.)`
+        : '';
     await _send(chatId,
-        `Outstanding${who ? ` from ${who}` : ''}: *${money(totals.outstanding)}* across ${rows.length} invoice${rows.length === 1 ? '' : 's'}\n${bucketLine}\n\n${lines.join('\n')}${more}${orphanWarn}`);
+        `Outstanding${who ? ` from ${who}` : ''}: *${money(totals.outstanding)}* across ${rows.length} invoice${rows.length === 1 ? '' : 's'}\n${bucketLine}\n\n${lines.join('\n')}${more}${orphanWarn}${excludedNote}`);
     return { action_taken: 'receivables_shown' };
+}
+
+// "track receivables from 1 July" — sets the opening watermark. See
+// helpers/receivables.js's opening-date block for why this exists and why it
+// does NOT mark the older invoices paid.
+async function setReceivablesStart(chatId, dateText) {
+    const ar = require('../helpers/receivables');
+    const d = parseArDate(dateText);
+    if (!d) {
+        await _send(chatId, `When should I start counting from? Give me a date like "1 July", "2026-07-01" or "July 1 2026".`);
+        return { action_taken: 'ar_start_no_date' };
+    }
+    await ar.setArOpeningDate(d);
+    const { rows, totals, excluded } = await ar.buildLedger({ openOnly: true });
+    await _send(chatId,
+        `Tracking receivables from ${d}.\n\n` +
+        `Outstanding since then: *${money(totals.outstanding)}* across ${rows.length} invoice${rows.length === 1 ? '' : 's'}.` +
+        (excluded && excluded.count
+            ? `\n\n${excluded.count} older invoice${excluded.count === 1 ? '' : 's'} (${money(excluded.total)}) are outside the ledger now. I have NOT marked them paid — I don't know that they were. If any is still owed, say "track <invoice no>" and I'll count it.`
+            : ''));
+    return { action_taken: 'ar_start_set' };
+}
+// Accepts "1 July", "July 1", "2026-07-01", "7/1/2026", "1 July 2026".
+function parseArDate(text) {
+    const s = String(text || '').trim();
+    if (!s) return null;
+    let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+    if (m) return `${m[1]}-${String(+m[2]).padStart(2, '0')}-${String(+m[3]).padStart(2, '0')}`;
+    m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/.exec(s);
+    if (m) { const y = +m[3] < 100 ? 2000 + +m[3] : +m[3]; return `${y}-${String(+m[1]).padStart(2, '0')}-${String(+m[2]).padStart(2, '0')}`; }
+    const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+    const lower = s.toLowerCase();
+    for (const [name, mo] of Object.entries(MONTHS)) {
+        if (!lower.includes(name)) continue;
+        const day = (/\b(\d{1,2})\b(?!\d)/.exec(lower.replace(/\b(19|20)\d{2}\b/, '')) || [])[1];
+        const yr = (/\b((?:19|20)\d{2})\b/.exec(lower) || [])[1] || String(new Date().getUTCFullYear());
+        if (day) return `${yr}-${String(mo).padStart(2, '0')}-${String(+day).padStart(2, '0')}`;
+        return `${yr}-${String(mo).padStart(2, '0')}-01`;
+    }
+    return null;
+}
+// "track 25RMT116" — pull one pre-opening-date invoice back into the ledger.
+async function trackOldInvoiceCmd(chatId, invRef) {
+    const ar = require('../helpers/receivables');
+    if (!invRef) {
+        await _send(chatId, `Which invoice should I start counting? Give me its number.`);
+        return { action_taken: 'ar_track_no_ref' };
+    }
+    const hit = await ar.resolveInvoice(invRef, { openOnly: false });
+    if (hit.candidates && hit.candidates.length) {
+        await _send(chatId, `"${invRef}" matches more than one invoice:\n${hit.candidates.map((c) => `• ${c.inv_no} — ${c.consignee || c.customer}`).join('\n')}\n\nGive me the exact number.`);
+        return { action_taken: 'ar_track_ambiguous' };
+    }
+    if (!hit.match) {
+        await _send(chatId, `Couldn't find an invoice matching "${invRef}".`);
+        return { action_taken: 'ar_track_not_found' };
+    }
+    await ar.trackOldInvoice(hit.match.inv_no);
+    await _send(chatId, `Now counting ${hit.match.inv_no} (${hit.match.consignee || hit.match.customer}) — ${money(hit.match.balance)} open — even though it predates the tracking start date.`);
+    return { action_taken: 'ar_track_added' };
 }
 
 async function recordPayment(chatId, { invoiceRef, amount, paidOn, method, note }, senderName) {
@@ -4128,7 +4233,7 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
     // by tests/cancel-loop.js, which has been failing to require them since.
     getQueuedPendings, clearAllPending,
     lookupAddress, sendMessageTo,
-    showReceivables, recordPayment, showOrphanPayments,
+    showReceivables, recordPayment, showOrphanPayments, setReceivablesStart, trackOldInvoiceCmd,
     setReminder, showReminders, cancelReminder,
     resumeQuoteWithScaleTickets,
 };

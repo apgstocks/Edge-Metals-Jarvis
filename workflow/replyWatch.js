@@ -336,6 +336,138 @@ async function assess(email) {
 const URGENCY_RANK = { high: 0, normal: 1, low: 2 };
 const URGENCY_MARK = { high: '!!', normal: '·', low: '·' };
 
+// ── Deadlines decide urgency, in code, not in the model ─────────────────────
+// REAL INCONSISTENCY (found 2026-08-22 in a live digest): two emails both
+// stated a deadline of 8/24, two days out. One came back "high" (shown "!!"),
+// the other "normal". Nothing distinguished them except which way Gemini
+// happened to read "about two days" on that particular call.
+//
+// The prompt asks the model for BOTH the deadline and the urgency, but those
+// are different kinds of work. Pulling "by Monday 8/24" out of prose is
+// reading comprehension — genuinely the model's job, and it does it well.
+// Deciding whether 8/24 is within two days of today is arithmetic, and a
+// model re-deriving it per call will disagree with itself. So the model still
+// supplies the deadline; the RANKING is computed here.
+//
+// Only ever RAISES urgency, never lowers it: the model can still flag
+// something high for reasons that have nothing to do with a date ("still
+// waiting", money at risk, a vessel about to sail), and that judgement must
+// survive this pass untouched.
+// (DAY_MS is already defined above — reused here rather than redeclared.)
+// Parses the deadline string Gemini copied verbatim out of the email. Returns
+// a Date, or null when it genuinely can't tell — null means "leave the
+// model's urgency alone", never "assume there's time".
+function parseDeadline(text, now = new Date()) {
+    const s = String(text || '').trim().toLowerCase();
+    if (!s) return null;
+
+    // "8/24", "8/24/26", "08-24-2026" — US month/day, the format in her mail.
+    const m = /\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/.exec(s);
+    if (m) {
+        const mo = +m[1], d = +m[2];
+        let y = m[3] ? +m[3] : now.getUTCFullYear();
+        if (y < 100) y += 2000;
+        if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+            const dt = new Date(Date.UTC(y, mo - 1, d));
+            // No year stated and the date is long past → they mean next year.
+            if (!m[3] && dt.getTime() < now.getTime() - 180 * DAY_MS) dt.setUTCFullYear(y + 1);
+            return dt;
+        }
+    }
+    const todayUTC = () => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    if (/\b(asap|immediately|urgent(ly)?|right away|today|eod|end of day|cob)\b/.test(s)) return todayUTC();
+    if (/\btomorrow\b/.test(s)) return new Date(todayUTC().getTime() + DAY_MS);
+    // A bare weekday ("by Monday", "Friday noon") — the NEXT one from today.
+    const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+    for (const [name, idx] of Object.entries(WD)) {
+        if (new RegExp(`\\b${name}\\b`).test(s)) {
+            let delta = (idx - now.getUTCDay() + 7) % 7;
+            if (delta === 0) delta = 7; // "by Monday" said ON Monday means the next one
+            return new Date(todayUTC().getTime() + delta * DAY_MS);
+        }
+    }
+    // "next week" is a real limit but a vague one — a week out, not urgent.
+    if (/\bnext week\b/.test(s)) return new Date(todayUTC().getTime() + 7 * DAY_MS);
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) return parsed;
+    return null;
+}
+// Whole days from today until the deadline. Negative = already overdue.
+function daysUntilDeadline(text, now = new Date()) {
+    const d = parseDeadline(text, now);
+    if (!d) return null;
+    const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    return Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - startOfToday) / DAY_MS);
+}
+// The urgency an item deserves once its stated deadline is accounted for.
+function applyDeadlineUrgency(item, now = new Date()) {
+    const days = daysUntilDeadline(item.deadline, now);
+    if (days === null) return item;
+    const deserved = days <= 2 ? 'high' : (days <= 5 ? 'normal' : null);
+    const urgency = deserved && URGENCY_RANK[deserved] < URGENCY_RANK[item.urgency] ? deserved : item.urgency;
+    return { ...item, urgency, daysToDeadline: days };
+}
+
+// ── One matter, not one row per email ───────────────────────────────────────
+// A live digest on 2026-08-22 listed 13 emails that were really 8 matters:
+// the same person asking twice, two colleagues at one customer chasing one
+// claim, a booking request sent again a day later. A list whose entire job is
+// to cut noise was carrying ~40% duplication.
+//
+// Grouped by, in order of confidence:
+//   1. threadId — same Gmail thread is definitionally the same matter.
+//   2. sender domain + overlapping ask — colleagues at one company chasing the
+//      same thing (jinho@ and joey@ at the same customer, one claim).
+// Personal-mail domains are excluded from rule 2: gmail.com is not a company,
+// and two unrelated people on gmail must never be merged.
+const PUBLIC_MAIL_DOMAINS = new Set(['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com', 'proton.me', 'protonmail.com']);
+const ASK_STOPWORDS = new Set(['the', 'a', 'an', 'for', 'to', 'of', 'and', 'or', 'is', 'be', 'by', 'on', 'in', 'if', 'it', 'please', 'confirm', 'confirmation', 'request', 'advise', 'send', 'from', 'with', 'this', 'that', 'will', 'would', 'need', 'needs', 'us', 'our', 'your']);
+function askTokens(item) {
+    const text = `${item.asked_for || ''} ${item.summary || ''} ${item.subject || ''}`.toLowerCase();
+    return new Set(text.split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !ASK_STOPWORDS.has(w)));
+}
+function domainOf(addr) {
+    const m = String(addr || '').match(/@([\w.-]+)/);
+    return m ? m[1].toLowerCase() : '';
+}
+// Two items are the same matter when they share a thread, or share a company
+// domain AND enough distinctive words that they're plainly about one thing.
+function sameMatter(a, b) {
+    if (a.threadId && b.threadId && a.threadId === b.threadId) return true;
+    const da = domainOf(a.from), db = domainOf(b.from);
+    if (!da || da !== db || PUBLIC_MAIL_DOMAINS.has(da)) return false;
+    const ta = askTokens(a), tb = askTokens(b);
+    if (!ta.size || !tb.size) return false;
+    let shared = 0;
+    for (const w of ta) if (tb.has(w)) shared++;
+    // Two or more distinctive shared words, and a real fraction of the
+    // smaller set — one word in common ("container") is a coincidence in this
+    // business, not a matter.
+    return shared >= 2 && shared / Math.min(ta.size, tb.size) >= 0.34;
+}
+// Collapses flagged items into matters. Each matter keeps ONE representative
+// (the most urgent, then the one with the nearest deadline, then the newest)
+// plus the others for display. The representative is what "reply to N"
+// resolves to, so replying answers the live message rather than an older one.
+function groupMatters(flagged) {
+    const matters = [];
+    for (const item of flagged) {
+        const hit = matters.find((mt) => mt.items.some((x) => sameMatter(x, item)));
+        if (hit) hit.items.push(item);
+        else matters.push({ items: [item] });
+    }
+    return matters.map((mt) => {
+        const ranked = [...mt.items].sort((x, y) => {
+            const u = URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency];
+            if (u !== 0) return u;
+            const dx = x.daysToDeadline ?? Infinity, dy = y.daysToDeadline ?? Infinity;
+            return dx - dy;
+        });
+        const rep = ranked[0];
+        return { ...rep, alsoCount: mt.items.length - 1, alsoFrom: ranked.slice(1).map((x) => x.fromName) };
+    });
+}
+
 // Has she answered this thread since it was flagged? Gmail orders thread
 // messages oldest-first, so the last entry is the most recent — if that is
 // from her, the thread is no longer waiting on her.
@@ -403,13 +535,32 @@ function buildChaseMessage(due) {
     return lines.join('\n');
 }
 
-function buildDigest(flagged) {
-    const lines = [`${flagged.length} email${flagged.length === 1 ? '' : 's'} waiting on you:`, ''];
+// Renders the digest from ALREADY-GROUPED matters. Takes the same array that
+// gets stored as lastDigest, so display position and "reply to N" can never
+// drift apart — the bug that once drafted a reply to the wrong customer. The
+// caller groups once and passes the identical array to both.
+function buildDigest(matters, emailCount) {
+    const n = emailCount == null ? matters.length : emailCount;
+    const head = matters.length === n
+        ? `${n} email${n === 1 ? '' : 's'} waiting on you:`
+        : `${n} emails waiting on you — ${matters.length} thing${matters.length === 1 ? '' : 's'} to deal with:`;
+    const lines = [head, ''];
     // Numbered so she can answer one without retyping the sender's name.
-    flagged.forEach((f, i) => {
-        lines.push(`${i + 1}. ${URGENCY_MARK[f.urgency]} ${f.fromName}${f.deadline ? ` — by ${f.deadline}` : ''}`);
+    matters.forEach((f, i) => {
+        const overdue = typeof f.daysToDeadline === 'number' && f.daysToDeadline < 0;
+        const due = f.deadline
+            ? ` — ${overdue ? 'OVERDUE, was' : 'by'} ${f.deadline}${typeof f.daysToDeadline === 'number' && f.daysToDeadline >= 0 && f.daysToDeadline <= 2 ? (f.daysToDeadline === 0 ? ' (today)' : f.daysToDeadline === 1 ? ' (tomorrow)' : ' (2 days)') : ''}`
+            : '';
+        lines.push(`${i + 1}. ${URGENCY_MARK[f.urgency]} ${f.fromName}${due}`);
         lines.push(`   ${f.summary || f.subject}`);
         if (f.asked_for) lines.push(`   wants: ${f.asked_for}`);
+        // Say plainly that others are chasing the same thing, and who — that's
+        // useful context ("two people at this customer are waiting"), and it
+        // explains why the count above is bigger than the list.
+        if (f.alsoCount > 0) {
+            const who = [...new Set(f.alsoFrom || [])].filter(Boolean).join(', ');
+            lines.push(`   (+${f.alsoCount} more on this${who ? ` — also ${who}` : ''})`);
+        }
         lines.push('');
     });
     lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
@@ -534,7 +685,14 @@ async function run({ sendToManager, dryRun = false } = {}) {
                 // often the wrong place to answer.
                 id: ref.id, threadId: msg.threadId, fromName: senderLabel(from),
                 from: preferredReplyAddress(hs) || from, subject,
-                summary: a.summary, asked_for: a.asked_for, deadline: a.deadline, urgency: a.urgency,
+                summary: a.summary, asked_for: a.asked_for, deadline: a.deadline,
+                // Deadline-derived urgency, computed rather than judged — see
+                // applyDeadlineUrgency. Gemini's own urgency is the input and
+                // can only be raised, never lowered.
+                ...(() => {
+                    const withDeadline = applyDeadlineUrgency({ urgency: a.urgency, deadline: a.deadline });
+                    return { urgency: withDeadline.urgency, daysToDeadline: withDeadline.daysToDeadline ?? null };
+                })(),
             });
         }
 
@@ -590,7 +748,16 @@ async function run({ sendToManager, dryRun = false } = {}) {
     // the very first digest there is no previous timestamp to compare to and
     // an overnight batch would be announced as if it had just landed.
     for (const f of flagged) if (!known.has(f.id)) queued.push({ ...f, queuedAt: new Date().toISOString() });
-    queued.sort((x, y) => URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency]);
+    // Urgency first, then the nearest stated deadline inside a band, then
+    // oldest-queued. Before the deadline tiebreak, two "high" items with
+    // deadlines a week apart came out in whatever order they were assessed.
+    queued.sort((x, y) => {
+        const u = URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency];
+        if (u !== 0) return u;
+        const dx = x.daysToDeadline ?? Infinity, dy = y.daysToDeadline ?? Infinity;
+        if (dx !== dy) return dx - dy;
+        return String(x.queuedAt || '').localeCompare(String(y.queuedAt || ''));
+    });
     store.undelivered = queued;
 
     // Chase-up pass. Runs on the same schedule as the scan but is gated by
@@ -631,7 +798,13 @@ async function run({ sendToManager, dryRun = false } = {}) {
             .filter((t) => !isNaN(t))
             .sort((a, b) => a - b)[0];
         const overnight = typeof oldest === 'number' && (Date.now() - oldest) > 4 * 60 * 60 * 1000;
-        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(queued);
+        // Group ONCE, here, and use the SAME array for both the rendered
+        // digest and lastDigest below. Rendering from one array and numbering
+        // from another is exactly the bug that once drafted a reply to the
+        // wrong customer (see the sort comment above) — grouping makes that
+        // trap easier to fall into, so the two must come from one variable.
+        const digestMatters = groupMatters(queued);
+        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length);
         try {
             // sendMessage returns FALSE when WhatsApp is down — it does not
             // throw. A plain `await` inside try/catch therefore treats a
@@ -648,7 +821,10 @@ async function run({ sendToManager, dryRun = false } = {}) {
             // Only clear the queue and renumber AFTER a confirmed send. If the
             // send throws, everything stays queued and the numbers she is
             // looking at keep pointing where they did.
-            store.lastDigest = queued;
+            // The SAME grouped array that was just rendered — so "reply to 3"
+            // resolves to the item printed as 3, and to that matter's most
+            // urgent/current message rather than an older one in the group.
+            store.lastDigest = digestMatters;
             store.undelivered = [];
             store.lastDigestAt = new Date().toISOString();
             delivered = true;
@@ -687,4 +863,7 @@ async function run({ sendToManager, dryRun = false } = {}) {
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, buildPrompt, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS };
+module.exports = { run, buildPrompt, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+    // Exposed for tests/integration.js — deadline ranking and matter grouping
+    // are pure functions and the parts most worth asserting directly.
+    parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };

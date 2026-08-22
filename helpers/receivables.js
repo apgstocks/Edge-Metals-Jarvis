@@ -137,9 +137,70 @@ function ageBucket(days) {
     return '90+';
 }
 
+// ── The opening date ────────────────────────────────────────────────────────
+// REAL PROBLEM, first live run 2026-08-22: the ledger reported $17,247,478.52
+// outstanding across 495 invoices, the oldest 594 days old. All correct
+// arithmetic, and completely useless — payments start empty, so every invoice
+// ever issued looked unpaid. That number is her entire invoicing history, not
+// her receivables.
+//
+// The obvious fix — bulk-mark the old ones paid — is the WRONG one, and worth
+// saying why: it would write hundreds of payment records for amounts and dates
+// nobody actually knows. That is inventing financial history, and once written
+// it is indistinguishable from a real payment. A ledger that quietly contains
+// fabricated entries is worse than no ledger.
+//
+// So instead there's a watermark: invoices dated before `ar_opening_date` are
+// OUT OF SCOPE, not "paid". They're excluded from the open list and reported
+// separately as a count and total, so nothing is hidden — the ledger just says
+// plainly "I don't track these" rather than asserting something untrue about
+// them. Anything genuinely still owed from before that date can be pulled back
+// in individually via ar_tracked_invoices.
+function getArSettings() {
+    try {
+        const { loadSettings } = require('./json');
+        const s = loadSettings() || {};
+        return {
+            openingDate: s.ar_opening_date || null,
+            tracked: Array.isArray(s.ar_tracked_invoices) ? s.ar_tracked_invoices : [],
+        };
+    } catch { return { openingDate: null, tracked: [] }; }
+}
+async function setArOpeningDate(dateStr) {
+    const { loadSettings, saveSettings } = require('./json');
+    const s = loadSettings() || {};
+    s.ar_opening_date = dateStr || null;
+    await saveSettings(s);
+    return s.ar_opening_date;
+}
+// Bring one pre-opening-date invoice back into scope — for a genuinely old
+// debt that IS still being chased.
+async function trackOldInvoice(invNo) {
+    const { loadSettings, saveSettings } = require('./json');
+    const s = loadSettings() || {};
+    const list = Array.isArray(s.ar_tracked_invoices) ? s.ar_tracked_invoices : [];
+    if (!list.some((x) => normaliseInvNo(x) === normaliseInvNo(invNo))) list.push(invNo);
+    s.ar_tracked_invoices = list;
+    await saveSettings(s);
+    return list;
+}
+// Is this invoice inside the tracked window?
+function inScope(inv, openingDate, tracked, now) {
+    if (!openingDate) return true;
+    if (tracked.some((t) => normaliseInvNo(t) === normaliseInvNo(inv.inv_no))) return true;
+    const days = daysOld(inv.inv_date, now);
+    const openDays = daysOld(openingDate, now);
+    // An unparseable invoice date can't be judged against the watermark.
+    // Kept IN scope on purpose: dropping a debt because its date didn't parse
+    // is the failure that loses money quietly.
+    if (days === null || openDays === null) return true;
+    return days <= openDays;
+}
+
 // The ledger: every invoice on the sheet, with what's been paid against it.
 // `openOnly` filters to invoices still owing something.
-async function buildLedger({ openOnly = false, consignee = null, now = new Date(), forceRefresh = false } = {}) {
+// `includeHistory` ignores the opening-date watermark and returns everything.
+async function buildLedger({ openOnly = false, consignee = null, now = new Date(), forceRefresh = false, includeHistory = false } = {}) {
     const invoices = await invoiceSheet.listAllInvoices(forceRefresh);
     const payments = loadPayments();
     const byInv = new Map();
@@ -179,6 +240,19 @@ async function buildLedger({ openOnly = false, consignee = null, now = new Date(
     const knownKeys = new Set(invoices.map((i) => normaliseInvNo(i.inv_no)));
     const orphans = payments.filter((p) => !knownKeys.has(normaliseInvNo(p.inv_no)));
 
+    // Apply the opening-date watermark BEFORE any other filter, and report
+    // what it removed rather than silently shrinking the number.
+    const { openingDate, tracked } = getArSettings();
+    let excluded = { count: 0, total: 0, openingDate: openingDate || null };
+    if (openingDate && !includeHistory) {
+        const kept = [];
+        for (const r of rows) {
+            if (inScope(r, openingDate, tracked, now)) { kept.push(r); continue; }
+            if (r.balance > 0.01) { excluded.count += 1; excluded.total = round2(excluded.total + r.balance); }
+        }
+        rows = kept;
+    }
+
     if (consignee) {
         const q = String(consignee).toLowerCase();
         rows = rows.filter((r) => String(r.consignee || '').toLowerCase().includes(q)
@@ -197,7 +271,7 @@ async function buildLedger({ openOnly = false, consignee = null, now = new Date(
         return t;
     }, { invoiced: 0, paid: 0, outstanding: 0, buckets: {} });
 
-    return { rows, totals, orphans };
+    return { rows, totals, orphans, excluded };
 }
 
 // Records a payment against a loosely-typed invoice reference, resolving it to
@@ -244,6 +318,7 @@ async function resolveInvoice(ref, { openOnly = true } = {}) {
 module.exports = {
     loadPayments, addPayment, deletePayment, paymentsFor,
     buildLedger, resolveInvoice, recordPaymentByRef,
+    getArSettings, setArOpeningDate, trackOldInvoice, inScope,
     parseAmount, normaliseInvNo, daysOld, ageBucket, round2,
     PAYMENTS_FILE,
 };
