@@ -3876,7 +3876,43 @@ function resetInvFlow() {
     picked: new Set(),   // container_no values ticked on step 2
     mergeAll: false,     // manual override — see pickInvGroups
     queue: [], queueIndex: 0,
+    // Buyer search returns everything on record — 67 containers for Taewon.
+    // Only the newest few are ever the answer to "what am I invoicing now",
+    // so the list is capped and the full set kept here behind a Show all.
+    allContainers: [], showAll: false, cappedFrom: 0,
   };
+}
+
+// The 5 most recent containers for a buyer, per Apsara 2026-08-22 ("just show
+// last 5 containers against the buyer").
+//
+// Sorted by INVOICE DATE, not by the order the server returns. The server
+// reverses sheet order as a proxy for recency, which is usually right but
+// isn't a date sort — on the live sheet the top two rows for Taewon are
+// "USED IT FOR WOOSHIN Mixed Load" and "2/8", neither of which is a real
+// container and neither of which has a date. Taking the server's first five
+// would have spent two of the five slots on those and pushed a genuinely
+// recent shipment off the list.
+//
+// Undated rows sort to the BOTTOM rather than being dropped: they're
+// unusual, but a container with a blank invoice date is still a real
+// container, and silently hiding one is exactly the failure this cap could
+// otherwise cause.
+const INV_BUYER_LIMIT = 5;
+function invRecentFirst(containers) {
+  const parse = (d) => {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(d || '').trim());
+    return m ? new Date(+m[3], +m[1] - 1, +m[2]).getTime() : null;
+  };
+  return containers
+    .map((c, i) => ({ c, t: parse(c.inv_date), i }))
+    .sort((a, b) => {
+      if (a.t === null && b.t === null) return a.i - b.i; // keep server order among undated
+      if (a.t === null) return 1;
+      if (b.t === null) return -1;
+      return b.t - a.t;
+    })
+    .map((x) => x.c);
 }
 
 // Decides how the ticked containers become invoices. Lifted from
@@ -3984,7 +4020,10 @@ function wireInvStep1() {
     },
     () => { invw.buyerTag = null; });
 
-  const search = async (btn, url, label) => {
+  // cap=true only for the buyer path. A container-number or invoice-number
+  // search is a targeted lookup — you already know what you're after, and
+  // trimming those results would just hide the thing you searched for.
+  const search = async (btn, url, label, cap) => {
     btn.disabled = true; const old = btn.textContent; btn.textContent = 'Searching…';
     $('invMsg').textContent = '';
     try {
@@ -3994,7 +4033,13 @@ function wireInvStep1() {
         $('invMsg').textContent = `No shipments found for ${label}. Check the spelling, or it may not be logged in the Invoice sheet yet.`;
         return;
       }
-      invw.containers = containers; invw.step = 2; renderInvFlow();
+      const ordered = cap ? invRecentFirst(containers) : containers;
+      invw.allContainers = ordered;
+      invw.showAll = !cap;
+      invw.cappedFrom = cap ? ordered.length : 0;
+      invw.containers = cap ? ordered.slice(0, INV_BUYER_LIMIT) : ordered;
+      invw.picked = new Set(); // a new search invalidates the old ticks
+      invw.step = 2; renderInvFlow();
     } catch (e) {
       $('invMsg').style.color = 'var(--status-danger)';
       $('invMsg').textContent = e.message;
@@ -4005,18 +4050,18 @@ function wireInvStep1() {
     const buyer = invw.buyerTag || $('invw_buyer').value.trim();
     if (!buyer) return;
     invw.buyer = $('invw_buyer').value.trim();
-    search($('btnInvSearchBuyer'), '/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer), invw.buyer);
+    search($('btnInvSearchBuyer'), '/api/invoice/by-buyer?buyer=' + encodeURIComponent(buyer), invw.buyer, true);
   });
   $('btnInvSearchContainer').addEventListener('click', () => {
     const q = $('invw_containerSearch').value.trim();
     if (!q) return;
-    search($('btnInvSearchContainer'), '/api/invoice/by-container?q=' + encodeURIComponent(q), q);
+    search($('btnInvSearchContainer'), '/api/invoice/by-container?q=' + encodeURIComponent(q), q, false);
   });
   $('invw_containerSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvSearchContainer').click(); });
   $('btnInvSearchInvNo').addEventListener('click', () => {
     const q = $('invw_invNoSearch').value.trim();
     if (!q) return;
-    search($('btnInvSearchInvNo'), '/api/invoice/by-inv-no?q=' + encodeURIComponent(q), q);
+    search($('btnInvSearchInvNo'), '/api/invoice/by-inv-no?q=' + encodeURIComponent(q), q, false);
   });
   $('invw_invNoSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnInvSearchInvNo').click(); });
 }
@@ -4024,9 +4069,13 @@ function wireInvStep1() {
 function invStep2Html() {
   return `
     <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
-      ${invw.containers.length} shipment${invw.containers.length === 1 ? '' : 's'} found.
+      ${invw.cappedFrom && !invw.showAll
+        ? `Showing the ${invw.containers.length} most recent of ${invw.cappedFrom} on record.`
+        : `${invw.containers.length} shipment${invw.containers.length === 1 ? '' : 's'} found.`}
       Tap one to invoice it on its own, or tick several to do a batch.
     </div>
+    ${invw.cappedFrom > INV_BUYER_LIMIT && !invw.showAll
+      ? `<button id="btnInvShowAll" class="btn" style="width:100%; margin-bottom:12px; font-size:11.5px;">Show all ${invw.cappedFrom}</button>` : ''}
     <div style="display:flex; flex-direction:column; gap:8px;">
       ${invw.containers.map((c, i) => `
         <div class="inv-row" data-i="${i}" style="display:flex; align-items:center; gap:11px; padding:11px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm);">
@@ -4059,6 +4108,13 @@ function invStep2Html() {
 }
 function wireInvStep2() {
   $('btnInvBack2').addEventListener('click', () => { invw.step = 1; renderInvFlow(); });
+  // Escape hatch. Capping a list without one is how you end up unable to
+  // invoice the sixth-newest shipment at all.
+  if ($('btnInvShowAll')) $('btnInvShowAll').addEventListener('click', () => {
+    invw.showAll = true;
+    invw.containers = invw.allContainers;
+    renderInvFlow();
+  });
 
   // Shows, in plain terms, what the current ticks will actually produce
   // BEFORE anything is generated. Worth the space: "3 selected" does not tell
