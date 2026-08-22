@@ -1563,8 +1563,15 @@ function pfCloseDescList(row) {
   if (box) box.remove();
 }
 
-async function pfShowDescList(row) {
-  const input = row.querySelector('.item-desc');
+// `sel` names the description input on this row. The full form's item rows
+// use `.item-desc`; the guided wizard's "Material & quantity" step uses
+// `.pfwiz-item-desc` — a genuinely different field on a different screen.
+// The first version of this wired only `.item-desc`, so the wizard's
+// material step — which is where a proforma usually STARTS — had no
+// suggestions at all. Apsara, 2026-08-22: "in material of proforma, the
+// change i told is missing."
+async function pfShowDescList(row, sel = '.item-desc') {
+  const input = row.querySelector(sel);
   if (!input) return;
   const generic = await loadGenericDescs();
   const items = pfDescSuggestions(input.value, window._pfCustomerDescs || [], generic);
@@ -1585,20 +1592,45 @@ async function pfShowDescList(row) {
       e.preventDefault();
       input.value = items[+el.dataset.idx].text;
       pfCloseDescList(row);
-      // A remembered description carries a remembered rate.
-      tryFillItemRate(row);
-      retrofitInvNoItemCode();
+      // A remembered description carries a remembered rate — but only the
+      // full form has a rate field on the row. The wizard collects price on
+      // a later step, so guard rather than calling into a row shape that
+      // has no `.item-rate` (which is exactly what threw before).
+      if (row.querySelector('.item-rate')) tryFillItemRate(row);
+      if (typeof retrofitInvNoItemCode === 'function') retrofitInvNoItemCode();
+      // Let anything listening (the wizard reads values back on Next) see
+      // the change as if it had been typed.
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     });
   });
 }
 
-function wireDescAutocomplete(row) {
-  const input = row.querySelector('.item-desc');
+function wireDescAutocomplete(row, sel = '.item-desc') {
+  const input = row.querySelector(sel);
   if (!input) return;
-  input.addEventListener('input', () => pfShowDescList(row));
-  input.addEventListener('focus', () => pfShowDescList(row));
+  input.addEventListener('input', () => pfShowDescList(row, sel));
+  input.addEventListener('focus', () => pfShowDescList(row, sel));
   input.addEventListener('blur', () => setTimeout(() => pfCloseDescList(row), 150));
   input.addEventListener('keydown', (e) => { if (e.key === 'Escape') pfCloseDescList(row); });
+}
+
+// Loads just this consignee's past descriptions, without touching any form
+// field.
+//
+// lookupPricingMemory() also fetches them, but it fills Trade Terms, Port of
+// Discharge, Payment Terms and the Invoice No as a side effect — and in the
+// wizard the consignee is known a full step BEFORE those fields should be
+// touched. Calling it early would populate the form from behind the wizard.
+// This is the read-only half, safe to call as soon as a name is known.
+async function preloadCustomerDescs(customer) {
+  const name = String(customer || '').trim();
+  if (!name) return;
+  try {
+    const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(name));
+    window._pfCustomerDescs = (info && info.items) ? Object.keys(info.items) : [];
+  } catch (e) {
+    window._pfCustomerDescs = []; // unknown customer — the generic list still applies
+  }
 }
 
 // ── Pricing memory auto-fill ──────────────────────────────────────────────
@@ -2082,6 +2114,10 @@ $('btnPfWiz1Next').addEventListener('click', () => {
   const name = $('pfWiz_consignee').value.trim();
   if (!name) return;
   pfWiz.consignee = name;
+  // Fetch this consignee's past materials NOW, so the suggestions on the
+  // very next step already know them. Read-only — see preloadCustomerDescs
+  // for why lookupPricingMemory is deliberately not used here.
+  preloadCustomerDescs(name);
   // Material choice used to be two hardcoded preset buttons (Mixed Combo /
   // AL+Regular split) plus a "something else" escape hatch. Apsara: "its
   // not mixed combo-21 MT.no matter whatever it is 21 MT just ask user to
@@ -2106,6 +2142,9 @@ function renderWizItemsEditor() {
     row.querySelector('.btn-del-item').addEventListener('click', () => {
       if ($('pfWizItemsEditor').children.length > 1) row.remove();
     });
+    // Suggestions on the wizard's material field too — this step is where a
+    // proforma normally starts, so it is the one that most needs them.
+    wireDescAutocomplete(row, '.pfwiz-item-desc');
   });
 }
 $('btnPfWizAddItem').addEventListener('click', () => {
