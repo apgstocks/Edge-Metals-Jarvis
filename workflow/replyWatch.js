@@ -725,9 +725,24 @@ function buildChaseMessage(due) {
 // caller groups once and passes the identical array to both.
 function buildDigest(matters, emailCount) {
     const n = emailCount == null ? matters.length : emailCount;
-    const head = matters.length === n
-        ? `${n} email${n === 1 ? '' : 's'} waiting on you:`
-        : `${n} emails waiting on you — ${matters.length} thing${matters.length === 1 ? '' : 's'} to deal with:`;
+    // Orders that want no reply are in this list too (see the is_order carve-
+    // out in _runOnce), so "N emails waiting on you" is no longer always true.
+    // A confirmed order isn't waiting on a reply — it's waiting on a proforma,
+    // which is a different job and deserves different words.
+    const orders = matters.filter((f) => f.is_order && !f.needs_reply);
+    const replies = matters.filter((f) => !(f.is_order && !f.needs_reply));
+    const orderPhrase = `${orders.length} order${orders.length === 1 ? '' : 's'} came in`;
+    const replyPhrase = `${replies.length} email${replies.length === 1 ? '' : 's'} waiting on you`;
+    let head;
+    if (!orders.length) {
+        head = matters.length === n
+            ? `${replyPhrase}:`
+            : `${n} emails waiting on you — ${matters.length} thing${matters.length === 1 ? '' : 's'} to deal with:`;
+    } else if (!replies.length) {
+        head = `${orderPhrase}:`;
+    } else {
+        head = `${replyPhrase}, and ${orderPhrase}:`;
+    }
     const lines = [head, ''];
     // Numbered so she can answer one without retyping the sender's name.
     matters.forEach((f, i) => {
@@ -773,6 +788,12 @@ function buildDigest(matters, emailCount) {
         }
         lines.push('');
     });
+    if (!replies.length) {
+        // Order-only digest: the reply instructions would be noise, and worse,
+        // they'd imply someone is waiting on an answer when nobody is.
+        lines.push('Nothing generated yet — say the word and I\'ll build the proforma for your yes.');
+        return lines.join('\n');
+    }
     lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
     lines.push('and I\'ll draft it for your yes before anything goes out.');
     return lines.join('\n');
@@ -900,7 +921,25 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
         seen[ref.id] = new Date().toISOString();
 
-        if (a.needs_reply && a.confidence >= MIN_CONFIDENCE) {
+        // AN ORDER COUNTS EVEN WHEN NO REPLY IS WANTED. Found by Apsara's own
+        // test, 2026-08-24: she emailed a real order confirmation — "Daekwang
+        // confirmed 2 containers of auto casting tense ... Your price is
+        // $2,420 ... Thank you for the confirmation." Gemini assessed it
+        // perfectly: needs_reply false at confidence 1.0 (correct — nothing is
+        // being asked of her), is_order true, order_buyer Daekwang (also
+        // correct). And then this line threw it away, because the whole
+        // pipeline gates on needs_reply.
+        //
+        // That was my mistake in adding is_order: a confirmed order is the
+        // MOST actionable mail she gets — there is a proforma to raise off the
+        // back of it — and it is precisely the kind that closes with "thanks,
+        // confirmed" and asks for nothing. Filtering it out as "no reply
+        // needed" is the opposite of useful.
+        //
+        // Orders bypass MIN_CONFIDENCE too: that threshold exists to stop
+        // borderline needs-a-reply judgements nagging her, and the cost of
+        // mentioning a possible order is one line she ignores.
+        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order) {
             flagged.push({
                 // replyTo honours the Reply-To header when present — see
                 // helpers/gmail.js's preferredReplyAddress for why From is
@@ -909,6 +948,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 from: preferredReplyAddress(hs) || from, subject,
                 summary: a.summary, asked_for: a.asked_for, deadline: a.deadline,
                 is_order: !!a.is_order, order_buyer: a.order_buyer || null,
+                needs_reply: !!a.needs_reply,
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
