@@ -187,8 +187,24 @@ function applyStandardQuantities(items) {
 // filling only what the email actually said and reporting what it did not.
 // Rates below RATE_TRUST are stripped out and listed as unconfirmed, so a
 // half-read number can never quietly become a price on the document.
+// Re-judges every rate against real price history BEFORE the draft is built,
+// so a model guess about per-MT vs per-lot never decides anything on its own.
+// See helpers/ratePlausibility.js for why: the model called $2,420/MT for auto
+// casting tense a lot total, and 202 rows of her own invoices say it is an
+// ordinary rate.
+async function groundRates(order) {
+    const { judgeRate } = require('./ratePlausibility');
+    const items = [];
+    for (const it of (order.items || [])) {
+        const j = await judgeRate(it.desc, it.rate, it.rate_basis).catch(() => null);
+        items.push(j ? { ...it, rate_basis: j.basis, rate_reason: j.reason } : it);
+    }
+    return { ...order, items };
+}
+
 function toProformaDraft(order, { fallbackConsignee } = {}) {
     const unconfirmed = [];
+    const grounded = [];
     const assumed = [];
     const needs = [];
     const items = applyStandardQuantities(order.items || []).map((it) => {
@@ -204,8 +220,13 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         const basis = it.rate_basis || 'unknown';
         const figureOk = it.rate != null && it.rate_confidence >= RATE_TRUST;
         const trusted = figureOk && basis === 'per_mt';
+        // When history CONFIRMED the rate, say so — a figure checked against 42
+        // past invoices is a different thing from one nobody questioned, and
+        // she should be able to see which she's looking at.
+        if (trusted && it.rate_reason) grounded.push(it.rate_reason);
         if (it.rate != null && !trusted) {
-            unconfirmed.push(basis === 'per_lot'
+            if (it.rate_reason) { unconfirmed.push(it.rate_reason); }
+            else unconfirmed.push(basis === 'per_lot'
                 ? `${it.desc}: "${it.rate}" reads as a total for the lot, not a per-MT rate`
                 : basis === 'unknown'
                     ? `${it.desc}: "${it.rate}" — the email doesn't make clear whether that's per MT or a total`
@@ -260,10 +281,11 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         payment_term: order.payment_term || '',
         needs: [...new Set(needs)],
         unconfirmed,
+        grounded,
         assumed,
         note: order.note || null,
         confidence: order.confidence,
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, buildOrderPrompt, applyStandardQuantities, RATE_TRUST };
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, RATE_TRUST };

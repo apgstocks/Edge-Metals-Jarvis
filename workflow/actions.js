@@ -4830,7 +4830,11 @@ async function startProformaFromEmail(chatId, targetName) {
         return _send(chatId, `The latest mail from ${who} doesn't look like an order.\n\n"${(content?.subject || '').slice(0, 80)}"\n\nIf the order is in an older email, tell me which one.`);
     }
 
-    const draft = toProformaDraft(order, { fallbackConsignee: who });
+    // Rates re-judged against her real invoice history before anything is
+    // decided — see helpers/ratePlausibility.js.
+    const { groundRates } = require('../helpers/proformaFromEmail');
+    const grounded = await groundRates(order).catch(() => order);
+    const draft = toProformaDraft(grounded, { fallbackConsignee: who });
 
     // Stop rather than guess. Everything listed here is something the email
     // genuinely did not say — filling it in would be invention.
@@ -4886,6 +4890,7 @@ async function startProformaFromEmail(chatId, targetName) {
     // different claims, and only one of them is worth querying before a
     // document goes out.
     if (draft.assumed.length) lines.push('', ...draft.assumed.map((a) => `* ${a}`));
+    if (draft.grounded.length) lines.push('', ...draft.grounded.map((g) => `✓ ${g}`));
     if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `⚠ ${u}`));
     if (draft.note) lines.push('', `Note: ${draft.note}`);
     if (draft.confidence < 0.7) lines.push('', `⚠ I'm only ${Math.round(draft.confidence * 100)}% sure I read that email correctly.`);
