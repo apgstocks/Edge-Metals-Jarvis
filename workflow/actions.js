@@ -47,9 +47,80 @@ _pushAlert     = pushAlert || (() => {});
 // meant for the trucker wizard could instead confirm sending a drafted email.
 // Fix: never overwrite an unresolved pending. Queue the new one; it goes
 // live automatically the moment the current one resolves (see clearPending).
+// ── RESTORED 2026-08-25 ────────────────────────────────────────────────────
+// This function and the dedupe guard in setPending below were added on
+// 2026-08-20 to fix a live cancel-loop, and were SILENTLY DELETED two days
+// later by commit 7179955 ("Emailwatcher"), which overwrote workflow/
+// actions.js with an older copy. The same commit reintroduced the
+// `send is not defined` crash in showPendingReplies.
+//
+// Commit 89c28c4 ("Restore 12 functions two commits silently deleted") was
+// the attempt to recover from that clobber, and it missed this one — because
+// setPending still EXISTED, it had just lost its body. A wiring check that
+// asks "does this function exist" cannot catch a function that survived
+// with its guard removed.
+//
+// It stayed missing for two more days because tests/cancel-loop.js — written
+// specifically to catch this regression — could not run: it needs a writable
+// data/, and run through the Cowork bridge every write no-op'd on a lock
+// directory the sandbox cannot remove, so it errored on setup instead of
+// failing on the assertion. A test that cannot run is not a test. Every
+// suite now redirects DATA_DIR to a scratch directory for that reason.
+function outstandingQuoteNote() {
+    try {
+        const { loadQuoteRequests } = require('../helpers/quoteRequests');
+        const active = loadQuoteRequests().filter((r) => r.status === 'active');
+        const awaiting = active.reduce((n, r) => n + r.legs.filter((l) => l.status === 'awaiting_reply').length, 0);
+        if (!awaiting) return `\n\nNothing else is outstanding — no quote requests are currently awaiting a reply.`;
+        const lanes = active
+            .filter((r) => r.legs.some((l) => l.status === 'awaiting_reply'))
+            // Field names verified against createQuoteRequest in
+            // helpers/quoteRequests.js — snake_case on the stored record,
+            // NOT the camelCase names its function argument uses. Getting
+            // this wrong renders a silent "? → ?".
+            .map((r) => `${r.origin_query || '?'} → ${r.destination_query || '?'}`);
+        return `\n\nStill live and NOT cancelled: ${awaiting} quote ${awaiting === 1 ? 'leg' : 'legs'} already sent out${lanes.length ? ` (${[...new Set(lanes)].join('; ')})` : ''}. I can't recall those — I'd have to message each trucker to disregard. Want me to?`;
+    } catch (err) {
+        console.warn('[ACTIONS] outstanding-quote check failed:', err.message);
+        return `\n\nNote: that only cancelled the question — any quote requests already sent to truckers are untouched.`;
+    }
+}
+
+function queueDepthNote(chatId) {
+    const n = getQueuedPendings(chatId).length;
+    if (!n) return '';
+    return `\n\n(${n} more question${n === 1 ? '' : 's'} still queued on this chat — reply "cancel all" to drop ${n === 1 ? 'it' : 'them all'}.)`;
+}
+
+function isSamePendingQuestion(a, b) {
+    if (!a || !b || a.type !== b.type) return false;
+    const al = a.state || {}, bl = b.state || {};
+    const aLane = `${al.originQuery || ''}|${al.destinationQuery || ''}`;
+    const bLane = `${bl.originQuery || ''}|${bl.destinationQuery || ''}`;
+    return aLane === bLane;
+}
+
 async function setPending(chatId, action) {
 const existing = getPending(chatId);
 if (existing) {
+    // REAL BUG (found 2026-08-20, live): Apsara re-sent "Send quote request
+    // from Junk car to Eccomelt" repeatedly while an earlier cargo-details
+    // question was stuck unanswered. Each retry queued ANOTHER identical
+    // cargo-details pending behind it — silently, with no cap. She ended up
+    // in an endless "cancel" → "Cancelled." → "(Next up...)" → same question
+    // loop, because each cancel popped one copy off a queue several deep.
+    // Nobody wants to be asked the identical question N times; a repeat of
+    // a question already waiting is the SAME request, not a new one. Drop
+    // the duplicate instead of stacking it. Scoped to genuinely identical
+    // questions (same type, same lane) — a different lane, or a different
+    // pending type, still queues normally as before.
+    const queuedAlready = (loadBrain().pending_queue[chatId] || []);
+    const dupOfActive = isSamePendingQuestion(existing, action);
+    const dupOfQueued = queuedAlready.some((q) => isSamePendingQuestion(q, action));
+    if (dupOfActive || dupOfQueued) {
+        console.warn(`[ACTIONS] ${chatId}: '${action.type}' is a duplicate of a pending already ${dupOfActive ? 'active' : 'queued'} — dropped instead of stacking`);
+        return { queued: true, blockedBy: existing.type, duplicate: true };
+    }
     await mutateBrain(b => {
         b.pending_queue[chatId] = b.pending_queue[chatId] || [];
         b.pending_queue[chatId].push(action);
@@ -982,7 +1053,7 @@ async function executeCombinedAssignment(chatId, bkgNo, supplierRecord, truckerR
     return { action_taken: 'dual_role_assigned' };
 }
 
-async function resolvePending(chatId, pending, answer, selection) {
+async function resolvePending(chatId, pending, answer, selection, cancelText = null) {
 // Handled BEFORE the generic 'no' branch below — unlike every other pending
 // type, "no" here does NOT mean "cancel and stop." It means "don't save the
 // cc pattern, but still draft the email I originally asked for" — the cc
@@ -1015,13 +1086,67 @@ if (pending.type === 'confirm_proforma' && answer === 'yes') {
     return generateProformaFromPending(chatId, pending);
 }
 
+// A fact conflict reached here via the GLOBAL cancel rule in brain.js's
+// policyDecide, which fires before this pending's own parse. Functionally
+// the generic branch below would do the right thing — clear, write nothing,
+// leave the original standing — but it answers "Cancelled." and drops the
+// one detail that actually matters: which version Jarvis is still going by.
+// Delegate so a cancel typed as "cancel" and a cancel typed as "no" give the
+// same, more useful answer.
+if (pending.type === 'await_fact_conflict' && answer === 'no') {
+    return resolveFactConflict(chatId, pending, 'cancel');
+}
+
 if (answer === 'no') {
+    // ── "cancel all" / "cancel everything" — drain the WHOLE queue ────────
+    // REAL BUG (found 2026-08-20, live): plain clearPending only drops the
+    // ACTIVE pending, then brain.js's promoteQueued immediately promotes the
+    // next one off the queue and asks it. With a queue several deep (see the
+    // duplicate-stacking bug fixed in setPending above), Apsara hit an
+    // endless "cancel" -> "Cancelled." -> "(Next up...)" -> same question loop
+    // with no way to get out. When she says "cancel ALL", she means all of
+    // them — drain the queue too, and say how many went.
+    //
+    // RESTORED 2026-08-25: this whole block, plus outstandingQuoteNote and
+    // queueDepthNote above, were deleted by commit 7179955 ("Emailwatcher")
+    // overwriting this file with an older copy. brain.js never stopped
+    // passing cancelText — resolvePending had simply lost the parameter, so
+    // every "cancel all" silently degraded to a plain single cancel.
+    const wantsAll = cancelText && /\b(all|everything)\b/i.test(cancelText);
+    if (wantsAll) {
+        if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
+        if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
+        const { count } = await clearAllPending(chatId);
+        const dropped = count === 1 ? 'the open question' : `all ${count} open questions`;
+        await _send(chatId, `Cancelled ${dropped}.${outstandingQuoteNote()}`);
+        return { action_taken: 'cancelled_pending' };
+    }
+
     await clearPending(chatId);
     // A rejection on a forward/assign confirmation resets that specific
     // pattern's trust streak — only these two types are trust-eligible.
     if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
     if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
-    await _send(chatId, 'Cancelled.');
+
+    // 2026-08-20: an explicit cancel whose WORDING claims a wider scope than
+    // the pending it actually cancelled ("cancel all the quote requests"
+    // — live, while only a cargo-details question was open) used to get the
+    // same bare "Cancelled." as everything else. That reads as "yes, I
+    // cancelled all your quote requests" when in fact only the one unanswered
+    // QUESTION was dropped and every already-dispatched request is still
+    // sitting in truckers' chats awaiting a price. There is no bulk-recall
+    // feature at all, so silently implying one ran is the worst option here —
+    // say plainly what was and wasn't cancelled instead.
+    const widerScope = cancelText && /\b(all|every|everything|quote\s*requests?|quotes)\b/i.test(cancelText);
+    if (widerScope) {
+        await _send(chatId, `Cancelled the pending question${pending.state?.originQuery && pending.state?.destinationQuery ? ` for ${pending.state.originQuery} → ${pending.state.destinationQuery}` : ''}.${outstandingQuoteNote()}${queueDepthNote(chatId)}`);
+        return { action_taken: 'cancelled_pending' };
+    }
+
+    // Plain "cancel" — tell her if more are stacked behind this one, so she
+    // isn't surprised by a "(Next up...)" she has no context for, and knows
+    // "cancel all" exists. Added 2026-08-20 alongside the loop fix above.
+    await _send(chatId, `Cancelled.${queueDepthNote(chatId)}`);
     return { action_taken: 'cancelled_pending' };
 }
 
@@ -1351,12 +1476,143 @@ return { action_taken: 'escalated' };
 // from the 15-item recency window from the moment it's saved. She no
 // longer has to separately go pin it on the dashboard for it to actually
 // stick — see helpers/json.js's addFact header for the full reasoning.
+//
+// ── CONTRADICTION CHECK (2026-08-25, phase 2) ──────────────────────────────
+// Before storing, look for an existing ACTIVE fact this one disagrees with.
+// The retrieval + LLM-classify shape is Mem0's (arXiv:2504.19413), which
+// resolves each new fact to ADD / UPDATE / DELETE / NOOP against the most
+// similar existing memories.
+//
+// DELIBERATE DEPARTURE from that paper, and the most important decision in
+// this phase: a detected contradiction does NOT auto-supersede. It stages a
+// question instead.
+//
+// The reason is a real incident in this system, not caution in the abstract.
+// verify_bookings once flagged a correct stored POL of LOS ANGELES as wrong
+// because a stray reply mail mentioned MARTINEZ, and would have overwritten
+// correct data had it been allowed to write (see helpers/cutoffBackfill.js's
+// evidence-grading work). An LLM's contradiction judgement is a good TRIGGER
+// and a poor AUTHORITY. Silently replacing a fact Apsara taught Jarvis,
+// based on a similarity score and a model's opinion, is exactly how a
+// correct standing rule disappears with nobody noticing.
+//
+// So the model gets to raise its hand; Apsara decides. The cost is one extra
+// yes/no on genuine corrections. The thing it buys is that no fact she
+// taught Jarvis can ever be replaced without her seeing it happen.
+const CONTRADICTION_TOPK = 5;
+const CONTRADICTION_MIN_SIMILARITY = 0.62;
+
+async function findContradictedFact(newText) {
+    const clean = String(newText || '').trim();
+    if (!clean) return null;
+    try {
+        const { loadActiveFacts } = require('../helpers/json');
+        const active = loadActiveFacts();
+        if (!active.length) return null;
+
+        const { searchSimilar } = require('../helpers/embeddings');
+        const hits = await searchSimilar(clean, { topK: CONTRADICTION_TOPK, minSimilarity: CONTRADICTION_MIN_SIMILARITY });
+        // Only ACTIVE facts are candidates. A superseded record disagreeing
+        // with the new text is not a conflict — it is history agreeing that
+        // something changed.
+        const byText = new Map(active.map((f) => [f.text, f]));
+        const candidates = (hits || [])
+            .filter((h) => h.type === 'fact' && byText.has(h.text) && h.text !== clean)
+            .map((h) => byText.get(h.text))
+            .slice(0, CONTRADICTION_TOPK);
+        if (!candidates.length) return null;
+
+        const { callGeminiJSON } = require('../helpers/gemini');
+        const list = candidates.map((c, i) => `${i + 1}. ${c.text}`).join('\n');
+        const verdict = await callGeminiJSON(
+`A business assistant already believes these facts:
+${list}
+
+It has just been told: "${clean}"
+
+Does the new statement CONTRADICT one of the existing facts — meaning both cannot be true at the same time about the same thing (a changed rate, a changed contact, a reversed rule)? A fact that merely adds detail, covers a different subject, or restates the same thing is NOT a contradiction.
+
+Return ONLY: { "contradicts": <the number from the list, or null>, "confidence": <0-1>, "why": "<one short sentence>" }`);
+
+        if (!verdict || verdict.contradicts == null) return null;
+        const idx = parseInt(verdict.contradicts, 10) - 1;
+        const hit = candidates[idx];
+        if (!hit) return null;
+        if (typeof verdict.confidence === 'number' && verdict.confidence < 0.6) return null;
+        return { fact: hit, why: String(verdict.why || '').trim() };
+    } catch (e) {
+        // A contradiction check that fails must never block Apsara storing a
+        // fact. Degrade to the old append-only behaviour and say nothing —
+        // the worst case is the pre-phase-2 status quo, not a lost lesson.
+        console.error('[ACTIONS] contradiction check failed (non-fatal):', e.message);
+        return null;
+    }
+}
+
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
-await addFact(clean, true);
+
+const conflict = await findContradictedFact(clean);
+if (conflict) {
+    await setPending(chatId, {
+        type: 'await_fact_conflict',
+        oldId: conflict.fact.id,
+        oldText: conflict.fact.text,
+        newText: clean,
+    });
+    const when = conflict.fact.recorded_at || conflict.fact.created_at;
+    const dateBit = when ? ` on ${new Date(when).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}` : '';
+    await _send(chatId,
+`That contradicts something you told me${dateBit}:
+
+*Now:* ${clean}
+*Before:* ${conflict.fact.text}
+
+Reply *replace* to make the new one current (I'll keep the old one on record), *both* to keep them side by side, or *cancel* to drop the new one.`);
+    return { action_taken: 'fact_conflict_staged' };
+}
+
+// origin: manager — this arrived on her own WhatsApp number, through the
+// authorized-sender check in brain.js's normalize(). The channel is what
+// grants authority, not anything about the text.
+await addFact(clean, true, { origin: 'manager' });
 await _send(chatId, `Got it — I'll remember: "${clean}"`);
 return { action_taken: 'fact_stored' };
+}
+
+// Resolver for the pending staged above.
+async function resolveFactConflict(chatId, pending, answer) {
+    const p = pending || {};
+    const a = String(answer || '').trim().toLowerCase();
+    const { supersedeFact } = require('../helpers/json');
+
+    if (/^(replace|supersede|update|new)\b/.test(a) || a === 'yes') {
+        const replacement = await supersedeFact(p.oldId, p.newText, { reason: 'manager correction', origin: 'manager' });
+        await clearPending(chatId);
+        if (!replacement) {
+            // The old fact moved underneath us (retracted or superseded by
+            // something else while this question sat open). Storing the new
+            // text standalone is still the right outcome — she asked for it —
+            // but say what happened rather than reporting a clean correction.
+            await addFact(p.newText, true, { origin: 'manager' });
+            await _send(chatId, `Saved "${p.newText}". The older one had already changed since I asked, so there was nothing left to replace.`);
+            return { action_taken: 'fact_conflict_stale_replace' };
+        }
+        await _send(chatId, `Updated. I'll go by "${p.newText}" now — the old one stays on record, marked as replaced.`);
+        return { action_taken: 'fact_superseded' };
+    }
+
+    if (/^both\b/.test(a) || /^keep\b/.test(a)) {
+        await addFact(p.newText, true, { origin: 'manager' });
+        await clearPending(chatId);
+        await _send(chatId, `Kept both. If they turn out to conflict in practice, tell me which one wins.`);
+        return { action_taken: 'fact_conflict_kept_both' };
+    }
+
+    await clearPending(chatId);
+    await _send(chatId, `Dropped it — still going by "${p.oldText}".`);
+    return { action_taken: 'fact_conflict_cancelled' };
 }
 
 // ── Business context — durable, non-correction situational notes. Separate
@@ -1672,8 +1928,28 @@ if (!toAdd.length) {
 // reasoning as rememberFact above: these are AI-detected corrections she's
 // explicitly reviewing and confirming here, not ambient notes, so they're
 // exempt from the recency window from the moment she approves them.
+// origin: manager, proposed_by: agent. This looks like a contradiction and
+// is not. The text was DRAFTED by Gemini from the audit log, but it only
+// reaches this line because Apsara read it and explicitly accepted it — and
+// under origin-bound authority it is the authenticated approval, not the
+// authorship, that grants authority. Same principle as an act-gate accepting
+// "fresh user authorization bound to that action".
+//
+// proposed_by is kept so the audit trail still distinguishes "she typed
+// this" from "she approved this", which matters when reviewing why Jarvis
+// believes something months later.
+// Carry the reflection's evidence onto the fact it produced (phase 5). An
+// approved suggestion without its citations is an assertion you cannot
+// check later; with them, "why does Jarvis believe this?" resolves to the
+// actual log entries it was drawn from — and if one of those turns out to
+// have been a misread, the rule built on it can be found and retracted.
+const details = pending.candidateDetails || [];
 for (const fact of toAdd) {
-    await addFact(fact, true);
+    const detail = details.find((d) => d && d.fact === fact);
+    await addFact(fact, true, {
+        origin: 'manager', proposedBy: 'agent',
+        derivedFrom: detail && detail.evidence ? detail.evidence : [],
+    });
 }
 await _send(chatId, `Added ${toAdd.length} fact${toAdd.length === 1 ? '' : 's'}:\n${toAdd.map(f => `- ${f}`).join('\n')}`);
 return { action_taken: 'fact_batch_confirmed' };
@@ -2696,7 +2972,7 @@ async function ignoreDigestItem(chatId, indices, all = false) {
 
 async function showPendingReplies(chatId) {
     try {
-        const { run, buildDigest } = require('./replyWatch');
+        const { run, buildDigest, groupMatters, loadStore, saveStore } = require('./replyWatch');
         const result = await run({ dryRun: true });
         if (result.skipped === 'no-gmail') {
             await _send(chatId, "I can't check mail right now — Gmail isn't authorized on this server.");
@@ -2706,11 +2982,41 @@ async function showPendingReplies(chatId) {
             await _send(chatId, `Couldn't read the inbox: ${result.error}`);
             return { action_taken: 'pending_replies_failed' };
         }
+        // backlogCount (added 2026-08-25) is everything currently tracked,
+        // not just what this call found newly. Apsara, live: "Its not
+        // understanding context" — three consecutive digests over ~2 hours
+        // never once mentioned an earlier one's items, because the digest
+        // (and this on-demand check) only ever reported what was NEW since
+        // last time. The older items were real and still tracked, just
+        // never mentioned again — reading exactly like Jarvis had forgotten
+        // them. Say the honest count here too, not just in the automatic
+        // digest, since this is the direct answer to her asking "what's
+        // outstanding" — silence about the backlog is the whole bug.
+        const older = Math.max(0, (result.backlogCount || 0) - (result.items ? result.items.length : 0));
+        const backlogNote = older > 0
+            ? `
+
+(+${older} older item${older === 1 ? '' : 's'} still open from before this check — they'll get chased if they sit too long, but I don't have a "list them all" view yet.)`
+            : '';
         if (!result.items || !result.items.length) {
-            await _send(chatId, `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`);
+            const base = `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`;
+            await _send(chatId, base + backlogNote);
             return { action_taken: 'pending_replies_none' };
         }
-        await _send(chatId, buildDigest(result.items));
+        // REAL BUG fixed alongside the backlog note above (2026-08-25): this
+        // path never grouped items into matters (the automatic digest does,
+        // via groupMatters) and never updated store.lastDigest — so the
+        // numbers she saw here meant nothing to "reply to N"/"ignore N",
+        // which resolve against whatever the LAST AUTOMATIC digest set
+        // lastDigest to. A "reply to 1" typed right after asking "which
+        // needs my reply" could silently act on a completely different,
+        // stale email. Group and persist exactly like the automatic path so
+        // the numbers she is looking at are the numbers that resolve.
+        const grouped = groupMatters(result.items);
+        const store = await loadStore();
+        store.lastDigest = grouped;
+        await saveStore(store);
+        await _send(chatId, buildDigest(grouped, result.items.length) + backlogNote);
         return { action_taken: 'pending_replies_reported', count: result.items.length };
     } catch (err) {
         console.error('[ACTIONS] showPendingReplies failed:', err.message);
@@ -5104,7 +5410,14 @@ async function generateProformaFromPending(chatId, pending) {
 async function rescanMail(chatId) {
     await _send(chatId, 'Re-reading the last few days of mail, including anything I\'ve already looked at…');
     try {
-        const { run } = require('./replyWatch');
+        // buildDigest was called bare here until 2026-08-25 — destructured
+        // only `run`, then used `buildDigest` as if it were a global. Same
+        // bug class as showPendingReplies' `send is not defined` and
+        // api/health's `fs is not defined`: a bare-identifier ReferenceError
+        // that node --check and the wiring check both pass, and that only a
+        // real invocation catches. It sat on the SUCCESS path, so "check my
+        // inbox again" crashed whenever there was actually something to show.
+        const { run, buildDigest } = require('./replyWatch');
         const result = await run({ rescan: true, dryRun: true });
         if (result.skipped === 'no-gmail') { await _send(chatId, "Gmail isn't authorized on this server."); return { action_taken: 'rescan_no_gmail' }; }
         if (result.error) { await _send(chatId, `Couldn't read the inbox: ${result.error}`); return { action_taken: 'rescan_failed' }; }
@@ -5152,6 +5465,7 @@ askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,

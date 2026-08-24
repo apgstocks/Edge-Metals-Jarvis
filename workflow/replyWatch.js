@@ -1082,21 +1082,31 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
     store.seen = seen;
 
-    // A dryRun is her asking directly — answer with exactly what she asked
-    // for and change nothing about the notification queue underneath her.
-    if (dryRun) {
-        await saveStore(store);
-        console.log(`[REPLYWATCH] (on-demand) assessed ${checked}, flagged ${flagged.length}`);
-        return { checked, flagged: flagged.length, items: flagged };
-    }
-
-    // Queue whatever is new, de-duplicated against what is already waiting —
-    // the scan runs every 5 minutes and a slow Gemini call can overlap the
-    // next tick, so the same email can legitimately be flagged twice.
-    // Track every newly flagged email so it can be chased if it goes
-    // unanswered — see AGING_DAYS. Tracking is independent of whether the
-    // digest has been delivered yet, so an email flagged at 2am and held
-    // until 6am still starts aging from when it was actually found.
+    // Track every newly flagged email so it can be chased later if it goes
+    // unanswered — see AGING_DAYS. Moved ABOVE the dryRun return on
+    // 2026-08-25 (Apsara: "Its not understanding context", pasting three
+    // consecutive hourly digests that never once mentioned an item from an
+    // earlier one). Root cause traced to two compounding gaps:
+    //
+    //   1. A dryRun (the on-demand "which needs my reply" check) used to
+    //      return BEFORE this block ran at all — so anything she discovered
+    //      by asking directly was shown to her exactly once and then
+    //      silently dropped. It was never added to `tracked`, so it could
+    //      never be chased later either — worse than the automatic path,
+    //      not equivalent to it. The DELIBERATE part of the old comment
+    //      ("change nothing about the notification queue underneath her")
+    //      is preserved below — the undelivered/queued block still runs
+    //      only on a real scan — but tracking discovered mail so it is not
+    //      lost forever was never supposed to be part of that guarantee.
+    //   2. Even for the automatic path, once an item was tracked it was
+    //      never mentioned again in ANY digest until AGING_DAYS (5 days)
+    //      passed and a separate chase-up message fired. Every hourly
+    //      digest reads like a complete, self-contained todo list ("3
+    //      things to deal with") with zero continuity from the last one —
+    //      so anything not answered inside that one hour reads as forgotten
+    //      for up to 5 days, even though it was safely sitting in `tracked`
+    //      the whole time. See the backlogCount field below and its use in
+    //      workflow/actions.js's showPendingReplies / the digest body.
     store.tracked = store.tracked || [];
     const trackedIds = new Set(store.tracked.map((t) => t.id));
     for (const f of flagged) {
@@ -1111,6 +1121,22 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         });
     }
 
+    // A dryRun is her asking directly — answer with exactly what she asked
+    // for and change nothing about the notification QUEUE underneath her
+    // (the undelivered/hourly-send machinery below is real-scan-only).
+    // backlogCount is everything currently tracked, INCLUDING what was just
+    // added above — the caller uses it to tell her honestly when there is
+    // more still open than what fits in this one answer, instead of a
+    // digest that quietly implies "this is everything."
+    if (dryRun) {
+        await saveStore(store);
+        console.log(`[REPLYWATCH] (on-demand) assessed ${checked}, flagged ${flagged.length}, backlog ${store.tracked.length}`);
+        return { checked, flagged: flagged.length, items: flagged, backlogCount: store.tracked.length };
+    }
+
+    // Queue whatever is new, de-duplicated against what is already waiting —
+    // the scan runs every 5 minutes and a slow Gemini call can overlap the
+    // next tick, so the same email can legitimately be flagged twice.
     const queued = store.undelivered || [];
     const known = new Set(queued.map((q) => q.id));
     // Stamp when each item entered the queue. This is what tells us later
@@ -1204,7 +1230,20 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // wrong customer (see the sort comment above) — grouping makes that
         // trap easier to fall into, so the two must come from one variable.
         const digestMatters = groupMatters(queued);
-        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length);
+        // Backlog note (2026-08-25, Apsara: "Its not understanding context" —
+        // see the long comment above `tracked` for the full root cause). This
+        // digest only ever lists what is NEW since the last one; anything
+        // still open from before is real and tracked, just not repeated here.
+        // Say so honestly rather than let the digest imply this is everything.
+        // Simplest correct measure: tracked minus whatever raw ids are
+        // actually part of THIS batch (queued already covers every item
+        // digestMatters was grouped from, pre-grouping).
+        const renderedIds = new Set(queued.map((q) => q.id));
+        const olderStillOpen = (store.tracked || []).filter((t) => !renderedIds.has(t.id)).length;
+        const backlogNote = olderStillOpen > 0
+            ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" any time to see them.)`
+            : '';
+        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote;
 
         // Stage the confirmation so a plain "yes" produces the document. Only
         // for a draft that is actually complete — one still missing a rate has

@@ -28,6 +28,28 @@
 // class of bug specifically: a feature can be perfectly implemented and still
 // be dead because nothing calls it.
 
+// ── TEST ISOLATION (2026-08-25) ────────────────────────────────────────────
+// Point DATA_DIR at a throwaway directory BEFORE anything requires config.js,
+// which captures every file path at module load.
+//
+// Until now this suite ran against the REAL data/ — Apsara's live bookings,
+// brain.json, reply_watch.json. Two concrete harms, both observed:
+//   1. It MUTATED live files. data/reply_watch.json spent a day holding
+//      "Raj / wants a rate / e1,e2,e3" — integration.js fixtures, not real
+//      mail — which then read as live traffic when auditing what runs where.
+//   2. proper-lockfile creates a <file>.json.lock DIRECTORY per write. Run
+//      from the Cowork bridge, which cannot rmdir on the mounted volume,
+//      every run leaves one behind. That is where the stale locks in data/
+//      came from, and a no-op'd write makes a test's results meaningless
+//      rather than failing loudly.
+// A scratch dir fixes all of it and costs nothing: these tests exercise real
+// file persistence either way, just not HER files.
+const os = require('os');
+const _p = require('path');
+const _fs = require('fs');
+process.env.DATA_DIR = process.env.DATA_DIR || _fs.mkdtempSync(_p.join(os.tmpdir(), 'jarvis-test-'));
+
+
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
@@ -444,9 +466,22 @@ section('"i cant keep on fixing this" — send is not defined');
     async function withStubbedRun(runImpl, fn) {
         delete require.cache[rwPath];
         const real = require(R('workflow/replyWatch.js'));
+        // 2026-08-25: showPendingReplies now also calls loadStore/saveStore
+        // directly (grouping + persisting lastDigest so "reply to N"/"ignore
+        // N" resolve against what she was actually just shown — see
+        // workflow/actions.js's showPendingReplies for the full incident).
+        // This file's own header promises "Read-only... no writable data/
+        // needed" — stub these too, in-memory, so that promise still holds
+        // instead of quietly starting to write the real data/reply_watch.json
+        // on every run of this suite.
+        let fakeStore = { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [] };
         require.cache[rwPath] = {
             id: rwPath, filename: rwPath, loaded: true, children: [], paths: [],
-            exports: { ...real, run: runImpl },
+            exports: {
+                ...real, run: runImpl,
+                loadStore: async () => fakeStore,
+                saveStore: async (s) => { fakeStore = s; },
+            },
         };
         delete require.cache[require.resolve(R('workflow/actions.js'))];
         const freshActions = require(R('workflow/actions.js'));

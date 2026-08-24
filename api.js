@@ -21,7 +21,8 @@ const fs      = require('fs');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
         mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking,
-        loadFacts, addFact, setFactPinned } = require('./helpers/json');
+        loadFacts, loadActiveFacts, addFact, setFactPinned, deleteFactById,
+        supersedeFact, retractFact, unretractFact, factHistory } = require('./helpers/json');
 const { daysUntil }   = require('./helpers/time');
 const { listAlerts, snoozeAlert, muteBooking } = require('./alerts');
 const cfg = require('./config');
@@ -1370,21 +1371,38 @@ function createApi() {
     // an error) if Neo4j isn't configured or the query fails — an empty
     // graph is a valid, non-error state for a caller to render as "nothing
     // here yet", not something to alert on.
+    //
+    // NOTE (2026-08-25): helpers/graph.js does not exist and never did —
+    // verified on disk and against apgstocks/Edge-Metals-Jarvis on GitHub.
+    // Both endpoints below therefore returned a 500 "Cannot find module",
+    // which directly contradicts the contract stated above ("never an
+    // error... an empty graph is a valid, non-error state"). Treat the
+    // module simply being absent as "not configured", which is what it
+    // actually means — an optional integration that was never built.
+    const loadGraphModule = () => {
+        try { return require('./helpers/graph'); }
+        catch (e) {
+            if (e.code === 'MODULE_NOT_FOUND') return null;
+            throw e;
+        }
+    };
+
     app.get('/api/graph/trace', requireAdmin, async (req, res) => {
         try {
-            const { traceEntity } = require('./helpers/graph');
             const name = String(req.query.entity || '').trim();
             if (!name) return res.status(400).json({ error: 'entity query param required' });
-            const result = await traceEntity(name, { depth: parseInt(req.query.depth, 10) || 2 });
+            const graph = loadGraphModule();
+            if (!graph) return res.json({ nodes: [], edges: [], configured: false });
+            const result = await graph.traceEntity(name, { depth: parseInt(req.query.depth, 10) || 2 });
             res.json(result);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     app.get('/api/graph/status', requireAdmin, async (req, res) => {
         try {
-            const { isConfigured, verifyConnectivity } = require('./helpers/graph');
-            if (!isConfigured()) return res.json({ configured: false });
-            const result = await verifyConnectivity();
+            const graph = loadGraphModule();
+            if (!graph || !graph.isConfigured || !graph.isConfigured()) return res.json({ configured: false });
+            const result = await graph.verifyConnectivity();
             res.json({ configured: true, ...result });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -2227,14 +2245,27 @@ function createApi() {
     // here (see workflow/actions.js rememberFact), and every one is fed into
     // every future Gemini prompt. Never exposed to non-admin dashboard users —
     // this is operational/business memory, not something every viewer needs.
+    // Active facts by default — what Jarvis currently believes, which is what
+    // the Facts tab is for. ?include=all adds superseded/retracted records so
+    // the history panel can show how a belief changed over time.
     app.get('/api/facts', requireAdmin, (req, res) => {
-        res.json({ facts: loadFacts() });
+        const all = String(req.query.include || '') === 'all';
+        res.json({ facts: all ? loadFacts() : loadActiveFacts(), include: all ? 'all' : 'active' });
+    });
+
+    // The lineage of one fact, newest first — "why does Jarvis think this?"
+    app.get('/api/facts/:id/history', requireAdmin, (req, res) => {
+        const chain = factHistory(String(req.params.id || ''));
+        if (!chain.length) return res.status(404).json({ error: 'not found' });
+        res.json({ history: chain });
     });
 
     app.post('/api/facts', requireAdmin, async (req, res) => {
         const text = String(req.body?.text || '').trim();
         if (!text) return res.status(400).json({ error: 'text required' });
-        await addFact(text, !!req.body?.pinned);
+        // origin: manager — behind requireAdmin, i.e. an authenticated
+        // dashboard session or the machine API token. Channel, not content.
+        await addFact(text, !!req.body?.pinned, { origin: 'manager' });
         res.json({ ok: true });
     });
 
@@ -2244,33 +2275,95 @@ function createApi() {
     // a fact from that window so a standing rule Apsara wants reinforced
     // (e.g. a routing/CC rule) is guaranteed to always be read, not just
     // usually read.
-    app.patch('/api/facts/:index', requireAdmin, async (req, res) => {
-        const idx = parseInt(req.params.index, 10);
-        if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'invalid index' });
-        const ok = await setFactPinned(idx, !!req.body?.pinned);
+    // ── ID-ADDRESSED, not index-addressed (2026-08-25) ─────────────────────
+    // These took an array INDEX until now, which is unsafe: addFact's 200-cap
+    // eviction splices a fact out of the middle and shifts every index below
+    // it, so a delete issued against a rendered list could remove a different
+    // fact than the one clicked. See helpers/json.js's deriveFactId header.
+    //
+    // Legacy ids are derived deterministically from a fact's own text +
+    // created_at, so a dashboard page rendered BEFORE this change still sends
+    // an id that resolves correctly — no coordinated deploy required. A stale
+    // cached page sending a bare integer is answered with an explicit 409
+    // telling it to refresh, rather than silently acting on the wrong record.
+    const rejectLegacyIndex = (raw, res) => {
+        if (/^\d+$/.test(String(raw))) {
+            res.status(409).json({ error: 'This page is out of date — refresh and try again. Facts are now addressed by id, not position.' });
+            return true;
+        }
+        return false;
+    };
+
+    app.patch('/api/facts/:id', requireAdmin, async (req, res) => {
+        const id = String(req.params.id || '');
+        if (rejectLegacyIndex(id, res)) return;
+        if (!id) return res.status(400).json({ error: 'invalid id' });
+        const ok = await setFactPinned(id, !!req.body?.pinned);
         if (!ok) return res.status(404).json({ error: 'not found' });
         res.json({ ok: true });
     });
 
-    app.delete('/api/facts/:index', requireAdmin, async (req, res) => {
-        const idx = parseInt(req.params.index, 10);
-        if (!Number.isInteger(idx) || idx < 0) return res.status(400).json({ error: 'invalid index' });
-        let removed = false;
-        let removedText = null;
-        await mutateJson(cfg.FACTS_FILE, [], (facts) => {
-            if (idx < facts.length) { removedText = facts[idx].text; facts.splice(idx, 1); removed = true; }
-            return facts;
-        });
+    app.delete('/api/facts/:id', requireAdmin, async (req, res) => {
+        const id = String(req.params.id || '');
+        if (rejectLegacyIndex(id, res)) return;
+        if (!id) return res.status(400).json({ error: 'invalid id' });
+        // RETRACT, not destroy (2026-08-25, phase 2). "Delete" in the Facts
+        // tab now means "stop believing this": the fact leaves every prompt
+        // immediately and its vector row is dropped, but the record stays on
+        // disk so it is auditable and — unlike before — recoverable from a
+        // mis-click. Nothing Apsara taught Jarvis is ever actually destroyed.
+        // ?purge=true still hard-deletes, for genuine junk that should leave
+        // no trace; that path is not reachable from the dashboard.
+        const purge = String(req.query.purge || '') === 'true';
+        const removed = purge
+            ? await deleteFactById(id)
+            : await retractFact(id, String(req.body?.reason || '') || 'deleted from dashboard');
         if (!removed) return res.status(404).json({ error: 'not found' });
         // Keep the graph node (if Neo4j is configured) in sync with a
-        // dashboard delete — see helpers/graph.js's header. Fire-and-forget,
-        // non-fatal: the fact is already gone from facts.json regardless of
-        // whether this succeeds.
-        if (removedText) {
-            require('./helpers/graph').deleteFactNode(removedText)
-                .catch((e) => console.error('[API] fact graph delete failed (non-fatal):', e.message));
+        // dashboard delete. helpers/graph.js DOES NOT EXIST in this repo and
+        // never has — verified on disk and on GitHub, 2026-08-25. A bare
+        // require() therefore threw synchronously, BEFORE .catch could
+        // attach, so this handler rejected and returned a 500 on a delete
+        // that had already succeeded. Wrapped so an optional integration
+        // that was never built cannot fail a core operation.
+        try {
+            const graph = require('./helpers/graph');
+            if (graph && typeof graph.deleteFactNode === 'function') {
+                graph.deleteFactNode(removed.text)
+                    .catch((e) => console.error('[API] fact graph delete failed (non-fatal):', e.message));
+            }
+        } catch (e) {
+            if (e.code !== 'MODULE_NOT_FOUND') console.error('[API] graph module load failed (non-fatal):', e.message);
         }
-        res.json({ ok: true });
+        res.json({ ok: true, id: removed.id, purged: purge });
+    });
+
+    // ── Correct a fact, keeping the history (2026-08-25, phase 2) ──────────
+    // The dashboard's "Correct" action. Distinct from editing the text in
+    // place, which would erase the fact that Jarvis ever believed the old
+    // version — the whole point is that the change is recorded, not hidden.
+    app.post('/api/facts/:id/supersede', requireAdmin, async (req, res) => {
+        const id = String(req.params.id || '');
+        const text = String(req.body?.text || '').trim();
+        if (!id) return res.status(400).json({ error: 'invalid id' });
+        if (!text) return res.status(400).json({ error: 'replacement text required' });
+        const replacement = await supersedeFact(id, text, {
+            pinned: typeof req.body?.pinned === 'boolean' ? req.body.pinned : null,
+            reason: String(req.body?.reason || '') || 'corrected from dashboard',
+            origin: 'manager',
+        });
+        // Null means the target is missing OR already superseded/retracted —
+        // superseding a record twice would fork its history into two competing
+        // chains, so it is refused rather than silently branched.
+        if (!replacement) return res.status(409).json({ error: 'not found, or already superseded/retracted' });
+        res.json({ ok: true, id: replacement.id, supersedes: id });
+    });
+
+    // Undo a retraction — the recoverability that makes soft-delete worth it.
+    app.post('/api/facts/:id/unretract', requireAdmin, async (req, res) => {
+        const revived = await unretractFact(String(req.params.id || ''));
+        if (!revived) return res.status(409).json({ error: 'not found, or not retracted' });
+        res.json({ ok: true, id: revived.id });
     });
 
     // ── Bot command surface — mimic WhatsApp interactions from the web ─────

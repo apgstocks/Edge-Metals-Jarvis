@@ -722,6 +722,33 @@ function policyDecide(ctx) {
     // generic yes/no" reasoning as await_ready_check above: "all" and "1,3"
     // don't match the YES/NO arrays or a plain list selection, so this needs
     // its own parse, not the generic pending handler. ──────────────────────────
+    // ── A0b-i. Fact-conflict resolution (2026-08-25, phase 2) ──────────────
+    // Jarvis found that something Apsara just told it contradicts a fact it
+    // already holds, and asked which wins. The valid answers — "replace",
+    // "both", "cancel" — are a closed set that the generic YES/NO arrays do
+    // not cover ("replace" is not a yes), so this needs its own parse and it
+    // has to run before section A's generic pending handler.
+    //
+    // Scoped strictly to this pending type. "replace" and "both" are ordinary
+    // words in freight conversation ("replace the seal", "both containers"),
+    // and must not become global confirmation keywords — the same reasoning
+    // that kept "apply" scoped to await_verify_apply.
+    if (ctx.pendingAction?.type === 'await_fact_conflict') {
+        const tt = ctx.text.trim().toLowerCase();
+        if (/^(replace|supersede|update|new|yes)\b/.test(tt))
+            return { intent: 'resolve_fact_conflict', resolvedBy: 'policy', data: { answer: 'replace' } };
+        if (/^(both|keep both|keep)\b/.test(tt))
+            return { intent: 'resolve_fact_conflict', resolvedBy: 'policy', data: { answer: 'both' } };
+        if (/^(no|cancel|drop|never mind|nevermind)\b/.test(tt))
+            return { intent: 'resolve_fact_conflict', resolvedBy: 'policy', data: { answer: 'cancel' } };
+        // Anything else is probably a fresh request, not an answer — hand it
+        // to the arbiter rather than nagging. Losing a real question to a
+        // canned "reply replace or both" is the failure mode that motivated
+        // the arbiter in the first place.
+        return { intent: 'reply', resolvedBy: 'policy', arbitrate: true,
+            data: { reply: 'Which should I go by — reply *replace* for the new one, *both* to keep them both, or *cancel* to drop it.' } };
+    }
+
     if (ctx.pendingAction?.type === 'await_fact_batch') {
         const tt = ctx.text.trim().toLowerCase();
         if (/^(no|none|skip|cancel)$/.test(tt))
@@ -1783,6 +1810,7 @@ async function route(decision, ctx, sendMessage) {
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection, d.cancelText);
         case 'reschedule_pending_email': return actions.reschedulePendingEmail(chatId, ctx.pendingAction, d.send_at_text);
         case 'resolve_fact_batch':     return actions.resolveFactBatch(chatId, ctx.pendingAction, d.selection);
+        case 'resolve_fact_conflict':  return actions.resolveFactConflict(chatId, ctx.pendingAction, d.answer);
         case 'show_menu':              return actions.showMenu(chatId);
         case 'bookings_menu':          return actions.showBookingsMenu(chatId);
         case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
@@ -1975,6 +2003,9 @@ function pendingFullReminder(p) {
     if (p.type === 'await_fact_batch') {
         const list = (p.candidates || []).map((c, i) => `${i + 1}. ${c}`).join('\n');
         return `(Still waiting: end-of-day review —\n${list}\n\nReply with numbers to accept (e.g. "1,3"), "all", or "no" to skip all.)`;
+    }
+    if (p.type === 'await_fact_conflict') {
+        return `(Still waiting: "${p.newText}" contradicts "${p.oldText}". Reply *replace*, *both*, or *cancel*.)`;
     }
     if (p.type === 'await_email_confirm') {
         const ccBcc = [p.cc ? `Cc: ${p.cc}` : null, p.bcc ? `Bcc: ${p.bcc}` : null].filter(Boolean).join('\n');

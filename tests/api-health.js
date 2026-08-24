@@ -13,6 +13,28 @@
 //
 // api.js has never had ANY test coverage — this file is that coverage,
 // starting with the endpoint that was silently broken.
+// ── TEST ISOLATION (2026-08-25) ────────────────────────────────────────────
+// Point DATA_DIR at a throwaway directory BEFORE anything requires config.js,
+// which captures every file path at module load.
+//
+// Until now this suite ran against the REAL data/ — Apsara's live bookings,
+// brain.json, reply_watch.json. Two concrete harms, both observed:
+//   1. It MUTATED live files. data/reply_watch.json spent a day holding
+//      "Raj / wants a rate / e1,e2,e3" — integration.js fixtures, not real
+//      mail — which then read as live traffic when auditing what runs where.
+//   2. proper-lockfile creates a <file>.json.lock DIRECTORY per write. Run
+//      from the Cowork bridge, which cannot rmdir on the mounted volume,
+//      every run leaves one behind. That is where the stale locks in data/
+//      came from, and a no-op'd write makes a test's results meaningless
+//      rather than failing loudly.
+// A scratch dir fixes all of it and costs nothing: these tests exercise real
+// file persistence either way, just not HER files.
+const os = require('os');
+const _p = require('path');
+const _fs = require('fs');
+process.env.DATA_DIR = process.env.DATA_DIR || _fs.mkdtempSync(_p.join(os.tmpdir(), 'jarvis-test-'));
+
+
 const path = require('path');
 const R = (p) => path.join(__dirname, '..', p);
 const http = require('http');

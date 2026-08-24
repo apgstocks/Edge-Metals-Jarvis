@@ -13,6 +13,28 @@
 // is worth exactly nothing if nobody ever tests it — so it is tested here,
 // by forcing the requires to fail and re-running the same assertions.
 
+// ── TEST ISOLATION (2026-08-25) ────────────────────────────────────────────
+// Point DATA_DIR at a throwaway directory BEFORE anything requires config.js,
+// which captures every file path at module load.
+//
+// Until now this suite ran against the REAL data/ — Apsara's live bookings,
+// brain.json, reply_watch.json. Two concrete harms, both observed:
+//   1. It MUTATED live files. data/reply_watch.json spent a day holding
+//      "Raj / wants a rate / e1,e2,e3" — integration.js fixtures, not real
+//      mail — which then read as live traffic when auditing what runs where.
+//   2. proper-lockfile creates a <file>.json.lock DIRECTORY per write. Run
+//      from the Cowork bridge, which cannot rmdir on the mounted volume,
+//      every run leaves one behind. That is where the stale locks in data/
+//      came from, and a no-op'd write makes a test's results meaningless
+//      rather than failing loudly.
+// A scratch dir fixes all of it and costs nothing: these tests exercise real
+// file persistence either way, just not HER files.
+const os = require('os');
+const _p = require('path');
+const _fs = require('fs');
+process.env.DATA_DIR = process.env.DATA_DIR || _fs.mkdtempSync(_p.join(os.tmpdir(), 'jarvis-test-'));
+
+
 const assert = require('assert');
 const Module = require('module');
 const path = require('path');
@@ -223,6 +245,28 @@ section('Brain routing — traps, escapes, and core grammar');
     ck('cancel escapes any pending',      D('cancel', CARGO), 'resolve_pending');
     ck('fresh quote command jumps queue', D('Send quote request from Junk car to Eccomelt', CARGO), 'get_quote');
 
+    // "bookings from <place>" only resolves to bookings_list_query when the
+    // place actually matches a stored booking — policyDecide checks the data,
+    // not just the words. This used to pass because the suite ran against the
+    // REAL data/, where an Oakland booking happened to exist: it was testing
+    // Apsara's live bookings file, not the grammar, and would have flipped to
+    // a failure the day that booking was archived. Seed the precondition
+    // explicitly so the assertion means what its name says.
+    // fs/cfg are required per-block in this file, not at module scope — a
+    // bare fs here throws "fs is not defined" at runtime while node --check
+    // passes it clean. Same class as api/health's fs and rescanMail's
+    // buildDigest; writing one myself while hunting them is a decent argument
+    // for the lint rule recommended in the phase-2 notes.
+    const fs = require('fs');
+    const cfg = require('../config');
+    fs.writeFileSync(cfg.BOOKINGS_FILE, JSON.stringify({
+        OAKTEST01: {
+            booking_number: 'OAKTEST01', carrier: 'TEST', port_of_loading: 'OAKLAND',
+            port_of_discharge: 'BUSAN', created_at: new Date().toISOString(),
+            containers: [{ seq: 1, size: '40HC', stage: 'new' }],
+        },
+    }, null, 2));
+
     // Core grammar regression — widening anything must not hijack these.
     for (const [t, w] of [['menu', 'show_menu'], ['available', 'show_bookings_available'],
         ['bookings from oakland', 'bookings_list_query'], ['get quote from LA to Houston', 'get_quote'],
@@ -325,7 +369,12 @@ On Fri, Aug 21, 2026 at 3:14 PM Apsara <apg0596@gmail.com> wrote:
         { fromName: 'Raj', summary: 'Asking for a rate', asked_for: null, deadline: null, urgency: 'normal', subject: 's' },
     ]);
     ckTrue('digest counts', d.includes('2 emails waiting on you'));
-    ckTrue('digest numbers entries', d.includes('1. !! Zimex') && d.includes('2. '));
+    // LAYOUT CHANGED 2026-08-24 on Apsara's instruction ("description should
+    // not go next line .side by side"): the numbered line now leads with the
+    // SUMMARY and the sender moves to the line below. The number must still
+    // lead the line — "reply to 1" depends on it — which is what this checks.
+    ckTrue('digest numbers entries', /^1\. !! \*Wants cutoff confirmation\*/m.test(d) && d.includes('2. '));
+    ckTrue('digest still names the sender, on its own line', /^\s+Zimex\b/m.test(d));
     ckTrue('digest shows deadline', d.includes('by Friday'));
     ckTrue('digest offers reply-by-number', d.includes('reply to 1'));
     ckTrue('digest promises a confirm gate', d.toLowerCase().includes('yes before anything goes out'));
@@ -372,13 +421,19 @@ section('Inbox triage — store shape, and the digest-numbering bug');
     const sorted = [...raw].sort((x, y) => RANK[x.urgency] - RANK[y.urgency]);
     await rw.saveStore({ seen: {}, lastDigest: sorted, undelivered: [], tracked: [], lastDigestAt: new Date().toISOString() });
     const digest = rw.buildDigest(sorted);
+    // Post-layout-change the numbered line carries the SUMMARY, so extract
+    // that and compare it to the summary of whatever resolveDigestIndex
+    // returns. The guarantee under test is unchanged and is the important
+    // one: the thing printed as N is the thing "reply to N" acts on. Getting
+    // this wrong once drafted a reply to the wrong customer.
     const shown = [1, 2, 3].map((n) => {
         const line = digest.split('\n').find((l) => l.trim().startsWith(n + '.'));
-        return line ? line.replace(/^\s*\d+\.\s*(?:!!|·)\s*/, '').split(' —')[0].trim() : null;
+        return line ? line.replace(/^\s*\d+\.\s*(?:!!|·)\s*/, '').replace(/\*/g, '').split(' —')[0].trim() : null;
     });
-    const resolved = [1, 2, 3].map((n) => (rw.resolveDigestIndex(n) || {}).fromName);
-    ck('digest orders urgent first', shown, ['Zimex', 'Raj', 'Lee']);
-    ck('"reply to N" resolves to the SAME email shown as N', resolved, shown);
+    const resolvedSummaries = [1, 2, 3].map((n) => (rw.resolveDigestIndex(n) || {}).summary);
+    const resolvedSenders = [1, 2, 3].map((n) => (rw.resolveDigestIndex(n) || {}).fromName);
+    ck('digest orders urgent first', resolvedSenders, ['Zimex', 'Raj', 'Lee']);
+    ck('"reply to N" resolves to the SAME email shown as N', resolvedSummaries, shown);
     ck('out-of-range index refuses rather than guessing', rw.resolveDigestIndex('9'), null);
     ck('zero index refuses', rw.resolveDigestIndex('0'), null);
     ck('garbage index refuses', rw.resolveDigestIndex('abc'), null);

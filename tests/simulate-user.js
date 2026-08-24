@@ -91,12 +91,20 @@ fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({
 const gmail = require(R('helpers/gmail.js'));
 gmail.getGmailRead = () => ({ __fake: true });
 gmail.getGmailWrite = () => ({ __fake: true });
-gmail.listMessages = async () => [];
-gmail.getMessage = async () => ({ payload: { headers: [{ name: 'Subject', value: 'Re: test' }, { name: 'From', value: 'ops@zimex.com' }] }, internalDate: String(Date.now()) });
-gmail.getEmailContent = () => ({ body: 'Please advise on the shipment.', pdfParts: [] });
+let nextGmailMessages = [];  // [{id, from, subject, body}], set per-scenario
+const GMAIL_MSG_BY_ID = {};
+let lastFetchedBody = 'Please advise on the shipment.';
+gmail.listMessages = async () => nextGmailMessages.map((m) => ({ id: m.id }));
+gmail.getMessage = async (_g, id) => {
+    const m = GMAIL_MSG_BY_ID[id] || { from: 'ops@zimex.com', subject: 'Re: test', body: 'Please advise on the shipment.' };
+    lastFetchedBody = m.body || 'Please advise on the shipment.';
+    return { threadId: 't-' + id, internalDate: String(Date.now()), payload: { headers: [{ name: 'Subject', value: m.subject }, { name: 'From', value: m.from }] } };
+};
+gmail.getEmailContent = () => ({ body: lastFetchedBody, pdfParts: [] });
 gmail.sendEmail = async () => ({ threadId: 't1', id: 'm1' });
 gmail.tallyAddressesForTerm = async () => ({ messages: [], tally: new Map() });
 gmail.preferredReplyAddress = () => 'ops@zimex.com';
+gmail.getMyEmailAddress = async () => 'ops@edgemetals.com';
 gmail.findLatestFrom = async () => null;
 
 const gemini = require(R('helpers/gemini.js'));
@@ -326,6 +334,56 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
         const r = await turn('Stranger', STRANGER_CHAT, STRANGER_NUM, 'hello, who is this?');
         reply(r); dbg(r);
         ck('S14 unauthorized stranger -> silently dropped, zero replies, no crash', !r.threw && r.replies.length === 0);
+    }
+
+    // 15. THE FIX BEING TESTED — Apsara, 2026-08-25, live: "Its not
+    //     understanding context", pasting three consecutive hourly digests
+    //     that never once mentioned an item from an earlier one. Root cause:
+    //     both the automatic digest and "which needs my reply" only ever
+    //     reported mail NEW since the last check, and the on-demand check
+    //     never updated store.lastDigest, so "reply to N" after asking could
+    //     silently resolve against a stale, unrelated list. This proves both
+    //     fixes for real: ask twice, get two DIFFERENT senders (nothing
+    //     repeated — that's correct, by design), the SECOND answer must
+    //     honestly say something older is still open, and "reply to 1" must
+    //     resolve to whoever was actually numbered 1 in that SECOND answer.
+    {
+        // S10's quote flow left an open await_quote_scale_tickets pending on
+        // this same chat — not what S15 is testing, so clear it for a clean
+        // slate rather than let an unrelated dangling pending swallow these
+        // messages (a real behaviour: the pending arbiter tries to reclassify
+        // via Gemini first, which is stubbed strictly here and correctly
+        // falls back to the old pending on failure — that resilience is
+        // real and good, just not what this scenario is isolating).
+        await actions.clearPending(MANAGER_CHAT);
+        GMAIL_MSG_BY_ID.tiffany1 = { from: 'Tiffany Furleigh <tiffany@example.com>', subject: 'Load type?', body: 'Is this load loose or skidded?' };
+        nextGmailMessages = [{ id: 'tiffany1' }];
+        nextAIResponse = { needs_reply: true, confidence: 0.9, summary: 'Sender asks if a load is loose or skidded.', asked_for: 'clarification on load type (loose or skidded)', deadline: null, urgency: 'normal', is_order: false };
+        say('manager', 'which needs my reply');
+        const r15a = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'which needs my reply');
+        reply(r15a); dbg(r15a);
+        ck('S15a first check -> flags Tiffany, no crash', !r15a.threw && /tiffany/i.test(r15a.replies[0]?.text || ''));
+
+        GMAIL_MSG_BY_ID.whittaker1 = { from: 'Matthew Ellis Whittaker <matthew@example.com>', subject: 'Monday availability', body: 'Can you confirm the manager is available Monday?' };
+        nextGmailMessages = [{ id: 'whittaker1' }];
+        nextAIResponse = { needs_reply: true, confidence: 0.9, summary: "Sender needs to know manager's availability for Monday.", asked_for: "Manager's availability for Monday", deadline: null, urgency: 'normal', is_order: false };
+        say('manager', 'which needs my reply');
+        const r15b = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'which needs my reply');
+        reply(r15b); dbg(r15b);
+        const text15b = r15b.replies[0]?.text || '';
+        ck('S15b second check -> flags Whittaker (not Tiffany again), no crash', !r15b.threw && /whittaker/i.test(text15b) && !/tiffany/i.test(text15b));
+        ck('S15c second check HONESTLY notes Tiffany is still open, not silently dropped', /older item.*still open/i.test(text15b));
+
+        // What "reply to 1"/"ignore 1" actually resolve against is
+        // store.lastDigest, read via replyWatch's own resolveDigestIndex —
+        // asserting at that level tests exactly the fix (lastDigest now
+        // matches what she was just shown) without also depending on the
+        // separate, unrelated forward-address-resolution chain deeper
+        // inside draftReplyForConfirm, which needs its own dedicated stub
+        // coverage this scenario isn't set up to give it.
+        const { resolveDigestIndex } = require(R('workflow/replyWatch.js'));
+        const resolved1 = resolveDigestIndex('1');
+        ck('S15d "reply to 1" / "ignore 1" resolve to Whittaker (what she was just shown), NOT the stale Tiffany digest', !!resolved1 && /whittaker/i.test(resolved1.fromName || ''));
     }
 
     console.log(`\n================================================================`);

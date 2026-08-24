@@ -254,6 +254,47 @@ async function invoke(name, fn) {
     // ── already covered elsewhere, invoked here for completeness ────────
     await invoke('replyToDigestItem (unknown index)', () => actions.replyToDigestItem('sim', '99', null, 'reply to 99'));
 
+    // ── Added 2026-08-25 ───────────────────────────────────────────────────
+    // A coverage audit (exported functions vs. every .name( appearing in
+    // tests/) found these had drifted back into the "exists but has never
+    // been run" state this file was built to eliminate. rescanMail is the
+    // reason the audit happened: it called a bare `buildDigest` it never
+    // imported — the THIRD "X is not defined" of exactly this shape, after
+    // showPendingReplies' `send` and api/health's `fs` — and it sat on the
+    // success path, so "check my inbox again" crashed whenever there was
+    // something to show. node --check passed it. The wiring check passed it.
+    // Only calling it catches this.
+    await invoke('rescanMail', () => actions.rescanMail('sim'));
+    await invoke('ignoreDigestItem', () => actions.ignoreDigestItem('sim', ['1']));
+    await invoke('ignoreDigestItem (all)', () => actions.ignoreDigestItem('sim', null, true));
+    await invoke('lookupAddress', () => actions.lookupAddress('sim', SEED_ORIGIN));
+    await invoke('lookupAddress (unknown place)', () => actions.lookupAddress('sim', 'nowhere at all'));
+    await invoke('sendMessageTo', () => actions.sendMessageTo('sim', { target: 'TruckerX', message: 'test relay' }));
+    await invoke('setReminder', () => actions.setReminder('sim', { target: 'TruckerX', message: 'chase this', when: 'tomorrow 9am' }));
+    await invoke('showWritingStyle', () => actions.showWritingStyle('sim'));
+    await invoke('learnWritingStyle', () => actions.learnWritingStyle('sim'));
+    await invoke('findContradictedFact', () => actions.findContradictedFact('some brand new fact'));
+    await invoke('prepareProformaNumbers', () => actions.prepareProformaNumbers
+        ? actions.prepareProformaNumbers({ consignee: 'Test Co', containerCount: 1 })
+        : Promise.resolve(null));
+    await invoke('startProformaFromEmail', () => actions.startProformaFromEmail('sim', 'Nobody'));
+    // Shape copied from a REAL confirm_proforma pending observed in the live
+    // brain.json (Taewon Metal, 2026-08-24) rather than invented — a made-up
+    // fixture here would either miss the crash or manufacture a fake one.
+    await invoke('generateProformaFromPending', () => actions.generateProformaFromPending('sim', {
+        type: 'confirm_proforma',
+        draft: {
+            consignee: 'Taewon Metal', containerCount: 2,
+            items: [{ desc: 'auto cast', qty: 21, rate: 340 }],
+            trade_terms: 'CIF Busan', port_discharge: 'South Korea',
+            payment_term: '', needs: [], unconfirmed: [], note: null, confidence: 0.93,
+        },
+        invNo: '260823_AC_26JY90',
+        containerNos: ['26JY90', '26JY91'],
+        addressLines: ['Taewon Metal', '123 Test Rd', 'Busan, South Korea'],
+        replyTo: 'Joey <joey@taewon.co.kr>', subject: 'Order for 2 containers', who: 'Joey',
+    }));
+
     console.log(`\n${'='.repeat(64)}`);
     console.log(`${pass} passed, ${fail} failed`);
     if (fail) {

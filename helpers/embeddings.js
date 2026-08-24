@@ -112,4 +112,33 @@ async function searchSimilar(queryText, { chatId = null, topK = DEFAULT_TOP_K, m
     }
 }
 
-module.exports = { storeEmbedding, searchSimilar };
+// ── DELETE (2026-08-25, memory architecture phase 1) ───────────────────────
+// Added because nothing in this codebase could remove a vector row, which
+// meant a fact deleted from facts.json lived on here forever and was
+// re-surfaced by searchSimilar on the very next message. See
+// helpers/json.js's deleteFactById header for the full incident.
+//
+// Matched on exact text + type rather than on a fact id, because that is
+// what storeEmbedding actually persists — there is no fact_id column today.
+// A schema with a real foreign key is the right long-term answer (phase 2);
+// this closes the live hole without a Supabase migration Apsara would have
+// to run by hand before the fix took effect.
+//
+// Deliberately NOT silent about the outcome: this returns the number of
+// rows deleted so a caller can tell "cleaned up" from "couldn't reach the
+// store". Everything else in this file returns [] or undefined on failure,
+// which is right for a nice-to-have read path and wrong for a deletion the
+// manager explicitly asked for.
+async function deleteEmbeddingsByText(text, type = null) {
+    const clean = String(text || '').trim();
+    if (!clean) return 0;
+    let q = getSupabase().from('memory_embeddings').delete().eq('text', clean);
+    if (type) q = q.eq('type', type);
+    const { data, error } = await q.select('id');
+    if (error) throw error;
+    const n = (data || []).length;
+    console.log(`[EMBEDDINGS] deleted ${n} vector row(s) for a retracted ${type || 'memory'}`);
+    return n;
+}
+
+module.exports = { storeEmbedding, searchSimilar, deleteEmbeddingsByText };

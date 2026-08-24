@@ -571,7 +571,7 @@ async function loadTab(tab) {
     if (tab === 'settings') return renderSettings(await api('/api/settings'));
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
-    if (tab === 'facts') return renderFacts(await api('/api/facts'));
+    if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
     if (tab === 'loads') return renderLoads(await api('/api/loads'));
     // Deliberately NOT fetched anywhere during boot/init — loadTab() only
     // runs this when the Inventory nav button is actually clicked, same
@@ -3802,16 +3802,44 @@ function wireDeckEvents() {
 // call, permanently, until someone unpins or deletes it here.
 function renderFacts(data) {
   const facts = data.facts || [];
-  const pinned = facts.map((f, i) => ({ ...f, i })).filter((f) => f.pinned);
-  const unpinned = facts.map((f, i) => ({ ...f, i })).filter((f) => !f.pinned).reverse();
+  // Facts are addressed by their stable server id (2026-08-25), never by
+  // position in this array — an eviction server-side shifts positions, so a
+  // rendered index could delete a different fact than the one clicked.
+  // Phase 2: the store now also holds superseded and retracted records. The
+  // main lists show only what Jarvis CURRENTLY believes; the rest goes to a
+  // Retired panel so nothing is hidden but nothing stale looks live either.
+  const active = facts.filter((f) => (f.status || 'active') === 'active');
+  const retired = facts.filter((f) => (f.status || 'active') !== 'active').reverse();
+  const pinned = active.filter((f) => f.pinned);
+  const unpinned = active.filter((f) => !f.pinned).reverse();
   const factRow = (f) => `
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs); ${f.pinned ? 'border:1px solid var(--accent);' : ''}">
       <span style="font-size:13px;">${f.pinned ? '<span title="Pinned — always included, never ages out" style="margin-right:6px;">📌</span>' : ''}${esc(f.text)}</span>
       <span style="display:flex; gap:6px; flex-shrink:0;">
-        <button class="btn btn-secondary btn-pin-fact" data-idx="${f.i}" data-pinned="${f.pinned ? '1' : '0'}" style="padding:5px 10px; font-size:10px;">${f.pinned ? 'Unpin' : 'Pin'}</button>
-        <button class="btn btn-danger btn-del-fact" data-idx="${f.i}" style="padding:5px 10px; font-size:10px;">Del</button>
+        <button class="btn btn-secondary btn-correct-fact" data-id="${esc(f.id)}" data-text="${esc(f.text)}" style="padding:5px 10px; font-size:10px;">Correct</button>
+        <button class="btn btn-secondary btn-pin-fact" data-id="${esc(f.id)}" data-pinned="${f.pinned ? '1' : '0'}" style="padding:5px 10px; font-size:10px;">${f.pinned ? 'Unpin' : 'Pin'}</button>
+        <button class="btn btn-danger btn-del-fact" data-id="${esc(f.id)}" style="padding:5px 10px; font-size:10px;">Forget</button>
       </span>
     </div>`;
+  const byId = Object.fromEntries(facts.map((f) => [f.id, f]));
+  const when = (iso) => { try { return new Date(iso).toLocaleDateString(); } catch { return ''; } };
+  const retiredRow = (f) => {
+    const superseded = f.status === 'superseded';
+    const replacement = superseded && f.superseded_by ? byId[f.superseded_by] : null;
+    return `
+    <div style="padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs); opacity:.85;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div style="min-width:0;">
+          <div style="font-size:13px; text-decoration:line-through; color:var(--text-muted);">${esc(f.text)}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); margin-top:4px;">
+            ${superseded ? `Replaced ${when(f.valid_until)}` : `Forgotten ${when(f.retracted_at)}`}${f.change_reason ? ` · ${esc(f.change_reason)}` : ''}
+          </div>
+          ${replacement ? `<div style="font-size:12px; margin-top:6px; color:var(--text-muted);">→ now: ${esc(replacement.text)}</div>` : ''}
+        </div>
+        ${superseded ? '' : `<button class="btn btn-secondary btn-restore-fact" data-id="${esc(f.id)}" style="padding:5px 10px; font-size:10px; flex-shrink:0;">Restore</button>`}
+      </div>
+    </div>`;
+  };
   $('viewRoot').innerHTML = `
     <section style="max-width:800px; margin:0 auto; padding:38px 40px 80px;">
       <div class="eyebrow">// Facts</div>
@@ -3838,6 +3866,12 @@ function renderFacts(data) {
           ${unpinned.length ? unpinned.map(factRow).join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No facts yet.</div>'}
         </div>
       </div>
+      ${retired.length ? `
+      <div class="card" style="padding:18px 20px; margin-top:16px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Retired — kept on record, not applied</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Nothing here reaches the AI. Corrected facts show what replaced them; forgotten ones can be restored.</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">${retired.map(retiredRow).join('')}</div>
+      </div>` : ''}
     </section>`;
   $('btnAddFact').addEventListener('click', async () => {
     const text = $('f_new_text').value.trim();
@@ -3846,14 +3880,35 @@ function renderFacts(data) {
     try { await api('/api/facts', { method: 'POST', body: JSON.stringify({ text, pinned: $('f_new_pinned').checked }) }); loadTab('facts'); }
     catch (e) { $('factAddErr').textContent = e.message; }
   });
+  // "Forget" is a RETRACTION, not a deletion (2026-08-25) — the fact stops
+  // being believed and leaves every prompt, but is kept on record and can be
+  // restored. The wording says so, because "Delete" would imply the record is
+  // destroyed, and it isn't.
   document.querySelectorAll('.btn-del-fact').forEach(btn => btn.addEventListener('click', async () => {
-    if (!confirm('Delete this fact?')) return;
-    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'DELETE' });
+    if (!confirm('Stop applying this fact?\n\nJarvis will stop using it immediately. It stays on record and you can restore it from Retired below.')) return;
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+    loadTab('facts');
+  }));
+  // Correcting records the change instead of hiding it — the old version is
+  // kept, marked superseded, so "what did Jarvis believe back then" stays
+  // answerable.
+  document.querySelectorAll('.btn-correct-fact').forEach(btn => btn.addEventListener('click', async () => {
+    const next = prompt('What should Jarvis go by instead?\n\nThe old version is kept on record, marked as replaced.', btn.dataset.text);
+    if (next === null) return;
+    const text = next.trim();
+    if (!text || text === btn.dataset.text) return;
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/supersede`, {
+      method: 'POST', body: JSON.stringify({ text, reason: 'corrected from dashboard' }),
+    });
+    loadTab('facts');
+  }));
+  document.querySelectorAll('.btn-restore-fact').forEach(btn => btn.addEventListener('click', async () => {
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/unretract`, { method: 'POST', body: '{}' });
     loadTab('facts');
   }));
   document.querySelectorAll('.btn-pin-fact').forEach(btn => btn.addEventListener('click', async () => {
     const nowPinned = btn.dataset.pinned !== '1';
-    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'PATCH', body: JSON.stringify({ pinned: nowPinned }) });
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}`, { method: 'PATCH', body: JSON.stringify({ pinned: nowPinned }) });
     loadTab('facts');
   }));
 }
