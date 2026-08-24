@@ -2681,22 +2681,22 @@ async function showPendingReplies(chatId) {
         const { run, buildDigest } = require('./replyWatch');
         const result = await run({ dryRun: true });
         if (result.skipped === 'no-gmail') {
-            await send(chatId, "I can't check mail right now — Gmail isn't authorized on this server.");
+            await _send(chatId, "I can't check mail right now — Gmail isn't authorized on this server.");
             return { action_taken: 'pending_replies_no_gmail' };
         }
         if (result.error) {
-            await send(chatId, `Couldn't read the inbox: ${result.error}`);
+            await _send(chatId, `Couldn't read the inbox: ${result.error}`);
             return { action_taken: 'pending_replies_failed' };
         }
         if (!result.items || !result.items.length) {
-            await send(chatId, `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`);
+            await _send(chatId, `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`);
             return { action_taken: 'pending_replies_none' };
         }
-        await send(chatId, buildDigest(result.items));
+        await _send(chatId, buildDigest(result.items));
         return { action_taken: 'pending_replies_reported', count: result.items.length };
     } catch (err) {
         console.error('[ACTIONS] showPendingReplies failed:', err.message);
-        await send(chatId, `Couldn't check the inbox: ${err.message}`);
+        await _send(chatId, `Couldn't check the inbox: ${err.message}`);
         return { action_taken: 'pending_replies_failed' };
     }
 }

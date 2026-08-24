@@ -421,6 +421,95 @@ section('"if i say ignore 3,will it remove?"');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+section('"i cant keep on fixing this" — send is not defined');
+// Apsara, 2026-08-24, live: "Check for new mail" / "Which needs my reply" ->
+// "Something broke while handling that: send is not defined". Every call
+// site in showPendingReplies called a bare `send(chatId, ...)` — a global
+// that has never existed in this file; the real function is `_send`. All
+// FIVE paths through the function were broken, including the success path,
+// so "what needs my reply" has been completely unusable since the function
+// was restored in commit 7179955 (2026-08-22) — TWO DAYS silently broken.
+//
+// The root cause is not the typo. It is that nothing ever actually CALLED
+// showPendingReplies. node --check and the wiring check both passed the
+// whole time — a bare-identifier ReferenceError only fires at runtime, and
+// this function had no runtime. This section exists so that gap cannot
+// reopen: it actually INVOKES the function, stubbing only replyWatch's
+// external edge, and reads the real message sent — not a source grep.
+{
+    const actions = require(R('workflow/actions.js'));
+    const rwPath = require.resolve(R('workflow/replyWatch.js'));
+    const origRw = require.cache[rwPath];
+
+    async function withStubbedRun(runImpl, fn) {
+        delete require.cache[rwPath];
+        const real = require(R('workflow/replyWatch.js'));
+        require.cache[rwPath] = {
+            id: rwPath, filename: rwPath, loaded: true, children: [], paths: [],
+            exports: { ...real, run: runImpl },
+        };
+        delete require.cache[require.resolve(R('workflow/actions.js'))];
+        const freshActions = require(R('workflow/actions.js'));
+        const sent = [];
+        freshActions.init({
+            sendMessage: async (_c, t) => { sent.push(String(t)); },
+            sendToManager: async () => { }, sendToTeam: async () => { }, pushAlert: () => { },
+        });
+        let threw = null;
+        try { await fn(freshActions, sent); }
+        catch (e) { threw = e; }
+        if (origRw) require.cache[rwPath] = origRw; else delete require.cache[rwPath];
+        delete require.cache[require.resolve(R('workflow/actions.js'))];
+        return threw;
+    }
+
+    let threw = await withStubbedRun(
+        async () => ({ checked: 3, items: [] }),
+        async (a, sent) => {
+            const ret = await a.showPendingReplies('sim');
+            ck('nothing waiting: reports the checked count, not a crash', ret.action_taken, 'pending_replies_none');
+            ckTrue('nothing waiting: an actual message was sent', sent.length === 1 && /nothing new waiting/i.test(sent[0]));
+        });
+    ckTrue('the "nothing waiting" path does not throw "send is not defined"', !threw, threw && threw.message);
+
+    threw = await withStubbedRun(
+        async () => ({ checked: 2, items: [{ id: 'm1', fromName: 'Kristal Sosethan', summary: 'confirmation if booking will be used', urgency: 'high' }] }),
+        async (a, sent) => {
+            const ret = await a.showPendingReplies('sim');
+            ck('items waiting: reports them, not a crash', ret.action_taken, 'pending_replies_reported');
+            ckTrue('items waiting: the digest was actually sent', sent.length === 1 && /Kristal Sosethan/.test(sent[0]));
+        });
+    ckTrue('the "items waiting" (success) path does not throw', !threw, threw && threw.message);
+
+    threw = await withStubbedRun(
+        async () => ({ skipped: 'no-gmail' }),
+        async (a, sent) => {
+            const ret = await a.showPendingReplies('sim');
+            ck('gmail unconfigured: reported, not a crash', ret.action_taken, 'pending_replies_no_gmail');
+            ckTrue('gmail unconfigured: she is told why', sent.length === 1 && /isn't authorized/i.test(sent[0]));
+        });
+    ckTrue('the "no gmail" path does not throw', !threw, threw && threw.message);
+
+    threw = await withStubbedRun(
+        async () => ({ error: 'quota exceeded' }),
+        async (a, sent) => {
+            const ret = await a.showPendingReplies('sim');
+            ck('inbox read failure: reported, not a crash', ret.action_taken, 'pending_replies_failed');
+            ckTrue('inbox read failure: the real error reaches her', sent.length === 1 && /quota exceeded/.test(sent[0]));
+        });
+    ckTrue('the "read failed" path does not throw', !threw, threw && threw.message);
+
+    threw = await withStubbedRun(
+        async () => { throw new Error('gmail 500'); },
+        async (a, sent) => {
+            const ret = await a.showPendingReplies('sim');
+            ck('run() itself throws: caught and reported, not a crash', ret.action_taken, 'pending_replies_failed');
+            ckTrue('run() itself throws: she is told, not left silent', sent.length === 1);
+        });
+    ckTrue('an exception inside run() does not escape as "X is not defined"', !threw, threw && threw.message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 section('"if its marketing email,ignore"');
 {
     const rw = require(R('workflow/replyWatch.js'));

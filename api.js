@@ -7,6 +7,17 @@
 const express = require('express');
 const path    = require('path');
 const crypto  = require('crypto');
+// Apsara, 2026-08-24, live: the exact same bug class as "send is not
+// defined" — found by running eslint's no-undef check across the whole repo
+// after that incident, rather than waiting for a second one to surface on
+// its own. /api/health's very first check (drive_keyfile) has been throwing
+// "fs is not defined" since whenever this endpoint was written, caught by
+// its own outer try/catch, which means EVERY check after it — gemini_key,
+// sheet_sync, whatsapp readiness, load_warnings — has never once actually
+// run. The endpoint always reported ok:false with a useless generic error,
+// which is worse than not having a health check: it looks monitored and
+// isn't.
+const fs      = require('fs');
 const { loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
         upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
         mutateJson, loadSettings, saveSettings, updateWorkflow, archiveBooking,
