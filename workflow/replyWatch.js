@@ -112,6 +112,19 @@ try {
         summary: z.string().optional().default(''),
         asked_for: z.string().nullable().optional().default(null),
         deadline: z.string().nullable().optional().default(null),
+        // Order detection (2026-08-24). Apsara: "email watcher will need to
+        // detect this" — an order arriving should be noticed, not wait to be
+        // asked about.
+        //
+        // Deliberately a FIELD on the assessment already being made, not a
+        // second pass. Every inbound email is assessed once here; running a
+        // separate order-extraction call over the same text would double the
+        // Gemini spend on the whole inbox to find the handful of emails that
+        // are orders. This flag is cheap and only says "this looks like one" —
+        // the real extraction (helpers/proformaFromEmail.js) runs later, on
+        // one email, when she asks for the proforma.
+        is_order: z.coerce.boolean().optional().default(false),
+        order_buyer: z.string().nullable().optional().default(null),
     });
 } catch (e) { /* falls back to hand-rolled checks below */ }
 
@@ -362,12 +375,15 @@ urgency:
 summary: ONE short sentence, under 15 words, saying what they want. Write it so it makes sense on its own in a list, without the subject line next to it.
 asked_for: the single most concrete thing being requested ("a rate for LA to Houston", "the signed BOL"), or null.
 deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
+is_order: true if the sender is asking to buy material, asking for a proforma/PI, or confirming an order with quantities and/or prices. false for anything else, including a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
+order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
+
 confidence: 0.0 to 1.0, how sure you are about needs_reply.
 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "deadline": null }`;
+{ "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "deadline": null, "is_order": false, "order_buyer": null }`;
 }
 
 async function assess(email) {
@@ -382,6 +398,8 @@ async function assess(email) {
         summary: String(res.summary || '').trim(),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
         deadline: res.deadline ? String(res.deadline).trim() : null,
+        is_order: res.is_order === true || res.is_order === 'true',
+        order_buyer: res.order_buyer ? String(res.order_buyer).trim() : null,
     };
 }
 
@@ -726,6 +744,23 @@ function buildDigest(matters, emailCount) {
         // three different ways.
         lines.push(`${i + 1}. ${urgencyMark(f.urgency)} *${f.summary || f.subject}*${due}`);
         lines.push(`   ${f.fromName}${f.asked_for ? ` — wants: ${f.asked_for}` : ''}`);
+        // An order gets one extra line saying what to type. Jarvis can raise
+        // the proforma itself now, and a digest that reports an order without
+        // mentioning that is making her do a lookup it could have saved her.
+        // Deliberately just a prompt — nothing is generated or sent off the
+        // back of an email arriving.
+        if (f.is_order) {
+            // The name in the command is WHOSE EMAIL TO READ, not who the
+            // document is for — startProformaFromEmail looks up the latest
+            // mail from that person. So it must be the SENDER even when the
+            // buyer is someone else. Suggesting the buyer here (the obvious
+            // first instinct, and what this line said for about ten minutes)
+            // sends Jarvis hunting for mail from a company that never wrote
+            // to us, and it comes back "no recent email from Daekwang" on an
+            // order that is sitting right there.
+            const forWhom = f.order_buyer && f.order_buyer !== f.fromName ? ` for ${f.order_buyer}` : '';
+            lines.push(`   📄 Looks like an order${forWhom} — say "proforma from ${f.fromName}" and I'll build it from this email.`);
+        }
         // Say plainly that others are chasing the same thing, and who — that's
         // useful context ("two people at this customer are waiting"), and it
         // explains why the count above is bigger than the list.
@@ -873,6 +908,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 id: ref.id, threadId: msg.threadId, fromName: senderLabel(from),
                 from: preferredReplyAddress(hs) || from, subject,
                 summary: a.summary, asked_for: a.asked_for, deadline: a.deadline,
+                is_order: !!a.is_order, order_buyer: a.order_buyer || null,
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
