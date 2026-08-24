@@ -822,14 +822,34 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // one shared body string across both channels (per Apsara's original
     // "same text, two channels" design — see this function's header
     // comment) rather than maintaining two separately-formatted bodies.
+    // A ZERO-LOAD DAY IS TWO LINES. Apsara, 2026-08-24: "if zero loads, dont
+    // sent any url. Just send as *Loads today (0)* / No loads recorded today."
+    // Nothing happened; a wall of spreadsheet links underneath that is noise,
+    // and noise on a report that arrives every single night is how the report
+    // stops being read at all.
+    if (!todays.length) {
+        return [
+            `*${cfg.COMPANY_NAME} — Yard Report — ${dateKey}*`,
+            '',
+            `*Loads today (0)*`,
+            'No loads recorded today.',
+        ].join('\n');
+    }
+
+    // The line that used to sit here — "Full inventory breakdown (by item
+    // type, today + all-time) is in the attached PDF" — was removed
+    // 2026-08-24 because it had been untrue since 2026-08-19, when this
+    // report stopped attaching anything and switched to links only (see the
+    // "LINKS ONLY, no attachments" comment in eodYardReport). Every report
+    // since has told her to look at an attachment that wasn't there. It
+    // reads as a bug in the send, and would have been chased as one.
     return [
         `*${cfg.COMPANY_NAME} — Yard Report — ${dateKey}*`,
         '',
         `*Loads today (${todays.length})*`,
-        ...(todays.length ? lines : ['No loads recorded today.']),
-        ...(todays.length ? ['', '*Totals*', `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · $${totals.amount}`] : []),
-        '',
-        'Full inventory breakdown (by item type, today + all-time) is in the attached PDF.',
+        ...lines,
+        '', '*Totals*',
+        `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · $${totals.amount}`,
     ].join('\n');
 }
 
@@ -988,10 +1008,14 @@ async function eodYardReport() {
                 if (l.pdf_link) pdfLines.push(`  ${l.id}: ${l.pdf_link}`);
                 if (l.weights_pdf_link) pdfLines.push(`  ${l.id} (weights): ${l.weights_pdf_link}`);
             }
+            // Links suppressed on a zero-load day for the same reason the
+            // summary is two lines — see buildYardReportText. The sheets haven't
+            // changed if nothing was weighed.
+            const quiet = !todays.length;
             const body = [
                 summaryText,
-                ...(linkLines.length ? ['', ...linkLines] : []),
-                ...(pdfLines.length ? ['', "Today's load tickets:", ...pdfLines] : []),
+                ...(!quiet && linkLines.length ? ['', ...linkLines] : []),
+                ...(!quiet && pdfLines.length ? ['', "Today's load tickets:", ...pdfLines] : []),
             ].join('\n');
             const { sendEmail } = require('./helpers/gmail');
             await sendEmail({ to: emails.join(', '), subject: `${cfg.COMPANY_NAME} — Yard Report — ${dateKey}`, body });
