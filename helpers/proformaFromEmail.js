@@ -80,7 +80,7 @@ is_order: true ONLY if the sender is asking to buy material, asking for a profor
 
 THE RULE THAT MATTERS MOST: report only what the email ACTUALLY STATES. Never infer, complete, or tidy up a number. If the email does not give a rate, rate is null — do not carry one over from a price list, a previous order, or your own sense of what scrap costs. A null is useful; a plausible invention is dangerous, because this becomes a priced document sent to this customer.
 
-consignee: the buying company as written, or null.
+consignee: the company that is BUYING — the one the proforma will be addressed to. This is very often NOT the sender. Orders here routinely arrive from an agent or broker writing on a buyer's behalf, sometimes naming commissions for other people entirely ("$10 c for Hynos"). In "Daekwang confirmed 2 containers", the consignee is Daekwang, not whoever sent the mail and not Hynos. Return the buying company as written. If the email genuinely doesn't name one, return null — do NOT fall back to the sender, and do not treat a person's first name as a company unless the email plainly uses it that way.
 currency: "USD", "EUR" etc, only if stated. null otherwise.
 trade_terms: e.g. "CIF Busan", "FOB Los Angeles", only if stated.
 port_discharge: destination port/country, only if stated.
@@ -241,7 +241,13 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     });
     if (!items.length) needs.push('material');
     if (items.some((i) => !i.rate)) needs.push('rate');
-    if (!(order.consignee || fallbackConsignee)) needs.push('consignee');
+    // The SENDER IS NOT THE BUYER, and must never quietly become one. On a
+    // real run the model returned no consignee for an email that plainly said
+    // "Daekwang confirmed 2 containers", and the fallback put the agent's
+    // name — Joey — on the document instead. Orders here routinely arrive
+    // from an agent writing on a buyer's behalf, so this is the normal shape
+    // of the data, not an edge case. If no buying company was read, ask.
+    if (!order.consignee) needs.push('consignee');
     // The model's own "missing" list is authoritative too — it said qty was
     // missing on that same real email while the code cleared needs to empty
     // and offered to send. Trusting only our own derived checks threw away a
@@ -262,7 +268,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     // model list "consignee" as missing, which blocked a draft that had a
     // perfectly good consignee from the sender fallback. Same rule as the
     // rest: a model claim never overrides something we can see for ourselves.
-    const haveConsignee = !!(order.consignee || fallbackConsignee);
+    const haveConsignee = !!order.consignee;
     for (const m of (order.missing || [])) {
         const k = MAP[String(m).toLowerCase()];
         if (!k) continue;
@@ -273,7 +279,10 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         needs.push(k);
     }
     return {
-        consignee: order.consignee || fallbackConsignee || '',
+        consignee: order.consignee || '',
+        // Kept only so the question can be helpful ("is it for Joey?"), never
+        // used as the answer.
+        sender_hint: fallbackConsignee || null,
         containerCount: order.container_count && order.container_count > 0 ? Math.round(order.container_count) : 1,
         items,
         trade_terms: order.trade_terms || '',

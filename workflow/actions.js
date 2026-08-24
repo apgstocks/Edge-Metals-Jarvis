@@ -4849,6 +4849,9 @@ async function startProformaFromEmail(chatId, targetName) {
             lines.push('');
         }
         lines.push(`Missing: ${draft.needs.join(', ')}.`);
+        if (draft.needs.includes('consignee')) {
+            lines.push('', `The email doesn't name the buying company. ${draft.sender_hint ? `It came from ${draft.sender_hint} — if it's for them, say so; if they're the agent, tell me the buyer.` : 'Tell me who it\'s for.'}`);
+        }
         if (draft.assumed.length) lines.push('', ...draft.assumed.map((a) => `Assumed: ${a}`));
         if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `Unclear: ${u}`));
         if (draft.note) lines.push('', `Note: ${draft.note}`);
@@ -4874,6 +4877,24 @@ async function startProformaFromEmail(chatId, targetName) {
         }
     } catch (e) { /* no history — she can supply the number on confirm */ }
 
+    // Address resolved HERE, before the confirmation, not silently at generate
+    // time — it prints on the document, so she should see it while she still
+    // has a choice. An ambiguous name is surfaced rather than resolved by
+    // picking the first match: two entries both aliased "Daekwang" (a current
+    // account and an old one, say) would otherwise put the wrong address on a
+    // proforma and email it, with nothing anywhere saying a decision was made.
+    let addressLines = [], addressWarning = null;
+    try {
+        const hit = require('../helpers/addressBook').resolveAddress(draft.consignee);
+        if (!hit) {
+            addressWarning = `No address book entry for "${draft.consignee}" — the proforma will go out without an address.`;
+        } else if (hit.type === 'ambiguous') {
+            addressWarning = `"${draft.consignee}" matches ${hit.matches.length} address book entries (${hit.matches.map((m) => (m.raw || '').split('\n')[0]).join(' / ')}). Tell me which, or fix the duplicate — I won't guess.`;
+        } else if (hit.entry && hit.entry.raw) {
+            addressLines = hit.entry.raw.split('\n').map((l) => l.trim()).filter(Boolean);
+        }
+    } catch (e) { addressWarning = `Couldn't read the address book: ${e.message}`; }
+
     const total = draft.items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0) * draft.containerCount;
     const lines = [
         `Proforma for ${draft.consignee}, from their email:`, '',
@@ -4882,6 +4903,7 @@ async function startProformaFromEmail(chatId, targetName) {
         `Containers: ${draft.containerCount}${containerNos.length ? ` (${containerNos.join(', ')})` : ''}`,
         `Invoice no: ${invNo || '(none suggested — I\'ll leave it blank)'}`,
     ];
+    if (addressLines.length) lines.push(`Address: ${addressLines.join(', ')}`);
     if (draft.trade_terms) lines.push(`Trade terms: ${draft.trade_terms}`);
     if (draft.port_discharge) lines.push(`Port of discharge: ${draft.port_discharge}`);
     lines.push(`Total: $${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -4891,6 +4913,7 @@ async function startProformaFromEmail(chatId, targetName) {
     // document goes out.
     if (draft.assumed.length) lines.push('', ...draft.assumed.map((a) => `* ${a}`));
     if (draft.grounded.length) lines.push('', ...draft.grounded.map((g) => `✓ ${g}`));
+    if (addressWarning) lines.push('', `⚠ ${addressWarning}`);
     if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `⚠ ${u}`));
     if (draft.note) lines.push('', `Note: ${draft.note}`);
     if (draft.confidence < 0.7) lines.push('', `⚠ I'm only ${Math.round(draft.confidence * 100)}% sure I read that email correctly.`);
@@ -4898,7 +4921,7 @@ async function startProformaFromEmail(chatId, targetName) {
 
     await setPending(chatId, {
         type: 'confirm_proforma',
-        draft, invNo, containerNos,
+        draft, invNo, containerNos, addressLines,
         replyTo: content?.from || null,
         subject: content?.subject || '',
         who,
@@ -4921,6 +4944,48 @@ function itemCodeFor(desc) {
     return null;
 }
 
+
+// Filename per Apsara 2026-08-24: "it should be 260824_AC_26JY90,91_Daekwang.pdf".
+//
+// The invoice number already ends with the FIRST container's code
+// (260824_AC_26JY90), so additional containers are appended as just their
+// numeric tail — 26JY90 and 26JY91 become "26JY90,91" rather than repeating
+// the shared 26JY prefix. Containers that don't share that prefix are written
+// out in full, because abbreviating them would produce something unreadable.
+//
+// Deliberately NOT run through documentsSaved.safeName(): that uppercases and
+// replaces every character outside [A-Z0-9_-] with an underscore, which would
+// turn the comma into "_" and "Daekwang" into "DAEKWANG" — neither of which is
+// what she asked for. Sanitised here instead with a rule that keeps the comma
+// and the casing while still refusing anything that could escape a directory
+// or break a MIME header: no slashes, no dots beyond the extension, no
+// control characters. saveProformaCopy() takes path.basename() of whatever it
+// is given, so the traversal case is covered twice.
+function proformaFilename(invNo, containerNos, consignee) {
+    const base = String(invNo || 'PROFORMA').trim();
+    const list = Array.isArray(containerNos) ? containerNos.filter(Boolean) : [];
+    let codes = base;
+    if (list.length > 1) {
+        const first = list[0];
+        // Split a code like "26JY90" into its letter prefix and trailing digits.
+        const m = /^(.*?)(\d+)$/.exec(first);
+        const prefix = m ? m[1] : null;
+        const extras = list.slice(1).map((c) => {
+            const mm = /^(.*?)(\d+)$/.exec(c);
+            return (prefix && mm && mm[1] === prefix) ? mm[2] : c;
+        });
+        // Only append when the invoice number actually ends with that first
+        // container code — if the numbering came from somewhere else, gluing
+        // container tails onto it would produce nonsense.
+        if (base.endsWith(first)) codes = `${base},${extras.join(',')}`;
+        else codes = `${base}_${list.join(',')}`;
+    }
+    const who = String(consignee || '').slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '').trim().replace(/\s+/g, '_');
+    const raw = who ? `${codes}_${who}` : codes;
+    const clean = raw.replace(/[\/\\:*?"<>|\x00-\x1f]/g, '_').replace(/\.+/g, '.').replace(/_+/g, '_');
+    return `${clean}.pdf`;
+}
+
 // The "yes" half of startProformaFromEmail. Generates through the SAME
 // helpers/proformaPdf.js the dashboard and the app's Documents tab use — one
 // generator, so a proforma raised by voice is byte-for-byte the document she'd
@@ -4934,12 +4999,12 @@ async function generateProformaFromPending(chatId, pending) {
     const documentsSaved = require('../helpers/documentsSaved');
     const path = require('path');
 
-    let addressLines = [];
-    try {
-        const hit = require('../helpers/addressBook').resolveAddress(draft.consignee);
-        const entry = hit && (hit.entry || (hit.matches && hit.matches[0]));
-        if (entry && entry.raw) addressLines = entry.raw.split('\n').map((l) => l.trim()).filter(Boolean);
-    } catch (e) { /* no address on file — the document still generates */ }
+    // Uses the address SHE SAW in the read-back, carried through on the
+    // pending, rather than resolving again here. Re-resolving would mean the
+    // document could carry a different address from the one she approved if
+    // the address book changed in between — unlikely, but it's the sort of
+    // gap that only shows up once, on a real document.
+    const addressLines = Array.isArray(pending.addressLines) ? pending.addressLines : [];
 
     const itemCode = itemCodeFor(draft.items[0]?.desc);
     const payload = {
@@ -4974,8 +5039,7 @@ async function generateProformaFromPending(chatId, pending) {
         return _send(chatId, `Couldn't build the proforma: ${err.message}`);
     }
 
-    const safe = documentsSaved.safeName(payload.inv_no || 'PROFORMA').replace(/_+/g, '_');
-    const filename = `${safe}_${String(draft.consignee).slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '')}.pdf`.replace(/\s+/g, '_');
+    const filename = proformaFilename(payload.inv_no, containerNos, draft.consignee);
     let savedName = null;
     try { savedName = path.basename(documentsSaved.saveProformaCopy(pdf, filename)); } catch (e) {
         console.error('[PROFORMA-MAIL] archive failed (non-fatal):', e.message);
