@@ -387,6 +387,13 @@ async function assess(email) {
 
 const URGENCY_RANK = { high: 0, normal: 1, low: 2 };
 const URGENCY_MARK = { high: '!!', normal: '·', low: '·' };
+// The vocabulary is high/normal/low, but it comes from a model. Anything else
+// ("medium", "urgent", null) used to print the literal string "undefined" in
+// the digest and, worse, make URGENCY_RANK[x] NaN — which silently breaks the
+// sort inside groupMatters, so the representative of a group became whichever
+// item happened to be first. Both now degrade to "normal" instead.
+const urgencyMark = (u) => URGENCY_MARK[u] || URGENCY_MARK.normal;
+const urgencyRank = (u) => (u in URGENCY_RANK ? URGENCY_RANK[u] : URGENCY_RANK.normal);
 
 // ── Deadlines decide urgency, in code, not in the model ─────────────────────
 // REAL INCONSISTENCY (found 2026-08-22 in a live digest): two emails both
@@ -464,7 +471,7 @@ function applyDeadlineUrgency(item, now = new Date()) {
     const days = daysUntilDeadline(item.deadline, now, item.receivedAt ? new Date(item.receivedAt) : null);
     if (days === null) return item;
     const deserved = days <= 2 ? 'high' : (days <= 5 ? 'normal' : null);
-    const urgency = deserved && URGENCY_RANK[deserved] < URGENCY_RANK[item.urgency] ? deserved : item.urgency;
+    const urgency = deserved && urgencyRank(deserved) < urgencyRank(item.urgency) ? deserved : item.urgency;
     return { ...item, urgency, daysToDeadline: days };
 }
 
@@ -518,7 +525,7 @@ function groupMatters(flagged) {
     }
     return matters.map((mt) => {
         const ranked = [...mt.items].sort((x, y) => {
-            const u = URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency];
+            const u = urgencyRank(x.urgency) - urgencyRank(y.urgency);
             if (u !== 0) return u;
             const dx = x.daysToDeadline ?? Infinity, dy = y.daysToDeadline ?? Infinity;
             return dx - dy;
@@ -644,14 +651,34 @@ async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Dat
     return { due, completed };
 }
 function buildDeadlineMessage(due) {
-    const lines = [due.length === 1 ? 'Due now — needs doing:' : `${due.length} things due now:`, ''];
-    for (const d of due) {
+    // Apsara, 2026-08-24: "also description should not go next line .side by
+    // side". The what was on its own line under the when, so the actual task
+    // was the second thing your eye reached on every item. It reads as the
+    // headline now, with the deadline beside it.
+    //
+    // Same message also arrived with "confirmation if booking will be used /
+    // asked by Kristal Sosethan" listed TWICE. That is groupMatters not being
+    // applied here — it was built for the digest and this path never called
+    // it, so the one place a duplicate is most annoying (a reminder that
+    // nags) was the one place still showing them.
+    const grouped = groupMatters(due);
+    const lines = [grouped.length === 1 ? 'Due now — needs doing:' : `${grouped.length} things due now:`, ''];
+    for (const d of grouped) {
         const when = d.daysToDeadline < 0
-            ? `OVERDUE — was due ${d.deadline} (${Math.abs(d.daysToDeadline)}d ago)`
-            : d.daysToDeadline === 0 ? `due TODAY — ${d.deadline}` : `due tomorrow — ${d.deadline}`;
-        lines.push(`• ${when}`);
-        lines.push(`   ${d.asked_for || d.summary || d.subject}`);
-        lines.push(`   asked by ${d.fromName}`);
+            ? `OVERDUE ${d.deadline} (${Math.abs(d.daysToDeadline)}d ago)`
+            : d.daysToDeadline === 0 ? `TODAY ${d.deadline}` : `tomorrow ${d.deadline}`;
+        const what = d.asked_for || d.summary || d.subject;
+        lines.push(`• *${when}* — ${what}`);
+        // The same person chasing the same thing twice is one ask, not two
+        // people — "Kristal +1 more (Kristal)" is how the first cut of this
+        // read, which is worse than the duplicate it replaced.
+        const others = [...new Set((d.alsoFrom || []).filter((n) => n && n !== d.fromName))];
+        const who = others.length
+            ? `${d.fromName} and ${others.join(', ')}`
+            : d.alsoCount
+                ? `${d.fromName} (${d.alsoCount + 1} mails)`
+                : d.fromName;
+        lines.push(`   asked by ${who}`);
         lines.push('');
     }
     lines.push('This clears itself once the sender gets a reply.');
@@ -661,8 +688,13 @@ function buildDeadlineMessage(due) {
 function buildChaseMessage(due) {
     const lines = [`${due.length} email${due.length === 1 ? '' : 's'} still unanswered:`, ''];
     for (const d of due) {
-        lines.push(`• ${d.fromName} — ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, no reply yet`);
-        lines.push(`   ${d.summary || d.subject}`);
+        // Same layout rule as buildDeadlineMessage (Apsara, 2026-08-24:
+        // "description should not go next line .side by side"). Applied here
+        // too on purpose — two lists of the same shape reading differently is
+        // worse than either layout on its own. Deliberately NOT grouped like
+        // the deadline list: chase-ups carry a per-item age, and merging two
+        // mails of different ages would have to throw one of them away.
+        lines.push(`• *${d.summary || d.subject}* — ${d.fromName}, ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, no reply yet`);
         lines.push('');
     }
     lines.push('Ask "what needs my reply" for the current list, or tell me to reply to one.');
@@ -685,15 +717,24 @@ function buildDigest(matters, emailCount) {
         const due = f.deadline
             ? ` — ${overdue ? 'OVERDUE, was' : 'by'} ${f.deadline}${typeof f.daysToDeadline === 'number' && f.daysToDeadline >= 0 && f.daysToDeadline <= 2 ? (f.daysToDeadline === 0 ? ' (today)' : f.daysToDeadline === 1 ? ' (tomorrow)' : ' (2 days)') : ''}`
             : '';
-        lines.push(`${i + 1}. ${URGENCY_MARK[f.urgency]} ${f.fromName}${due}`);
-        lines.push(`   ${f.summary || f.subject}`);
-        if (f.asked_for) lines.push(`   wants: ${f.asked_for}`);
+        // Apsara, 2026-08-24: "description should not go next line .side by
+        // side". The number and urgency mark still lead — "reply to 1" needs
+        // the number to be the first thing on the line — but the WHAT now
+        // sits on that same line instead of under it, and the sender moves
+        // down to join "wants". Same rule as buildDeadlineMessage and
+        // buildChaseMessage; three lists of the same shape should not read
+        // three different ways.
+        lines.push(`${i + 1}. ${urgencyMark(f.urgency)} *${f.summary || f.subject}*${due}`);
+        lines.push(`   ${f.fromName}${f.asked_for ? ` — wants: ${f.asked_for}` : ''}`);
         // Say plainly that others are chasing the same thing, and who — that's
         // useful context ("two people at this customer are waiting"), and it
         // explains why the count above is bigger than the list.
         if (f.alsoCount > 0) {
-            const who = [...new Set(f.alsoFrom || [])].filter(Boolean).join(', ');
-            lines.push(`   (+${f.alsoCount} more on this${who ? ` — also ${who}` : ''})`);
+            // Drop the representative's own name — one person chasing twice
+            // is not "also Kristal" (see buildDeadlineMessage for the live
+            // version of that read).
+            const who = [...new Set(f.alsoFrom || [])].filter((x) => x && x !== f.fromName).join(', ');
+            lines.push(`   (+${f.alsoCount} more on this${who ? ` — also ${who}` : ', same sender'})`);
         }
         lines.push('');
     });
@@ -857,7 +898,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // the "1" that "reply to 1" resolved to were different emails — a
     // confirmed reply drafted to the wrong customer. One statement out of
     // place, no error anywhere, and a wrong-recipient email at the end of it.
-    flagged.sort((x, y) => URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency]);
+    flagged.sort((x, y) => urgencyRank(x.urgency) - urgencyRank(y.urgency));
 
     store.seen = seen;
 
@@ -902,7 +943,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // oldest-queued. Before the deadline tiebreak, two "high" items with
     // deadlines a week apart came out in whatever order they were assessed.
     queued.sort((x, y) => {
-        const u = URGENCY_RANK[x.urgency] - URGENCY_RANK[y.urgency];
+        const u = urgencyRank(x.urgency) - urgencyRank(y.urgency);
         if (u !== 0) return u;
         const dx = x.daysToDeadline ?? Infinity, dy = y.daysToDeadline ?? Infinity;
         if (dx !== dy) return dx - dy;

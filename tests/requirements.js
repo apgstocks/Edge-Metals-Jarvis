@@ -303,6 +303,79 @@ section('"put a reminder in internal group" + "if a reply is sent alrdy, cancel"
     // The sliding-deadline bug: "by Monday" seen Friday, checked Monday.
     ck('a relative deadline anchors to when the email ARRIVED',
         rw.daysUntilDeadline('Monday Noon', new Date('2026-08-24T09:00:00Z'), FRI), 0);
+
+    // ── "also description should not go next line .side by side" ─────────
+    // Apsara, 2026-08-24. The task was on its own line under the deadline,
+    // so the WHAT was the second thing her eye reached on every single item.
+    const mk = (deadline, asked_for, fromName, from, threadId, daysToDeadline = 0) =>
+        ({ deadline, asked_for, fromName, from, threadId, daysToDeadline, urgency: 'high' });
+    {
+        const msg = rw.buildDeadlineMessage([
+            mk('Monday Noon', 'Transfer cargo to RadMetals', 'brian@radmetals.com', 'brian@radmetals.com', 't1'),
+        ]);
+        ckTrue('the description sits on the deadline line, not the next one',
+            /TODAY Monday Noon\* — Transfer cargo to RadMetals/.test(msg),
+            'the task is the headline; the deadline is context for it');
+        ckTrue('the description is NOT on its own line',
+            !/\n\s+Transfer cargo to RadMetals/.test(msg));
+        ckTrue('who asked is still shown', /asked by brian@radmetals\.com/.test(msg));
+    }
+    {
+        // The same live message that carried the layout complaint also listed
+        // Kristal Sosethan's identical ask TWICE. groupMatters existed but
+        // this path never called it — so the one message designed to nag was
+        // the one place duplicates survived.
+        const msg = rw.buildDeadlineMessage([
+            mk('Monday Noon', 'Transfer cargo to RadMetals', 'brian@radmetals.com', 'brian@radmetals.com', 't1'),
+            mk('Monday 8/24', 'confirmation if booking will be used', 'Kristal Sosethan', 'kristal@zimex.com', 't2'),
+            mk('Monday 8/24', 'confirmation if booking will be used', 'Kristal Sosethan', 'kristal@zimex.com', 't3'),
+            mk('8/24', 'booking for 2 *40 HC from LA/BUSAN', 'Accounting Edge', 'acct@edgetrading.com', 't4'),
+        ]);
+        ck('four mails about three matters are counted as three', msg.split('\n')[0], '3 things due now:');
+        ck('the duplicate ask appears once', (msg.match(/confirmation if booking will be used/g) || []).length, 1);
+        ckTrue('and it says the same person chased twice',
+            /Kristal Sosethan \(2 mails\)/.test(msg));
+        ckTrue('never "X +1 more (X)" — the same name twice reads as two people',
+            !/Kristal Sosethan \+1 more \(Kristal Sosethan\)/.test(msg));
+    }
+    {
+        // Two DIFFERENT people on one matter must both be named — collapsing
+        // them to a count would hide who is waiting.
+        const msg = rw.buildDeadlineMessage([
+            mk('8/25', 'confirm the LA/BUSAN booking', 'Kristal Sosethan', 'kristal@zimex.com', 't5'),
+            mk('8/25', 'confirm the LA/BUSAN booking', 'Ravi Kumar', 'ravi@zimex.com', 't6', 1),
+        ]);
+        ckTrue('two different senders on one matter are both named',
+            /Kristal Sosethan and Ravi Kumar/.test(msg));
+        ck('and it is still one item', (msg.match(/^• /gm) || []).length, 1);
+    }
+    {
+        // The same layout rule, applied to the other two lists of this shape.
+        const chase = rw.buildChaseMessage([{ fromName: 'Zimex', ageDays: 3, summary: 'BL draft for DALA20928700' }]);
+        ckTrue('the chase-up list puts the description first too',
+            /\*BL draft for DALA20928700\* — Zimex, 3 days ago/.test(chase),
+            'three lists of the same shape must not read three different ways');
+        const dig = rw.buildDigest([{ urgency: 'high', fromName: 'Kristal Sosethan',
+            summary: 'confirmation if booking will be used', asked_for: 'yes/no on LA/BUSAN',
+            deadline: '8/24', daysToDeadline: 0, alsoCount: 1, alsoFrom: ['Kristal Sosethan'] }], 2);
+        ckTrue('the digest puts the description on the numbered line',
+            /^1\. !! \*confirmation if booking will be used\*/m.test(dig),
+            'the number must stay first — "reply to 1" depends on it');
+        ckTrue('the digest still names the sender', /Kristal Sosethan — wants:/.test(dig));
+        ckTrue('the digest never says "also <the same person>"',
+            /same sender/.test(dig) && !/also Kristal Sosethan/.test(dig));
+        // Urgency comes from a model, so an unexpected value must degrade,
+        // not print "undefined" or NaN-break the group sort.
+        const odd = rw.buildDigest([{ urgency: 'medium', fromName: 'X', summary: 'a thing' }], 1);
+        ckTrue('an unknown urgency degrades to normal instead of printing undefined',
+            !/undefined/.test(odd));
+    }
+    {
+        // Overdue must stay unmistakable now that the line is denser.
+        const msg = rw.buildDeadlineMessage([mk('8/20', 'send the BL draft', 'Zimex', 'ops@zimex.com', 't7', -3)]);
+        ckTrue('overdue still reads as overdue, with the task beside it',
+            /OVERDUE 8\/20 \(3d ago\)\* — send the BL draft/.test(msg));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
