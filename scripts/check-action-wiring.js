@@ -84,6 +84,41 @@ for (const file of collectJs(ROOT)) {
 const recognised = new Set((brainSrc.match(/'(await_[a-z0-9_]+)'/g) || [])
     .map((m) => m.slice(1, -1)));
 
+// ── confirm_* pendings ────────────────────────────────────────────────────
+// A SECOND family, and the check was blind to it until 2026-08-23. The scan
+// above only matches `await_*`, so a new `confirm_proforma` pending passed
+// cleanly while nothing on earth handled it — a false PASS, which is worse
+// than no check at all, because it is trusted.
+//
+// These resolve differently from await_* ones: brain.js never names them, it
+// routes a plain yes/no to actions.resolvePending, which switches on
+// pending.type itself. So the contract for this family is between
+// setPending and resolvePending, both inside actions.js, and that is what
+// gets verified here.
+//
+// The generic `if (answer === 'no')` branch handles declining ANY pending, so
+// a type only needs naming for its yes-path. Types that are purely
+// cancellable are therefore not required to appear.
+const actionsSrc = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+const confirmCreated = new Set((actionsSrc.match(/type:\s*'(confirm_[a-z0-9_]+)'/g) || [])
+    .map((m) => m.replace(/.*'(confirm_[a-z0-9_]+)'.*/, '$1')));
+// Bounded to resolvePending's OWN body, not to end-of-file. Slicing to the
+// end was this check's first bug, found by testing it rather than trusting
+// it: setPending({ type: 'confirm_proforma' }) lives further down the same
+// file, so the CREATION site fell inside the "is it handled" slice and
+// satisfied the check by itself. It passed with the handler deleted.
+const resolveStart = actionsSrc.indexOf('async function resolvePending');
+let resolveSrc = '';
+if (resolveStart !== -1) {
+    const after = actionsSrc.slice(resolveStart + 1);
+    // Next top-level declaration ends the function.
+    const endRel = after.search(/\n(?:async function |function |const [A-Za-z_$][\w$]*\s*=\s*(?:async\s*)?\()/);
+    resolveSrc = endRel === -1 ? after : after.slice(0, endRel);
+}
+const confirmHandled = new Set((resolveSrc.match(/'(confirm_[a-z0-9_]+)'/g) || [])
+    .map((m) => m.slice(1, -1)));
+const confirmUnhandled = [...confirmCreated].filter((t) => !confirmHandled.has(t)).sort();
+
 // Known-dead leftovers. Listed rather than silently filtered, so the finding
 // is recorded instead of swept away — and so anything NEW showing up here
 // still fails loudly.
@@ -108,10 +143,15 @@ if (unhandledPendings.length) {
     console.error(`\n✗ ${unhandledPendings.length} pending type(s) created but never handled by brain.js:\n`);
     for (const t of unhandledPendings) console.error(`    ${t}  — a user answering this gets nowhere; the pending never resolves`);
 }
+if (confirmUnhandled.length) {
+    pendingProblem = true;
+    console.error(`\n✗ ${confirmUnhandled.length} confirm pending(s) created but never handled in resolvePending:\n`);
+    for (const t of confirmUnhandled) console.error(`    ${t}  — answering "yes" does nothing`);
+}
 if (pendingProblem) {
     console.error('');
     process.exit(1);
 }
 
 console.log(`✓ action wiring: all ${routed.length} routed actions exist`);
-console.log(`✓ pending wiring: ${created.size} pending type(s) created, all handled`);
+console.log(`✓ pending wiring: ${created.size} await pending(s) + ${confirmCreated.size} confirm pending(s), all handled`);

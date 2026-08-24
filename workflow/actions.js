@@ -998,6 +998,15 @@ if (pending.type === 'await_cc_pattern_confirm') {
         pending.scheduled_for ? new Date(pending.scheduled_for) : null);
 }
 
+// Proforma confirmation (2026-08-23). Placed before the generic 'no' branch
+// only so the yes-path is readable next to its own comment; a "no" still
+// falls through to the generic cancel below, which is the right behaviour —
+// declining a proforma means stop, nothing else.
+if (pending.type === 'confirm_proforma' && answer === 'yes') {
+    await clearPending(chatId);
+    return generateProformaFromPending(chatId, pending);
+}
+
 if (answer === 'no') {
     await clearPending(chatId);
     // A rejection on a forward/assign confirmation resets that specific
@@ -4755,6 +4764,236 @@ async function resumeQuoteWithScaleTickets(chatId, pending, scaleText) {
     return continueQuoteFlow(chatId, { ...pending.state, scaleTicketsNeeded: isYes });
 }
 
+
+// ── Proforma from an email ─────────────────────────────────────────────────
+// Apsara 2026-08-23: "Check mail from Joey and send proforma to her — it
+// should check mail and prepare proforma according to that and then send it
+// back as well."
+//
+// Built on what already exists rather than beside it:
+//   - helpers/gmail.js findLatestFrom  — locating her mail
+//   - workflow/replyWatch.js extractLatestMessage — quoted history and
+//     signatures stripped, so Gemini reads THIS message and not a question
+//     settled three replies ago
+//   - helpers/proformaFromEmail.js     — the order schema (the only genuinely
+//     new piece)
+//   - helpers/nextInvoiceNo.js         — real invoice/container numbering
+//   - helpers/proformaPdf.js           — the same generator the dashboard uses
+//
+// TWO GATES, both deliberate.
+//
+// 1. It will not invent a price. Any rate the extractor isn't confident is a
+//    per-MT figure is dropped rather than used (see RATE_TRUST), and this
+//    stops and asks instead of generating. A proforma with a hallucinated
+//    rate reaching a customer is not a bug you find later — it's a number
+//    someone may act on.
+// 2. Nothing is sent until she says yes. She chose "read back, then confirm"
+//    over full automation, and this reads back consignee, containers, and
+//    every material with its rate and line total before asking.
+async function startProformaFromEmail(chatId, targetName) {
+    const who = String(targetName || '').trim();
+    if (!who) return _send(chatId, 'Who should I build the proforma for? e.g. "send proforma to Joey".');
+
+    const { getGmailRead, findLatestFrom, getEmailContent } = require('../helpers/gmail');
+    const { extractLatestMessage, senderLabel } = require('./replyWatch');
+    const { extractOrderFromEmail, toProformaDraft } = require('../helpers/proformaFromEmail');
+
+    await _send(chatId, `Reading the latest mail from ${who}…`);
+
+    let mail;
+    try {
+        const gmail = getGmailRead();
+        mail = await findLatestFrom(gmail, who);
+    } catch (err) {
+        return _send(chatId, `Couldn't reach Gmail: ${err.message}`);
+    }
+    if (!mail) return _send(chatId, `No recent email from ${who}. Check the name, or forward me the order and I'll read that.`);
+
+    const content = await getEmailContent(mail).catch(() => null);
+    const body = extractLatestMessage(content?.body || '');
+    if (!body) return _send(chatId, `Found an email from ${who} but couldn't read anything in it.`);
+
+    let order;
+    try {
+        order = await extractOrderFromEmail({
+            from: content?.from || who, subject: content?.subject || '',
+            body, date: content?.date || '',
+        });
+    } catch (err) {
+        return _send(chatId, `Couldn't read that email: ${err.message}`);
+    }
+    if (!order) return _send(chatId, `Couldn't make sense of the latest mail from ${who}.`);
+    if (!order.is_order) {
+        return _send(chatId, `The latest mail from ${who} doesn't look like an order.\n\n"${(content?.subject || '').slice(0, 80)}"\n\nIf the order is in an older email, tell me which one.`);
+    }
+
+    const draft = toProformaDraft(order, { fallbackConsignee: who });
+
+    // Stop rather than guess. Everything listed here is something the email
+    // genuinely did not say — filling it in would be invention.
+    if (draft.needs.length) {
+        const lines = [`I read the order from ${who} but it doesn't give me everything.`, ''];
+        if (draft.items.length) {
+            lines.push('What it does say:');
+            draft.items.forEach((i) => lines.push(`  • ${i.desc} — ${i.qty} MT${i.rate ? ` @ $${i.rate}` : ' (no rate)'}`));
+            lines.push('');
+        }
+        lines.push(`Missing: ${draft.needs.join(', ')}.`);
+        if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `Unclear: ${u}`));
+        if (draft.note) lines.push('', `Note: ${draft.note}`);
+        lines.push('', 'Tell me the missing bits and I\'ll build it, or raise it in the app under Documents.');
+        return _send(chatId, lines.join('\n'));
+    }
+
+    // Real numbering, from her actual invoice history — same source the
+    // dashboard and the app's Documents tab use.
+    let invNo = '', containerNos = [];
+    try {
+        const sug = await require('../helpers/nextInvoiceNo').suggestNextInvNo(draft.consignee);
+        if (sug && sug.inv_no) {
+            const dateStr = sug.inv_no.split(' ')[0];
+            const code = itemCodeFor(draft.items[0]?.desc);
+            invNo = code ? `${dateStr}_${code}_${sug.code_only}` : sug.inv_no;
+            let n = sug.next_number;
+            for (let i = 0; i < draft.containerCount; i++) {
+                const numStr = sug.number_had_leading_zero ? String(n).padStart(sug.number_digits, '0') : String(n);
+                containerNos.push(`${sug.year_prefix}${sug.letter_code}${numStr}`);
+                n += 1;
+            }
+        }
+    } catch (e) { /* no history — she can supply the number on confirm */ }
+
+    const total = draft.items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0) * draft.containerCount;
+    const lines = [
+        `Proforma for ${draft.consignee}, from their email:`, '',
+        ...draft.items.map((i) => `  • ${i.desc} — ${i.qty} MT @ $${i.rate} = $${(i.qty * i.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
+        '',
+        `Containers: ${draft.containerCount}${containerNos.length ? ` (${containerNos.join(', ')})` : ''}`,
+        `Invoice no: ${invNo || '(none suggested — I\'ll leave it blank)'}`,
+    ];
+    if (draft.trade_terms) lines.push(`Trade terms: ${draft.trade_terms}`);
+    if (draft.port_discharge) lines.push(`Port of discharge: ${draft.port_discharge}`);
+    lines.push(`Total: $${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `⚠ ${u}`));
+    if (draft.note) lines.push('', `Note: ${draft.note}`);
+    if (draft.confidence < 0.7) lines.push('', `⚠ I'm only ${Math.round(draft.confidence * 100)}% sure I read that email correctly.`);
+    lines.push('', `Generate and email it to ${draft.consignee}? (yes/no)`);
+
+    await setPending(chatId, {
+        type: 'confirm_proforma',
+        draft, invNo, containerNos,
+        replyTo: content?.from || null,
+        subject: content?.subject || '',
+        who,
+    });
+    return _send(chatId, lines.join('\n'));
+}
+
+// Same material→code map the documents page uses for invoice numbers. Kept
+// deliberately small here; see dashboard/documents.html for the full table and
+// the note about moving it server-side.
+function itemCodeFor(desc) {
+    const n = String(desc || '').toUpperCase().replace(/[^A-Z]/g, '');
+    const rules = [['AW', ['ALUMINUMWHEEL', 'ALUMINIUMWHEEL', 'ALWHEEL']], ['CW', ['CHROMEWHEEL']],
+        ['AL', ['ALUMINIUMCOMBO', 'ALUMINUMCOMBO', 'ALCOMBO']], ['AC', ['AUTOCAST']],
+        ['AP', ['SCRAPAUTOPART', 'AUTOPART']], ['RC', ['REGULARCOMBO']], ['BT', ['BATTERY', 'BATTERIES']],
+        ['HW', ['HARNESSWIRE', 'HARNESS']], ['TT', ['TAINTTABOUR', 'TAINTTABOR', 'TOUGHTABOO']],
+        ['ML', ['MIXEDLOAD']], ['SU', ['SEALEDUNIT']], ['MM', ['MIXEDMOTOR']], ['RD', ['ROTOR', 'DRUM']],
+        ['MC', ['MIXEDCOMBO']]];
+    for (const [code, keys] of rules) if (keys.some((k) => n.includes(k))) return code;
+    return null;
+}
+
+// The "yes" half of startProformaFromEmail. Generates through the SAME
+// helpers/proformaPdf.js the dashboard and the app's Documents tab use — one
+// generator, so a proforma raised by voice is byte-for-byte the document she'd
+// have produced by hand — then archives a copy and emails it back.
+//
+// The pricing-memory and Edge Metals sheet writes mirror what
+// POST /api/proforma/generate does, and fail soft the same way: a Sheets
+// hiccup must never lose a document that has already been generated and sent.
+async function generateProformaFromPending(chatId, pending) {
+    const { draft, invNo, containerNos, replyTo, who } = pending;
+    const documentsSaved = require('../helpers/documentsSaved');
+    const path = require('path');
+
+    let addressLines = [];
+    try {
+        const hit = require('../helpers/addressBook').resolveAddress(draft.consignee);
+        const entry = hit && (hit.entry || (hit.matches && hit.matches[0]));
+        if (entry && entry.raw) addressLines = entry.raw.split('\n').map((l) => l.trim()).filter(Boolean);
+    } catch (e) { /* no address on file — the document still generates */ }
+
+    const itemCode = itemCodeFor(draft.items[0]?.desc);
+    const payload = {
+        inv_no: invNo || '',
+        inv_date: new Date().toISOString().slice(0, 10),
+        reference: '',
+        qty_unit: 'MT',
+        consignee: draft.consignee,
+        consignee_sheet_tag: draft.consignee,
+        consignee_address: addressLines,
+        trade_terms: draft.trade_terms || '',
+        port_discharge: draft.port_discharge || '',
+        // Same standard values the app's wizard falls back to, so a proforma
+        // raised by voice doesn't go out missing terms the printed document
+        // always carries.
+        payment_term: draft.payment_term || 'T/T 100% Against Shipping Documents',
+        freight_label: /^FOB/i.test(draft.trade_terms || '') ? 'FOB (freight excluded)' : 'CIF (freight included)',
+        buyer_po: '', buyer_po_date: '',
+        country_of_origin: 'USA',
+        shipment_allowance: '+/- 10% on weights',
+        containers: (containerNos.length ? containerNos : ['']).map((no) => ({
+            container_no: no,
+            item_code: itemCode || null,
+            items: draft.items.map((i) => ({ desc: i.desc, qty: i.qty, rate: i.rate, unit: 'MT' })),
+        })),
+    };
+
+    let pdf;
+    try {
+        pdf = await require('../helpers/proformaPdf').generateProformaDc2Pdf(payload);
+    } catch (err) {
+        return _send(chatId, `Couldn't build the proforma: ${err.message}`);
+    }
+
+    const safe = documentsSaved.safeName(payload.inv_no || 'PROFORMA').replace(/_+/g, '_');
+    const filename = `${safe}_${String(draft.consignee).slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '')}.pdf`.replace(/\s+/g, '_');
+    let savedName = null;
+    try { savedName = path.basename(documentsSaved.saveProformaCopy(pdf, filename)); } catch (e) {
+        console.error('[PROFORMA-MAIL] archive failed (non-fatal):', e.message);
+    }
+
+    // Non-fatal side effects, same contract as the HTTP route: neither may
+    // cost her a document that already exists.
+    try {
+        await require('../helpers/proformaPricing').recordFromGeneration(
+            draft.consignee, draft.trade_terms || '', draft.port_discharge || '', draft.items);
+    } catch (e) { console.error('[PROFORMA-MAIL] pricing memory failed (non-fatal):', e.message); }
+    try {
+        await require('../helpers/proformaSheetLog').logProformaToSheet(payload);
+    } catch (e) { console.error('[PROFORMA-MAIL] sheet log failed (non-fatal):', e.message); }
+
+    // Emailing back is the last step ON PURPOSE. If the send fails, the
+    // document still exists and is archived, and the reply below says exactly
+    // that — so the fallback is "attach it yourself", not "start again".
+    const to = replyTo ? String(replyTo).match(/<([^>]+)>/)?.[1] || String(replyTo).trim() : null;
+    if (!to) {
+        return _send(chatId, `Proforma ${payload.inv_no} is ready and saved${savedName ? ` as ${savedName}` : ''}, but I couldn't work out ${who}'s email address to send it to. It's in Documents > Saved.`);
+    }
+    try {
+        await require('../helpers/gmail').sendEmail({
+            to,
+            subject: `Proforma Invoice ${payload.inv_no} — Edge Trading`,
+            body: `Dear ${draft.consignee},\n\nPlease find attached our proforma invoice ${payload.inv_no}.\n\nBest regards,\nEdge Trading`,
+            attachments: [{ filename, content: pdf, mimeType: 'application/pdf' }],
+        });
+    } catch (err) {
+        return _send(chatId, `Proforma ${payload.inv_no} is generated and saved${savedName ? ` as ${savedName}` : ''}, but the email to ${to} failed: ${err.message}\n\nYou can send it from Documents > Saved.`);
+    }
+    return _send(chatId, `Sent. Proforma ${payload.inv_no} emailed to ${to}${savedName ? ` and saved as ${savedName}` : ''}.`);
+}
+
 module.exports = {
     showPendingReplies, replyToDigestItem, forwardOriginalToSelf, sendDraftedEmail,
 init,
@@ -4785,4 +5024,6 @@ applyVerifiedSchedules,
 ignoreDigestItem,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
+    // Proforma raised from a customer's own email (2026-08-23).
+    startProformaFromEmail, generateProformaFromPending,
 };
