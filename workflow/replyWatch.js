@@ -810,7 +810,19 @@ function senderLabel(from) {
 
 // dryRun: assess and return, send nothing. Used by tests and by a manual
 // "what's waiting on me" check that shouldn't fire a WhatsApp message.
-async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = false } = {}) {
+// rescan: forget what was already assessed within the lookback window and read
+// it again. Added 2026-08-24 after a real dead end — Apsara's test order was
+// assessed by an older build, marked seen, and then permanently skipped, so
+// every subsequent fix to the assessment logic was invisible on the one email
+// she was testing with. The seen store is the right design for a poller (it
+// stops re-billing Gemini for the same mail every five minutes), but with no
+// way to clear it, a logic fix can only ever affect mail that arrives AFTER
+// the fix — which is exactly backwards when you're debugging with a specific
+// message in front of you.
+//
+// Scoped to the lookback window rather than wiping the store, so it re-reads
+// the last few days and not the entire history.
+async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = false, rescan = false } = {}) {
     const gmail = await getGmailRead();
     if (!gmail) {
         console.warn('[REPLYWATCH] Gmail not authorized — skipping');
@@ -822,6 +834,15 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     const seen = store.seen;
 
     const after = new Date(Date.now() - LOOKBACK_DAYS * 86400000);
+    if (rescan) {
+        // Only entries inside the window — older ones stay suppressed, which
+        // is what stops a rescan turning into a re-notify of everything.
+        let cleared = 0;
+        for (const [id, at] of Object.entries(seen)) {
+            if (!at || new Date(at) >= after) { delete seen[id]; cleared++; }
+        }
+        console.log(`[REPLYWATCH] rescan: forgot ${cleared} previously-assessed message(s) in the last ${LOOKBACK_DAYS} days`);
+    }
     const afterStr = `${after.getFullYear()}/${after.getMonth() + 1}/${after.getDate()}`;
     // -from:me excludes her own sent mail; category filters drop the bulk of
     // promotional and social noise before it costs anything.

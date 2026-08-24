@@ -5081,21 +5081,44 @@ async function generateProformaFromPending(chatId, pending) {
 // "learn my writing style" / "how do i write". See helpers/writingStyle.js for
 // the privacy reasoning — the profile is style only, and scrubbed before it is
 // stored regardless of what the model returns.
+// Re-reads recent mail that was already assessed, ignoring the seen store.
+// See replyWatch.run's rescan comment for why this needs to exist.
+async function rescanMail(chatId) {
+    await _send(chatId, 'Re-reading the last few days of mail, including anything I\'ve already looked at…');
+    try {
+        const { run } = require('./replyWatch');
+        const result = await run({ rescan: true, dryRun: true });
+        if (result.skipped === 'no-gmail') { await _send(chatId, "Gmail isn't authorized on this server."); return { action_taken: 'rescan_no_gmail' }; }
+        if (result.error) { await _send(chatId, `Couldn't read the inbox: ${result.error}`); return { action_taken: 'rescan_failed' }; }
+        if (!result.items || !result.items.length) {
+            await _send(chatId, `Re-read ${result.checked} email${result.checked === 1 ? '' : 's'} — nothing waiting on you and no orders.`);
+            return { action_taken: 'rescan_none' };
+        }
+        await _send(chatId, buildDigest(result.items));
+        return { action_taken: 'rescan_shown', count: result.items.length };
+    } catch (err) {
+        await _send(chatId, `Couldn't re-read the inbox: ${err.message}`);
+        return { action_taken: 'rescan_failed' };
+    }
+}
+
 async function learnWritingStyle(chatId) {
     const ws = require('../helpers/writingStyle');
     await _send(chatId, 'Reading your sent mail to learn how you write. One minute…');
     let res;
     try { res = await ws.learnStyle(); }
-    catch (err) { return _send(chatId, `Couldn't do that: ${err.message}`); }
-    if (!res.ok) return _send(chatId, res.error);
-    return _send(chatId, `Done — learned from ${res.sampled} of your sent emails.\n\n${ws.describeStyle()}\n\nDrafts will sound like this from now on. Nothing about what those emails were ABOUT was kept — only how you write.`);
+    catch (err) { await _send(chatId, `Couldn't do that: ${err.message}`); return { action_taken: 'writing_style_failed' }; }
+    if (!res.ok) { await _send(chatId, res.error); return { action_taken: 'writing_style_failed' }; }
+    await _send(chatId, `Done — learned from ${res.sampled} of your sent emails.\n\n${ws.describeStyle()}\n\nDrafts will sound like this from now on. Nothing about what those emails were ABOUT was kept — only how you write.`);
+    return { action_taken: 'writing_style_learned', sampled: res.sampled };
 }
 
 async function showWritingStyle(chatId) {
     const ws = require('../helpers/writingStyle');
     const desc = ws.describeStyle();
-    if (!desc) return _send(chatId, `I haven't learned your writing style yet. Say "learn my writing style" and I'll read your sent mail.`);
-    return _send(chatId, desc);
+    if (!desc) { await _send(chatId, `I haven't learned your writing style yet. Say "learn my writing style" and I'll read your sent mail.`); return { action_taken: 'writing_style_none' }; }
+    await _send(chatId, desc);
+    return { action_taken: 'writing_style_shown' };
 }
 
 module.exports = {
@@ -5130,5 +5153,5 @@ ignoreDigestItem,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
-    learnWritingStyle, showWritingStyle,
+    learnWritingStyle, showWritingStyle, rescanMail,
 };
