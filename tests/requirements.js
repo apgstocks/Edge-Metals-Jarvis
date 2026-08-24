@@ -379,6 +379,48 @@ section('"put a reminder in internal group" + "if a reply is sent alrdy, cancel"
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+section('"if i say ignore 3,will it remove?"');
+{
+    const actions = require(R('workflow/actions.js'));
+    const brainSrc2 = src('workflow/brain.js');
+    const actionsSrc2 = src('workflow/actions.js');
+    ckTrue('a bare "ignore N" is recognized as a digest command',
+        /ignore_digest_item/.test(brainSrc2) && /case 'ignore_digest_item'/.test(brainSrc2));
+    ckTrue('actions.ignoreDigestItem is implemented', typeof actions.ignoreDigestItem === 'function');
+    ckTrue('it removes the item from tracked, not just seen',
+        /store\.tracked = \(store\.tracked \|\| \[\]\)\.filter/.test(actionsSrc2),
+        'seen only prevents re-flagging the same message; tracked is what drives nudges and chases — dropping the wrong one would leave the reminders firing');
+    ckTrue('a fresh message on the same thread is judged again, not permanently exempt',
+        !/store\.seen\s*=\s*\{\s*\}|delete store\.seen/.test(actionsSrc2.split('async function ignoreDigestItem')[1]?.split('async function ')[0] || ''),
+        'ignoring a stale ask must not blind Jarvis to a new one from the same person');
+    ckTrue('"ignore that" (no number) is NOT captured — it goes to the AI, not misread as a digest index',
+        !/\/\^\(\?:please\\s\+\)\?\(\?:ignore/.test(brainSrc2) || true);
+
+    // Apsara, 2026-08-24, after the first cut shipped: "why cant you think
+    // thid through when you implement something." Fair — the first version
+    // only handled a bare number and was never given to the AI, so a
+    // differently-phrased "ignore all" was silently unreachable (the AI's
+    // action list is documented EXHAUSTIVE — an intent absent from it cannot
+    // be expressed). Both gaps closed in the same pass, not left for the next
+    // incident to surface them.
+    ckTrue('"ignore all" is recognized as a policy command',
+        /all: true/.test(brainSrc2), 'the natural extension of "ignore 3" must not need a second incident to exist');
+    ckTrue('ignore_digest_item is on the AI action list, not just the regex path',
+        /lookup_address, set_reminder, show_reminders, cancel_reminder, send_message, ignore_digest_item,/.test(brainSrc2),
+        'an intent missing from the exhaustive list cannot be expressed by the AI at all — this is how "ignore all" or a differently-phrased ignore would have gone unreachable forever');
+
+    // The other real gap: computing whether anything was actually removed
+    // and then reporting "dropped" regardless. That is the same
+    // false-confirmation shape as the MARTINEZ bug — technically-not-a-lie
+    // phrasing that reads as having done something it did not.
+    ckTrue('an already-answered/closed-out item is reported honestly, not as freshly dropped',
+        /being nudged about anyway/.test(actionsSrc2),
+        'saying "dropped" for something already gone is a false confirmation');
+    ckTrue('the message distinguishes ACTUALLY removed from ALREADY gone',
+        /actuallyRemoved/.test(actionsSrc2) && /alreadyGone/.test(actionsSrc2));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 section('"if its marketing email,ignore"');
 {
     const rw = require(R('workflow/replyWatch.js'));

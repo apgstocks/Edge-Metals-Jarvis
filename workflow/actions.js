@@ -2603,6 +2603,79 @@ async function replyToDigestItem(chatId, index, details, rawText) {
     return draftReplyForConfirm(chatId, target, details || null, null, rawText || `reply to ${target}`, null);
 }
 
+// Apsara, 2026-08-24: "if i say ignore 3,will it remove?" Direct question,
+// and at the time the honest answer was no — only "reply to N" existed.
+// This is that answer. Resolves the same digest position "reply to 3" would,
+// then removes it from `tracked` so it stops being nudged for its deadline
+// and stops being chased for a reply — the two things being flagged for a
+// reply actually causes. It does NOT touch `seen`, so the assessment itself
+// stands; if a NEW message lands on that thread later, it is judged fresh on
+// its own terms rather than being permanently exempted.
+async function ignoreDigestItem(chatId, indices, all = false) {
+    const { resolveDigestIndex, loadStore, saveStore } = require('./replyWatch');
+
+    // "ignore all" — the natural extension of the same question, built
+    // alongside the numbered form instead of leaving it to surface as a
+    // second incident later. Reuses the same tracked-removal path below by
+    // resolving every position currently in lastDigest, so the two modes
+    // cannot drift into different behaviour.
+    if (all) {
+        const store0 = await loadStore();
+        const n = (store0.lastDigest || []).length;
+        if (!n) {
+            await _send(chatId, 'Nothing on the list right now.');
+            return { action_taken: 'digest_ignore_all_empty' };
+        }
+        indices = Array.from({ length: n }, (_, i) => String(i + 1));
+    }
+
+    const found = [], missing = [];
+    for (const idx of indices || []) {
+        let item = null;
+        try { item = resolveDigestIndex(idx); }
+        catch (e) { console.error('[ACTIONS] resolveDigestIndex failed:', e.message); }
+        if (item) found.push({ idx, item }); else missing.push(idx);
+    }
+    if (!found.length) {
+        await _send(chatId, `I don't have ${indices && indices.length > 1 ? 'those numbers' : `a #${(indices || [])[0]}`} from a recent digest. Ask "what needs my reply" for a fresh list.`);
+        return { action_taken: 'digest_ignore_unknown_index' };
+    }
+    const ids = new Set(found.map((f) => f.item.id).filter(Boolean));
+    const store = await loadStore();
+    const before = new Set((store.tracked || []).map((t) => t.id));
+    store.tracked = (store.tracked || []).filter((t) => !ids.has(t.id));
+    await saveStore(store);
+
+    // What she actually asked ("will it remove?") was a factual question
+    // about state, not a request to make a cheerful noise regardless of what
+    // happened. An item can be a valid, resolvable #N (still in lastDigest)
+    // and ALREADY gone from tracked — she replied to it herself in the
+    // meantime, or collectDeadlineReminders already closed it out as
+    // answered. Reporting "dropped" for something already gone is the exact
+    // false-confirmation shape as the MARTINEZ bug: technically-not-a-lie
+    // phrasing that reads as having done something it didn't.
+    const actuallyRemoved = found.filter((f) => before.has(f.item.id));
+    const alreadyGone = found.filter((f) => !before.has(f.item.id));
+
+    const nameOf = (f) => f.item.fromName || f.item.from || `#${f.idx}`;
+    const lines = [];
+    if (actuallyRemoved.length) {
+        const names = actuallyRemoved.map(nameOf).join(', ');
+        lines.push(`Dropped ${actuallyRemoved.length === 1 ? 'that one' : `those ${actuallyRemoved.length}`} — no more nudges about ${names}.`);
+    }
+    if (alreadyGone.length) {
+        const names = alreadyGone.map(nameOf).join(', ');
+        lines.push(`${names} ${alreadyGone.length === 1 ? "wasn't" : "weren't"} being nudged about anyway — already answered or closed out.`);
+    }
+    if (missing.length) lines.push(`Didn't recognize #${missing.join(', #')} — left as is.`);
+    // A dropped item stays gone until it either gets answered on its own or a
+    // fresh message on the thread gets flagged again — same "an answered
+    // thread closes itself out" posture as collectDeadlineReminders, just
+    // triggered by her telling it to stop instead of a reply arriving.
+    await _send(chatId, lines.join(' '));
+    return { action_taken: 'digest_item_ignored', count: found.length, removedFromTracking: actuallyRemoved.length, alreadyGone: alreadyGone.length };
+}
+
 async function showPendingReplies(chatId) {
     try {
         const { run, buildDigest } = require('./replyWatch');
@@ -4709,6 +4782,7 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
     showReceivables, recordPayment, showOrphanPayments, setReceivablesStart, trackOldInvoiceCmd,
 verifyBookings,
 applyVerifiedSchedules,
+ignoreDigestItem,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
 };
