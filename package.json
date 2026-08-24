@@ -8,8 +8,8 @@
     "dev": "nodemon index.js",
     "pm2": "pm2 start index.js --name jarvis --update-env",
     "check": "node scripts/check-action-wiring.js",
-    "test": "node scripts/check-action-wiring.js && node tests/requirements.js && node tests/verify-simulation.js && node tests/api-health.js",
-    "test:full": "npm test && node tests/integration.js && node tests/trap-audit.js && node tests/cancel-loop.js"
+    "test": "node scripts/check-action-wiring.js && node tests/requirements.js && node tests/verify-simulation.js && node tests/api-health.js && node tests/action-invoke.js",
+    "test:full": "npm test && node tests/integration.js && node tests/trap-audit.js && node tests/cancel-loop.js && node tests/simulate-user.js"
   },
   "dependencies": {
     "@google/genai": "^0.3.0",
