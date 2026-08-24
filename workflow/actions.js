@@ -2240,7 +2240,8 @@ What the email needs to say: ${details || (recentContext
         : 'No specific ask was given and no past correspondence was found either — ask a brief, concrete question (e.g. current pricing/availability) rather than pure small talk.')}
 ${recentContext ? `Most recent past email with them, for context (use only what's actually relevant): ${recentContext}` : ''}
 ${bookingLine ? `Relevant booking data (use only what's relevant, do not dump all of it): ${bookingLine}` : ''}
-Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+${require('../helpers/writingStyle').getStyleGuidance()}
+Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
 
     const draft = await callGeminiJSON(prompt);
     if (!draft || !draft.subject || !draft.body) {
@@ -3120,7 +3121,8 @@ ${(origBody || '').slice(0, 1500)}
 
 What this email needs to say: ${details || '(no further detail given — infer a reasonable, brief message from context)'}
 ${bookingLine ? `Relevant booking data (use only what's relevant): ${bookingLine}` : ''}
-Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+${require('../helpers/writingStyle').getStyleGuidance()}
+Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
         const draft = await callGeminiJSON(prompt);
         if (!draft || !draft.subject || !draft.body) {
             await _send(chatId, "Couldn't draft that email — try rephrasing what it should say.");
@@ -3214,7 +3216,8 @@ Original body: ${(origBody || '').slice(0, 1500)}
 
 What the reply needs to say: ${details || '(no further detail given — infer a reasonable, brief reply from context)'}
 ${bookingLine ? `Relevant booking data (use only what's relevant): ${bookingLine}` : ''}
-Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off as Edge Metals Inc." }`;
+${require('../helpers/writingStyle').getStyleGuidance()}
+Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
 
     const draft = await callGeminiJSON(prompt);
     if (!draft || !draft.body) {
@@ -4994,6 +4997,29 @@ async function generateProformaFromPending(chatId, pending) {
     return _send(chatId, `Sent. Proforma ${payload.inv_no} emailed to ${to}${savedName ? ` and saved as ${savedName}` : ''}.`);
 }
 
+
+
+// ── Writing style ─────────────────────────────────────────────────────────
+// "learn my writing style" / "how do i write". See helpers/writingStyle.js for
+// the privacy reasoning — the profile is style only, and scrubbed before it is
+// stored regardless of what the model returns.
+async function learnWritingStyle(chatId) {
+    const ws = require('../helpers/writingStyle');
+    await _send(chatId, 'Reading your sent mail to learn how you write. One minute…');
+    let res;
+    try { res = await ws.learnStyle(); }
+    catch (err) { return _send(chatId, `Couldn't do that: ${err.message}`); }
+    if (!res.ok) return _send(chatId, res.error);
+    return _send(chatId, `Done — learned from ${res.sampled} of your sent emails.\n\n${ws.describeStyle()}\n\nDrafts will sound like this from now on. Nothing about what those emails were ABOUT was kept — only how you write.`);
+}
+
+async function showWritingStyle(chatId) {
+    const ws = require('../helpers/writingStyle');
+    const desc = ws.describeStyle();
+    if (!desc) return _send(chatId, `I haven't learned your writing style yet. Say "learn my writing style" and I'll read your sent mail.`);
+    return _send(chatId, desc);
+}
+
 module.exports = {
     showPendingReplies, replyToDigestItem, forwardOriginalToSelf, sendDraftedEmail,
 init,
@@ -5026,4 +5052,5 @@ ignoreDigestItem,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
+    learnWritingStyle, showWritingStyle,
 };
