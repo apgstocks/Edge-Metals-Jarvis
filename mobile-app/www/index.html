@@ -198,6 +198,8 @@ body { overflow-y:auto; }
       #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
       #loadModal .modal-shell { max-width:900px; width:100%; }
       #adminSettingsModal.modal-overlay { display:flex; } /* same fix as #loadModal above — same underlying .modal-overlay quirk */
+      #voiceSheet.modal-overlay { display:flex; }
+      #voiceSheet.hidden { display:none; }
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
          the load level per Apsara — a load can mix items with different
@@ -390,6 +392,8 @@ body { overflow-y:auto; }
            risk of an edit meant for one panel accidentally leaking a field
            (renumber-a-load, yard report toggle) into the other. -->
       <button id="btnStaffSettings" class="btn btn-dark hidden" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 12px; font-size:15px;" title="Settings">⚙️</button>
+      <!-- Voice. Tap = one command, long-press = toggle "Hey Jarvis". -->
+      <button id="btnVoice" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 12px; font-size:15px;" title="Tap to speak">🎤</button>
       <button id="btnSignout" class="btn btn-dark" style="background:transparent; border-color:var(--steel-700); color:var(--steel-300); padding:8px 14px; font-size:10.5px;">Sign out</button>
     </div>
   </div>
@@ -423,6 +427,31 @@ body { overflow-y:auto; }
      from this app to any role. Note the next-load-number floor below is
      a different thing and stays: it sets where FUTURE auto-assigned
      numbers start, it doesn't change an existing load's number. -->
+<!-- Voice command review. Nothing reaches the brain until Send is tapped —
+     see the module comment: these commands fire for real, and a mic in a yard
+     mishears more than a keyboard does. -->
+<div id="voiceSheet" class="hidden modal-overlay">
+  <div class="modal-shell" style="max-width:460px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Say a command</div>
+      <button id="btnVoiceClose" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="voiceState" style="font-family:var(--font-mono); font-size:11.5px; color:var(--accent); margin-bottom:10px; display:flex; align-items:center;"></div>
+      <textarea id="voiceText" rows="3" placeholder="e.g. check mail from Joey" style="width:100%; padding:12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:inherit; font-size:14px; resize:vertical;"></textarea>
+      <div style="font-size:11.5px; color:var(--text-faint); margin-top:7px; line-height:1.5;">
+        Correct anything it misheard before sending. This runs for real — same as messaging Jarvis on WhatsApp.
+      </div>
+      <div style="display:flex; gap:8px; margin-top:13px;">
+        <button id="btnVoiceRetry" class="btn" style="flex:1;">🎤 Again</button>
+        <button id="btnVoiceSend" class="btn btn-primary" style="flex:2;">Send to Jarvis</button>
+      </div>
+      <div id="voiceReplies"></div>
+    </div>
+  </div>
+</div>
+
 <div id="adminSettingsModal" class="hidden modal-overlay">
   <div class="modal-shell" style="max-width:420px;">
     <div class="modal-stripe"></div>
@@ -1944,6 +1973,8 @@ function renderLoads(loads) {
       #loadModal.modal-overlay { display:flex; } /* base .modal-overlay never sets display, so without this the shell hugs the left edge instead of centering — this is the "stuck on one end" bug */
       #loadModal .modal-shell { max-width:900px; width:100%; }
       #adminSettingsModal.modal-overlay { display:flex; } /* same fix as #loadModal above — same underlying .modal-overlay quirk */
+      #voiceSheet.modal-overlay { display:flex; }
+      #voiceSheet.hidden { display:none; }
       .ld-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       /* Gross/tare/net/price/unit/amount are now captured PER ITEM (moved off
          the load level per Apsara — a load can mix items with different
@@ -3061,6 +3092,7 @@ async function bootLoads() {
   // After ROLE is set — refreshWaBanner() reads it to decide whether to call
   // the admin-only status endpoint at all.
   startWaBannerPolling();
+  wireVoiceUI();
   try {
     await renderCurrentMobileTab();
   } catch (err) {
@@ -4662,6 +4694,299 @@ function startWaBannerPolling() {
   if (waBannerTimer) clearInterval(waBannerTimer);
   refreshWaBanner();
   waBannerTimer = setInterval(refreshWaBanner, 60000);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// VOICE COMMANDS — "Hey Jarvis" (2026-08-23)
+// ══════════════════════════════════════════════════════════════════════
+// Per Apsara: "activate jarvis in mobile. when i say Hey Jarvis, i should be
+// able to talk back" — scoped to EARS ONLY for now (her call: no spoken
+// replies yet), with both a wake word and a mic button.
+//
+// The backend already existed: POST /api/bot/command runs text through the
+// SAME workflow/brain.js pipeline a WhatsApp message goes through and returns
+// whatever Jarvis would have replied. So this is a microphone bolted onto a
+// door that was already open — which also means voice can do exactly what
+// Jarvis can do over WhatsApp today, no more.
+//
+// RECOGNITION IS ON-DEVICE, not the server's Gemini transcriber
+// (/api/bot/voice-command). Three reasons: the wake word needs continuous
+// local listening and can't ship every ambient second of a scrap yard to a
+// server; yard signal is unreliable and this keeps working without it; and
+// nothing is uploaded, so an open mic isn't also an open pipe. The cost is
+// accuracy on accented or noisy speech, which is exactly why the transcript
+// is shown in an EDITABLE box before anything runs.
+//
+// NOTHING FIRES WITHOUT A LOOK. Every command lands in a review box first.
+// The dashboard's own terminal warns "Commands fire for real — same effect as
+// messaging Jarvis on WhatsApp", and that was for someone sitting at a desk
+// having typed it deliberately. A mic in a noisy yard mishears more, and
+// these commands send real messages to truckers and suppliers.
+let voiceOn = false;          // wake-word loop running
+let voiceListening = false;   // a capture is currently open
+let voiceMode = null;         // 'wake' | 'command'
+let voiceWatchdog = null;
+const WAKE_PATTERNS = [
+  // Deliberately loose. "Jarvis" is not a word Android's recogniser knows
+  // well, and in a yard it comes back as "service", "jervis", "java's" and
+  // worse. Matching only the exact phrase would mean the wake word almost
+  // never works; these are the mishearings seen in practice plus the obvious
+  // near-homophones. A false wake costs one tap on Cancel — a missed wake
+  // costs the whole feature.
+  /\bhey\s+(jarvis|jervis|jarvi|jervis|java'?s|service|jarvas|charvis|harvis)\b/i,
+  /\bhi\s+(jarvis|jervis|jarvi)\b/i,
+  /\bok\s+(jarvis|jervis)\b/i,
+];
+
+function voicePlugin() {
+  const cap = window.Capacitor;
+  if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+  return (cap.Plugins && cap.Plugins.SpeechRecognition) || null;
+}
+
+function isWakePhrase(text) {
+  return WAKE_PATTERNS.some(re => re.test(String(text || '')));
+}
+
+// Strips the wake phrase off the front so "hey jarvis check mail from Joey"
+// reaches the brain as "check mail from Joey" — the brain has never seen a
+// wake word and shouldn't have to learn one.
+function stripWake(text) {
+  let t = String(text || '');
+  for (const re of WAKE_PATTERNS) t = t.replace(re, ' ');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+// ── Wake-word loop ────────────────────────────────────────────────────────
+// Android's SpeechRecognizer is NOT continuous — it stops on silence, every
+// time. "Always listening" is therefore a restart loop, which is why this
+// only runs while the app is in the foreground and why there's a switch to
+// turn it off. A phone in a pocket with the mic cycling all day is a battery
+// complaint waiting to happen.
+async function startWakeLoop() {
+  const SR = voicePlugin();
+  if (!SR || voiceOn) return;
+  try {
+    const avail = await SR.available();
+    if (!(avail && (avail.available ?? avail))) return;
+    const perm = await SR.requestPermissions();
+    if (perm && perm.speechRecognition === 'denied') { voiceToast('Microphone permission denied — use the mic button instead.'); return; }
+  } catch (e) { return; }
+  voiceOn = true;
+  renderVoiceButton();
+  wakeCycle();
+}
+
+function stopWakeLoop() {
+  voiceOn = false;
+  const SR = voicePlugin();
+  try { SR && SR.stop(); } catch (e) {}
+  if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
+  renderVoiceButton();
+}
+
+async function wakeCycle() {
+  const SR = voicePlugin();
+  if (!SR || !voiceOn || voiceListening) return;
+  voiceMode = 'wake';
+  voiceListening = true;
+  try {
+    // popup:false and partialResults:true — a system dialog on every cycle
+    // would make the whole thing unusable, and partials are what let the wake
+    // phrase be spotted mid-utterance instead of after a full silence timeout.
+    await SR.start({ language: 'en-US', maxResults: 3, prompt: '', partialResults: true, popup: false });
+  } catch (e) {
+    // Busy/again errors are normal on a restart loop — back off and retry
+    // rather than tearing the loop down over a transient.
+    voiceListening = false;
+    if (voiceOn) voiceWatchdog = setTimeout(wakeCycle, 1200);
+    return;
+  }
+  // Android sometimes stops without firing listeningState. Without this the
+  // loop would silently die and the wake word would just stop working with
+  // no sign of why.
+  if (voiceWatchdog) clearTimeout(voiceWatchdog);
+  voiceWatchdog = setTimeout(() => {
+    voiceListening = false;
+    if (voiceOn && voiceMode === 'wake') wakeCycle();
+  }, 12000);
+}
+
+// ── One-shot command capture ──────────────────────────────────────────────
+// Used both by the mic button and by the wake word once it fires. Longer
+// maxResults and no wake matching — everything heard is the command.
+async function captureCommand(seedText) {
+  const SR = voicePlugin();
+  if (!SR) { voiceToast('Voice needs the installed app — not available in a browser.'); return; }
+  if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
+  try { await SR.stop(); } catch (e) {}
+  voiceListening = false;
+  voiceMode = 'command';
+  openVoiceSheet(seedText || '');
+  try {
+    const perm = await SR.requestPermissions();
+    if (perm && perm.speechRecognition === 'denied') { setVoiceSheetState('error', 'Microphone permission denied.'); return; }
+    voiceListening = true;
+    setVoiceSheetState('listening', 'Listening…');
+    await SR.start({ language: 'en-US', maxResults: 5, prompt: '', partialResults: true, popup: false });
+  } catch (e) {
+    voiceListening = false;
+    setVoiceSheetState('error', e.message || "couldn't start listening");
+  }
+}
+
+// ── Plugin listeners ──────────────────────────────────────────────────────
+// Registered once at boot, not per capture — the plugin appends listeners,
+// so wiring them inside captureCommand() would stack a new copy every tap and
+// fire the handler N times on the Nth use.
+function wireVoiceListeners() {
+  const SR = voicePlugin();
+  if (!SR || SR.__jarvisWired) return;
+  SR.__jarvisWired = true;
+
+  SR.addListener('partialResults', (data) => {
+    const heard = ((data && data.matches) || [])[0] || '';
+    if (!heard) return;
+    if (voiceMode === 'wake') {
+      if (!isWakePhrase(heard)) return;
+      // Heard it. Anything AFTER the wake phrase in the same breath is
+      // already the command — "hey jarvis check mail from Joey" is one
+      // utterance, and making her pause and repeat herself would be worse
+      // than useless.
+      const rest = stripWake(heard);
+      captureCommand(rest);
+      return;
+    }
+    if (voiceMode === 'command') {
+      const box = $('voiceText');
+      // Don't fight the user: once they start correcting the transcript by
+      // hand, stop overwriting it from the mic.
+      if (box && !box.dataset.edited) box.value = stripWake(heard);
+      setVoiceSheetState('listening', 'Listening…');
+    }
+  });
+
+  SR.addListener('listeningState', (state) => {
+    const status = (state && (state.status || state.state)) || state;
+    if (status !== 'stopped') return;
+    voiceListening = false;
+    if (voiceMode === 'wake' && voiceOn) { wakeCycle(); return; }
+    if (voiceMode === 'command') {
+      const box = $('voiceText');
+      setVoiceSheetState(box && box.value.trim() ? 'ready' : 'empty',
+        box && box.value.trim() ? 'Check it, then send.' : "Didn't catch that — tap the mic to try again, or type it.");
+    }
+  });
+}
+
+// ── Review sheet ──────────────────────────────────────────────────────────
+function openVoiceSheet(seed) {
+  const el = $('voiceSheet');
+  if (!el) return;
+  el.classList.remove('hidden');
+  const box = $('voiceText');
+  box.value = seed || '';
+  delete box.dataset.edited;
+  $('voiceReplies').innerHTML = '';
+  setVoiceSheetState(seed ? 'ready' : 'listening', seed ? 'Check it, then send.' : 'Listening…');
+}
+
+function closeVoiceSheet() {
+  const el = $('voiceSheet');
+  if (el) el.classList.add('hidden');
+  const SR = voicePlugin();
+  try { SR && SR.stop(); } catch (e) {}
+  voiceListening = false;
+  voiceMode = null;
+  // Back to watching for the wake word, if it was on before this capture.
+  if (voiceOn) setTimeout(wakeCycle, 400);
+}
+
+function setVoiceSheetState(state, msg) {
+  const s = $('voiceState');
+  if (!s) return;
+  const color = state === 'error' ? 'var(--status-danger)'
+    : state === 'listening' ? 'var(--accent)'
+    : state === 'empty' ? 'var(--status-warning)' : 'var(--text-muted)';
+  s.style.color = color;
+  s.innerHTML = (state === 'listening' ? '<span class="wt-spin" style="margin-right:7px;"></span>' : '') + esc(msg || '');
+  const send = $('btnVoiceSend');
+  if (send) send.disabled = state === 'listening';
+}
+
+// Runs the command through the same brain a WhatsApp message goes through.
+async function sendVoiceCommand() {
+  const box = $('voiceText');
+  const text = (box.value || '').trim();
+  if (!text) return;
+  const SR = voicePlugin();
+  try { SR && SR.stop(); } catch (e) {}
+  voiceListening = false;
+  const btn = $('btnVoiceSend');
+  btn.disabled = true; btn.textContent = 'Working…';
+  setVoiceSheetState('working', 'Jarvis is working on it…');
+  try {
+    const r = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
+    const replies = (r && r.replies) || [];
+    $('voiceReplies').innerHTML = replies.length
+      ? replies.map(t => `<div style="margin-top:10px; padding:11px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm); font-size:13px; color:var(--text-strong); white-space:pre-wrap; line-height:1.5;">${esc(t)}</div>`).join('')
+      : '<div style="margin-top:10px; font-size:12.5px; color:var(--text-muted);">Jarvis did that, but had nothing to say back.</div>';
+    setVoiceSheetState('done', 'Done.');
+  } catch (err) {
+    setVoiceSheetState('error', err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send to Jarvis';
+  }
+}
+
+function voiceToast(msg) { showWeighToast('flagged', msg, '', 4000); }
+
+// Mic button in the header. Tap = one command. Long-press = toggle the wake
+// word, so "always listening" is a deliberate choice rather than something
+// that silently switched itself on.
+function renderVoiceButton() {
+  const b = $('btnVoice');
+  if (!b) return;
+  b.textContent = voiceOn ? '🎙' : '🎤';
+  b.title = voiceOn ? 'Listening for "Hey Jarvis" — long-press to stop' : 'Tap to speak a command · long-press for "Hey Jarvis"';
+  b.style.borderColor = voiceOn ? 'var(--accent)' : 'var(--steel-700)';
+  b.style.color = voiceOn ? 'var(--accent)' : 'var(--steel-300)';
+}
+
+function wireVoiceUI() {
+  const b = $('btnVoice');
+  if (!b || b.dataset.wired) return;
+  b.dataset.wired = '1';
+  let held = false, timer = null;
+  const startHold = () => {
+    held = false;
+    timer = setTimeout(() => {
+      held = true;
+      if (voiceOn) { stopWakeLoop(); voiceToast('Stopped listening for "Hey Jarvis".'); }
+      else { startWakeLoop(); voiceToast('Listening for "Hey Jarvis" while the app is open.'); }
+    }, 550);
+  };
+  const endHold = (ev) => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (held) { ev.preventDefault(); return; }
+    captureCommand('');
+  };
+  b.addEventListener('touchstart', startHold, { passive: true });
+  b.addEventListener('touchend', endHold);
+  b.addEventListener('mousedown', startHold);
+  b.addEventListener('mouseup', endHold);
+
+  $('btnVoiceClose').addEventListener('click', closeVoiceSheet);
+  $('btnVoiceSend').addEventListener('click', sendVoiceCommand);
+  $('btnVoiceRetry').addEventListener('click', () => captureCommand(''));
+  $('voiceText').addEventListener('input', () => { $('voiceText').dataset.edited = '1'; });
+  $('voiceText').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendVoiceCommand(); }
+  });
+
+  wireVoiceListeners();
+  renderVoiceButton();
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────

@@ -2128,9 +2128,37 @@ async function process(rawEvent, sendMessage) {
         };
     }
 
+    // ── Compound-request guard ────────────────────────────────────────────
+    // Added 2026-08-23, prompted by Apsara's voice-command example: "check
+    // mail from Joey AND send proforma to her". This router handles exactly
+    // ONE intent per message — it's a single switch on decision.intent — so
+    // the second half of a request like that was simply discarded. Silently.
+    // The mail would be checked, nothing would be said about the proforma,
+    // and the only way to notice was to remember what you'd asked for.
+    //
+    // That gets worse with voice, where a whole sentence arrives at once and
+    // there's no sent-message history to scroll back through.
+    //
+    // This does NOT execute the second part — chaining intents is a much
+    // bigger change. It just refuses to pretend the request was fully
+    // handled, which is the difference between a limitation and a bug.
+    //
+    // Deliberately conservative: it needs an "and"/"then"/"also" followed
+    // closely by a real command verb. "check mail from Joey and Bose" has no
+    // verb after the "and" and so doesn't trigger; neither does a single
+    // clause of any length.
+    const COMPOUND_RE = /\b(?:and|then|also|after that)\s+(?:can you\s+|please\s+|you\s+)?(send|check|prepare|make|create|generate|draft|show|tell|ask|remind|add|book|forward|reply|email|call|update|cancel|delete|assign|share)\b/i;
+    const looksCompound = COMPOUND_RE.test(ctx.text || '');
+
     let result = { action_taken: 'error' };
     try {
         result = await route(decision, ctx, sendMessage);
+        if (looksCompound && inbound.isManagerOrTeam && result && result.action_taken !== 'error') {
+            const m = COMPOUND_RE.exec(ctx.text || '');
+            const second = (ctx.text || '').slice(m.index).replace(/^\s*(and|then|also|after that)\s+/i, '').trim();
+            await sendMessage(inbound.chatId,
+                `That looked like two requests — I only did the first one. I handle one at a time.\n\nSend this separately if you still want it:\n"${second}"`);
+        }
     } catch (err) {
         console.error('[BRAIN] Route failed:', err);
         if (inbound.isManagerOrTeam) {

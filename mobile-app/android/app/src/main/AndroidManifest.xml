@@ -64,6 +64,14 @@
          its own camera permission; this app's embedded WebView is a
          separate sandboxed context and needs its own. -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Voice commands (2026-08-23). The speech-recognition plugin's own
+         manifest already declares RECORD_AUDIO and the RecognitionService
+         <queries> entry, and the manifest merger would pull both in on its
+         own — declared here as well so the app's required permissions are
+         readable in one place rather than only discoverable by opening a
+         dependency's manifest. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- required="false" so the app still installs on a camera-less
          device (e.g. a tablet used only for reviewing loads) — it just
          won't be able to use the camera capture button there. -->
