@@ -723,6 +723,76 @@ function buildChaseMessage(due) {
 // gets stored as lastDigest, so display position and "reply to N" can never
 // drift apart — the bug that once drafted a reply to the wrong customer. The
 // caller groups once and passes the identical array to both.
+// ── Draft a proforma off an incoming order ─────────────────────────────────
+// Apsara, 2026-08-24: "if that email comes, i want proforma to be drafted."
+//
+// The digest used to say "say 'proforma from Joey'" and make her ask. Now the
+// order is read, priced and totalled before she ever sees the message, and all
+// that is left is yes or no.
+//
+// The extraction is one extra Gemini call, run ONLY on emails already flagged
+// as orders — a handful, not the inbox. That is the whole reason is_order is a
+// cheap field on the existing assessment rather than a second pass over
+// everything: the expensive read is reserved for the mail that earns it.
+//
+// STILL NOTHING SENT WITHOUT A YES. What changes is how much is done before
+// she is asked, not whether she is asked.
+//
+// Two safety decisions worth keeping:
+//
+//   1. The confirmation expires in 30 MINUTES, not the usual two hours. This
+//      pending was raised by Jarvis rather than requested, so it can be
+//      sitting there unread — and a stale yes on it generates and EMAILS a
+//      priced document to a customer. A short window means a stray yes lands
+//      on nothing.
+//   2. It never overwrites an existing pending. setPending already queues
+//      instead of clobbering, and that behaviour matters more here than
+//      anywhere else: hijacking a confirmation she is mid-way through, with
+//      one that sends an invoice, is the worst version of this feature.
+async function draftProformaForOrder(item, gmail) {
+    try {
+        const { getEmailContent, getMessage } = require('../helpers/gmail');
+        const { extractOrderFromEmail, toProformaDraft, groundRates } = require('../helpers/proformaFromEmail');
+        const full = await getMessage(gmail, item.id);
+        const { body } = getEmailContent(full.payload || {});
+        const visible = extractLatestMessage(body || '');
+        if (!visible) return null;
+
+        const order = await extractOrderFromEmail({
+            from: item.from, subject: item.subject, body: visible, date: null,
+        });
+        if (!order || !order.is_order) return null;
+
+        const groundedOrder = await groundRates(order).catch(() => order);
+        const draft = toProformaDraft(groundedOrder, { fallbackConsignee: null });
+        return { draft, order: groundedOrder };
+    } catch (err) {
+        console.warn('[REPLYWATCH] proforma draft failed for', item.fromName, '-', err.message);
+        return null;
+    }
+}
+
+// Renders the drafted figures for the digest. Returns [] when there is nothing
+// worth showing, so the caller can concatenate unconditionally.
+function proformaDraftLines(draft) {
+    if (!draft) return [];
+    const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (draft.needs && draft.needs.length) {
+        const out = [`   📄 Order for ${draft.consignee || 'someone'} — I can't price it yet, missing: ${draft.needs.join(', ')}.`];
+        (draft.items || []).forEach((i) => out.push(`      ${i.desc}${i.qty != null ? ` — ${i.qty} MT` : ''}${i.rate ? ` @ $${i.rate}/MT` : ''}`));
+        (draft.unconfirmed || []).forEach((u) => out.push(`      ⚠ ${u}`));
+        return out;
+    }
+    const total = (draft.items || []).reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0) * (draft.containerCount || 1);
+    const out = [`   📄 Proforma drafted for ${draft.consignee}:`];
+    (draft.items || []).forEach((i) => out.push(`      ${i.desc} — ${i.qty} MT${i.qty_assumed ? '*' : ''} @ $${i.rate}/MT`));
+    out.push(`      ${draft.containerCount} container(s) · total $${money(total)}`);
+    (draft.assumed || []).forEach((a) => out.push(`      * ${a}`));
+    (draft.grounded || []).forEach((g) => out.push(`      ✓ ${g}`));
+    (draft.unconfirmed || []).forEach((u) => out.push(`      ⚠ ${u}`));
+    return out;
+}
+
 function buildDigest(matters, emailCount) {
     const n = emailCount == null ? matters.length : emailCount;
     // Orders that want no reply are in this list too (see the is_order carve-
@@ -765,16 +835,17 @@ function buildDigest(matters, emailCount) {
         // Deliberately just a prompt — nothing is generated or sent off the
         // back of an email arriving.
         if (f.is_order) {
-            // The name in the command is WHOSE EMAIL TO READ, not who the
-            // document is for — startProformaFromEmail looks up the latest
-            // mail from that person. So it must be the SENDER even when the
-            // buyer is someone else. Suggesting the buyer here (the obvious
-            // first instinct, and what this line said for about ten minutes)
-            // sends Jarvis hunting for mail from a company that never wrote
-            // to us, and it comes back "no recent email from Daekwang" on an
-            // order that is sitting right there.
-            const forWhom = f.order_buyer && f.order_buyer !== f.fromName ? ` for ${f.order_buyer}` : '';
-            lines.push(`   📄 Looks like an order${forWhom} — say "proforma from ${f.fromName}" and I'll build it from this email.`);
+            if (f.proforma) {
+                // Already read, priced and totalled — see draftProformaForOrder.
+                lines.push(...proformaDraftLines(f.proforma));
+            } else {
+                // Extraction didn't run or failed. Fall back to the command,
+                // naming the SENDER: that name is whose email to read, not who
+                // the document is for, so suggesting the buyer would send
+                // Jarvis hunting for mail from a company that never wrote.
+                const forWhom = f.order_buyer && f.order_buyer !== f.fromName ? ` for ${f.order_buyer}` : '';
+                lines.push(`   📄 Looks like an order${forWhom} — say "proforma from ${f.fromName}" and I'll build it from this email.`);
+            }
         }
         // Say plainly that others are chasing the same thing, and who — that's
         // useful context ("two people at this customer are waiting"), and it
@@ -791,7 +862,10 @@ function buildDigest(matters, emailCount) {
     if (!replies.length) {
         // Order-only digest: the reply instructions would be noise, and worse,
         // they'd imply someone is waiting on an answer when nobody is.
-        lines.push('Nothing generated yet — say the word and I\'ll build the proforma for your yes.');
+        const priced = orders.find((f) => f.proforma && !(f.proforma.needs || []).length);
+        lines.push(priced
+            ? `Nothing generated yet. Say "yes" and I'll produce the proforma for ${priced.proforma.consignee} and email it back.`
+            : 'Nothing generated yet — say the word and I\'ll build the proforma for your yes.');
         return lines.join('\n');
     }
     lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
@@ -997,6 +1071,15 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // place, no error anywhere, and a wrong-recipient email at the end of it.
     flagged.sort((x, y) => urgencyRank(x.urgency) - urgencyRank(y.urgency));
 
+    // Price the orders before she is shown anything — Apsara, 2026-08-24: "if
+    // that email comes, i want proforma to be drafted." One extra Gemini call
+    // each, on the handful of emails that ARE orders rather than the inbox.
+    for (const f of flagged) {
+        if (!f.is_order) continue;
+        const built = await draftProformaForOrder(f, gmail);
+        if (built) f.proforma = built.draft;
+    }
+
     store.seen = seen;
 
     // A dryRun is her asking directly — answer with exactly what she asked
@@ -1122,6 +1205,38 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // trap easier to fall into, so the two must come from one variable.
         const digestMatters = groupMatters(queued);
         const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length);
+
+        // Stage the confirmation so a plain "yes" produces the document. Only
+        // for a draft that is actually complete — one still missing a rate has
+        // nothing to say yes TO, and staging it would make "yes" mean
+        // something different from what the message just described.
+        //
+        // 30 minutes, not the usual 2 hours: this pending was raised by Jarvis
+        // rather than asked for, so it can sit unread, and a stale yes on it
+        // emails a priced document to a customer. setPending queues rather
+        // than overwrites, so an answer she is already mid-way through is
+        // never hijacked by one that sends an invoice.
+        try {
+            const ready = digestMatters.find((f) => f.proforma && !(f.proforma.needs || []).length);
+            if (ready) {
+                const actions = require('./actions');
+                const managerChat = (cfg.getSettings().manager_number || cfg.MANAGER_NUMBER) + '@c.us';
+                // Same numbering and address resolution the asked-for path
+                // uses, so both produce an identical document — see
+                // actions.prepareProformaNumbers.
+                const prep = await actions.prepareProformaNumbers(ready.proforma);
+                const r = await actions.setPending(managerChat, {
+                    type: 'confirm_proforma',
+                    draft: ready.proforma,
+                    invNo: prep.invNo, containerNos: prep.containerNos, addressLines: prep.addressLines,
+                    replyTo: ready.from, who: ready.fromName,
+                    expires_in_ms: 30 * 60 * 1000,
+                });
+                if (r && r.queued) console.log(`[REPLYWATCH] proforma confirmation queued behind '${r.blockedBy}' rather than overwriting it`);
+            }
+        } catch (e) {
+            console.warn('[REPLYWATCH] could not stage the proforma confirmation:', e.message);
+        }
         try {
             // sendMessage returns FALSE when WhatsApp is down — it does not
             // throw. A plain `await` inside try/catch therefore treats a
@@ -1215,7 +1330,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };

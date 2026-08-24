@@ -58,10 +58,18 @@ if (existing) {
     return { queued: true, blockedBy: existing.type };
 }
 await mutateBrain(b => {
+    // expires_in_ms lets a caller shorten the window. Added 2026-08-24 for
+    // proformas drafted UNPROMPTED off an incoming order: the default 2 hours
+    // is fine for a pending she asked for seconds ago, but a confirmation
+    // Jarvis raised on its own could sit for two hours and then capture a
+    // "yes" she meant for something else entirely — and that yes generates and
+    // EMAILS a priced document to a customer. A shorter window means a stray
+    // yes lands on nothing instead.
+    const ttl = Number(action.expires_in_ms) > 0 ? Number(action.expires_in_ms) : cfg.PENDING_EXPIRY_MS;
     b.pending_actions[chatId] = {
         ...action,
         created_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + cfg.PENDING_EXPIRY_MS).toISOString(),
+        expires_at: new Date(Date.now() + ttl).toISOString(),
     };
 });
 return { queued: false };
@@ -4859,41 +4867,10 @@ async function startProformaFromEmail(chatId, targetName) {
         return _send(chatId, lines.join('\n'));
     }
 
-    // Real numbering, from her actual invoice history — same source the
-    // dashboard and the app's Documents tab use.
-    let invNo = '', containerNos = [];
-    try {
-        const sug = await require('../helpers/nextInvoiceNo').suggestNextInvNo(draft.consignee);
-        if (sug && sug.inv_no) {
-            const dateStr = sug.inv_no.split(' ')[0];
-            const code = itemCodeFor(draft.items[0]?.desc);
-            invNo = code ? `${dateStr}_${code}_${sug.code_only}` : sug.inv_no;
-            let n = sug.next_number;
-            for (let i = 0; i < draft.containerCount; i++) {
-                const numStr = sug.number_had_leading_zero ? String(n).padStart(sug.number_digits, '0') : String(n);
-                containerNos.push(`${sug.year_prefix}${sug.letter_code}${numStr}`);
-                n += 1;
-            }
-        }
-    } catch (e) { /* no history — she can supply the number on confirm */ }
-
-    // Address resolved HERE, before the confirmation, not silently at generate
-    // time — it prints on the document, so she should see it while she still
-    // has a choice. An ambiguous name is surfaced rather than resolved by
-    // picking the first match: two entries both aliased "Daekwang" (a current
-    // account and an old one, say) would otherwise put the wrong address on a
-    // proforma and email it, with nothing anywhere saying a decision was made.
-    let addressLines = [], addressWarning = null;
-    try {
-        const hit = require('../helpers/addressBook').resolveAddress(draft.consignee);
-        if (!hit) {
-            addressWarning = `No address book entry for "${draft.consignee}" — the proforma will go out without an address.`;
-        } else if (hit.type === 'ambiguous') {
-            addressWarning = `"${draft.consignee}" matches ${hit.matches.length} address book entries (${hit.matches.map((m) => (m.raw || '').split('\n')[0]).join(' / ')}). Tell me which, or fix the duplicate — I won't guess.`;
-        } else if (hit.entry && hit.entry.raw) {
-            addressLines = hit.entry.raw.split('\n').map((l) => l.trim()).filter(Boolean);
-        }
-    } catch (e) { addressWarning = `Couldn't read the address book: ${e.message}`; }
+    // Real numbering and address, from her actual invoice history and address
+    // book — shared with the auto-drafted path so both produce the same
+    // document. See prepareProformaNumbers.
+    const { invNo, containerNos, addressLines, addressWarning } = await prepareProformaNumbers(draft);
 
     const total = draft.items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0) * draft.containerCount;
     const lines = [
@@ -4944,6 +4921,47 @@ function itemCodeFor(desc) {
     return null;
 }
 
+
+
+// Works out the invoice number, the container-number sequence and the
+// consignee address for a drafted proforma. Extracted 2026-08-24 so the
+// asked-for path and the auto-drafted one produce IDENTICAL documents — the
+// first version of the watcher staged a confirmation with none of these, so
+// saying yes to an auto-drafted proforma would have produced one with no
+// invoice number, no container numbers and no address, while the same order
+// requested by hand came out complete. Two paths to one document is exactly
+// where that kind of divergence hides.
+async function prepareProformaNumbers(draft) {
+    let invNo = '', containerNos = [];
+    try {
+        const sug = await require('../helpers/nextInvoiceNo').suggestNextInvNo(draft.consignee);
+        if (sug && sug.inv_no) {
+            const dateStr = sug.inv_no.split(' ')[0];
+            const code = itemCodeFor(draft.items[0] && draft.items[0].desc);
+            invNo = code ? `${dateStr}_${code}_${sug.code_only}` : sug.inv_no;
+            let n = sug.next_number;
+            for (let i = 0; i < (draft.containerCount || 1); i++) {
+                const numStr = sug.number_had_leading_zero ? String(n).padStart(sug.number_digits, '0') : String(n);
+                containerNos.push(`${sug.year_prefix}${sug.letter_code}${numStr}`);
+                n += 1;
+            }
+        }
+    } catch (e) { /* no history — she can supply the number on confirm */ }
+
+    let addressLines = [], addressWarning = null;
+    try {
+        const hit = require('../helpers/addressBook').resolveAddress(draft.consignee);
+        if (!hit) {
+            addressWarning = `No address book entry for "${draft.consignee}" — the proforma will go out without an address.`;
+        } else if (hit.type === 'ambiguous') {
+            addressWarning = `"${draft.consignee}" matches ${hit.matches.length} address book entries (${hit.matches.map((m) => (m.raw || '').split('\n')[0]).join(' / ')}). Tell me which, or fix the duplicate — I won't guess.`;
+        } else if (hit.entry && hit.entry.raw) {
+            addressLines = hit.entry.raw.split('\n').map((l) => l.trim()).filter(Boolean);
+        }
+    } catch (e) { addressWarning = `Couldn't read the address book: ${e.message}`; }
+
+    return { invNo, containerNos, addressLines, addressWarning };
+}
 
 // Filename per Apsara 2026-08-24: "it should be 260824_AC_26JY90,91_Daekwang.pdf".
 //
@@ -5153,5 +5171,5 @@ ignoreDigestItem,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
-    learnWritingStyle, showWritingStyle, rescanMail,
+    learnWritingStyle, showWritingStyle, rescanMail, prepareProformaNumbers,
 };
