@@ -96,8 +96,12 @@ const money = fmtRate;
 // file; nothing outside pdf.js references it.
 const EDGE_TRADING = {
     name: 'EDGE TRADING',
-    address1: '2453 E 25th Street',
-    address2: 'Los Angeles, CA 90058',
+    // ONE line as of 2026-08-22 per Apsara ("edge trading address make it in
+    // one line"). Was address1/address2 on separate rows. Kept as a single
+    // string rather than joining two fields at each draw site, so there is
+    // one place to edit if the address ever changes and no chance of the
+    // letterhead and the POS receipt disagreeing.
+    address: '2453 E 25th Street, Los Angeles, CA 90058',
     phone: '(310) 938-2525',
     email: 'bose@edgemetals.com',
 };
@@ -108,10 +112,11 @@ function drawLetterhead(doc, subtitle, load) {
     // Address block sits directly under the name, tight leading so the four
     // lines read as one unit rather than a list.
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED);
-    doc.text(EDGE_TRADING.address1, PAGE_L, 70, { lineBreak: false });
-    doc.text(EDGE_TRADING.address2, PAGE_L, 81, { lineBreak: false });
-    doc.text(EDGE_TRADING.phone, PAGE_L, 92, { lineBreak: false });
-    doc.text(EDGE_TRADING.email, PAGE_L, 103, { lineBreak: false });
+    // Phone and email pulled up 11pt each — the address is one line now, so
+    // leaving them where they were would open a gap under the company name.
+    doc.text(EDGE_TRADING.address, PAGE_L, 70, { lineBreak: false });
+    doc.text(EDGE_TRADING.phone, PAGE_L, 81, { lineBreak: false });
+    doc.text(EDGE_TRADING.email, PAGE_L, 92, { lineBreak: false });
 
     // Document type + load id stay right-aligned, opposite the address, so
     // neither block has to compete for the same horizontal space.
@@ -123,11 +128,13 @@ function drawLetterhead(doc, subtitle, load) {
         .text(subtitle.toUpperCase(), PAGE_L, 62, { width: PAGE_R - PAGE_L, align: 'right', characterSpacing: 1.2 })
         .text(`Generated ${formatCreatedAt(new Date().toISOString())}`, PAGE_L, 76, { width: PAGE_R - PAGE_L, align: 'right' });
 
-    // Rule moved down from 92 to clear the taller address block — the old
-    // value would have struck straight through the phone/email lines.
-    doc.moveTo(PAGE_L, 122).lineTo(PAGE_R, 122).lineWidth(1.5).strokeColor(NAVY).stroke();
+    // 111, not 122: the address block lost a line (2026-08-22), so the rule
+    // comes up with it rather than leaving dead space. Still clears BOTH
+    // blocks — the address column now ends at 92+~9=101, and the right-hand
+    // "Generated ..." line at 76+~9=85.
+    doc.moveTo(PAGE_L, 111).lineTo(PAGE_R, 111).lineWidth(1.5).strokeColor(NAVY).stroke();
     doc.lineWidth(1);
-    doc.y = 136;
+    doc.y = 125; // was 136, tracking the rule up by the same 11pt
 }
 
 // twoColFields render as "Label value" pairs, 2 per row, inside a shaded box.
@@ -140,52 +147,91 @@ function drawLetterhead(doc, subtitle, load) {
 // value that wraps to 2-3 lines used to overflow past the box border and
 // collide with whatever heading was drawn right after it, since the old
 // fixed-height guess only ever reserved room for one line.
+// Two-column fields WRAP within their column as of 2026-08-22.
+//
+// They used to be single-line: label with `continued: true`, then the value,
+// with no width constraint. That was safe only while the two-col slots held
+// short things (a date, a timestamp, a company name). Per Apsara the same day
+// — "i want seller name and address in same line, next to seller add address"
+// and "description should not go next line, side by side" — Seller Address and
+// Description moved OUT of the full-width block and INTO these columns, and
+// both are long. A realistic address ("456 Scrap Avenue, Suite 12, Dallas, TX
+// 75201") measures 185pt at 9pt, and its label another 63pt: 248pt against a
+// 238pt column. It would have run straight off the edge of the box.
+//
+// So each field is measured at its own column width, every row takes the
+// height of its taller side, and the box grows to fit. Nothing is clipped and
+// nothing overlaps regardless of how long an address gets.
+const FB_COL_X = [PAGE_L + 14, PAGE_L + 262];
+const FB_COL_W = [
+    (PAGE_L + 262) - (PAGE_L + 14) - 12,  // col 0, less a gutter so it can't touch col 1
+    PAGE_R - 14 - (PAGE_L + 262),         // col 1, to the box's inner right edge
+];
+
 function drawFieldBox(doc, twoColFields, fullFields) {
-    const rowH = 18;
-    const rows2 = Math.ceil(twoColFields.length / 2);
     const fields = Array.isArray(fullFields) ? fullFields : (fullFields ? [fullFields] : []);
 
+    // ── measure the two-col rows ──────────────────────────────────────────
+    const m2 = twoColFields.map((f, i) => {
+        const col = i % 2;
+        doc.font('Helvetica-Bold').fontSize(9);
+        const labelW = doc.widthOfString(f.label + ' ');
+        doc.font('Helvetica').fontSize(9);
+        // Floor of 60pt: a pathologically long label shouldn't squeeze the
+        // value into a one-character-per-line ribbon.
+        const valueW = Math.max(60, FB_COL_W[col] - labelW);
+        const h = doc.heightOfString(String(f.value || '—'), { width: valueW });
+        return { ...f, labelW, valueW, h: Math.max(12, h) };
+    });
+    const rowHeights = [];
+    for (let i = 0; i < m2.length; i += 2) {
+        const a = m2[i].h, b = m2[i + 1] ? m2[i + 1].h : 0;
+        rowHeights.push(Math.max(a, b) + 6); // 6pt of breathing room per row
+    }
+    const twoColH = rowHeights.reduce((s, h) => s + h, 0);
+
+    // ── measure any remaining full-width rows ─────────────────────────────
     doc.font('Helvetica').fontSize(9.5);
     let fullBlockH = 0;
-    const measured = fields.map(f => {
+    const measured = fields.map((f) => {
         const valH = doc.heightOfString(f.value || '—', { width: 484 });
         const h = 14 + valH + 4;
         fullBlockH += h;
         return { ...f, h };
     });
 
-    // Gap before the full-width block tightened 16->8 per Apsara 2026-08-15
-    // ("reduce spacing between seller and seller address" — Seller sits in
-    // the last two-col row, Seller Address is the first full-width row right
-    // after it). Bottom margin below the box's last field kept at the same
-    // 4pt it was before (20 - 16 = 4, now 12 - 8 = 4) so only the gap that
-    // was actually flagged shrinks, not the box's own bottom padding.
-    const boxH = rows2 * rowH + fullBlockH + 12;
-    // Height is fully known BEFORE anything is drawn (measured above), so
-    // the page-break check runs first and doc.y is only read AFTER that —
-    // boxTop is then guaranteed to be the top of wherever this box actually
-    // ends up (same page or a fresh one), never split across the two.
+    const boxH = 12 + twoColH + fullBlockH + 4;
+    // Height is fully known BEFORE anything is drawn, so the page-break check
+    // runs first and doc.y is only read AFTER it — boxTop is then guaranteed
+    // to be the top of wherever this box actually lands, never split across
+    // two pages.
     ensureSpace(doc, boxH);
     const boxTop = doc.y;
 
     doc.rect(PAGE_L, boxTop, PAGE_R - PAGE_L, boxH).fillAndStroke(NAVY_LIGHT, RULE);
 
-    twoColFields.forEach((f, i) => {
+    m2.forEach((f, i) => {
         const col = i % 2;
-        const x = col === 0 ? PAGE_L + 14 : PAGE_L + 262;
-        const y = boxTop + 12 + Math.floor(i / 2) * rowH;
-        doc.font('Helvetica-Bold').fontSize(9).fillColor(NAVY).text(f.label, x, y, { continued: true });
-        doc.font('Helvetica').fontSize(9).fillColor(INK).text(' ' + (f.value || '—'));
+        const rowIdx = Math.floor(i / 2);
+        const y = boxTop + 10 + rowHeights.slice(0, rowIdx).reduce((s, h) => s + h, 0);
+        const x = FB_COL_X[col];
+        doc.font('Helvetica-Bold').fontSize(9).fillColor(NAVY).text(f.label, x, y, { lineBreak: false });
+        // Value drawn as its own positioned block rather than `continued`,
+        // so its wrap width is exactly the column remainder and wrapped
+        // lines align under the value instead of under the label.
+        doc.font('Helvetica').fontSize(9).fillColor(INK)
+            .text(String(f.value || '—'), x + f.labelW, y, { width: f.valueW });
     });
 
-    let fy = boxTop + 8 + rows2 * rowH;
-    measured.forEach(f => {
+    let fy = boxTop + 8 + twoColH;
+    measured.forEach((f) => {
         doc.font('Helvetica-Bold').fontSize(8).fillColor(NAVY).text(f.label, PAGE_L + 14, fy, { characterSpacing: 0.3 });
         doc.font('Helvetica').fontSize(9.5).fillColor(INK).text(f.value || '—', PAGE_L + 14, fy + 12, { width: 484 });
         fy += f.h;
     });
     doc.y = boxTop + boxH + 18;
 }
+
 
 // Sums gross/tare/net/amount per ITEM DESCRIPTION (e.g. "Sealed units",
 // "Auto cast") — per Apsara, the item table lists every individual weigh-in
@@ -526,10 +572,14 @@ function generateLoadPdf(load, opts = {}) {
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
                 { label: 'Seller:',  value: load.seller },
-            ], [
-                { label: 'Seller Address:', value: load.seller_address },
-                { label: 'Description:',    value: load.description },
-            ]);
+                // Address beside Seller, and Description no longer alone on a
+                // full-width line — per Apsara 2026-08-22. Order gives:
+                //   row 1  Date        | Created
+                //   row 2  Seller      | Address
+                //   row 3  Description |
+                { label: 'Address:',     value: load.seller_address },
+                { label: 'Description:', value: load.description },
+            ], []);
 
             const unit = load.weight_unit || 'lb';
             const items = Array.isArray(load.items) ? load.items : [];
@@ -683,10 +733,14 @@ function generateWeightsPdf(load, opts = {}) {
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
                 { label: 'Seller:',  value: load.seller },
-            ], [
-                { label: 'Seller Address:', value: load.seller_address },
-                { label: 'Description:',    value: load.description },
-            ]);
+                // Address beside Seller, and Description no longer alone on a
+                // full-width line — per Apsara 2026-08-22. Order gives:
+                //   row 1  Date        | Created
+                //   row 2  Seller      | Address
+                //   row 3  Description |
+                { label: 'Address:',     value: load.seller_address },
+                { label: 'Description:', value: load.description },
+            ], []);
 
             const unit = load.weight_unit || 'lb';
             const items = Array.isArray(load.items) ? load.items : [];
@@ -928,8 +982,7 @@ function drawReceiptContent(doc, load, contentWidth) {
     };
 
     line(EDGE_TRADING.name, { size: 13, bold: true, align: 'center', gap: 1 });
-    line(EDGE_TRADING.address1, { size: 7.5, align: 'center', color: MUTED, gap: 0.5 });
-    line(EDGE_TRADING.address2, { size: 7.5, align: 'center', color: MUTED, gap: 0.5 });
+    line(EDGE_TRADING.address, { size: 7.5, align: 'center', color: MUTED, gap: 0.5 });
     line(EDGE_TRADING.phone, { size: 7.5, align: 'center', color: MUTED, gap: 2 });
     divider();
 
