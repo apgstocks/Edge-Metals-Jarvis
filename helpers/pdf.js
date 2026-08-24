@@ -258,7 +258,11 @@ function drawFieldBox(doc, twoColFields, fullFields) {
         doc.font('Helvetica').fontSize(9.5).fillColor(INK).text(f.value || '—', PAGE_L + 14, fy + 12, { width: 484 });
         fy += f.h;
     });
-    doc.y = boxTop + boxH + 18;
+    // 6pt, down from 18, per Apsara 2026-08-22 ("reduce spacing between item
+    // detail and box above"). Deliberately NOT changed on the summary box
+    // further down (drawSummaryBox's identical line) — she named this gap
+    // specifically, and that box sits against a different neighbour.
+    doc.y = boxTop + boxH + 6;
 }
 
 
