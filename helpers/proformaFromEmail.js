@@ -53,6 +53,7 @@ try {
             qty: z.coerce.number().nullable().optional().default(null),
             rate: z.coerce.number().nullable().optional().default(null),
             rate_confidence: z.coerce.number().min(0).max(1).optional().default(0),
+            rate_basis: z.enum(['per_mt', 'per_lot', 'unknown']).optional().default('unknown'),
         })).optional().default([]),
         missing: z.array(z.string()).optional().default([]),
         note: z.string().nullable().optional().default(null),
@@ -89,8 +90,11 @@ container_count: number of containers, only if stated as a number.
 items: one entry per distinct material.
   desc: the material as the sender wrote it ("auto cast", "aluminium combo").
   qty: metric tonnes for that material if stated, else null.
-  rate: price per MT if stated, else null. A total price for a lot is NOT a rate — leave rate null and say so in note.
-  rate_confidence: 0.0-1.0. Use 0.9+ only when the email plainly ties that number to that material as a per-unit price. Use below 0.5 when a number is present but the link to the material or the unit is ambiguous.
+  rate: the price figure as written, whatever basis it is on. null if none.
+  rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
+  rate_confidence: 0.0-1.0, how sure you are of the FIGURE itself (not its basis). Use 0.9+ only when the email plainly ties that number to that material.
+
+WHEN AN EMAIL CONTAINS SEVERAL PRICES: a message may quote a price to the end buyer, subtract agent commissions, and then state what WE receive ("your price is X"). The figure that belongs on our proforma is the one presented as ours. Put that in rate, and say in note what the other figures were and why you chose this one, so a human can check the choice.
 
 missing: field names a proforma needs that this email does not give, from: consignee, material, quantity, rate, trade_terms, port_discharge, container_count.
 note: one short sentence on anything a human should check — an ambiguous number, a total-vs-unit price, two materials sharing one price. null if nothing.
@@ -115,6 +119,7 @@ async function extractOrderFromEmail(email) {
             qty: num(it && it.qty),
             rate: num(it && it.rate),
             rate_confidence: typeof (it && it.rate_confidence) === 'number' ? it.rate_confidence : 0,
+            rate_basis: ['per_mt', 'per_lot', 'unknown'].includes(it && it.rate_basis) ? it.rate_basis : 'unknown',
         }))
         .filter((it) => it.desc);
     return {
@@ -143,15 +148,59 @@ const RATE_TRUST = 0.75;
 // half-read number can never quietly become a price on the document.
 function toProformaDraft(order, { fallbackConsignee } = {}) {
     const unconfirmed = [];
-    const items = (order.items || []).map((it) => {
-        const trusted = it.rate != null && it.rate_confidence >= RATE_TRUST;
-        if (it.rate != null && !trusted) unconfirmed.push(`${it.desc}: read "${it.rate}" but not clearly a per-MT price`);
-        return { desc: it.desc, qty: it.qty ?? 21, rate: trusted ? it.rate : 0 };
-    });
     const needs = [];
+    const items = (order.items || []).map((it) => {
+        // A rate is usable ONLY if we're confident of the figure AND it is
+        // plainly per metric tonne. rate_basis was added 2026-08-24 after a
+        // real email — "2 containers of auto casting tense at 2,450 ... Your
+        // price is $2,420 CIF Busan" — where the model correctly picked 2,420,
+        // scored it 0.9 confident, and said in its own note that it looked
+        // like a LOT TOTAL rather than a per-tonne rate. Confidence alone
+        // therefore passed it straight through. A per-lot figure used as a
+        // per-tonne rate multiplies the invoice by the tonnage: 2,420 becomes
+        // 2,420 x 21 x 2 containers = $101,640 for a $2,420 order.
+        const basis = it.rate_basis || 'unknown';
+        const figureOk = it.rate != null && it.rate_confidence >= RATE_TRUST;
+        const trusted = figureOk && basis === 'per_mt';
+        if (it.rate != null && !trusted) {
+            unconfirmed.push(basis === 'per_lot'
+                ? `${it.desc}: "${it.rate}" reads as a total for the lot, not a per-MT rate`
+                : basis === 'unknown'
+                    ? `${it.desc}: "${it.rate}" — the email doesn't make clear whether that's per MT or a total`
+                    : `${it.desc}: read "${it.rate}" but not confidently`);
+        }
+        // NEVER invent a quantity. The first version defaulted a missing qty
+        // to 21 MT, which silently turned "the email doesn't say how much"
+        // into a priced line on a document going to a customer.
+        if (it.qty == null) needs.push('quantity');
+        return { desc: it.desc, qty: it.qty, rate: trusted ? it.rate : 0 };
+    });
     if (!items.length) needs.push('material');
     if (items.some((i) => !i.rate)) needs.push('rate');
     if (!(order.consignee || fallbackConsignee)) needs.push('consignee');
+    // The model's own "missing" list is authoritative too — it said qty was
+    // missing on that same real email while the code cleared needs to empty
+    // and offered to send. Trusting only our own derived checks threw away a
+    // signal the model had already given us.
+    // ...but never let it contradict direct evidence. On the real Daekwang
+    // email the model listed "material" as missing while the email plainly
+    // said "auto casting tense" and we had it in items — it seems to have
+    // meant the GRADE was underspecified. Reporting "missing: material" to
+    // someone looking at an email that names the material reads as a bug and
+    // teaches her to distrust the whole list. So a model claim is only
+    // accepted where our own check hasn't already settled the question.
+    const MAP = { qty: 'quantity', quantity: 'quantity', rate: 'rate', price: 'rate', material: 'material', consignee: 'consignee' };
+    const haveMaterial = items.length > 0;
+    const haveAllQty = items.length > 0 && items.every((i) => i.qty != null);
+    const haveAllRates = items.length > 0 && items.every((i) => i.rate);
+    for (const m of (order.missing || [])) {
+        const k = MAP[String(m).toLowerCase()];
+        if (!k) continue;
+        if (k === 'material' && haveMaterial) continue;
+        if (k === 'quantity' && haveAllQty) continue;
+        if (k === 'rate' && haveAllRates) continue;
+        needs.push(k);
+    }
     return {
         consignee: order.consignee || fallbackConsignee || '',
         containerCount: order.container_count && order.container_count > 0 ? Math.round(order.container_count) : 1,

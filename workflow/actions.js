@@ -4838,7 +4838,10 @@ async function startProformaFromEmail(chatId, targetName) {
         const lines = [`I read the order from ${who} but it doesn't give me everything.`, ''];
         if (draft.items.length) {
             lines.push('What it does say:');
-            draft.items.forEach((i) => lines.push(`  • ${i.desc} — ${i.qty} MT${i.rate ? ` @ $${i.rate}` : ' (no rate)'}`));
+            // Renders an absent quantity as words, not "null MT" — a literal
+            // null on screen reads as a crash, not as "the email didn't say".
+            draft.items.forEach((i) => lines.push(
+                `  • ${i.desc} — ${i.qty != null ? `${i.qty} MT` : 'quantity not stated'}${i.rate ? ` @ $${i.rate}/MT` : ', no usable rate'}`));
             lines.push('');
         }
         lines.push(`Missing: ${draft.needs.join(', ')}.`);
