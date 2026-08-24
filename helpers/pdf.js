@@ -112,11 +112,14 @@ function drawLetterhead(doc, subtitle, load) {
     // Address block sits directly under the name, tight leading so the four
     // lines read as one unit rather than a list.
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED);
-    // Phone and email pulled up 11pt each — the address is one line now, so
-    // leaving them where they were would open a gap under the company name.
+    // Two lines total, not four. Address collapsed 2026-08-22, then phone and
+    // email joined onto one line the same day ("similarly phone and mail in
+    // same line"). Measured before committing to it: the pair renders 159pt
+    // wide and so ends at x=209, while the right-aligned "Generated ..."
+    // block starts at x=409 — 200pt of clearance, so the two can't collide
+    // even with a longer timestamp.
     doc.text(EDGE_TRADING.address, PAGE_L, 70, { lineBreak: false });
-    doc.text(EDGE_TRADING.phone, PAGE_L, 81, { lineBreak: false });
-    doc.text(EDGE_TRADING.email, PAGE_L, 92, { lineBreak: false });
+    doc.text(`${EDGE_TRADING.phone}  ·  ${EDGE_TRADING.email}`, PAGE_L, 81, { lineBreak: false });
 
     // Document type + load id stay right-aligned, opposite the address, so
     // neither block has to compete for the same horizontal space.
@@ -128,13 +131,13 @@ function drawLetterhead(doc, subtitle, load) {
         .text(subtitle.toUpperCase(), PAGE_L, 62, { width: PAGE_R - PAGE_L, align: 'right', characterSpacing: 1.2 })
         .text(`Generated ${formatCreatedAt(new Date().toISOString())}`, PAGE_L, 76, { width: PAGE_R - PAGE_L, align: 'right' });
 
-    // 111, not 122: the address block lost a line (2026-08-22), so the rule
-    // comes up with it rather than leaving dead space. Still clears BOTH
-    // blocks — the address column now ends at 92+~9=101, and the right-hand
-    // "Generated ..." line at 76+~9=85.
-    doc.moveTo(PAGE_L, 111).lineTo(PAGE_R, 111).lineWidth(1.5).strokeColor(NAVY).stroke();
+    // 100, down from 122 across two passes on 2026-08-22 as the letterhead
+    // went from four lines to two. Still clears BOTH blocks: the left column
+    // now ends at 81+~9=90, and the right-hand "Generated ..." line at
+    // 76+~9=85.
+    doc.moveTo(PAGE_L, 100).lineTo(PAGE_R, 100).lineWidth(1.5).strokeColor(NAVY).stroke();
     doc.lineWidth(1);
-    doc.y = 125; // was 136, tracking the rule up by the same 11pt
+    doc.y = 114; // tracks the rule: 136 -> 125 -> 114 as each line was removed
 }
 
 // twoColFields render as "Label value" pairs, 2 per row, inside a shaded box.
