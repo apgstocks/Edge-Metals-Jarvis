@@ -142,14 +142,56 @@ async function extractOrderFromEmail(email) {
 // where being wrong is expensive, and the cost of asking is one message.
 const RATE_TRUST = 0.75;
 
+// ── Standard container loading ────────────────────────────────────────────
+// Apsara, 2026-08-24: "by default only 21 MT for auto cast, if both Al combo
+// and Regular combo/steel combo — then it should be 13 followed by 9 MT
+// respectively."
+//
+// These are how a container is actually loaded, not guesses: a container takes
+// 21 MT of auto cast on its own, or 13 MT of aluminium combo alongside 9 MT of
+// regular/steel combo when the two ship together.
+//
+// This is the ONLY place a quantity may be supplied that the email did not
+// state, and it exists because she gave the rule explicitly. It is still
+// marked as assumed and called out in the read-back — the distinction between
+// "the customer said 21" and "we always load 21" matters when someone is
+// checking a document before it goes out, and one of those is worth querying.
+//
+// Anything outside these patterns still comes back with no quantity and stops,
+// rather than being rounded to whatever looks close.
+const norm = (d) => String(d || '').toUpperCase().replace(/[^A-Z]/g, '');
+const isAutoCast = (d) => norm(d).includes('AUTOCAST');
+const isAlCombo = (d) => /^(?=.*(?:ALUMINIUM|ALUMINUM|\bAL\b|^AL))(?=.*COMBO)/.test(norm(d)) || /ALCOMBO|ALUMINIUMCOMBO|ALUMINUMCOMBO/.test(norm(d));
+const isSteelCombo = (d) => /REGULARCOMBO|STEELCOMBO/.test(norm(d));
+
+// Fills quantities from the loading convention where it applies. Returns the
+// items with { qty, qty_assumed } set; never overwrites a quantity the email
+// actually gave.
+function applyStandardQuantities(items) {
+    const hasAl = items.some((i) => isAlCombo(i.desc));
+    const hasSteel = items.some((i) => isSteelCombo(i.desc));
+    const pairLoad = hasAl && hasSteel;
+    return items.map((it) => {
+        if (it.qty != null) return { ...it, qty_assumed: false };
+        let qty = null;
+        if (pairLoad && isAlCombo(it.desc)) qty = 13;
+        else if (pairLoad && isSteelCombo(it.desc)) qty = 9;
+        // 21 only when auto cast is the whole load — an auto-cast line sharing
+        // a container with something else is not the 21 MT pattern.
+        else if (isAutoCast(it.desc) && items.length === 1) qty = 21;
+        return { ...it, qty, qty_assumed: qty != null };
+    });
+}
+
 // Turns an extraction into the payload helpers/proformaPdf.js already accepts,
 // filling only what the email actually said and reporting what it did not.
 // Rates below RATE_TRUST are stripped out and listed as unconfirmed, so a
 // half-read number can never quietly become a price on the document.
 function toProformaDraft(order, { fallbackConsignee } = {}) {
     const unconfirmed = [];
+    const assumed = [];
     const needs = [];
-    const items = (order.items || []).map((it) => {
+    const items = applyStandardQuantities(order.items || []).map((it) => {
         // A rate is usable ONLY if we're confident of the figure AND it is
         // plainly per metric tonne. rate_basis was added 2026-08-24 after a
         // real email — "2 containers of auto casting tense at 2,450 ... Your
@@ -173,7 +215,8 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // to 21 MT, which silently turned "the email doesn't say how much"
         // into a priced line on a document going to a customer.
         if (it.qty == null) needs.push('quantity');
-        return { desc: it.desc, qty: it.qty, rate: trusted ? it.rate : 0 };
+        if (it.qty_assumed) assumed.push(`${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
+        return { desc: it.desc, qty: it.qty, rate: trusted ? it.rate : 0, qty_assumed: !!it.qty_assumed };
     });
     if (!items.length) needs.push('material');
     if (items.some((i) => !i.rate)) needs.push('rate');
@@ -193,12 +236,19 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     const haveMaterial = items.length > 0;
     const haveAllQty = items.length > 0 && items.every((i) => i.qty != null);
     const haveAllRates = items.length > 0 && items.every((i) => i.rate);
+    // Consignee needed its own guard too — missed in the first pass, and it
+    // showed up immediately: an email that named no buying company made the
+    // model list "consignee" as missing, which blocked a draft that had a
+    // perfectly good consignee from the sender fallback. Same rule as the
+    // rest: a model claim never overrides something we can see for ourselves.
+    const haveConsignee = !!(order.consignee || fallbackConsignee);
     for (const m of (order.missing || [])) {
         const k = MAP[String(m).toLowerCase()];
         if (!k) continue;
         if (k === 'material' && haveMaterial) continue;
         if (k === 'quantity' && haveAllQty) continue;
         if (k === 'rate' && haveAllRates) continue;
+        if (k === 'consignee' && haveConsignee) continue;
         needs.push(k);
     }
     return {
@@ -210,9 +260,10 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         payment_term: order.payment_term || '',
         needs: [...new Set(needs)],
         unconfirmed,
+        assumed,
         note: order.note || null,
         confidence: order.confidence,
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, buildOrderPrompt, RATE_TRUST };
+module.exports = { extractOrderFromEmail, toProformaDraft, buildOrderPrompt, applyStandardQuantities, RATE_TRUST };

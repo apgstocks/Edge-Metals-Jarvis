@@ -4845,6 +4845,7 @@ async function startProformaFromEmail(chatId, targetName) {
             lines.push('');
         }
         lines.push(`Missing: ${draft.needs.join(', ')}.`);
+        if (draft.assumed.length) lines.push('', ...draft.assumed.map((a) => `Assumed: ${a}`));
         if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `Unclear: ${u}`));
         if (draft.note) lines.push('', `Note: ${draft.note}`);
         lines.push('', 'Tell me the missing bits and I\'ll build it, or raise it in the app under Documents.');
@@ -4872,7 +4873,7 @@ async function startProformaFromEmail(chatId, targetName) {
     const total = draft.items.reduce((s, i) => s + (i.qty || 0) * (i.rate || 0), 0) * draft.containerCount;
     const lines = [
         `Proforma for ${draft.consignee}, from their email:`, '',
-        ...draft.items.map((i) => `  • ${i.desc} — ${i.qty} MT @ $${i.rate} = $${(i.qty * i.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
+        ...draft.items.map((i) => `  • ${i.desc} — ${i.qty} MT${i.qty_assumed ? '*' : ''} @ $${i.rate}/MT = $${(i.qty * i.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
         '',
         `Containers: ${draft.containerCount}${containerNos.length ? ` (${containerNos.join(', ')})` : ''}`,
         `Invoice no: ${invNo || '(none suggested — I\'ll leave it blank)'}`,
@@ -4880,6 +4881,11 @@ async function startProformaFromEmail(chatId, targetName) {
     if (draft.trade_terms) lines.push(`Trade terms: ${draft.trade_terms}`);
     if (draft.port_discharge) lines.push(`Port of discharge: ${draft.port_discharge}`);
     lines.push(`Total: $${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+    // Quantities we supplied rather than read are marked inline with * AND
+    // spelled out here. "The customer said 21" and "we always load 21" are
+    // different claims, and only one of them is worth querying before a
+    // document goes out.
+    if (draft.assumed.length) lines.push('', ...draft.assumed.map((a) => `* ${a}`));
     if (draft.unconfirmed.length) lines.push('', ...draft.unconfirmed.map((u) => `⚠ ${u}`));
     if (draft.note) lines.push('', `Note: ${draft.note}`);
     if (draft.confidence < 0.7) lines.push('', `⚠ I'm only ${Math.round(draft.confidence * 100)}% sure I read that email correctly.`);
