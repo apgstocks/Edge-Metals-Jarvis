@@ -175,21 +175,46 @@ function drawFieldBox(doc, twoColFields, fullFields) {
     const fields = Array.isArray(fullFields) ? fullFields : (fullFields ? [fullFields] : []);
 
     // ── measure the two-col rows ──────────────────────────────────────────
-    const m2 = twoColFields.map((f, i) => {
-        const col = i % 2;
+    // `span: 2` gives a field the whole row instead of one column. Added for
+    // Description 2026-08-22 ("description should be in one straight line"):
+    // it was the only field on its row, so half the width was empty while the
+    // text wrapped to three lines beside it. Full width fits even a
+    // 100-character description on one line (408pt of 429pt available), which
+    // is what she's after — and it costs no vertical space, because the row
+    // was already there.
+    //
+    // Column assignment walks the list rather than using i%2, since a spanning
+    // field consumes a whole row and would otherwise throw off the parity of
+    // everything after it.
+    let cursor = 0; // running column slot
+    const m2 = twoColFields.map((f) => {
+        const span = f.span === 2 ? 2 : 1;
+        if (span === 2 && cursor % 2 === 1) cursor += 1; // a spanning field starts a fresh row
+        const col = cursor % 2;
+        const row = Math.floor(cursor / 2);
+        cursor += span;
         doc.font('Helvetica-Bold').fontSize(9);
         const labelW = doc.widthOfString(f.label + ' ');
         doc.font('Helvetica').fontSize(9);
         // Floor of 60pt: a pathologically long label shouldn't squeeze the
         // value into a one-character-per-line ribbon.
-        const valueW = Math.max(60, FB_COL_W[col] - labelW);
+        const cellW = span === 2 ? (PAGE_R - 14) - FB_COL_X[0] : FB_COL_W[col];
+        const valueW = Math.max(60, cellW - labelW);
         const h = doc.heightOfString(String(f.value || '—'), { width: valueW });
-        return { ...f, labelW, valueW, h: Math.max(12, h) };
+        return { ...f, span, col, row, labelW, valueW, h: Math.max(12, h) };
     });
+    const rowCount = Math.ceil(cursor / 2);
     const rowHeights = [];
-    for (let i = 0; i < m2.length; i += 2) {
-        const a = m2[i].h, b = m2[i + 1] ? m2[i + 1].h : 0;
-        rowHeights.push(Math.max(a, b) + 6); // 6pt of breathing room per row
+    for (let r = 0; r < rowCount; r++) {
+        const inRow = m2.filter((f) => f.row === r);
+        const a = inRow.length ? Math.max(...inRow.map((f) => f.h)) : 12;
+        const b = 0;
+        // 2pt, down from 6, per Apsara 2026-08-22 ("reduce spacing between
+        // date, seller, description"). These rows are label+value pairs a
+        // metre from someone's eyes on a printed ticket, not body copy that
+        // needs leading — 2pt is enough to keep adjacent rows from touching
+        // while the three read as one block instead of a spaced-out list.
+        rowHeights.push(Math.max(a, b) + 2);
     }
     const twoColH = rowHeights.reduce((s, h) => s + h, 0);
 
@@ -203,7 +228,10 @@ function drawFieldBox(doc, twoColFields, fullFields) {
         return { ...f, h };
     });
 
-    const boxH = 12 + twoColH + fullBlockH + 4;
+    // Top/bottom padding trimmed with the row spacing (12/4 -> 9/4): the box
+    // shrinking around tighter rows keeps the proportion, whereas leaving the
+    // old padding would just move the empty space to the edges.
+    const boxH = 9 + twoColH + fullBlockH + 4;
     // Height is fully known BEFORE anything is drawn, so the page-break check
     // runs first and doc.y is only read AFTER it — boxTop is then guaranteed
     // to be the top of wherever this box actually lands, never split across
@@ -213,11 +241,9 @@ function drawFieldBox(doc, twoColFields, fullFields) {
 
     doc.rect(PAGE_L, boxTop, PAGE_R - PAGE_L, boxH).fillAndStroke(NAVY_LIGHT, RULE);
 
-    m2.forEach((f, i) => {
-        const col = i % 2;
-        const rowIdx = Math.floor(i / 2);
-        const y = boxTop + 10 + rowHeights.slice(0, rowIdx).reduce((s, h) => s + h, 0);
-        const x = FB_COL_X[col];
+    m2.forEach((f) => {
+        const y = boxTop + 8 + rowHeights.slice(0, f.row).reduce((s, h) => s + h, 0);
+        const x = FB_COL_X[f.col];
         doc.font('Helvetica-Bold').fontSize(9).fillColor(NAVY).text(f.label, x, y, { lineBreak: false });
         // Value drawn as its own positioned block rather than `continued`,
         // so its wrap width is exactly the column remainder and wrapped
@@ -226,7 +252,7 @@ function drawFieldBox(doc, twoColFields, fullFields) {
             .text(String(f.value || '—'), x + f.labelW, y, { width: f.valueW });
     });
 
-    let fy = boxTop + 8 + twoColH;
+    let fy = boxTop + 6 + twoColH;
     measured.forEach((f) => {
         doc.font('Helvetica-Bold').fontSize(8).fillColor(NAVY).text(f.label, PAGE_L + 14, fy, { characterSpacing: 0.3 });
         doc.font('Helvetica').fontSize(9.5).fillColor(INK).text(f.value || '—', PAGE_L + 14, fy + 12, { width: 484 });
@@ -581,7 +607,9 @@ function generateLoadPdf(load, opts = {}) {
                 //   row 2  Seller      | Address
                 //   row 3  Description |
                 { label: 'Address:',     value: load.seller_address },
-                { label: 'Description:', value: load.description },
+                // Full row: only field on its line, and full width keeps it
+                // to one line instead of wrapping in a half-width column.
+                { label: 'Description:', value: load.description, span: 2 },
             ], []);
 
             const unit = load.weight_unit || 'lb';
@@ -742,7 +770,9 @@ function generateWeightsPdf(load, opts = {}) {
                 //   row 2  Seller      | Address
                 //   row 3  Description |
                 { label: 'Address:',     value: load.seller_address },
-                { label: 'Description:', value: load.description },
+                // Full row: only field on its line, and full width keeps it
+                // to one line instead of wrapping in a half-width column.
+                { label: 'Description:', value: load.description, span: 2 },
             ], []);
 
             const unit = load.weight_unit || 'lb';
