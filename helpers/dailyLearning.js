@@ -74,11 +74,43 @@ function readLookback(days = LOOKBACK_DAYS) {
 // Failure-shaped entries only — NEED_DATA outcomes, or an AI decision that
 // came in under the confidence bar. Successful replies/silences are not
 // candidates for a new rule.
+// ── WHOSE WORDS MAY SEED A RULE (2026-08-25) ───────────────────────────────
+// This filter used to select purely on outcome — NEED_DATA, or a
+// low-confidence AI decision — and say nothing about WHO wrote the message.
+//
+// That was a live path around phase 3's provenance defence. workflow/brain.js
+// writes an audit entry for EVERY message it handles, carrying the sender's
+// text, their senderRole, and a confidence — and role can be 'trucker',
+// 'supplier', 'contact' or 'yard'. So a supplier's WhatsApp message that the
+// AI handled at low confidence would flow into the reflection prompt, could
+// be drafted into a proposed rule, and on approval be stored as
+// `origin: manager, authority: act`.
+//
+// Phase 3 blocks external-origin text from ever becoming a belief. This path
+// bypassed it entirely, because origin was assigned from WHO APPROVED the
+// fact rather than WHOSE WORDS it came from — with her approval as the
+// laundering step. That is precisely the shape MemPoison (arXiv:2607.14651)
+// describes as a structural blind spot: content that passes every write-time
+// check in isolation and becomes harmful later through a different pathway.
+//
+// The original header already claimed this was scoped to WhatsApp-conversation
+// gaps and that email-watcher entries were "naturally excluded" for lacking a
+// numeric confidence. That was true by accident, not by design — adding a
+// confidence field to any other audit source would have silently opened it.
+// Make it explicit and fail closed: only the manager's and team's own words
+// may seed a candidate rule.
+const RULE_SEEDING_ROLES = new Set(['manager', 'team']);
+
 function findGaps(entries) {
-    return entries.filter(e =>
-        e.intent === 'NEED_DATA' ||
-        (e.resolvedBy === 'ai' && typeof e.confidence === 'number' && e.confidence < LOW_CONFIDENCE)
-    );
+    return entries.filter(e => {
+        // Fails closed: an entry with no source/role recorded is not trusted
+        // to seed a rule. Better to miss a pattern than to learn one from a
+        // party outside Apsara's control.
+        if (e.source !== 'core') return false;
+        if (!RULE_SEEDING_ROLES.has(e.senderRole)) return false;
+        return e.intent === 'NEED_DATA' ||
+            (e.resolvedBy === 'ai' && typeof e.confidence === 'number' && e.confidence < LOW_CONFIDENCE);
+    });
 }
 
 // Evidence-cited reflection (Generative Agents, arXiv:2304.03442). Each gap
@@ -187,4 +219,4 @@ async function run({ sendToManager, setPending, managerChatId }) {
     );
 }
 
-module.exports = { run, readLogFile, readLookback, logFilesForLookback, findGaps, generateCandidates, buildPrompt, LOOKBACK_DAYS };
+module.exports = { run, RULE_SEEDING_ROLES, readLogFile, readLookback, logFilesForLookback, findGaps, generateCandidates, buildPrompt, LOOKBACK_DAYS };

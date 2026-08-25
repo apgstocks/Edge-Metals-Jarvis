@@ -288,10 +288,10 @@ section('CORNER — where two phases meet');
     const inferred = await jsonH.addFact('Jarvis guesses TQL prefers mornings', false, { origin: 'agent' });
     ck('(setup) an inferred fact only informs', inferred.authority === 'inform');
 
-    const byHer = await jsonH.supersedeFact(inferred.id, 'TQL prefers mornings — confirmed', { origin: 'manager' });
+    const byHer = (await jsonH.supersedeFact(inferred.id, 'TQL prefers mornings — confirmed', { origin: 'manager' })).fact;
     ck('SHE can promote an inference to a real rule', byHer.authority === 'act');
 
-    const back = await jsonH.supersedeFact(byHer.id, 'Actually TQL prefers afternoons', { origin: 'agent' });
+    const back = (await jsonH.supersedeFact(byHer.id, 'Actually TQL prefers afternoons', { origin: 'agent' })).fact;
     ck('but Jarvis restating HER fact does not keep her authority', back.authority === 'inform',
         'authority was laundered upward through a supersede');
 
@@ -308,7 +308,7 @@ section('CORNER — where two phases meet');
     await jsonH.addFact('Notice period is 24h', true, { origin: 'manager' });
     ck('(setup) confirmed three times', jsonH.loadActiveFacts()[0].confirmations === 2);
 
-    const rep = await jsonH.supersedeFact(f.id, 'Notice period is 48h', { origin: 'manager' });
+    const rep = (await jsonH.supersedeFact(f.id, 'Notice period is 48h', { origin: 'manager' })).fact;
     // DOCUMENTED BEHAVIOUR, not an accident: a correction is a NEW claim, so
     // it starts at zero confirmations. That is right — she has said the new
     // thing once. It is safe because the replacement inherits the PIN, and a
@@ -359,6 +359,63 @@ section('CORNER — where two phases meet');
     const p2 = await prompt('who is cc on zimex mail');
     ck('and a legacy fact can be corrected end to end',
         p2.beliefs.includes('Bose and Kristal') && !p2.beliefs.includes('Bose is CC on all Zimex mail'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('RACE — a correction must never be silently lost');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, on reading the adversarial results: the "loser told it failed"
+// outcome I had catalogued as a PASS is not one. The loser is one of her
+// corrections. supersedeFact used to return a bare null, which conflated
+// "that id is gone", "it was retracted on purpose", and "something changed it
+// while you were deciding" — three situations needing three different
+// answers. A caller that did not carefully check dropped her edit on the
+// floor with nothing recording that a correction was discarded.
+{
+    fs.writeFileSync(cfg.FACTS_FILE, JSON.stringify([], null, 2));
+    VECTOR_ROWS = [];
+    const orig = await jsonH.addFact('Busan rate is $2,100/MT', true, { origin: 'manager' });
+
+    // She is asked to confirm a correction...
+    const r1 = await say('remember the Busan rate is $2,400/MT',
+        { ai: { contradicts: 1, confidence: 0.92, why: 'rate changed' } });
+    ck('(setup) a conflict is staged', /contradicts/i.test(r1.all));
+
+    // ...and while that question sits open, the dashboard corrects the SAME
+    // fact to something else. This is not exotic: she uses both surfaces.
+    await jsonH.supersedeFact(orig.id, 'Busan rate is $2,300/MT', { origin: 'manager' });
+
+    const r2 = await say('replace');
+    const active = activeTexts();
+    // substring, not exact: the "remember X" regex captures "the Busan rate
+    // is $2,400/MT" — the leading article is part of what she typed.
+    ck('her correction is NOT lost when the fact moved underneath',
+        active.some((t) => t.includes('$2,400/MT')),
+        'a correction she explicitly confirmed vanished silently');
+    ck('and the store did not fork into two competing beliefs',
+        active.length === 1, `active: ${JSON.stringify(active)}`);
+    ck('the superseded middle version is retained on record',
+        jsonH.loadFacts().some((f) => f.text.includes('$2,300') && f.status === 'superseded'));
+    ck('and she is TOLD it landed on a newer version than the one she was shown',
+        /already changed/i.test(r2.all),
+        'the collision was hidden — she thinks she corrected what she saw');
+
+    // A retraction is different: it was withdrawn on purpose, and chaining a
+    // correction onto it would quietly bring the belief back.
+    fs.writeFileSync(cfg.FACTS_FILE, JSON.stringify([], null, 2));
+    const gone = await jsonH.addFact('Old rule', true, { origin: 'manager' });
+    const r3 = await say('remember New rule replaces it',
+        { ai: { contradicts: 1, confidence: 0.9, why: 'x' } });
+    ck('(setup) staged', /contradicts/i.test(r3.all));
+    await jsonH.retractFact(gone.id, 'withdrawn');
+    const r4 = await say('replace');
+    ck('a correction is still SAVED when its target was retracted mid-question',
+        activeTexts().some((t) => t.includes('New rule replaces it')));
+    ck('but never resurrects the retracted fact',
+        !activeTexts().some((t) => t === 'Old rule'),
+        'a belief she deliberately removed came back');
+    ck('and she is told why it could not be a correction',
+        /removed entirely/i.test(r4.all));
 }
 
 // ══════════════════════════════════════════════════════════════════════════

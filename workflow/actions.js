@@ -1576,7 +1576,14 @@ Reply *replace* to make the new one current (I'll keep the old one on record), *
 // origin: manager — this arrived on her own WhatsApp number, through the
 // authorized-sender check in brain.js's normalize(). The channel is what
 // grants authority, not anything about the text.
-await addFact(clean, true, { origin: 'manager' });
+// addFact returns null when the write did not land. Answering "Got it —
+// I'll remember" for something that was never persisted is the worst
+// possible failure here: she stops repeating it, believing Jarvis has it.
+const stored = await addFact(clean, true, { origin: 'manager' });
+if (!stored) {
+    await _send(chatId, `I couldn't save that just now — something went wrong writing to memory. Say it again in a moment and I'll retry.`);
+    return { action_taken: 'fact_store_failed' };
+}
 await _send(chatId, `Got it — I'll remember: "${clean}"`);
 return { action_taken: 'fact_stored' };
 }
@@ -1588,24 +1595,62 @@ async function resolveFactConflict(chatId, pending, answer) {
     const { supersedeFact } = require('../helpers/json');
 
     if (/^(replace|supersede|update|new)\b/.test(a) || a === 'yes') {
-        const replacement = await supersedeFact(p.oldId, p.newText, { reason: 'manager correction', origin: 'manager' });
+        // followChain: this pending may have sat open while the fact moved —
+        // she corrected it from the dashboard, or the nightly review replaced
+        // it. Her answer here is still a correction of THAT belief, so apply
+        // it to whatever now heads the chain rather than discarding it. The
+        // old behaviour (bare null) meant her correction could silently
+        // become a duplicate standalone fact sitting beside the real one.
+        const res = await supersedeFact(p.oldId, p.newText, {
+            reason: 'manager correction', origin: 'manager', followChain: true,
+        });
         await clearPending(chatId);
-        if (!replacement) {
-            // The old fact moved underneath us (retracted or superseded by
-            // something else while this question sat open). Storing the new
-            // text standalone is still the right outcome — she asked for it —
-            // but say what happened rather than reporting a clean correction.
-            await addFact(p.newText, true, { origin: 'manager' });
-            await _send(chatId, `Saved "${p.newText}". The older one had already changed since I asked, so there was nothing left to replace.`);
-            return { action_taken: 'fact_conflict_stale_replace' };
+
+        if (res.ok) {
+            // Say plainly when it landed on something other than what she was
+            // shown — otherwise "Updated" hides that two changes collided.
+            const movedUnderneath = !(res.fact.supersedes || []).includes(p.oldId);
+            await _send(chatId, movedUnderneath
+                ? `Updated to "${p.newText}". Heads up: that fact had already changed since I asked, so I applied your correction on top of the newer version rather than the one I showed you.`
+                : `Updated. I'll go by "${p.newText}" now — the old one stays on record, marked as replaced.`);
+            return { action_taken: 'fact_superseded' };
         }
-        await _send(chatId, `Updated. I'll go by "${p.newText}" now — the old one stays on record, marked as replaced.`);
-        return { action_taken: 'fact_superseded' };
+
+        if (res.reason === 'write_failed') {
+            // Do NOT fall through to addFact: the store is failing to write,
+            // so a retry here would fail too and she would be told something
+            // reassuring but false. Keep the pending decision honest.
+            await _send(chatId, `I couldn't save that correction — something went wrong writing to memory. Nothing changed; tell me again in a moment.`);
+            return { action_taken: 'fact_conflict_write_failed' };
+        }
+
+        if (res.reason === 'retracted') {
+            // Deliberately withdrawn while this sat open. Chaining onto it
+            // would quietly resurrect a belief she removed on purpose.
+            const savedA = await addFact(p.newText, true, { origin: 'manager' });
+            await _send(chatId, savedA
+                ? `Saved "${p.newText}" as a new fact — the one it would have replaced was removed entirely while this was open, so there was nothing to correct.`
+                : `I couldn't save that — something went wrong writing to memory. Tell me again in a moment.`);
+            return { action_taken: savedA ? 'fact_conflict_stale_replace' : 'fact_conflict_write_failed' };
+        }
+
+        // not_found / empty_text — store it anyway. She asked for this text to
+        // be true; failing to record it because a reference went stale would
+        // lose the correction, which is the whole point of this change.
+        const savedB = await addFact(p.newText, true, { origin: 'manager' });
+        await _send(chatId, savedB
+            ? `Saved "${p.newText}". I couldn't find the older one to mark as replaced (${res.reason}), so it's stored on its own.`
+            : `I couldn't save that — something went wrong writing to memory. Tell me again in a moment.`);
+        return { action_taken: savedB ? 'fact_conflict_stale_replace' : 'fact_conflict_write_failed' };
     }
 
     if (/^both\b/.test(a) || /^keep\b/.test(a)) {
-        await addFact(p.newText, true, { origin: 'manager' });
+        const savedBoth = await addFact(p.newText, true, { origin: 'manager' });
         await clearPending(chatId);
+        if (!savedBoth) {
+            await _send(chatId, `I couldn't save that — something went wrong writing to memory. Only the original is still in place.`);
+            return { action_taken: 'fact_conflict_write_failed' };
+        }
         await _send(chatId, `Kept both. If they turn out to conflict in practice, tell me which one wins.`);
         return { action_taken: 'fact_conflict_kept_both' };
     }
@@ -1944,15 +1989,21 @@ if (!toAdd.length) {
 // actual log entries it was drawn from — and if one of those turns out to
 // have been a misread, the rule built on it can be found and retracted.
 const details = pending.candidateDetails || [];
+const saved = [], lost = [];
 for (const fact of toAdd) {
     const detail = details.find((d) => d && d.fact === fact);
-    await addFact(fact, true, {
+    const ok = await addFact(fact, true, {
         origin: 'manager', proposedBy: 'agent',
         derivedFrom: detail && detail.evidence ? detail.evidence : [],
     });
+    (ok ? saved : lost).push(fact);
 }
-await _send(chatId, `Added ${toAdd.length} fact${toAdd.length === 1 ? '' : 's'}:\n${toAdd.map(f => `- ${f}`).join('\n')}`);
-return { action_taken: 'fact_batch_confirmed' };
+// Report what ACTUALLY saved. Announcing "Added 3 facts" when one silently
+// failed to write is how she ends up relying on a rule Jarvis does not hold.
+if (saved.length) await _send(chatId, `Added ${saved.length} fact${saved.length === 1 ? '' : 's'}:\n${saved.map(f => `- ${f}`).join('\n')}`);
+if (lost.length) await _send(chatId, `Couldn't save ${lost.length}${saved.length ? ' of them' : ''} — something went wrong writing to memory:\n${lost.map(f => `- ${f}`).join('\n')}`);
+if (!saved.length) return { action_taken: 'fact_batch_write_failed' };
+return { action_taken: 'fact_batch_confirmed', saved: saved.length, lost: lost.length };
 }
 
 // ── Manager-initiated outbound email ("email Zimex about DALA123's cutoff") ──

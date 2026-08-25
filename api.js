@@ -2265,8 +2265,11 @@ function createApi() {
         if (!text) return res.status(400).json({ error: 'text required' });
         // origin: manager — behind requireAdmin, i.e. an authenticated
         // dashboard session or the machine API token. Channel, not content.
-        await addFact(text, !!req.body?.pinned, { origin: 'manager' });
-        res.json({ ok: true });
+        const saved = await addFact(text, !!req.body?.pinned, { origin: 'manager' });
+        // A 200 for a fact that never reached disk is the same lie as
+        // "Got it — I'll remember" on WhatsApp: she stops repeating it.
+        if (!saved) return res.status(503).json({ error: 'could not save — the memory store is not writable right now', reason: 'write_failed' });
+        res.json({ ok: true, id: saved.id });
     });
 
     // Pin/unpin an existing fact — see helpers/json.js's addFact header for
@@ -2315,10 +2318,23 @@ function createApi() {
         // ?purge=true still hard-deletes, for genuine junk that should leave
         // no trace; that path is not reachable from the dashboard.
         const purge = String(req.query.purge || '') === 'true';
-        const removed = purge
+        const outcome = purge
             ? await deleteFactById(id)
             : await retractFact(id, String(req.body?.reason || '') || 'deleted from dashboard');
-        if (!removed) return res.status(404).json({ error: 'not found' });
+        // deleteFactById still returns a bare record/null; retractFact returns
+        // a structured result. Normalise both here rather than making the
+        // dashboard care which path it took.
+        const removed = purge ? outcome : (outcome.ok ? outcome.fact : null);
+        if (!removed) {
+            const reason = purge ? 'not_found' : outcome.reason;
+            if (reason === 'write_failed') {
+                return res.status(503).json({ error: 'could not save — the memory store is not writable right now', reason: 'write_failed' });
+            }
+            // "Already gone" is not an error worth alarming her about — the
+            // end state she asked for is the end state she has.
+            if (reason === 'already_retracted') return res.json({ ok: true, id, alreadyRetracted: true });
+            return res.status(404).json({ error: 'not found', reason });
+        }
         // Keep the graph node (if Neo4j is configured) in sync with a
         // dashboard delete. helpers/graph.js DOES NOT EXIST in this repo and
         // never has — verified on disk and on GitHub, 2026-08-25. A bare
@@ -2338,6 +2354,17 @@ function createApi() {
         res.json({ ok: true, id: removed.id, purged: purge });
     });
 
+    // Is there actually a usable off-VM backup, and how stale is it?
+    // A backup nobody checks is a backup nobody has — this is the only way to
+    // find out replication has been failing before the day it is needed.
+    app.get('/api/facts/replica', requireAdmin, async (req, res) => {
+        try {
+            res.json(await require('./helpers/factReplica').status());
+        } catch (e) {
+            res.status(500).json({ configured: true, ok: false, error: e.message });
+        }
+    });
+
     // ── Correct a fact, keeping the history (2026-08-25, phase 2) ──────────
     // The dashboard's "Correct" action. Distinct from editing the text in
     // place, which would erase the fact that Jarvis ever believed the old
@@ -2347,23 +2374,50 @@ function createApi() {
         const text = String(req.body?.text || '').trim();
         if (!id) return res.status(400).json({ error: 'invalid id' });
         if (!text) return res.status(400).json({ error: 'replacement text required' });
-        const replacement = await supersedeFact(id, text, {
+        // followChain is opt-in from the client. A dashboard correction is
+        // made against a rendered list that may be seconds stale; when the
+        // fact has moved, the honest default is to REFUSE and show her what it
+        // collided with, so she can decide whether her edit still applies —
+        // rather than silently stacking it on a change she has not seen.
+        const res2 = await supersedeFact(id, text, {
             pinned: typeof req.body?.pinned === 'boolean' ? req.body.pinned : null,
             reason: String(req.body?.reason || '') || 'corrected from dashboard',
             origin: 'manager',
+            followChain: req.body?.followChain === true,
         });
-        // Null means the target is missing OR already superseded/retracted —
-        // superseding a record twice would fork its history into two competing
-        // chains, so it is refused rather than silently branched.
-        if (!replacement) return res.status(409).json({ error: 'not found, or already superseded/retracted' });
-        res.json({ ok: true, id: replacement.id, supersedes: id });
+        if (!res2.ok) {
+            // A failed WRITE is not a conflict — 409 would tell the dashboard
+            // "someone changed this", which is wrong and unactionable. 503
+            // says what is true: the store is not writable, try again.
+            if (res2.reason === 'write_failed') {
+                return res.status(503).json({ error: 'could not save — the memory store is not writable right now', reason: 'write_failed' });
+            }
+            // 409 carries the REASON and the current head, so the client can
+            // say "this changed to X — apply yours on top?" instead of the
+            // old undifferentiated "not found, or already superseded".
+            return res.status(409).json({
+                error: 'could not supersede', reason: res2.reason,
+                currentHead: res2.currentHead ? { id: res2.currentHead.id, text: res2.currentHead.text } : null,
+            });
+        }
+        res.json({ ok: true, id: res2.fact.id, supersedes: id });
     });
 
     // Undo a retraction — the recoverability that makes soft-delete worth it.
     app.post('/api/facts/:id/unretract', requireAdmin, async (req, res) => {
-        const revived = await unretractFact(String(req.params.id || ''));
-        if (!revived) return res.status(409).json({ error: 'not found, or not retracted' });
-        res.json({ ok: true, id: revived.id });
+        const out = await unretractFact(String(req.params.id || ''));
+        if (!out.ok) {
+            if (out.reason === 'write_failed') {
+                return res.status(503).json({ error: 'could not save — the memory store is not writable right now', reason: 'write_failed' });
+            }
+            return res.status(409).json({
+                error: out.reason === 'superseded'
+                    ? 'that fact was replaced by a newer one — restoring it would leave two conflicting facts active'
+                    : 'not found, or not retracted',
+                reason: out.reason,
+            });
+        }
+        res.json({ ok: true, id: out.fact.id });
     });
 
     // ── Bot command surface — mimic WhatsApp interactions from the web ─────

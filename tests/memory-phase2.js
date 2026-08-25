@@ -95,10 +95,15 @@ section('G2 — a correction records history instead of destroying it');
     writeFacts([]);
     STORED = [];
     const original = await json.addFact('Busan rate is $2,100/MT', true);
-    const replacement = await json.supersedeFact(original.id, 'Busan rate is $2,400/MT', { reason: 'manager correction' });
+    // supersedeFact returns a structured result as of 2026-08-25 — see its
+    // header. A bare null could not distinguish "gone" from "someone changed
+    // it while you were deciding", so a lost correction looked like a pass.
+    const supRes = await json.supersedeFact(original.id, 'Busan rate is $2,400/MT', { reason: 'manager correction' });
     await settle();
+    const replacement = supRes.ok ? supRes.fact : null;
 
-    ck('supersede returns the new record', !!replacement && replacement.text === 'Busan rate is $2,400/MT');
+    ck('supersede reports success and returns the new record',
+        supRes.ok === true && !!replacement && replacement.text === 'Busan rate is $2,400/MT');
     ck('the correction inherits the pin from what it replaced', replacement.pinned === true);
 
     const all = json.loadFacts();
@@ -120,7 +125,10 @@ section('G2 — a correction records history instead of destroying it');
     // Superseding an already-superseded record would fork its history into
     // two competing chains — refuse rather than branch it silently.
     const again = await json.supersedeFact(original.id, 'Busan rate is $9,999/MT');
-    ck('a superseded fact cannot be superseded a second time', again === null);
+    ck('a superseded fact cannot be superseded a second time', again.ok === false);
+    ck('and it says WHY, rather than a bare failure', again.reason === 'already_superseded');
+    ck('and hands back what it collided with, so a caller can offer a choice',
+        !!again.currentHead && again.currentHead.text === 'Busan rate is $2,400/MT');
     ck('and nothing was written by that attempt', json.loadFacts().length === 2);
 }
 
@@ -132,10 +140,11 @@ section('G3 — retract is a different thing from supersede, and is reversible')
     const bad = await json.addFact('Trucker Dave handles Houston', true);
     const good = await json.addFact('Bose is CC on all Zimex mail', true);
 
-    const out = await json.retractFact(bad.id, 'that was never true');
+    const retRes = await json.retractFact(bad.id, 'that was never true');
     await settle();
+    const out = retRes.ok ? retRes.fact : null;
 
-    ck('retract returns the record it retracted', !!out && out.id === bad.id);
+    ck('retract reports success and returns the record', retRes.ok === true && !!out && out.id === bad.id);
     ck('the record is still on disk', json.loadFacts().length === 2);
     ck('but it is no longer believed', json.loadActiveFacts().map((f) => f.id).join() === good.id);
     ck('it is marked retracted, NOT superseded', json.loadFacts().find((f) => f.id === bad.id).status === 'retracted');
@@ -143,9 +152,9 @@ section('G3 — retract is a different thing from supersede, and is reversible')
     ck('retract drops the vector row (unlike supersede)', DELETED.some((d) => d.text === 'Trucker Dave handles Houston'));
 
     STORED = [];
-    const revived = await json.unretractFact(bad.id);
+    const revRes = await json.unretractFact(bad.id);
     await settle();
-    ck('a retraction can be undone', !!revived && json.loadActiveFacts().length === 2);
+    ck('a retraction can be undone', revRes.ok === true && json.loadActiveFacts().length === 2);
     ck('and the fact becomes searchable again', STORED.some((x) => x.text === 'Trucker Dave handles Houston'));
 
     // Reviving a superseded fact would leave two active contradicting facts —
@@ -153,7 +162,8 @@ section('G3 — retract is a different thing from supersede, and is reversible')
     const orig = await json.addFact('Rate is $1', true);
     await json.supersedeFact(orig.id, 'Rate is $2');
     const badRevive = await json.unretractFact(orig.id);
-    ck('unretract refuses to revive a SUPERSEDED fact', badRevive === null);
+    ck('unretract refuses to revive a SUPERSEDED fact', badRevive.ok === false);
+    ck('and names that specific danger, not a generic failure', badRevive.reason === 'superseded');
     ck('so a correction can never be silently undone',
         !json.loadActiveFacts().some((f) => f.text === 'Rate is $1'));
 }

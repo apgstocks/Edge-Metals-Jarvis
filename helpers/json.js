@@ -29,36 +29,88 @@ function loadJson(filePath, defaultVal) {
     }
 }
 
-async function saveJson(filePath, data) {
+// ── ATOMIC WRITE ───────────────────────────────────────────────────────────
+// Write a complete new file, then rename it over the original. POSIX
+// rename(2) requires the destination name to keep pointing at a valid file
+// throughout — the swap is not observable halfway through — so a reader
+// always gets either the whole old file or the whole new one, and a crash
+// mid-write can never leave a truncated facts.json. That guarantee is why
+// loadJson() is safe with no lock of its own.
+//
+// The temp name is UNIQUE PER WRITE, not a fixed `${filePath}.tmp`.
+// writeFileSync is not one syscall for a file of any size — it loops over
+// write() — so two writers sharing a temp path can interleave inside it and
+// then rename the resulting mixture into place as if it were valid. Under
+// the lock only one writer exists, but saveJson's fallback below deliberately
+// writes WITHOUT the lock, which is exactly the case where a collision would
+// happen. A unique name degrades that worst case to last-writer-wins with a
+// complete document, which is what the warning there actually claims.
+let tmpCounter = 0;
+function writeAtomic(filePath, data) {
+    const tmp = `${filePath}.${process.pid}.${++tmpCounter}.tmp`;
+    try {
+        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+        fs.renameSync(tmp, filePath);
+    } catch (err) {
+        // Don't leave debris behind on a failed write.
+        try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+        throw err;
+    }
+}
+
+async function saveJson(filePath, data, { strict = false } = {}) {
     ensureFile(filePath, Array.isArray(data) ? [] : {});
     let release = null;
     try {
         release = await lockfile.lock(filePath, LOCK_OPTS);
-        const tmp = filePath + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
-        fs.renameSync(tmp, filePath);
+        writeAtomic(filePath, data);
     } catch (err) {
         console.error(`[JSON] Save failed ${filePath}:`, err.message);
-        try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8'); } catch {}
+        // This fallback used to be a bare fs.writeFileSync — no lock AND no
+        // temp+rename, i.e. precisely the torn write this module exists to
+        // prevent, reached exactly when contention is worst. Keep the atomic
+        // rename so a reader can never see a half-written file; only mutual
+        // exclusion is given up, and only after 8 backed-off retries failed.
+        try {
+            writeAtomic(filePath, data);
+            console.warn(`[JSON] ${filePath}: wrote WITHOUT the lock after repeated failures — a concurrent update may have been lost`);
+        } catch (err2) {
+            console.error(`[JSON] Unlocked fallback also failed ${filePath}:`, err2.message);
+            if (strict) throw err2;
+        }
     } finally {
         if (release) { try { await release(); } catch {} }
     }
 }
 
 // Read-modify-write under one lock. mutator(data) returns new data (or mutates in place and returns it).
-async function mutateJson(filePath, defaultVal, mutator) {
+//
+// strict (2026-08-25): THROW instead of silently returning stale data.
+//
+// The forgiving path returns loadJson() on failure, handing the caller
+// plausible-looking data with no way to tell the write never landed. That is
+// the same silent-loss shape as every "(non-fatal)" catch removed from this
+// codebase, and it leaked upward: addFact returned a fully-formed record for
+// a fact that was never persisted, and supersedeFact reported 'not_found' for
+// a fact that exists perfectly well when it was the WRITE that failed.
+//
+// Opt-in rather than flipped globally on purpose. Around twenty call sites
+// rely on the forgiving behaviour, and a failed logging or bookkeeping write
+// should not take a WhatsApp conversation down with it. The paths where a
+// lost write means lost DATA — anything Apsara taught Jarvis — opt in and
+// report honestly.
+async function mutateJson(filePath, defaultVal, mutator, { strict = false } = {}) {
     ensureFile(filePath, defaultVal);
     let release = null;
     try {
         release = await lockfile.lock(filePath, LOCK_OPTS);
         const data   = loadJson(filePath, defaultVal);
         const result = await mutator(data) ?? data;
-        const tmp    = filePath + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(result, null, 2), 'utf8');
-        fs.renameSync(tmp, filePath);
+        writeAtomic(filePath, result);
         return result;
     } catch (err) {
         console.error(`[JSON] Mutate failed ${filePath}:`, err.message);
+        if (strict) throw err;
         return loadJson(filePath, defaultVal);
     } finally {
         if (release) { try { await release(); } catch {} }
@@ -427,7 +479,14 @@ const AUTHORITY_RANK = { [AUTH_NONE]: 0, [AUTH_INFORM]: 1, [AUTH_ACT]: 2 };
 // to `act`) would mean one forgotten argument silently reopens the whole
 // hole this phase exists to close.
 function deriveAuthority(origin, derivedFromAuthorities = []) {
-    const own = ORIGIN_AUTHORITY[origin] ?? AUTH_NONE;
+    // Type-check before the lookup. JS coerces object keys through toString,
+    // so ORIGIN_AUTHORITY[{ toString: () => 'manager' }] resolves to 'act' —
+    // a fail-OPEN in the one function whose entire purpose is failing closed.
+    // No current call site passes anything but a literal, but a future one
+    // reading an origin out of parsed JSON or a request body could, and this
+    // is not a place to rely on every future caller being careful.
+    const key = typeof origin === 'string' ? origin : null;
+    const own = (key && ORIGIN_AUTHORITY[key]) ?? AUTH_NONE;
     let rank = AUTHORITY_RANK[own];
     for (const a of derivedFromAuthorities) {
         const r = AUTHORITY_RANK[a] ?? 0;
@@ -524,23 +583,44 @@ const loadBelievableFacts = () => loadActiveFacts().filter((f) => f.authority !=
 // near-match is a job for the phase-2 contradiction check, which asks her.
 // Silently folding two similar-but-different facts into one here would be a
 // quiet data loss with no confirmation step in front of it.
+// Collapses unicode whitespace as well as ASCII. Found by adversarial
+// testing: text pasted from Word or a web page carries non-breaking spaces
+// (U+00A0), and "Cutoff is Friday" with an NBSP created a SECOND record
+// instead of confirming the first. Genuine duplicates would accumulate
+// invisibly — two records that look identical in the dashboard, both in
+// every prompt, neither strengthening the other.
+const sameFactText = (t) => String(t || '').toLowerCase().replace(/[\s\u00a0\u200b]+/g, ' ').trim();
+
 async function confirmFact(text) {
-    const clean = String(text || '').trim().toLowerCase();
+    const clean = sameFactText(text);
     if (!clean) return null;
     let bumped = null;
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         const out = withFactIds(facts);
-        const f = out.find((x) => x.status === FACT_ACTIVE && String(x.text || '').trim().toLowerCase() === clean);
+        const f = out.find((x) => x.status === FACT_ACTIVE && sameFactText(x.text) === clean);
         if (!f) return out;
         f.confirmations = (f.confirmations || 0) + 1;
         f.last_recalled_at = new Date().toISOString();
         bumped = f;
         return out;
     });
+    if (bumped) replicateFact(bumped);
     return bumped;
 }
 
 async function addFact(text, pinned = false, opts = {}) {
+    // Reject junk before it becomes a record. Found by adversarial testing:
+    // addFact(null) and addFact('   ') both stored a fact, which then renders
+    // as an empty bullet in every prompt. Worse, deriveFactId hashes
+    // text|created_at, so two field-less legacy records collide on one id —
+    // and phase 1's whole addressing guarantee rests on ids being distinct.
+    const clean = typeof text === 'string' ? text.trim() : '';
+    if (!clean) {
+        console.warn('[JSON] addFact called with empty or non-string text — ignoring');
+        return null;
+    }
+    text = clean;
+
     // Said again? Strengthen, don't duplicate.
     if (opts.confirmIfExists !== false) {
         const bumped = await confirmFact(text);
@@ -556,6 +636,11 @@ async function addFact(text, pinned = false, opts = {}) {
         derived_from: opts.derivedFrom || [],
         proposed_by: opts.proposedBy || null,
     });
+    // strict: a failed write must NOT come back looking like a saved fact.
+    // Before this, addFact returned `record` regardless — so a lock failure
+    // produced a fully-formed fact object for something that never reached
+    // disk, and rememberFact cheerfully answered "Got it — I'll remember".
+    try {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         const out = withFactIds(facts);
         out.push(record);
@@ -566,9 +651,14 @@ async function addFact(text, pinned = false, opts = {}) {
             // than silently breaking "never forget" by evicting one anyway.
         }
         return out;
-    });
+    }, { strict: true });
+    } catch (err) {
+        console.error(`[JSON] addFact FAILED TO PERSIST "${String(text).slice(0, 60)}":`, err.message);
+        return null;
+    }
     require('./embeddings').storeEmbedding({ chatId: null, text, type: 'fact' })
         .catch((e) => console.error('[JSON] fact embedding store failed (non-fatal):', e.message));
+    replicateFact(record);
     return record;
 }
 
@@ -580,6 +670,7 @@ async function setFactPinned(id, pinned) {
         if (f) { f.pinned = !!pinned; ok = true; }
         return out;
     });
+    if (ok) { const f = loadFacts().find((x) => x.id === id); if (f) replicateFact(f); }
     return ok;
 }
 
@@ -613,38 +704,107 @@ async function setFactPinned(id, pinned) {
 // semantic search over history ("what did we used to charge?") still has
 // something to find. A retraction is different: that content was never true
 // and should not be findable at all.
-async function supersedeFact(oldId, newText, { pinned = null, reason = null, origin = null, derivedFromAuthorities = [] } = {}) {
+// ── OFF-VM BACKUP (2026-08-25) ─────────────────────────────────────────────
+// Every fact Apsara has ever taught Jarvis lives in one JSON file, on one VM,
+// with no backup of any kind. Lose that disk and the whole memory is gone.
+//
+// Fire-and-forget by design, and never awaited: a backup that can block her
+// teaching Jarvis something is worse than no backup. Failures are logged and
+// repaired by the nightly syncAll — that repair is what makes fire-and-forget
+// acceptable here rather than merely convenient.
+//
+// Deliberately NOT the source of truth. See claude/jarvis-supabase-plan.md:
+// reads stay local so phase 4's retrieval stays off the network, and a
+// Supabase outage cannot stop a write.
+function replicateFact(fact) {
+    if (!fact || !fact.id) return;
+    try {
+        require('./factReplica').replicate(fact);
+    } catch (e) {
+        console.error('[JSON] fact replication dispatch failed (non-fatal):', e.message);
+    }
+}
+
+// Walks superseded_by FORWARD to whatever currently replaces this fact.
+// Cycle-guarded for the same reason factHistory is: a corrupted pointer must
+// not hang the bot.
+function headOfChain(facts, id) {
+    const byId = new Map(facts.map((f) => [f.id, f]));
+    let cur = byId.get(id);
+    const seen = new Set();
+    while (cur && cur.superseded_by && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        const next = byId.get(cur.superseded_by);
+        if (!next) break;
+        cur = next;
+    }
+    return cur || null;
+}
+
+// Returns { ok: true, fact } or { ok: false, reason, currentHead? }.
+//
+// WHY A STRUCTURED RESULT, not the bare null this used to return:
+//
+// null conflated three outcomes that need three different responses —
+// "that id doesn't exist" (a bug), "it was retracted" (deliberate, do not
+// resurrect), and "something superseded it while you were deciding" (a race,
+// and the correction is still wanted). Adversarial testing framed the last
+// one as a pass: "two simultaneous corrections leave exactly one active fact
+// with the loser told it failed." That is not a pass. The loser is one of
+// Apsara's corrections, and a caller that does not carefully check for null
+// drops it on the floor.
+//
+// Concretely: she corrects a rate from WhatsApp while the dashboard corrects
+// it too. One wins. The other vanishes — with nothing in the store, the logs,
+// or the conversation saying a correction was discarded. That is the same
+// silent-loss shape as every (non-fatal) catch fixed in this project.
+//
+// followChain (opt-in) re-targets the correction at whatever now heads the
+// chain, so a correction made against a stale view still lands instead of
+// evaporating. NOT the default: applying an edit on top of a change you have
+// not seen is right when it is the same person continuing one intent, and
+// wrong when two people are disagreeing — so the caller decides, and
+// currentHead is always returned so it can show what it collided with.
+async function supersedeFact(oldId, newText, { pinned = null, reason = null, origin = null, derivedFromAuthorities = [], followChain = false } = {}) {
     const clean = String(newText || '').trim();
-    if (!clean) throw new Error('supersedeFact needs replacement text');
+    if (!clean) return { ok: false, reason: 'empty_text' };
     const now = new Date().toISOString();
     let replacement = null;
-    let ok = false;
+    let failure = null;
 
+    try {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         const out = withFactIds(facts);
-        const old = out.find((f) => f.id === oldId);
-        if (!old) return out;
-        // Superseding something already superseded or retracted would build a
-        // second, competing chain off one record and make the history
-        // ambiguous. Refuse rather than quietly branch it.
-        if (old.status !== FACT_ACTIVE) return out;
+        let old = out.find((f) => f.id === oldId);
 
-        // The replacement's authority comes from ITS OWN origin, not the
-        // record it replaces. A manager correction to an agent-inferred fact
-        // is rightly promoted to `act`; an agent restating a manager fact is
-        // rightly NOT — it stays `inform`. Deriving from the old fact instead
-        // would let a low-authority write inherit a high-authority slot just
-        // by pointing at it, which is the laundering path this phase closes.
+        if (!old) { failure = { ok: false, reason: 'not_found' }; return out; }
+
+        if (old.status === FACT_RETRACTED) {
+            // Never chain onto a retraction. It was withdrawn on purpose;
+            // superseding it would quietly bring the belief back to life.
+            failure = { ok: false, reason: 'retracted' };
+            return out;
+        }
+
+        if (old.status === FACT_SUPERSEDED) {
+            const head = headOfChain(out, oldId);
+            if (!followChain) {
+                failure = { ok: false, reason: 'already_superseded', currentHead: head || null };
+                return out;
+            }
+            if (!head || head.status !== FACT_ACTIVE) {
+                failure = { ok: false, reason: head ? 'retracted' : 'not_found', currentHead: head || null };
+                return out;
+            }
+            old = head;   // re-target at the live head
+        }
+
         const repOrigin = origin || ORIGIN_MANAGER;
         replacement = normaliseFact({
             id: newFactId(),
             text: clean,
-            // Inherit the pin unless the caller says otherwise — a correction
-            // to a standing rule is still a standing rule.
             pinned: pinned === null ? !!old.pinned : !!pinned,
-            created_at: now,
-            valid_from: now,
-            recorded_at: now,
+            created_at: now, valid_from: now, recorded_at: now,
             supersedes: [old.id],
             change_reason: reason,
             origin: repOrigin,
@@ -652,20 +812,33 @@ async function supersedeFact(oldId, newText, { pinned = null, reason = null, ori
         });
 
         old.status = FACT_SUPERSEDED;
-        old.valid_until = now;          // it stopped being true when this replaced it
+        old.valid_until = now;
         old.superseded_by = replacement.id;
         old.change_reason = reason;
 
         out.push(replacement);
-        ok = true;
         return out;
-    });
-
-    if (ok) {
-        require('./embeddings').storeEmbedding({ chatId: null, text: clean, type: 'fact' })
-            .catch((e) => console.error('[JSON] fact embedding store failed (non-fatal):', e.message));
+    }, { strict: true });
+    } catch (err) {
+        // Without this the caller was told 'not_found' for a fact that exists
+        // perfectly well — the WRITE failed, not the lookup. Misreporting the
+        // reason is worse than reporting no reason: it points at the wrong fix.
+        console.error('[JSON] supersedeFact FAILED TO PERSIST:', err.message);
+        return { ok: false, reason: 'write_failed' };
     }
-    return ok ? replacement : null;
+
+    if (failure) return failure;
+    if (!replacement) return { ok: false, reason: 'not_found' };
+
+    require('./embeddings').storeEmbedding({ chatId: null, text: clean, type: 'fact' })
+        .catch((e) => console.error('[JSON] fact embedding store failed (non-fatal):', e.message));
+    // Both records changed: the replacement is new, and the old one now
+    // carries valid_until/superseded_by. Replicating only the new one would
+    // leave the backup asserting the old fact is still active.
+    replicateFact(replacement);
+    const oldNow = loadFacts().find((f) => f.id === oldId);
+    if (oldNow) replicateFact(oldNow);
+    return { ok: true, fact: replacement };
 }
 
 // ── RETRACT — "it was never true" (unlearn) ────────────────────────────────
@@ -679,27 +852,41 @@ async function supersedeFact(oldId, newText, { pinned = null, reason = null, ori
 // helpers/context.js's active-only filter is still the thing that actually
 // guarantees it never reaches a prompt, because this delete is a network
 // call that can fail. Same two-layer posture as phase 1's deleteFactById.
+// Returns { ok:true, fact } | { ok:false, reason }. Same reasoning as
+// supersedeFact: "not found" and "already retracted" are different facts
+// about the world and a caller may want to answer differently.
 async function retractFact(id, reason = null) {
     const now = new Date().toISOString();
     let retracted = null;
+    let failure = null;
 
+    try {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         const out = withFactIds(facts);
         const f = out.find((x) => x.id === id);
-        if (!f || f.status === FACT_RETRACTED) return out;
+        if (!f) { failure = { ok: false, reason: 'not_found' }; return out; }
+        if (f.status === FACT_RETRACTED) { failure = { ok: false, reason: 'already_retracted' }; return out; }
         f.status = FACT_RETRACTED;
         f.retracted_at = now;
         f.valid_until = f.valid_until || now;
         f.change_reason = reason || f.change_reason;
         retracted = f;
         return out;
-    });
-
-    if (retracted) {
-        require('./embeddings').deleteEmbeddingsByText(retracted.text, 'fact')
-            .catch((e) => console.error('[JSON] fact embedding delete failed (non-fatal):', e.message));
+    }, { strict: true });
+    } catch (err) {
+        console.error('[JSON] retractFact FAILED TO PERSIST:', err.message);
+        return { ok: false, reason: 'write_failed' };
     }
-    return retracted;
+
+    if (failure) return failure;
+    if (!retracted) return { ok: false, reason: 'not_found' };
+    require('./embeddings').deleteEmbeddingsByText(retracted.text, 'fact')
+        .catch((e) => console.error('[JSON] fact embedding delete failed (non-fatal):', e.message));
+    // A retracted fact IS replicated — the point of a soft delete is that the
+    // record survives, so a backup that dropped it would restore a memory she
+    // could no longer audit or undo.
+    replicateFact(retracted);
+    return { ok: true, fact: retracted };
 }
 
 // Undo a retraction. Cheap to provide once nothing is destroyed, and it is
@@ -708,23 +895,37 @@ async function retractFact(id, reason = null) {
 // refuses to revive a SUPERSEDED fact — that would resurrect a belief the
 // newer one already replaced, leaving two active contradicting facts, which
 // is the exact state phase 2 exists to prevent.
+// Returns { ok:true, fact } | { ok:false, reason }. 'superseded' is called
+// out separately from 'not_retracted' because it is the dangerous one:
+// reviving a superseded fact would leave two active contradicting beliefs,
+// which is the exact state phase 2 exists to prevent — the caller should be
+// able to say so rather than reporting a generic failure.
 async function unretractFact(id) {
     let revived = null;
+    let failure = null;
+    try {
     await mutateJson(cfg.FACTS_FILE, [], (facts) => {
         const out = withFactIds(facts);
         const f = out.find((x) => x.id === id);
-        if (!f || f.status !== FACT_RETRACTED) return out;
+        if (!f) { failure = { ok: false, reason: 'not_found' }; return out; }
+        if (f.status === FACT_SUPERSEDED) { failure = { ok: false, reason: 'superseded' }; return out; }
+        if (f.status !== FACT_RETRACTED) { failure = { ok: false, reason: 'not_retracted' }; return out; }
         f.status = FACT_ACTIVE;
         f.retracted_at = null;
         f.valid_until = null;
         revived = f;
         return out;
-    });
-    if (revived) {
-        require('./embeddings').storeEmbedding({ chatId: null, text: revived.text, type: 'fact' })
-            .catch((e) => console.error('[JSON] fact embedding restore failed (non-fatal):', e.message));
+    }, { strict: true });
+    } catch (err) {
+        console.error('[JSON] unretractFact FAILED TO PERSIST:', err.message);
+        return { ok: false, reason: 'write_failed' };
     }
-    return revived;
+    if (failure) return failure;
+    if (!revived) return { ok: false, reason: 'not_found' };
+    require('./embeddings').storeEmbedding({ chatId: null, text: revived.text, type: 'fact' })
+        .catch((e) => console.error('[JSON] fact embedding restore failed (non-fatal):', e.message));
+    replicateFact(revived);
+    return { ok: true, fact: revived };
 }
 
 // Walks a fact's lineage back through supersedes[] to the original. Used by
@@ -760,7 +961,7 @@ async function deleteFactById(id) {
 }
 
 module.exports = {
-    loadJson, saveJson, mutateJson,
+    loadJson, saveJson, mutateJson, writeAtomic,
     loadBookings, loadWorkflow, loadHistory, loadTruckers, loadSuppliers,
     upsertTrucker, deleteTrucker, upsertSupplier, deleteSupplier,
     loadBrain, saveBrain, mutateBrain,
@@ -769,7 +970,7 @@ module.exports = {
     updateWorkflow, archiveBooking,
     saveTranscript, loadTranscripts,
     loadFacts, loadActiveFacts, loadBelievableFacts, addFact, confirmFact, setFactPinned, deleteFactById, deriveFactId,
-    supersedeFact, retractFact, unretractFact, factHistory,
+    supersedeFact, retractFact, unretractFact, factHistory, headOfChain,
     FACT_ACTIVE, FACT_SUPERSEDED, FACT_RETRACTED,
     ORIGIN_MANAGER, ORIGIN_TRUSTED_TOOL, ORIGIN_AGENT, ORIGIN_EXTERNAL,
     AUTH_ACT, AUTH_INFORM, AUTH_NONE, deriveAuthority, factCanAuthorize,

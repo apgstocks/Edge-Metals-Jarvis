@@ -1086,10 +1086,26 @@ function start() {
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
         require('./helpers/dailyLearning').run({ sendToManager: _sendToManager, setPending: actions.setPending, managerChatId }).catch(e => console.error('[SCHED] learning:', e));
     }, TZ);
+    // Nightly full replication of facts.json to Supabase.
+    //
+    // The per-write replicate() calls in helpers/json.js are fire-and-forget
+    // and CAN fail — during a Supabase blip, a network drop, or a restart
+    // mid-write. This pass is what makes that acceptable: it re-pushes every
+    // fact, so any single dropped replication is repaired within a day.
+    // Cheap (an upsert of a few hundred rows, keyed on the fact's own id, so
+    // re-pushing an unchanged fact is a no-op).
+    //
+    // 03:30 — after the 23:45 learning review, so any facts she approved that
+    // evening are included in the same night's backup.
+    cron.schedule('30 3 * * *', () => {
+        require('./helpers/factReplica').syncAll()
+            .catch(e => console.error('[SCHED] fact-replica sync:', e.message));
+    }, TZ);
+
     // Own timezone — America/New_York, not the shared LA `TZ` — see
     // eodYardReport's comment for why.
     cron.schedule('0 20 * * *', () => eodYardReport().catch(e => console.error('[SCHED] eod-yard-report:', e)), { timezone: 'America/New_York' });
-    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
+    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 3:30AM fact backup, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
 }
 
 module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText };

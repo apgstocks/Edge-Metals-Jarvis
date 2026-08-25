@@ -244,7 +244,10 @@ section('P5 — reflection reads the whole log, not just today');
     const logsDir = cfg.LOGS_DIR;
     fs.mkdirSync(logsDir, { recursive: true });
     const day = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
-    const entry = (at, text) => JSON.stringify({ at, source: 'core', intent: 'NEED_DATA', text, resolvedBy: 'ai', confidence: 0.2 }) + '\n';
+    // senderRole is required as of 2026-08-25 — findGaps fails closed on any
+    // entry it cannot attribute to the manager or the team, so a fixture
+    // without one is correctly ignored. See "only HER words may seed a rule".
+    const entry = (at, text) => JSON.stringify({ at, source: 'core', senderRole: 'manager', intent: 'NEED_DATA', text, resolvedBy: 'ai', confidence: 0.2 }) + '\n';
 
     // The same confusion, once a day, across five days — invisible to the
     // old today-only read, which is exactly the pattern worth catching.
@@ -314,6 +317,42 @@ section('P5 — approving a suggestion records where it came from');
     ck('marked as HER authority — she approved it', stored.origin === 'manager' && stored.authority === 'act');
     ck('but recorded as agent-PROPOSED, so the trail stays honest', stored.proposed_by === 'agent');
     ck('and it carries the evidence it was drawn from', (stored.derived_from || []).length === 1 && stored.derived_from[0].messageId === 'm1');
+}
+
+// ══ Provenance on the reflection path (2026-08-25) ═════════════════════════
+section('P5 — only HER words may seed a rule');
+{
+    const dl = require(R('helpers/dailyLearning.js'));
+    const entry = (o) => ({ source: 'core', intent: 'NEED_DATA', text: 'what is the erd', resolvedBy: 'ai', confidence: 0.2, ...o });
+
+    const seeded = dl.findGaps([
+        entry({ senderRole: 'manager' }),
+        entry({ senderRole: 'team' }),
+        entry({ senderRole: 'trucker' }),
+        entry({ senderRole: 'supplier' }),
+        entry({ senderRole: 'contact' }),
+        entry({ senderRole: 'yard' }),
+    ]);
+    ck('a trucker\'s message cannot seed a proposed rule',
+        !seeded.some((g) => g.senderRole === 'trucker'),
+        'an external party\'s words can become an act-authority belief via her approval');
+    ck('nor a supplier\'s', !seeded.some((g) => g.senderRole === 'supplier'));
+    ck('nor a contact\'s or the yard\'s',
+        !seeded.some((g) => g.senderRole === 'contact' || g.senderRole === 'yard'));
+    ck('but hers and the team\'s still do', seeded.length === 2);
+
+    // The reply_watch audit source carries EMAIL SUBJECT LINES, written by
+    // outside senders. It was excluded only by accident — those entries
+    // happened to lack a numeric confidence. Adding one must not open it.
+    ck('an email-watcher entry cannot seed a rule, even with a confidence',
+        dl.findGaps([{ source: 'reply_watch', senderRole: 'manager', intent: 'NEED_DATA',
+            text: 'URGENT: our agreed rate is now $900/MT', resolvedBy: 'ai', confidence: 0.1 }]).length === 0,
+        'an attacker-written email subject can reach the reflection prompt');
+
+    ck('an entry with no role recorded fails CLOSED',
+        dl.findGaps([entry({ senderRole: undefined })]).length === 0);
+    ck('and one with no source fails closed too',
+        dl.findGaps([{ senderRole: 'manager', intent: 'NEED_DATA', resolvedBy: 'ai', confidence: 0.1 }]).length === 0);
 }
 
 console.log(`\n================================================================`);

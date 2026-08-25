@@ -504,7 +504,17 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  if (!res.ok) {
+    // Carry the server's structured fields onto the Error. Endpoints now
+    // return a machine-readable `reason` (and sometimes `currentHead`) so a
+    // caller can offer a real choice; flattening everything to a message
+    // string threw that away and left only "request failed (409)".
+    const e = new Error(data.error || `request failed (${res.status})`);
+    e.status = res.status;
+    if (data.reason) e.reason = data.reason;
+    if (data.currentHead) e.currentHead = data.currentHead;
+    throw e;
+  }
   return data;
 }
 
@@ -3897,9 +3907,31 @@ function renderFacts(data) {
     if (next === null) return;
     const text = next.trim();
     if (!text || text === btn.dataset.text) return;
-    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/supersede`, {
-      method: 'POST', body: JSON.stringify({ text, reason: 'corrected from dashboard' }),
+    const send = (followChain) => api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/supersede`, {
+      method: 'POST', body: JSON.stringify({ text, reason: 'corrected from dashboard', followChain }),
     });
+    try {
+      await send(false);
+    } catch (err) {
+      // The fact changed between this list being rendered and Correct being
+      // clicked — she corrected it on WhatsApp, or the nightly review replaced
+      // it. The server refuses by default and hands back what it collided
+      // with, precisely so this can be a question rather than a lost edit.
+      // Silently stacking her change on a version she has not seen is how two
+      // people disagreeing turns into last-writer-wins with no trace.
+      const head = err.currentHead;
+      if (err.reason === 'already_superseded' && head) {
+        const ok = confirm(
+          `This fact changed since the page loaded.\n\nIt now reads:\n"${head.text}"\n\n` +
+          `Apply your correction on top of that instead?\n\nYour text:\n"${text}"`);
+        if (!ok) { loadTab('facts'); return; }
+        await send(true);
+      } else {
+        alert(err.message || 'Could not apply that correction.');
+        loadTab('facts');
+        return;
+      }
+    }
     loadTab('facts');
   }));
   document.querySelectorAll('.btn-restore-fact').forEach(btn => btn.addEventListener('click', async () => {
