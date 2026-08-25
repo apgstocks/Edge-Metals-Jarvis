@@ -183,6 +183,128 @@ section('The ledger survives a save/load round-trip');
         Array.isArray(again.tracked) && Array.isArray(again.lastDigest));
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// C. DIRECTION — Apsara, 2026-08-25, on a live digest: "intent is totally
+//    wrong". Jarvis reported
+//        1. · Sender is trying to get an EDO number.
+//           Andy Park — wants: EDO #
+//    when Andy was chasing the CARRIER for that EDO because SHE had asked him
+//    to roll HMM BKG #DALA21235600 from HMM RAON 0025W to HMM TURQUOISE 0011W.
+//    He owed her the thing the digest said he wanted from her.
+// ══════════════════════════════════════════════════════════════════════════
+
+// The real thread, reduced to what Gmail's threads.get(format:'metadata')
+// actually returns: headers + snippet, oldest first.
+const ANDY = 'andy.park@hmm.example.com';
+const ME = 'apsara@edgemetals.com';
+const andyThread = [
+    { snippet: 'HMM BKG #DALA21235600 confirmed, 2x40HC batteries, initial loading Aug 12.',
+      payload: { headers: [{ name: 'From', value: `Andy Park <${ANDY}>` }, { name: 'Date', value: 'Tue, 12 Aug 2026 09:00:00 -0700' }] } },
+    { snippet: 'Accounting needs a new ERD of 8/19 or 8/20 please advise',
+      payload: { headers: [{ name: 'From', value: `Andy Park <${ANDY}>` }, { name: 'Date', value: 'Mon, 18 Aug 2026 09:00:00 -0700' }] } },
+    { snippet: 'Please roll us to HMM TURQUOISE 0011W, ERD 8/25 CUT 8/28.',
+      payload: { headers: [{ name: 'From', value: `Apsara <${ME}>` }, { name: 'Date', value: 'Wed, 20 Aug 2026 09:00:00 -0700' }] } },
+    { snippet: 'Noted. I am working to get the EDO # ASAP and will revert.',
+      payload: { headers: [{ name: 'From', value: `Andy Park <${ANDY}>` }, { name: 'Date', value: 'Mon, 24 Aug 2026 09:00:00 -0700' }] } },
+];
+
+section('C1 — the thread ledger makes WHO ASKED WHOM visible');
+{
+    const led = rw.buildThreadLedger(andyThread, ME);
+    ck('her own messages are marked as hers, not by display name', /HER \(the manager\)/.test(led));
+    ck('the counterparty is named', /Andy Park/.test(led));
+    ck('her roll request is in the ledger — the fact that makes direction knowable',
+        /HMM TURQUOISE 0011W/.test(led), led);
+    ck('it states the rule the model kept getting backwards',
+        /a thing they OWE her, not a thing they want from her/i.test(led));
+    ck('a one-message thread produces no ledger (nothing to learn from it)',
+        rw.buildThreadLedger([andyThread[0]], ME) === '');
+    const long = rw.buildThreadLedger(Array.from({ length: 12 }, () => andyThread[0]), ME);
+    ck('a long thread is capped, and says so rather than silently truncating',
+        long.split('\n').filter((l) => l.startsWith('- ')).length === 6 && /6 earlier messages not shown/.test(long), long);
+    ck('the ledger reaches the prompt', /HMM TURQUOISE 0011W/.test(
+        rw.buildPrompt({ from: ANDY, subject: 's', date: 'd', body: 'b', thread: led })));
+}
+
+section('C2 — an email she is WAITING ON never becomes an email waiting on HER');
+{
+    const body = 'Noted. I am working to get the EDO # ASAP and will revert once the line releases it.';
+    AI = { waiting_on: 'them', needs_reply: true, confidence: 0.9, urgency: 'normal',
+           summary: 'Chasing the carrier for the EDO on the HMM TURQUOISE roll.',
+           asked_for: 'the EDO number', asked_for_quote: 'I am working to get the EDO # ASAP',
+           deadline: null, is_order: false, order_buyer: null };
+    const a = await rw.assess({ from: ANDY, subject: 'DALA21235600', date: 'd', body });
+    ck('direction survives the assessment', a.waiting_on === 'them');
+    // THE BUG. The model itself said needs_reply true — plausible, since he
+    // does owe an answer eventually. Code forces the coupling.
+    ck('needs_reply is forced FALSE even though the model said true', a.needs_reply === false);
+    ck('the thing he owes is kept, not nulled by the request-grounding check',
+        a.asked_for === 'the EDO number', JSON.stringify(a));
+
+    const digest = rw.buildDigest([{ ...a, fromName: 'Andy Park', subject: 'DALA21235600' }]);
+    ck('the digest no longer claims an email is waiting on her',
+        !/emails? waiting on you/.test(digest), digest);
+    ck('it says who is actually blocked', /waiting on someone else/.test(digest), digest);
+    ck('the line reads "owes you", not "wants"',
+        /Andy Park — owes you: the EDO number/.test(digest), digest);
+    ck('and it does not tell her to reply to something nobody asked',
+        !/Nothing sent yet/.test(digest) && /others owe you/.test(digest), digest);
+}
+
+section('C3 — the anti-fabrication guard still holds in the new direction');
+{
+    const body = 'Noted. I am working to get the EDO # ASAP.';
+    AI = { waiting_on: 'them', needs_reply: false, confidence: 0.9, urgency: 'normal', summary: 's',
+           asked_for: 'a rate for LA to Houston', asked_for_quote: 'please send us your best rate',
+           deadline: null, is_order: false, order_buyer: null };
+    const a = await rw.assess({ from: ANDY, subject: 's', date: 'd', body });
+    ck('a quote that is not in the email is still dropped', a.asked_for === null, JSON.stringify(a));
+
+    AI = { ...AI, asked_for: 'the EDO number', asked_for_quote: 'Noted.' };
+    const b = await rw.assess({ from: ANDY, subject: 's', date: 'd', body });
+    ck('a span that is present but commits to nothing is dropped', b.asked_for === null, JSON.stringify(b));
+}
+
+section('C4 — REGRESSION: an ordinary request behaves exactly as before');
+{
+    const body = 'Hi, could you please confirm the ERD for the Oakland load?';
+    AI = { needs_reply: true, confidence: 0.9, urgency: 'normal', summary: 'Wants the ERD confirmed.',
+           asked_for: 'the ERD', asked_for_quote: 'could you please confirm the ERD',
+           deadline: null, is_order: false, order_buyer: null };   // NOTE: no waiting_on at all
+    const a = await rw.assess({ from: ANDY, subject: 's', date: 'd', body });
+    ck('a response with no waiting_on field defaults to "her"', a.waiting_on === 'her');
+    ck('needs_reply is untouched', a.needs_reply === true);
+    ck('asked_for survives request-grounding', a.asked_for === 'the ERD');
+    const digest = rw.buildDigest([{ ...a, fromName: 'Andy Park', subject: 's' }]);
+    ck('the digest still says waiting on you', /1 email waiting on you/.test(digest), digest);
+    ck('and still says "wants:"', /— wants: the ERD/.test(digest), digest);
+    ck('and still offers the reply command', /Nothing sent yet/.test(digest), digest);
+}
+
+section('C5 — a mixed digest counts each bucket honestly');
+{
+    const reply = { needs_reply: true, waiting_on: 'her', urgency: 'normal', fromName: 'Kristal', summary: 'Wants a rate.', asked_for: 'a rate', is_order: false };
+    const owedI = { needs_reply: false, waiting_on: 'them', urgency: 'normal', fromName: 'Andy Park', summary: 'Chasing the EDO.', asked_for: 'the EDO number', is_order: false };
+    const order = { needs_reply: false, waiting_on: 'her', urgency: 'normal', fromName: 'Joey', summary: 'Order for 2x40HC.', asked_for: null, is_order: true, order_buyer: 'Daekwang' };
+    const d = rw.buildDigest([reply, owedI, order]);
+    ck('replies counted alone', /1 email waiting on you/.test(d), d);
+    ck('orders counted separately', /1 order came in/.test(d), d);
+    ck('owed counted separately', /1 is waiting on someone else/.test(d), d);
+    ck('the owed item is NOT folded into the reply count', !/2 emails waiting on you/.test(d), d);
+}
+
+section('C6 — a chase-up does not accuse her of not replying to a thing she cannot reply to');
+{
+    const m = rw.buildChaseMessage([
+        { summary: 'Chasing the EDO.', fromName: 'Andy Park', ageDays: 6, waiting_on: 'them' },
+        { summary: 'Wants a rate.', fromName: 'Kristal', ageDays: 6, waiting_on: 'her' },
+    ]);
+    ck('the owed item says nothing came back', /Andy Park, 6 days ago, nothing back from them yet/.test(m), m);
+    ck('the reply item still says no reply yet', /Kristal, 6 days ago, no reply yet/.test(m), m);
+}
+
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
