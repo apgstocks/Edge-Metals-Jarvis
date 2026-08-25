@@ -20,6 +20,7 @@
 // flow has to change to support this.
 
 const cfg = require('../config');
+const { usd } = require('../helpers/money');
 const tasks = require('../helpers/tasks');
 const { pushAlert } = require('../alerts');
 const { loadSettings } = require('../helpers/json');
@@ -270,13 +271,13 @@ async function maybeSendPriceComparison(requestId) {
     const unranked = priced.filter((l) => l.price.amount == null);
     if (!ranked.length) return;
 
-    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.recipient_name}: $${l.price.amount}`);
+    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.recipient_name}: ${usd(l.price.amount)}`);
     if (unranked.length) {
         lines.push(`${unranked.map((l) => l.recipient_name).join(', ')} replied with a price Jarvis couldn't read as a number — check manually: "${unranked.map((l) => l.price.raw_text).join('", "')}"`);
     }
     await pushAlert({
         type: 'contact_quote_price_comparison', bkgNo: null,
-        message: `Price comparison for ${request.details} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].recipient_name} at $${ranked[0].price.amount}. ${lines.join(' | ')}`,
+        message: `Price comparison for ${request.details} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].recipient_name} at ${usd(ranked[0].price.amount)}. ${lines.join(' | ')}`,
         severity: 'info',
     });
 }

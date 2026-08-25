@@ -4509,7 +4509,9 @@ function stripAddressQueryWording(text) {
     return s.replace(/[?.!,]+$/, '').trim();
 }
 
-const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Delegates to helpers/money.js — one definition, so a figure reads the same
+// here as it does in the yard report, a proforma and a quote comparison.
+const money = (n) => require('../helpers/money').usd(n);
 
 // Read-only address-book lookup. Reached ONLY via the AI classifier's
 // 'lookup_address' action — there is deliberately no regex/keyword grammar in

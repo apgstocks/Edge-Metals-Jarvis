@@ -4,6 +4,7 @@
 // mid-day never double-sends.
 
 const cron = require('node-cron');
+const { usd } = require('./helpers/money');
 const { loadBookings, loadWorkflow, mutateBrain, loadBrain,
         mutateJson, loadHistory } = require('./helpers/json');
 const { daysUntil, getLADate }    = require('./helpers/time');
@@ -805,7 +806,7 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // helpers/loads.js's validateLoadForSave comment. l.seller is right
     // again under the new mapping.)
     const lines = todays.map(l =>
-        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — $${l.amount}` : ''}`
+        `• ${l.id} — ${l.seller || 'Unnamed seller'} — Net ${l.net_weight ?? '—'} ${unit}${l.amount != null ? ` — ${usd(l.amount)}` : ''}`
     );
 
     // Reformatted 2026-08-16 per Apsara ("this looks ugly and unorganised" /
@@ -849,7 +850,7 @@ function buildYardReportText(dateKey, todays, allLoads) {
         `*Loads today (${todays.length})*`,
         ...lines,
         '', '*Totals*',
-        `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · $${totals.amount}`,
+        `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · ${usd(totals.amount)}`,
     ].join('\n');
 }
 

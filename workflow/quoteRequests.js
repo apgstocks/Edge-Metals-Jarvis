@@ -14,6 +14,7 @@
 //   pollEmailReplies()         — scheduler.js cron, for email-channel legs
 
 const cfg = require('../config');
+const { usd } = require('../helpers/money');
 const tasks = require('../helpers/tasks');
 const { pushAlert } = require('../alerts');
 const { loadSettings, loadTruckers } = require('../helpers/json');
@@ -386,13 +387,13 @@ async function maybeSendPriceComparison(requestId) {
     const unranked = priced.filter((l) => l.price.amount == null);
     if (!ranked.length) return; // every priced leg failed to parse into a number — nothing rankable yet
 
-    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.trucker_name}: $${l.price.amount}`);
+    const lines = ranked.map((l, i) => `${i === 0 ? '🏆 ' : ''}${l.trucker_name}: ${usd(l.price.amount)}`);
     if (unranked.length) {
         lines.push(`${unranked.map((l) => l.trucker_name).join(', ')} replied with a price Jarvis couldn't read as a number — check manually: "${unranked.map((l) => l.price.raw_text).join('", "')}"`);
     }
     await pushAlert({
         type: 'quote_price_comparison', bkgNo: null,
-        message: `Price comparison for ${request.origin_query} → ${request.destination_query} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].trucker_name} at $${ranked[0].price.amount}. ${lines.join(' | ')}`,
+        message: `Price comparison for ${request.origin_query} → ${request.destination_query} (${priced.length}/${request.legs.length} quoted) — cheapest: ${ranked[0].trucker_name} at ${usd(ranked[0].price.amount)}. ${lines.join(' | ')}`,
         severity: 'info',
     });
 }

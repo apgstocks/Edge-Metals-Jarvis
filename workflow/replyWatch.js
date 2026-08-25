@@ -1022,7 +1022,7 @@ async function draftProformaForOrder(item, gmail) {
 // worth showing, so the caller can concatenate unconditionally.
 function proformaDraftLines(draft) {
     if (!draft) return [];
-    const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const money = (n) => require('../helpers/money').amount(n) ?? '0.00';
     if (draft.needs && draft.needs.length) {
         const out = [`   📄 Order for ${draft.consignee || 'someone'} — I can't price it yet, missing: ${draft.needs.join(', ')}.`];
         (draft.items || []).forEach((i) => out.push(`      ${i.desc}${i.qty != null ? ` — ${i.qty} MT` : ''}${i.rate ? ` @ $${i.rate}/MT` : ''}`));

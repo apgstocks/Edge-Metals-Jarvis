@@ -15,6 +15,7 @@
 // every time buildInventoryWorkbook() runs (see scheduler.js's nightly job).
 
 const ExcelJS = require('exceljs');
+const { usd } = require('./money');
 const { getInventoryReport } = require('./loads');
 
 const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
@@ -354,7 +355,7 @@ function buildExpensesOverallWorkbook(allExpenses) {
   const sheet = wb.addWorksheet('Overall');
   sheet.columns = [{ width: 26 }, { width: 14 }, { width: 16 }, { width: 16 }];
 
-  sheet.getCell('A1').value = `All-time — ${report.count} expense${report.count === 1 ? '' : 's'}, total $${report.total}`;
+  sheet.getCell('A1').value = `All-time — ${report.count} expense${report.count === 1 ? '' : 's'}, total ${usd(report.total)}`;
   sheet.getCell('A1').font = { bold: true, size: 12 };
 
   let r = 3;
