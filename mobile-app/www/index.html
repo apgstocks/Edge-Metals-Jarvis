@@ -2822,8 +2822,25 @@ function mobInvBySellerHtml(data) {
         ${s.byType.map(g => `
           <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:12px;">
             <span style="color:var(--text-muted);">${esc(g.description)}</span>
-            <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? '$' + g.amount : '—'}</span>
+            <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</span>
           </div>`).join('')}
+        <!-- The loads behind those totals, per Apsara 2026-08-24: "when i
+             click it, it should open my load ticket". A seller row was a
+             dead end before — it told you Ramesh brought 7,110 lb and gave
+             you no way to see which tickets that was. -->
+        ${(s.loads || []).length ? `
+          <div style="margin-top:9px; padding-top:8px; border-top:1px dashed var(--border-subtle);">
+            <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:5px;">Load tickets</div>
+            ${s.loads.map(l => l.pdf_link
+              ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="display:flex; justify-content:space-between; padding:6px 0; font-size:12px; text-decoration:none; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--accent);">${esc(l.id)} →</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''}</span>
+                 </a>`
+              : `<div style="display:flex; justify-content:space-between; padding:6px 0; font-size:12px; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--text-muted);">${esc(l.id)}</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''} · no PDF yet</span>
+                 </div>`).join('')}
+          </div>` : ''}
       </div>
     </details>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
 }

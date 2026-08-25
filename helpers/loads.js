@@ -373,12 +373,24 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     const sellerMap = new Map();
     for (const l of filtered) {
         const key = (l.seller && String(l.seller).trim()) || 'Unknown seller';
-        if (!sellerMap.has(key)) sellerMap.set(key, { seller: key, loadCount: 0, net: 0, amount: 0, items: [] });
+        if (!sellerMap.has(key)) sellerMap.set(key, { seller: key, loadCount: 0, net: 0, amount: 0, items: [], loads: [] });
         const s = sellerMap.get(key);
         s.loadCount += 1;
         s.net += l.net_weight || 0;
         s.amount += l.amount || 0;
         if (Array.isArray(l.items)) s.items.push(...l.items);
+        // The individual loads behind the seller's totals — added 2026-08-24
+        // per Apsara ("in inventory per seller tab, when i click it, it should
+        // open my load ticket"). Deliberately only the four fields the two
+        // clients need to render a link: this report is fetched on every
+        // Inventory visit and there is no reason to ship whole load records,
+        // photos and signatures included, to draw a list of tickets.
+        s.loads.push({
+            id: l.id,
+            date: l.date || null,
+            amount: l.amount != null ? round2(l.amount) : null,
+            pdf_link: l.pdf_link || null,
+        });
     }
     const bySeller = Array.from(sellerMap.values())
         .map(s => ({
@@ -387,6 +399,8 @@ function getInventoryReport(allLoads, { from, to } = {}) {
             net: round2(s.net),
             amount: round2(s.amount),
             byType: s.items.length ? groupItemsByDescription(s.items) : [],
+            // Newest first, matching how the Loads deck reads.
+            loads: s.loads.slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))),
         }))
         .sort((a, b) => (b.net || 0) - (a.net || 0));
 

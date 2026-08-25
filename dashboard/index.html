@@ -659,7 +659,7 @@ function invBySellerHtml(data) {
     <details class="card" style="margin-bottom:8px; padding:0;">
       <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
         <span style="font-weight:600;">${esc(s.seller)}</span>
-        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + s.amount : '—'}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + fmtAmount(s.amount) : '—'}</span>
       </summary>
       <div style="padding:0 16px 14px;">
         ${s.byType.length ? `
@@ -672,11 +672,28 @@ function invBySellerHtml(data) {
                 <td style="padding:6px;">${esc(g.description)}</td>
                 <td style="padding:6px;">${g.count}</td>
                 <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
-                <td style="padding:6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+                <td style="padding:6px;">${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
         ` : ''}
+        <!-- The loads behind those totals, per Apsara 2026-08-24: "when i
+             click it, it should open my load ticket". A seller row was a dead
+             end before — it told you Ramesh brought 7,110 lb and gave you no
+             way to reach the tickets that made it up. -->
+        ${(s.loads || []).length ? `
+          <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--border-subtle);">
+            <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:6px;">Load tickets</div>
+            ${s.loads.map(l => l.pdf_link
+              ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; text-decoration:none; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--accent);">${esc(l.id)} →</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''}</span>
+                 </a>`
+              : `<div style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--text-muted);">${esc(l.id)}</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''} · no PDF yet</span>
+                 </div>`).join('')}
+          </div>` : ''}
       </div>
     </details>
   `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
