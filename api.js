@@ -2239,7 +2239,18 @@ function createApi() {
             const { loadOutboundLoads } = require('./helpers/outboundLoads');
             const { stockReport, lotReport } = require('./helpers/stock');
             const inbound = loadLoads(), outbound = loadOutboundLoads();
-            res.json({ byType: stockReport(inbound, outbound), lots: lotReport(inbound, outbound) });
+            const byType = stockReport(inbound, outbound);
+            let lots = lotReport(inbound, outbound);
+            // COST IS ADMIN-ONLY. lotReport carries unitCost — what she paid
+            // per lb for that pile — and this route sits under /api/loads, so
+            // staff can reach it. Weights are their job; purchase prices are
+            // not. Stripped server-side rather than hidden in the UI, because
+            // a field that never leaves the server cannot be read out of a
+            // response by anyone who opens dev tools.
+            if (req.role !== 'admin') {
+                lots = lots.map(({ unitCost, ...rest }) => rest);
+            }
+            res.json({ byType, lots });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
