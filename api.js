@@ -367,7 +367,12 @@ function createApi() {
     // people who hit the edit-unlock prompt (a locked load is locked for
     // them too), so they must be able to have a typed admin password
     // checked. It only answers yes/no and grants nothing — see the route.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
+    // '/api/outbound-loads' added 2026-08-24. Recording material LEAVING the
+    // yard is yard work, the same as recording it arriving — Apsara, asked
+    // directly whether sales should be denied to staff: "no". They already
+    // create loads, weigh them and price them; a sale is the same job in the
+    // other direction, on the same form.
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -2239,18 +2244,14 @@ function createApi() {
             const { loadOutboundLoads } = require('./helpers/outboundLoads');
             const { stockReport, lotReport } = require('./helpers/stock');
             const inbound = loadLoads(), outbound = loadOutboundLoads();
-            const byType = stockReport(inbound, outbound);
-            let lots = lotReport(inbound, outbound);
-            // COST IS ADMIN-ONLY. lotReport carries unitCost — what she paid
-            // per lb for that pile — and this route sits under /api/loads, so
-            // staff can reach it. Weights are their job; purchase prices are
-            // not. Stripped server-side rather than hidden in the UI, because
-            // a field that never leaves the server cannot be read out of a
-            // response by anyone who opens dev tools.
-            if (req.role !== 'admin') {
-                lots = lots.map(({ unitCost, ...rest }) => rest);
-            }
-            res.json({ byType, lots });
+            // unitCost is NOT hidden from staff, and briefly was — that was
+            // wrong. Staff type the purchase price into every load they
+            // create, so a per-lot cost derived from those same figures is
+            // nothing they haven't already entered by hand. Hiding it here
+            // while showing it on the form it came from is theatre, and
+            // theatre in an access check is worse than none: it reads as a
+            // boundary that isn't one.
+            res.json({ byType: stockReport(inbound, outbound), lots: lotReport(inbound, outbound) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

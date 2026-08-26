@@ -591,10 +591,6 @@ async function loadTab(tab) {
         api('/api/loads'),
         api('/api/outbound-loads').catch(() => []),
       ]);
-      // Sales are not part of staff's job — the button ships hidden and is
-      // revealed here, where ROLE is known and the deck re-renders on every
-      // visit. See the button's own comment.
-      if ($('btnAddSale')) $('btnAddSale').classList.toggle('hidden', ROLE === 'staff');
       return renderLoads([
         ...(inbound || []).map(l => ({ ...l, _kind: 'purchase' })),
         ...(sales || []).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
@@ -3502,12 +3498,11 @@ function renderLoads(loads) {
         </div>
         <div style="display:flex; gap:8px;">
           <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
-          <!-- Hidden for staff. The server already denies them every
-               /api/outbound-loads route, so the boundary holds either way —
-               but a button that fills in a whole form and then fails on save
-               is the "shown and failing" pattern this file avoids everywhere
-               else. Staff access is Loads only. -->
-          <button id="btnAddSale" class="btn hidden">+ Sale</button>
+          <!-- Visible to every role. Recording material leaving the yard is
+               yard work, same as recording it arriving — Apsara, 2026-08-24,
+               asked directly whether sales should be denied to staff: "no".
+               /api/outbound-loads is on the staff allowlist to match. -->
+          <button id="btnAddSale" class="btn">+ Sale</button>
         </div>
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
