@@ -1714,6 +1714,52 @@ function createApi() {
             res.status(500).json({ error: err.message });
         }
     });
+    // Sale ticket — Apsara 2026-08-24: "what if i want to have ticket
+    // actions" on a sale. Mirrors the inbound generate-pdf route above and
+    // reuses the SAME generator and Drive path; only opts.kind differs, which
+    // is what makes the document say "SALE TICKET / Buyer:" and skip the
+    // signature line ("no sign needed").
+    //
+    // Writes pdf_link/pdf_drive_id back onto the outbound record under the
+    // same field names an inbound load uses, so both clients render a sale
+    // card with the existing code rather than a parallel set of branches.
+    app.post('/api/outbound-loads/:id/generate-pdf', async (req, res) => {
+        try {
+            const ob = require('./helpers/outboundLoads');
+            const sale = ob.getOutboundLoad(req.params.id);
+            if (!sale) return res.status(404).json({ error: 'not found' });
+
+            // generateLoadPdf reads the counterparty from load.seller — on a
+            // sale that party is the buyer, so it's mapped here rather than
+            // teaching the generator a second field name.
+            const forPdf = { ...sale, seller: sale.buyer, seller_address: sale.buyer_address };
+            const { generateLoadPdf, generateLoadReceiptPdf } = require('./helpers/pdf');
+            const { uploadLoadPdf } = require('./helpers/drive');
+
+            const buf = await generateLoadPdf(forPdf, { kind: 'sale', includeSummary: !(req.body && req.body.includeSummary === false) });
+            const file = await uploadLoadPdf(sale.id, buf);
+            let receiptPatch = {};
+            try {
+                const rbuf = await generateLoadReceiptPdf(forPdf, { kind: 'sale' });
+                const rfile = await uploadLoadPdf(sale.id, rbuf, `receipt_${sale.id}.pdf`);
+                receiptPatch = { receipt_pdf_drive_id: rfile.id, receipt_pdf_link: rfile.webViewLink };
+            } catch (e) {
+                // Non-fatal, same posture as the inbound path: the POS receipt
+                // is a convenience and must not cost her the main ticket.
+                console.error(`[API] sale receipt failed for ${sale.id}:`, e.message);
+            }
+            // patchOutboundLoad, NOT editOutboundLoad: the latter rebuilds the
+            // record from a known field list and would drop these.
+            const updated = await ob.patchOutboundLoad(sale.id, {
+                pdf_drive_id: file.id, pdf_link: file.webViewLink, ...receiptPatch,
+            });
+            res.json({ ok: true, load: updated });
+        } catch (err) {
+            console.error('[API] outbound generate-pdf failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
     app.put('/api/workflow/:bkgNo', async (req, res) => {
         const step = req.body.step;
         if (step && !cfg.WORKFLOW_STAGES.includes(step)) {

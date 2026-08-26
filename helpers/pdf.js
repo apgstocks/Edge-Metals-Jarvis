@@ -426,7 +426,7 @@ function drawSummaryBox(doc, rows) {
 // Per Apsara 2026-08-17 ("post pdf generation, there should be an option
 // called sign... it should open a whiteboard where it allows the user to
 // sign. this should get reflected in yard invoice above Seller signature").
-// So: a ruled signature line labelled "Seller signature", with the captured
+// So: a ruled signature line labelled "<party> signature", with the captured
 // signature drawn IN THE SPACE ABOVE that line — i.e. exactly where a
 // person would sign on paper.
 // load.seller_signature is a data URL (image/png, transparent background)
@@ -434,7 +434,10 @@ function drawSummaryBox(doc, rows) {
 // still prints, just empty — the ticket then works as a paper form someone
 // can sign by hand, which is strictly better than the block vanishing and
 // the document silently changing shape depending on signed/unsigned.
-function drawSignatureBlock(doc, load) {
+function drawSignatureBlock(doc, load, opts) {
+    // "Buyer signature" on a sale — the person signing is whoever received
+    // the material, and on a sale that is the buyer.
+    const partyWord = (opts && opts.kind === 'sale') ? 'Buyer' : 'Seller';
     const SIG_AREA_H = 46;   // drawing space above the rule
     const BLOCK_H = SIG_AREA_H + 26;
     ensureSpace(doc, BLOCK_H + 10);
@@ -461,7 +464,7 @@ function drawSignatureBlock(doc, load) {
 
     doc.moveTo(PAGE_L, lineY).lineTo(PAGE_L + lineW, lineY).lineWidth(0.75).strokeColor(INK).stroke();
     doc.font('Helvetica').fontSize(8.5).fillColor(MUTED)
-        .text('Seller signature', PAGE_L, lineY + 5, { width: lineW, lineBreak: false });
+        .text(`${partyWord} signature`, PAGE_L, lineY + 5, { width: lineW, lineBreak: false });
     if (load.seller_signed_at) {
         const when = new Date(load.seller_signed_at).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
         doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
@@ -600,11 +603,18 @@ function generateLoadPdf(load, opts = {}) {
             // Created, Seller] puts Created directly beside Date on row 1,
             // and Seller directly beneath Date on row 2, per Apsara
             // 2026-08-15's earlier layout request.
-            drawLetterhead(doc, 'Load Ticket', load);
+            // A SALE ticket names the buyer, not a seller — Apsara 2026-08-24
+            // ("what if i want to have ticket actions" on a sale). Edge
+            // Trading is the seller on that document and already sits in the
+            // letterhead, so the one variable party is whoever we traded with.
+            // opts.kind is 'sale' | 'purchase'; anything else reads as a
+            // purchase, which is what every existing caller passes.
+            const isSale = opts && opts.kind === 'sale';
+            drawLetterhead(doc, isSale ? 'Sale Ticket' : 'Load Ticket', load);
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
-                { label: 'Seller:',  value: load.seller },
+                { label: isSale ? 'Buyer:' : 'Seller:',  value: load.seller },
                 // Address beside Seller, and Description no longer alone on a
                 // full-width line — per Apsara 2026-08-22. Order gives:
                 //   row 1  Date        | Created
@@ -729,7 +739,10 @@ function generateLoadPdf(load, opts = {}) {
             // Signature block last, per Apsara 2026-08-17 — a signature
             // belongs at the end of the document, under the numbers it's
             // attesting to.
-            drawSignatureBlock(doc, load);
+            // Sales carry no signature line — Apsara 2026-08-24, "no sign
+            // needed". A ruled line nobody will ever sign is worse than no
+            // line: it reads as an unfinished document.
+            if (!isSale) drawSignatureBlock(doc, load, opts);
 
             addFooters(doc, load);
             doc.end();
@@ -767,7 +780,7 @@ function generateWeightsPdf(load, opts = {}) {
             drawFieldBox(doc, [
                 { label: 'Date:',    value: load.date },
                 { label: 'Created:', value: formatCreatedAt(load.created_at) },
-                { label: 'Seller:',  value: load.seller },
+                { label: (opts && opts.kind === 'sale') ? 'Buyer:' : 'Seller:',  value: load.seller },
                 // Address beside Seller, and Description no longer alone on a
                 // full-width line — per Apsara 2026-08-22. Order gives:
                 //   row 1  Date        | Created
@@ -995,7 +1008,10 @@ const RECEIPT_WIDTH_MM = { '58': 58, '80': 80 };
 const RECEIPT_HEIGHT_MM = 150;
 function mmToPt(mm) { return (mm / 25.4) * 72; }
 
-function drawReceiptContent(doc, load, contentWidth) {
+function drawReceiptContent(doc, load, contentWidth, opts) {
+    // Own copy: partyWord lives in drawSignatureBlock's scope, and referencing
+    // it here threw a ReferenceError on every POS receipt until this was added.
+    const partyWord = (opts && opts.kind === 'sale') ? 'Buyer' : 'Seller';
     // Page-break guard for the primitives that DON'T paginate themselves.
     // doc.text() checks the bottom margin and adds a page on its own, but
     // moveTo/lineTo/image draw at raw coordinates — past the page bottom
@@ -1025,7 +1041,7 @@ function drawReceiptContent(doc, load, contentWidth) {
 
     line(`Load: ${load.id || '—'}`, { size: 9, bold: true, gap: 1 });
     line(`Date: ${load.date || '—'}`, { size: 8.5, gap: 1 });
-    line(`Seller: ${load.seller || '—'}`, { size: 8.5, gap: load.seller_address ? 0.5 : 1 });
+    line(`${partyWord}: ${load.seller || '—'}`, { size: 8.5, gap: load.seller_address ? 0.5 : 1 });
     if (load.seller_address) line(load.seller_address, { size: 7.5, color: MUTED, gap: 1 });
     divider();
 
@@ -1061,7 +1077,7 @@ function drawReceiptContent(doc, load, contentWidth) {
     }
     doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + contentWidth, doc.y).lineWidth(0.75).strokeColor('#000').stroke();
     doc.moveDown(0.35);
-    line('Seller signature', { size: 7.5, color: MUTED, gap: 2 });
+    line(`${partyWord} signature`, { size: 7.5, color: MUTED, gap: 2 });
 
     line(`Generated ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })} (LA time)`, { size: 6.5, align: 'center', color: MUTED });
 }
@@ -1088,7 +1104,7 @@ function generateLoadReceiptPdf(load, opts = {}) {
             doc.on('data', (c) => chunks.push(c));
             doc.on('end', () => resolve(Buffer.concat(chunks)));
             doc.on('error', reject);
-            drawReceiptContent(doc, load, contentWidth);
+            drawReceiptContent(doc, load, contentWidth, opts);
             doc.end();
         } catch (err) {
             reject(err);

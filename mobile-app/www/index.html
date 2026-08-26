@@ -1891,13 +1891,17 @@ function loadCardHtml(l) {
              from there) — there's no way to skip straight to a specific
              printer without a dedicated printer SDK, which wasn't asked
              for here. -->
-        ${l.receipt_pdf_link && l._kind !== 'sale' ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
+        ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
         <!-- Ticket actions are purchase-only: a sale has no yard ticket to
              generate, no seller to send one to and nothing to sign. Hidden
              rather than shown-and-failing. -->
-        ${l._kind === 'sale' ? '' : (!l.pdf_link
-          ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
-          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`)}
+        <!-- Sales get a ticket too — Apsara 2026-08-24 ("what if i want to
+             have ticket actions"). data-kind tells the handler which route to
+             call; the document itself says "SALE TICKET / Buyer:" and carries
+             no signature line, per "no sign needed". -->
+        ${!l.pdf_link
+          ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
+          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
         <!-- No stale-ticket warning here, deliberately. It was built and then
              removed the same day per Apsara 2026-08-20 ("don't do that. user
              will get irritated"), and she's right: on first deploy EVERY
@@ -2535,7 +2539,10 @@ function wireDeckEvents() {
     const originalLabel = btn.textContent;
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
+      // Routed by kind — a sale's ticket is generated from the outbound
+      // store and prints as a SALE TICKET naming the buyer.
+      const base = btn.dataset.kind === 'sale' ? '/api/outbound-loads/' : '/api/loads/';
+      await api(`${base}${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
       loadTab('loads');
     } catch (err) {
       alert('PDF generation failed: ' + err.message);

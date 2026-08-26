@@ -16,6 +16,11 @@ const { updateLoad } = require('./loads');
 // the weights PDF and the receipt PDF are both best-effort (a failure in
 // either is logged and skipped, not fatal — the main ticket having
 // uploaded successfully is what actually matters).
+// opts.kind ('sale' | 'purchase', default purchase) reaches the generators so a
+// sale prints "SALE TICKET / Buyer:" and carries no signature line — see
+// helpers/pdf.js. Storage is identical either way: same Drive folder, same
+// pdf_link/pdf_drive_id fields, so every reader downstream keeps working
+// without knowing which kind it is looking at.
 async function generateAndStoreLoadPdfs(load, opts = {}) {
     const buf = await generateLoadPdf(load, opts);
     const file = await uploadLoadPdf(load.id, buf);

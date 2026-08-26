@@ -155,6 +155,28 @@ async function addOutboundLoad(entry) {
 
 async function editOutboundLoad(id, entry) {
     const patch = buildRecord(entry);
+    // An edit invalidates the ticket. Same rule helpers/loads.js applies to a
+    // purchase: the stored PDF shows the OLD figures, so leaving the link in
+    // place would keep serving a document that disagrees with the record it
+    // came from. Cleared here so the card offers "Generate PDF" again.
+    patch.pdf_link = null; patch.pdf_drive_id = null;
+    patch.receipt_pdf_link = null; patch.receipt_pdf_drive_id = null;
+    let updated = null;
+    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
+        const l = loads.find((x) => x.id === id);
+        if (l) { Object.assign(l, patch, { updated_at: new Date().toISOString() }); updated = l; }
+        return loads;
+    });
+    return updated;
+}
+
+// Writes arbitrary fields straight onto a record, bypassing buildRecord.
+// Added 2026-08-24 for the sale-ticket PDF: editOutboundLoad() rebuilds the
+// record from a known field list, so pdf_link/pdf_drive_id passed through it
+// were silently dropped and the ticket appeared to generate while the card
+// never gained a link. Caught before shipping by reading buildRecord rather
+// than assuming a patch object survives it.
+async function patchOutboundLoad(id, patch) {
     let updated = null;
     await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
         const l = loads.find((x) => x.id === id);
@@ -258,6 +280,6 @@ function getOutboundReport(allLoads, { from, to } = {}) {
 }
 
 module.exports = {
-    normaliseDraws,
+    normaliseDraws, patchOutboundLoad,
     loadOutboundLoads, addOutboundLoad, editOutboundLoad, deleteOutboundLoad, getOutboundLoad, getOutboundReport, getLoadMargin,
 };
