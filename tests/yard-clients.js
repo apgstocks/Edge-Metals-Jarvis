@@ -1,0 +1,118 @@
+// ── tests/yard-clients.js ───────────────────────────────────────────────────
+// The 2026-08-23/24 client work, extracted from the shipped HTML rather than
+// reimplemented — so these assert what actually runs on the phone, not a copy
+// that could drift from it.
+//   • "Hey Jarvis" wake matching and phrase stripping
+//   • the compound-command guard in brain.js
+//   • the writing-style scrubber (business content must never reach disk)
+//   • the runtime server URL
+//   • both clients parse, and the pieces exist in BOTH
+const fs = require('fs');
+const path = require('path');
+
+let pass = 0, fail = 0; const failures = [];
+const ck = (n, c) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; failures.push(n); console.log('  FAIL  ' + n); } };
+const section = (t) => console.log('\n=== ' + t + ' ===');
+
+const ROOT = path.join(__dirname, '..');
+const MOBILE = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const mobileJs = MOBILE.match(/<script>([\s\S]*?)<\/script>/)[1];
+
+section('A — "Hey Jarvis"');
+{
+    const seg = mobileJs.slice(mobileJs.indexOf('const WAKE_PATTERNS'), mobileJs.indexOf('// ── Wake-word loop'));
+    const [isWake, strip] = new Function(seg + '; return [isWakePhrase, stripWake];')();
+
+    // Deliberately loose: the recogniser mishears "Jarvis" constantly, and a
+    // missed wake costs the whole feature while a false one costs a tap.
+    ['hey jarvis', 'Hey Jarvis check mail from Joey', 'hey service send the price list',
+     'hey jervis', 'OK Jarvis show loads', 'hi jarvis'].forEach((t) =>
+        ck(`wakes on ${JSON.stringify(t)}`, isWake(t)));
+    ['jarvis', 'hey there', 'check mail from Joey', 'heyward services'].forEach((t) =>
+        ck(`ignores ${JSON.stringify(t)}`, !isWake(t)));
+
+    ck('the wake phrase is stripped before the brain sees it',
+        strip('Hey Jarvis check mail from Joey') === 'check mail from Joey');
+    ck('a mishearing is stripped too',
+        strip('hey service send proforma to Taewon') === 'send proforma to Taewon');
+    ck('a bare wake leaves nothing', strip('hey jarvis') === '');
+}
+
+section('B — one command per message, said out loud');
+{
+    // brain.js routes a single intent. The guard exists so the second half is
+    // reported rather than silently dropped.
+    const brain = fs.readFileSync(path.join(ROOT, 'workflow/brain.js'), 'utf8');
+    const m = brain.match(/const COMPOUND_RE = (\/.*\/[a-z]*);/);
+    ck('the guard is still in brain.js', !!m);
+    const RE = m ? eval(m[1]) : null;
+    if (RE) {
+        ['check mail from Joey and send proforma to her', 'show loads then send the price list',
+         'check mail and also draft a reply', 'find the booking and then forward it to Bose'
+        ].forEach((t) => ck(`flags ${JSON.stringify(t.slice(0, 34))}…`, RE.test(t)));
+        // Lists of names are not second commands.
+        ['check mail from Joey and Bose', 'send proforma to Taewon and Daekwang',
+         'show me loads for Rad Metal and Hugo', 'remind me tomorrow',
+         'check mail from sales and marketing'].forEach((t) =>
+            ck(`stays quiet on ${JSON.stringify(t.slice(0, 34))}`, !RE.test(t)));
+    }
+}
+
+section('C — the writing-style profile carries no business content');
+{
+    const { scrubProfile } = require('../helpers/writingStyle');
+    const leaky = {
+        greeting: 'Hi <first name>,', sign_off: 'Thanks, Apsara',
+        tone: 'Direct. Often quotes a rate like $340 per MT straight away.',
+        sentence_style: 'Short. Mentions container 26JY90, booking 1234567 and HMMU6247533.',
+        habits: ['opens with the price, e.g. $7,140.00', 'quotes DALA123 often'],
+        avoids: ['no exclamation marks', 'never quotes above 410 without checking'],
+        formality_note: 'Warmer with Joey. Uses 21 MT as the default.',
+    };
+    const blob = JSON.stringify(scrubProfile(leaky));
+    ck('no dollar amounts survive', !/\$\s?\d/.test(blob));
+    ck('no container ids survive (26JY90)', !/26JY90/.test(blob));
+    ck('no carrier ids survive (HMMU…)', !/HMMU/.test(blob));
+    ck('no booking refs survive (DALA123)', !/DALA/.test(blob));
+    ck('no long numbers survive', !/\d[\d,.]{2,}/.test(blob));
+    ck('no bare quantities survive', !/\b21\b/.test(blob));
+    // ...while the thing it is FOR still works.
+    ck('the actual style survives', /Direct/.test(blob) && /exclamation/.test(blob) && /Warmer with Joey/.test(blob));
+}
+
+section('D — the server address is not baked in');
+{
+    const seg = mobileJs.slice(mobileJs.indexOf('const DEFAULT_API_BASE'), mobileJs.indexOf('let API_BASE ='));
+    const store = {};
+    global.localStorage = { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+    global.window = { JARVIS_CONFIG: { API_BASE: 'https://built-in.example.com' } };
+    const [stored, setStored] = new Function('return (()=>{' + seg + '; return [storedApiBase,setStoredApiBase];})()')();
+    ck('nothing saved means the bundled default is used', stored() === '');
+    setStored('https://new-tunnel.trycloudflare.com/');
+    ck('a saved address survives', stored() === 'https://new-tunnel.trycloudflare.com');
+    ck('and a trailing slash is stripped', !stored().endsWith('/'));
+    setStored('');
+    ck('"use default" clears it', stored() === '');
+    ck('API_BASE is reassignable, not a const', /let API_BASE =/.test(mobileJs));
+    ck('and the login screen can edit it', MOBILE.includes('id="serverUrl"'));
+    ck('it is verified against /api/health before saving', mobileJs.includes("'/api/health'") || mobileJs.includes('/api/health'));
+}
+
+section('E — the two clients have not drifted');
+{
+    // Every pair this file has had to fix once already.
+    [['sale mode', 'applyLoadModalMode'], ['the Sale button', 'btnAddSale'],
+     ['sale routing', "_kind === 'sale'"], ['the outbound endpoint', 'outbound-loads/'],
+     ['the description type-ahead', 'ld-item-desc-input'], ['on-hand', 'onHandAvailable'],
+     ['per-seller tickets', 'Load tickets']].forEach(([label, needle]) => {
+        ck(`${label} exists in BOTH clients`, MOBILE.includes(needle) && DASH.includes(needle));
+    });
+    ck('neither client still uses the old description <select>',
+        !MOBILE.includes('ld-item-desc-select') && !DASH.includes('ld-item-desc-select'));
+}
+
+console.log('\n================================================================');
+console.log(`${pass} passed, ${fail} failed`);
+if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log('  - ' + f)); }
+process.exit(fail ? 1 : 0);
