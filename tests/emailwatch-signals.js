@@ -318,6 +318,90 @@ section('C6 — a chase-up does not accuse her of not replying to a thing she ca
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// D. KEY FIGURES — Apsara, 2026-08-26, on a live digest:
+//        2. · Sender wants confirmation of payment amount sent.
+//           octavio fmc — wants: the final amount that was sent
+//    Bose had reported receiving $58,313.56 against an expected $58,813.56.
+//    Money was $500 short and the digest called it a routine admin ask.
+// ══════════════════════════════════════════════════════════════════════════
+const OCT = 'octavio@fmc.example.com';
+const payThread = [
+    { snippet: 'Invoice total for the two containers is $58,813.56 due 8/25.',
+      payload: { headers: [{ name: 'From', value: `Apsara <${ME}>` }, { name: 'Date', value: 'Mon, 24 Aug 2026 09:00:00 -0700' }] } },
+    { snippet: 'Bank shows we received $58,313.56 yesterday against Edge Metals.',
+      payload: { headers: [{ name: 'From', value: 'Edge Metals Bose <bose@edgemetals.com>' }, { name: 'Date', value: 'Tue, 25 Aug 2026 09:00:00 -0700' }] } },
+    { snippet: 'Could you please confirm the final amount that was sent yesterday?',
+      payload: { headers: [{ name: 'From', value: `octavio fmc <${OCT}>` }, { name: 'Date', value: 'Tue, 25 Aug 2026 17:00:00 -0700' }] } },
+];
+const payBody = 'Could you please confirm the final amount that was sent yesterday?';
+
+section('D1 — figures survive only if they are really there');
+{
+    const led = rw.buildThreadLedger(payThread, ME);
+    ck('the prompt demands the numbers', /THE NUMBER GOES IN THE SUMMARY/.test(
+        rw.buildPrompt({ from: OCT, subject: 's', date: 'd', body: payBody, thread: led })));
+    ck('and forbids Jarvis doing the arithmetic itself',
+        /NEVER compute, total, convert or round one/.test(
+            rw.buildPrompt({ from: OCT, subject: 's', date: 'd', body: payBody })));
+
+    AI = { waiting_on: 'her', needs_reply: true, confidence: 0.9, urgency: 'normal',
+           summary: 'Bose received $58,313.56 against $58,813.56 expected — confirm what was sent.',
+           asked_for: 'the final amount sent', asked_for_quote: 'confirm the final amount that was sent yesterday',
+           key_figures: ['$58,313.56', '$58,813.56'], deadline: null, is_order: false, order_buyer: null };
+    const a = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body: payBody, thread: led });
+    ck('a figure from ANOTHER message in the thread is kept — this is the whole point',
+        a.key_figures.includes('$58,313.56'), JSON.stringify(a.key_figures));
+    ck('so is the expected total she herself stated earlier',
+        a.key_figures.includes('$58,813.56'), JSON.stringify(a.key_figures));
+
+    // The failure that matters more than the feature.
+    AI = { ...AI, key_figures: ['$58,313.56', '$500.00 short'] };
+    const b = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body: payBody, thread: led });
+    ck('a COMPUTED figure nobody wrote is dropped, not printed as fact',
+        !b.key_figures.some((f) => /500/.test(f)), JSON.stringify(b.key_figures));
+
+    AI = { ...AI, key_figures: ['$58,313.56', '$58,313.56', 'USD 58,313.56'] };
+    const c = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body: payBody, thread: led });
+    ck('the same amount written three ways is listed once', c.key_figures.length === 1, JSON.stringify(c.key_figures));
+
+    AI = { ...AI, key_figures: ['5', '.56', '$58,313.56'] };
+    const d = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body: payBody, thread: led });
+    ck('stray digits that would match almost anything are refused',
+        d.key_figures.length === 1 && d.key_figures[0] === '$58,313.56', JSON.stringify(d.key_figures));
+
+    AI = { ...AI, key_figures: ['$58,313.56', 'A', 'B', 'C', 'D', 'E'], };
+    const e = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body: 'x $58,313.56 A B C D E' });
+    ck('the list is capped so a digest line cannot run away', e.key_figures.length <= 4, JSON.stringify(e.key_figures));
+}
+
+section('D2 — the digest she would have received instead');
+{
+    const item = { needs_reply: true, waiting_on: 'her', urgency: 'normal', fromName: 'octavio fmc',
+        summary: 'Bose received $58,313.56 against $58,813.56 expected — confirm what was sent.',
+        asked_for: 'the final amount sent', key_figures: ['$58,313.56', '$58,813.56'], is_order: false };
+    const d = rw.buildDigest([item]);
+    ck('both amounts are on the page', /\$58,313\.56/.test(d) && /\$58,813\.56/.test(d), d);
+    ck('the gap is visible to a human reading two lines', /58,313\.56\s+·\s+\$58,813\.56/.test(d), d);
+    // The line Apsara actually got.
+    ck('it is no longer just "wants confirmation of the amount"',
+        !/^\s*2?\.?\s*·?\s*\*?Sender wants confirmation of payment amount sent\.\*?$/m.test(d), d);
+    ck('an item with no figures renders exactly as before (no empty line)',
+        !/\n   \n/.test(rw.buildDigest([{ ...item, key_figures: [] }])), JSON.stringify(rw.buildDigest([{ ...item, key_figures: [] }])));
+}
+
+section('D3 — REGRESSION: a response with no key_figures at all still works');
+{
+    AI = { needs_reply: true, confidence: 0.9, urgency: 'normal', summary: 'Wants the ERD confirmed.',
+           asked_for: 'the ERD', asked_for_quote: 'could you please confirm the ERD',
+           deadline: null, is_order: false, order_buyer: null };
+    const a = await rw.assess({ from: ANDY, subject: 's', date: 'd', body: 'could you please confirm the ERD for Oakland?' });
+    ck('key_figures defaults to an empty array, never undefined', Array.isArray(a.key_figures) && a.key_figures.length === 0);
+    ck('nothing else changed', a.asked_for === 'the ERD' && a.needs_reply === true);
+}
+
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

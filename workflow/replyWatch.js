@@ -153,6 +153,29 @@ try {
         //   'them'   - she is waiting on THEM; this is progress -> chase item
         //   'nobody' - closed loop, FYI, notification
         waiting_on: z.enum(['her', 'them', 'nobody']).optional().default('her'),
+        // KEY FIGURES (2026-08-26). Apsara, on a live digest:
+        //
+        //     2. . Sender wants confirmation of payment amount sent.
+        //        octavio fmc - wants: the final amount that was sent
+        //
+        // True, useless, and it buried the only thing that mattered: Bose had
+        // reported receiving $58,313.56 against an expected $58,813.56. Money
+        // was FIVE HUNDRED DOLLARS short and the digest rendered it as a
+        // routine admin ask.
+        //
+        // Cause: `summary` is capped at "under 15 words" and told to say what
+        // the sender wants. Nothing anywhere asks for the NUMBERS, so amounts,
+        // booking numbers and container numbers are systematically thrown away
+        // - which strips out precisely what makes an item alarming or
+        // ignorable. "Wants confirmation of the amount" and "$58,313.56 against
+        // $58,813.56 expected" are the same length and not remotely the same
+        // message.
+        //
+        // Verbatim spans only, and grounded like asked_for_quote: an INVENTED
+        // figure on a money thread is far worse than no figure. Jarvis reports
+        // numbers; it does NOT do arithmetic on them and does not assert a
+        // shortfall - see the digest, which only ever lists what was said.
+        key_figures: z.array(z.string()).optional().default([]),
     });
 } catch (e) { /* falls back to hand-rolled checks below */ }
 
@@ -533,7 +556,7 @@ urgency:
 - "normal" — a real question with no particular time pressure.
 - "low" — courteous or optional; a reply would be nice but nothing is blocked.
 
-summary: ONE short sentence, under 15 words, written FROM HER SIDE OF THE DESK. It must make sense on its own in a list, without the subject line next to it, and it must make the direction obvious.
+summary: ONE short sentence, under 20 words, written FROM HER SIDE OF THE DESK. IF THE EMAIL OR THREAD TURNS ON A NUMBER, THE NUMBER GOES IN THE SUMMARY. A summary about money that contains no amount has thrown away the only thing that decides what she does next: "Wants confirmation of the amount sent" and "Bose received $58,313.56 against $58,813.56 expected" cost the same words and are not the same message. Where two figures for the same thing appear in the thread, put BOTH in and let her see the gap - state them, never subtract them. It must make sense on its own in a list, without the subject line next to it, and it must make the direction obvious.
   - waiting_on "her":  say what they need from her.        e.g. "Wants a rate for LA to Houston."
   - waiting_on "them": say what THEY are doing for HER and what it is attached to, using the thread for the specifics (booking, vessel, container, invoice).
                        e.g. "Chasing the carrier for the EDO on the HMM TURQUOISE roll."
@@ -547,6 +570,8 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
   - waiting_on "her":  the span in which they ASK        ("could you please confirm the ERD").
   - waiting_on "them": the span in which they COMMIT or report progress ("I am working to get the EDO # ASAP").
   null if you cannot point at a specific span, in which case asked_for should almost certainly be null too.
+key_figures: every figure that a person deciding what to do about this email would need, copied VERBATIM: money amounts, booking numbers, container numbers, invoice numbers, quantities, weights. Up to 4, most important first, [] if the email genuinely contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
+
 deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
 is_order: true if the sender is asking to buy material, asking for a proforma/PI, or confirming an order with quantities and/or prices. false for anything else, including a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
 order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
@@ -558,7 +583,7 @@ If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "waiting_on": "her", "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
+{ "waiting_on": "her", "key_figures": [], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
 }
 
 // ── QUOTE GROUNDING (2026-08-25) ───────────────────────────────────────────
@@ -611,6 +636,34 @@ function quoteAppearsIn(quote, body, kind = 'request') {
     return true;
 }
 
+// Figures are matched on their DIGITS AND LETTERS ONLY, so "$58,313.56",
+// "USD 58,313.56" and "58313.56" are one figure rather than three misses.
+// Deliberately loose about surrounding punctuation and strict about the
+// characters themselves: the point is to prove Jarvis copied a number that is
+// really there, not to parse currency.
+const MAX_KEY_FIGURES = 4;
+const figKey = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function groundFigures(figures, haystacks) {
+    if (!Array.isArray(figures)) return [];
+    const hay = figKey(haystacks.filter(Boolean).join(' '));
+    const out = [];
+    const seen = new Set();
+    for (const f of figures) {
+        const k = figKey(f);
+        // Under 3 characters is not a figure, it is a digit that will match
+        // almost anything - "5" appears inside every long number on the page.
+        if (k.length < 3 || seen.has(k)) continue;
+        if (!hay.includes(k)) {
+            console.warn(`[REPLYWATCH] key figure "${String(f).slice(0, 40)}" does not appear in the email or thread - dropping it as ungrounded`);
+            continue;
+        }
+        seen.add(k);
+        out.push(String(f).trim());
+        if (out.length >= MAX_KEY_FIGURES) break;
+    }
+    return out;
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -630,8 +683,14 @@ async function assess(email) {
     }
     // Without zod these fields are unvalidated, so normalize defensively —
     // the shape must not depend on whether an optional package installed.
+    // Grounded against the thread as well as the body: the figure that made
+    // the $500 gap visible was in a DIFFERENT message (Bose's), which only
+    // reaches the model through the thread ledger.
+    const key_figures = groundFigures(res.key_figures, [email.body, email.thread]);
+
     return {
         waiting_on,
+        key_figures,
         // Coupled in CODE, not left to the model. Same principle as
         // applyDeadlineUrgency below: the judgement ("who is blocked here")
         // is the model's job, the consistency rule that follows from it is
@@ -1095,6 +1154,15 @@ function buildDigest(matters, emailCount) {
         // THE LINE APSARA READ AS BACKWARDS: "Andy Park — wants: EDO #", when
         // Andy owed her that EDO. The word is now chosen by direction.
         lines.push(`   ${f.fromName}${f.asked_for ? ` — ${f.waiting_on === 'them' ? 'owes you' : 'wants'}: ${f.asked_for}` : ''}`);
+        // The figures, verbatim, on their own line. Belt and braces: the prompt
+        // also requires them inside the summary, but a model that forgets one
+        // there should not cost her the number entirely. Listed, never totalled
+        // and never compared - if two amounts disagree she is the one who reads
+        // the gap, because a wrong shortfall claim on a live money thread is a
+        // worse failure than no claim at all.
+        if (Array.isArray(f.key_figures) && f.key_figures.length) {
+            lines.push(`   ${f.key_figures.join('  ·  ')}`);
+        }
         // An order gets one extra line saying what to type. Jarvis can raise
         // the proforma itself now, and a digest that reports an order without
         // mentioning that is making her do a lookup it could have saved her.
@@ -1360,6 +1428,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 is_order: !!a.is_order, order_buyer: a.order_buyer || null,
                 needs_reply: !!a.needs_reply,
                 waiting_on: a.waiting_on || 'her',
+                key_figures: Array.isArray(a.key_figures) ? a.key_figures : [],
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
@@ -1440,6 +1509,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // Carried so deadline reminders can fire off tracked state without
             // re-reading the mailbox — see collectDeadlineReminders.
             deadline: f.deadline || null, asked_for: f.asked_for || null,
+            key_figures: Array.isArray(f.key_figures) ? f.key_figures : [],
             lastDeadlineNudgeOn: null,
         });
     }
