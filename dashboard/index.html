@@ -582,7 +582,20 @@ async function loadTab(tab) {
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
-    if (tab === 'loads') return renderLoads(await api('/api/loads'));
+    if (tab === 'loads') {
+      // Purchases and sales in one deck — a sale she can't see is a sale she
+      // can't delete, and deletion is what rolls inventory back. _kind tells
+      // the card, the edit handler and the delete handler which store the
+      // record lives in. Mirrors the app exactly.
+      const [inbound, sales] = await Promise.all([
+        api('/api/loads'),
+        api('/api/outbound-loads').catch(() => []),
+      ]);
+      return renderLoads([
+        ...(inbound || []).map(l => ({ ...l, _kind: 'purchase' })),
+        ...(sales || []).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
+      ].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))));
+    }
     // Deliberately NOT fetched anywhere during boot/init — loadTab() only
     // runs this when the Inventory nav button is actually clicked, same
     // lazy-per-tab pattern every tab above already uses. That's what
@@ -3057,7 +3070,50 @@ function todayLocalDateStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function resetLoadModal() {
+// ── Purchase vs sale ──────────────────────────────────────────────────────
+// Apsara, 2026-08-24: "next to create invoice, i want another button as sales
+// replicating the same template — only change is: i want buyer and buyer
+// address instead of seller. on save, inventory to be updated. on deletion,
+// inventory roll back."
+//
+// ONE modal, two modes. Deliberately not a second copy of the form: the item
+// rows carry the scale scanner, per-item photos, the description type-ahead,
+// last-price fill and the totals maths, and a duplicate would have started
+// identical and drifted within a week — this file has already been through
+// that with the two clients.
+//
+// What actually differs is small and lives in applyLoadModalMode(): which
+// party is editable, what the fields are called, and where the save goes.
+//
+// Inventory movement needs no special handling either way. A purchase writes
+// an inbound load and a sale writes an outbound one, and getInventoryReport
+// nets the two by item type — so a sale reduces on-hand on save and deleting
+// it puts the material back, with no rollback code anywhere. That is exactly
+// why sales are stored as outbound loads rather than as negative purchases.
+let loadModalMode = 'purchase'; // 'purchase' | 'sale'
+
+function applyLoadModalMode(mode) {
+  loadModalMode = mode === 'sale' ? 'sale' : 'purchase';
+  const sale = loadModalMode === 'sale';
+  const t = sale ? 'Record sale' : 'Create invoice';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : t;
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = editingLoadId ? 'Save changes' : t;
+  // The counterparty swaps sides: on a purchase Edge Trading is the buyer and
+  // the seller is typed; on a sale Edge Trading is the seller and the buyer is
+  // typed. Same two inputs, relabelled, so every downstream handler keeps
+  // working on the same element ids.
+  if ($('ld_party_label')) $('ld_party_label').textContent = sale ? 'Buyer' : 'Seller';
+  if ($('ld_party_addr_label')) $('ld_party_addr_label').textContent = sale ? 'Buyer address' : 'Seller address';
+  if ($('ld_fixed_label')) $('ld_fixed_label').textContent = sale ? 'Seller' : 'Buyer';
+  if ($('ld_seller')) $('ld_seller').placeholder = sale ? 'Buyer name' : 'Seller name';
+  // Phone is a purchase-side convenience (the "send ticket to seller" button)
+  // and has no meaning on a sale — hidden rather than left to collect a
+  // number nothing will ever use.
+  const phoneWrap = $('ld_seller_phone') && $('ld_seller_phone').closest('.field');
+  if (phoneWrap) phoneWrap.style.display = sale ? 'none' : '';
+}
+
+function resetLoadModal(mode) {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
@@ -3067,8 +3123,7 @@ function resetLoadModal() {
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
   if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Create invoice';
-  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Create invoice';
+  applyLoadModalMode(mode);
   renderItemRows();
   stopCamera();
   refreshAddressBookCache();
@@ -3112,7 +3167,9 @@ function openEditLoadModal(load) {
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
   $('loadModalErr').textContent = '';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
+  // Set AFTER editingLoadId is assigned — applyLoadModalMode runs before this
+  // while it is still null, so its title is the create-mode one.
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = `${loadModalMode === 'sale' ? 'Edit sale' : 'Edit load'} — ${load.id}`;
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
   renderItemRows();
   stopCamera();
@@ -3131,7 +3188,9 @@ function loadCardHtml(l) {
           <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.seller || 'Unnamed seller')}</div>
           <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(l.date || '—')} · ${esc(l.id)}</div>
         </div>
-        <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
+        ${l._kind === 'sale'
+          ? `<span class="badge" style="background:var(--status-warning, #d69e2e); color:#fff; white-space:nowrap;">SALE</span>`
+          : `<span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>`}
       </div>
       ${(l.warnings && l.warnings.length) ? `
       <!-- Warning banner — per Apsara 2026-08-20. Photo/PDF/Drive failures
@@ -3158,14 +3217,17 @@ function loadCardHtml(l) {
         <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
       </div>
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
-        ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
+        ${l.pdf_link && l._kind !== 'sale' ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
         <!-- POS receipt PDF (80mm width) — per Apsara 2026-08-17. Mirrors
              mobile-app/www/index.html's identical link. -->
-        ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
-        ${!l.pdf_link
+        ${l.receipt_pdf_link && l._kind !== 'sale' ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
+        <!-- Ticket actions are purchase-only: a sale has no yard ticket to
+             generate, no seller to send one to and nothing to sign. Hidden
+             rather than shown-and-failing. Mirrors the app. -->
+        ${l._kind === 'sale' ? '' : (!l.pdf_link
           ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
-          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
+          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`)}
         <!-- No stale-ticket warning here, deliberately. It was built and then
              removed the same day per Apsara 2026-08-20 ("don't do that. user
              will get irritated"), and she's right: on first deploy EVERY
@@ -3181,7 +3243,7 @@ function loadCardHtml(l) {
              phone on file so the click handler can surface that as a
              clear error rather than the option just silently not being
              there — per Apsara 2026-08-17. Mirrors mobile-app/www/index.html. -->
-        ${l.pdf_link ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
+        ${l.pdf_link && l._kind !== 'sale' ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
@@ -3430,7 +3492,10 @@ function renderLoads(loads) {
           <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
           <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
         </div>
-        <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+        <div style="display:flex; gap:8px;">
+          <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+          <button id="btnAddSale" class="btn">+ Sale</button>
+        </div>
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
@@ -3446,15 +3511,15 @@ function renderLoads(loads) {
         <div class="modal-body">
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
-            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
+            <div class="field"><label id="ld_fixed_label">Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field" style="position:relative;">
-              <label>Seller</label>
+              <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
           <!-- Optional — per Apsara 2026-08-17. Only used to build the
                WhatsApp chat id for the "Send to seller" button once a PDF
@@ -3511,7 +3576,11 @@ function validateItemsBeforeSave(items) {
 
 function wireLoadsEvents() {
   $('btnAddLoad').addEventListener('click', () => {
-    resetLoadModal();
+    resetLoadModal('purchase');
+    $('loadModal').classList.remove('hidden');
+  });
+  if ($('btnAddSale')) $('btnAddSale').addEventListener('click', () => {
+    resetLoadModal('sale');
     $('loadModal').classList.remove('hidden');
   });
   const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
@@ -3649,7 +3718,19 @@ function wireLoadsEvents() {
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
-      if (isEdit) {
+      if (loadModalMode === 'sale') {
+        // Outbound: the party in the seller field IS the buyer here. Its own
+        // record type, not a negative purchase — see applyLoadModalMode.
+        const salePayload = {
+          date: payload.date, buyer: payload.seller, buyer_address: payload.seller_address,
+          description: payload.description, weight_unit: payload.weight_unit, items: payload.items,
+        };
+        if (isEdit) {
+          await api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(salePayload) });
+        } else {
+          await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(salePayload) });
+        }
+      } else if (isEdit) {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
@@ -3766,6 +3847,9 @@ function wireDeckEvents() {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
     if (!load) return;
+    // Reopen in the mode this record belongs to, so a sale edits as a sale
+    // and saves back to the outbound store rather than becoming a purchase.
+    applyLoadModalMode(load._kind === 'sale' ? 'sale' : 'purchase');
     // NO EDIT LOCK — removed 2026-08-20 per Apsara ("remove the admin
     // password asking for editing even for staff access"). The lock, the
     // prompt and the admin-only carve-out are all gone; any authorised user
@@ -3805,10 +3889,17 @@ function wireDeckEvents() {
     // the opposite of what it said before (api.js's DELETE route now trashes
     // the load's whole Drive subfolder — recoverable for 30 days, not gone
     // forever, but very much not "kept" either).
-    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+    const rec = loadsCache.find(l => l.id === btn.dataset.id);
+    const isSale = rec && rec._kind === 'sale';
+    // Different consequences, different wording. Deleting a SALE puts the
+    // material back on hand — the rollback, which happens because inventory
+    // nets purchases against sales rather than storing a balance to unwind.
+    if (!confirm(isSale
+      ? `Delete sale ${btn.dataset.id}? The material goes back into inventory as on hand.`
+      : `Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      await api(`${isSale ? '/api/outbound-loads/' : '/api/loads/'}${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
       loadTab('loads');
     } catch (err) {
       alert('Delete failed: ' + err.message);
