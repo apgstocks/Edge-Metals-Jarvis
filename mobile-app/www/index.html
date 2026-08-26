@@ -5076,22 +5076,51 @@ async function wakeCycle() {
 // Used both by the mic button and by the wake word once it fires. Longer
 // maxResults and no wake matching — everything heard is the command.
 async function captureCommand(seedText) {
-  const SR = voicePlugin();
-  if (!SR) { voiceToast('Voice needs the installed app — not available in a browser.'); return; }
-  if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
-  try { await SR.stop(); } catch (e) {}
-  voiceListening = false;
+  // THE SHEET OPENS FIRST, BEFORE ANY PLUGIN CALL. Apsara, 2026-08-24: "when i
+  // click mike button, nothing happening in app."
+  //
+  // The first version did plugin work before showing anything: it returned
+  // early with only a toast when the plugin was missing, and it awaited
+  // SR.stop() — which on Android can hang when nothing is listening — before
+  // opening the sheet. Either path produced a button that visibly did nothing,
+  // which is the worst possible failure: no error, no feedback, nothing to
+  // report. Whatever else breaks now, the sheet appears and says why.
   voiceMode = 'command';
   openVoiceSheet(seedText || '');
+
+  const SR = voicePlugin();
+  if (!SR) {
+    setVoiceSheetState('error', window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+      ? 'Speech recognition is not available on this device. Type the command instead.'
+      : 'Voice only works in the installed app, not a browser tab. Type the command instead.');
+    return;
+  }
+
+  if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
+  // Bounded: a stop() that never settles must not strand the capture. 1.5s is
+  // far longer than a real stop takes and short enough not to be felt.
   try {
+    await Promise.race([SR.stop().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
+  } catch (e) { /* already stopped */ }
+  voiceListening = false;
+
+  try {
+    const avail = await SR.available().catch(() => null);
+    if (avail && (avail.available === false)) {
+      setVoiceSheetState('error', 'No speech recogniser on this device — some Android builds ship without one. Type the command instead.');
+      return;
+    }
     const perm = await SR.requestPermissions();
-    if (perm && perm.speechRecognition === 'denied') { setVoiceSheetState('error', 'Microphone permission denied.'); return; }
+    if (perm && perm.speechRecognition === 'denied') {
+      setVoiceSheetState('error', 'Microphone permission denied. Allow it in Android Settings > Apps > Edge Yard > Permissions.');
+      return;
+    }
     voiceListening = true;
     setVoiceSheetState('listening', 'Listening…');
     await SR.start({ language: 'en-US', maxResults: 5, prompt: '', partialResults: true, popup: false });
   } catch (e) {
     voiceListening = false;
-    setVoiceSheetState('error', e.message || "couldn't start listening");
+    setVoiceSheetState('error', (e && e.message) || "couldn't start listening — type the command instead");
   }
 }
 
@@ -5217,24 +5246,51 @@ function wireVoiceUI() {
   const b = $('btnVoice');
   if (!b || b.dataset.wired) return;
   b.dataset.wired = '1';
-  let held = false, timer = null;
+  // TOUCH AND MOUSE ARE THE SAME GESTURE, and Android fires both: a real tap
+  // sends touchstart/touchend and THEN synthetic mousedown/mouseup. The first
+  // version listened to all four, so one tap ran the handler twice — opening
+  // the capture, then immediately opening it again — and the synthetic
+  // mousedown started a second long-press timer that could toggle the wake
+  // loop on its own about half a second later.
+  //
+  // usedTouch latches on the first touch event and makes the mouse pair a
+  // no-op from then on, which is the standard fix and survives a device that
+  // reports both.
+  let held = false, timer = null, usedTouch = false, handledAt = 0;
   const startHold = () => {
     held = false;
+    if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       held = true;
+      timer = null;
       if (voiceOn) { stopWakeLoop(); voiceToast('Stopped listening for "Hey Jarvis".'); }
       else { startWakeLoop(); voiceToast('Listening for "Hey Jarvis" while the app is open.'); }
     }, 550);
   };
   const endHold = (ev) => {
     if (timer) { clearTimeout(timer); timer = null; }
-    if (held) { ev.preventDefault(); return; }
+    handledAt = Date.now(); // so the trailing click knows this gesture is done
+    if (held) { held = false; if (ev && ev.preventDefault) ev.preventDefault(); return; }
     captureCommand('');
   };
-  b.addEventListener('touchstart', startHold, { passive: true });
-  b.addEventListener('touchend', endHold);
-  b.addEventListener('mousedown', startHold);
-  b.addEventListener('mouseup', endHold);
+  b.addEventListener('touchstart', () => { usedTouch = true; startHold(); }, { passive: true });
+  b.addEventListener('touchend', (ev) => { ev.preventDefault(); endHold(ev); });
+  b.addEventListener('mousedown', () => { if (!usedTouch) startHold(); });
+  b.addEventListener('mouseup', (ev) => { if (!usedTouch) endHold(ev); });
+  // Last resort: if a device delivers NEITHER pair, a plain click still opens
+  // the capture rather than the button doing nothing at all.
+  //
+  // handledAt, not the sheet's visibility, decides whether this is a duplicate.
+  // A desktop click fires mouseup AND click, so this ran twice; keying off
+  // "is the sheet already open" happened to mask that, but it made a correct
+  // gesture depend on DOM state set by an async function. A timestamp is
+  // deterministic and does not care what the UI has managed to render yet.
+  b.addEventListener('click', (ev) => {
+    if (timer || held) return;
+    if (Date.now() - handledAt < 700) return; // the touch/mouse pair already handled it
+    ev.preventDefault();
+    captureCommand('');
+  });
 
   $('btnVoiceClose').addEventListener('click', closeVoiceSheet);
   $('btnVoiceSend').addEventListener('click', sendVoiceCommand);

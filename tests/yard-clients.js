@@ -112,6 +112,59 @@ section('E — the two clients have not drifted');
         !MOBILE.includes('ld-item-desc-select') && !DASH.includes('ld-item-desc-select'));
 }
 
+section('F — one tap on the mic is one capture');
+{
+    // Android fires touch AND synthetic mouse for a single tap, so the button
+    // ran its handler twice; a desktop click fires mouseup AND click, so the
+    // fallback doubled it again. Both are reproduced here because "nothing
+    // happening" and "happening twice" are the same class of bug and neither
+    // is visible from reading the code.
+    const seg = mobileJs.slice(
+        mobileJs.indexOf('  let held = false, timer = null, usedTouch = false, handledAt = 0;'),
+        mobileJs.indexOf("  $('btnVoiceClose')"));
+    ck('the gesture handler is still shaped as expected', seg.length > 200);
+
+    const wire = () => {
+        const state = { captures: 0, toggles: 0 };
+        const handlers = {};
+        const b = { addEventListener: (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn); } };
+        const $ = () => ({ classList: { contains: () => true } });
+        const captureCommand = () => state.captures++;
+        const stopWakeLoop = () => state.toggles++;
+        const startWakeLoop = () => state.toggles++;
+        const voiceToast = () => {};
+        let voiceOn = false;
+        eval(seg);
+        return { state, fire: (ev) => (handlers[ev] || []).forEach((f) => f({ preventDefault() {} })) };
+    };
+
+    const tap = (seq) => { const w = wire(); seq.forEach((e) => w.fire(e)); return w.state; };
+    const android = tap(['touchstart', 'touchend', 'mousedown', 'mouseup', 'click']);
+    ck('an android tap captures exactly once', android.captures === 1);
+    ck('and does not toggle the wake word', android.toggles === 0);
+    const desktop = tap(['mousedown', 'mouseup', 'click']);
+    ck('a desktop click captures exactly once', desktop.captures === 1);
+    const bare = tap(['click']);
+    ck('a click-only webview still captures', bare.captures === 1);
+
+    // Long press is the wake-word toggle, and must not also capture.
+    const w = wire();
+    w.fire('touchstart');
+    const started = Date.now();
+    while (Date.now() - started < 650) { /* let the 550ms timer elapse */ }
+    return new Promise((resolve) => setTimeout(() => {
+        ['touchend', 'mousedown', 'mouseup', 'click'].forEach((e) => w.fire(e));
+        setTimeout(() => {
+            ck('a long press toggles the wake word', w.state.toggles === 1);
+            ck('and does NOT also open a capture', w.state.captures === 0);
+            console.log('\n================================================================');
+            console.log(`${pass} passed, ${fail} failed`);
+            if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log('  - ' + f)); }
+            process.exit(fail ? 1 : 0);
+        }, 80);
+    }, 10));
+}
+
 console.log('\n================================================================');
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log('  - ' + f)); }
