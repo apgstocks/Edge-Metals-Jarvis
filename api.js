@@ -1366,9 +1366,26 @@ function createApi() {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // Refuses a save that would draw more from a lot than it holds. Checked
+    // BEFORE the write, because an over-draw silently accepted turns every
+    // later on-hand figure into a lie and there is nothing afterwards that
+    // could detect it. ignoreOutboundId lets an EDIT re-save its own existing
+    // draws without them counting against themselves.
+    function checkDraws(items, ignoreOutboundId) {
+        const proposed = (Array.isArray(items) ? items : []).flatMap((it) => (it && it.draws) || []);
+        if (!proposed.length) return null;
+        const { loadLoads } = require('./helpers/loads');
+        const { loadOutboundLoads } = require('./helpers/outboundLoads');
+        const { validateDraws } = require('./helpers/stock');
+        const v = validateDraws(loadLoads(), loadOutboundLoads(), proposed, { ignoreOutboundId });
+        return v.ok ? null : v.errors.join(' ');
+    }
+
     app.post('/api/outbound-loads', async (req, res) => {
         const b = req.body || {};
         try {
+            const drawErr = checkDraws(b.items, null);
+            if (drawErr) return res.status(400).json({ error: drawErr });
             const { addOutboundLoad } = require('./helpers/outboundLoads');
             const record = await addOutboundLoad({
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
@@ -1388,6 +1405,8 @@ function createApi() {
     app.put('/api/outbound-loads/:id', async (req, res) => {
         const b = req.body || {};
         try {
+            const drawErr = checkDraws((req.body || {}).items, req.params.id);
+            if (drawErr) return res.status(400).json({ error: drawErr });
             const { editOutboundLoad } = require('./helpers/outboundLoads');
             const record = await editOutboundLoad(req.params.id, {
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
@@ -2161,6 +2180,33 @@ function createApi() {
     app.delete('/api/item-types', async (req, res) => {
         try { res.json(await require('./helpers/itemTypes').deleteCustomItemType(req.body.description)); }
         catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── Stock — what is still in the yard ───────────────────────────────────
+    // Per Apsara 2026-08-24. Kept OFF /api/loads/inventory deliberately: she
+    // asked for these to stay separate, so the Inventory tab remains the
+    // purchase log it has always been and this is its own view. Same staff
+    // visibility as the rest of /api/loads/*.
+    app.get('/api/loads/stock', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const { loadOutboundLoads } = require('./helpers/outboundLoads');
+            const { stockReport, lotReport } = require('./helpers/stock');
+            const inbound = loadLoads(), outbound = loadOutboundLoads();
+            res.json({ byType: stockReport(inbound, outbound), lots: lotReport(inbound, outbound) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // FIFO proposal for drawing a quantity of one material — the client shows
+    // it pre-filled and she adjusts when reality differs (a specific pile went
+    // into a specific container).
+    app.get('/api/loads/stock/suggest', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const { loadOutboundLoads } = require('./helpers/outboundLoads');
+            const { suggestDraws } = require('./helpers/stock');
+            res.json(suggestDraws(loadLoads(), loadOutboundLoads(), req.query.description || '', req.query.weight));
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────

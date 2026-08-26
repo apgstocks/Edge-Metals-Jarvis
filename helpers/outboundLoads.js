@@ -29,6 +29,16 @@ function toNum(v) {
     return isFinite(n) ? n : null;
 }
 
+// draws: [{ load_id, weight }] — which inbound lots this line drew from, and
+// how much from each. Added 2026-08-24; see helpers/stock.js for the model and
+// for why whole-load linking wasn't enough. Optional: a sale with no draws
+// still counts as shipped, it just carries no cost.
+function normaliseDraws(raw) {
+    return (Array.isArray(raw) ? raw : [])
+        .map((d) => ({ load_id: String(d && d.load_id || '').trim(), weight: toNum(d && d.weight) }))
+        .filter((d) => d.load_id && d.weight != null && d.weight > 0);
+}
+
 function computeItem(it) {
     const gross = toNum(it.gross_weight);
     const tare  = toNum(it.tare_weight);
@@ -36,6 +46,7 @@ function computeItem(it) {
     const price = toNum(it.price);
     const amount = (net != null && price != null) ? round2(net * price) : null;
     return {
+        draws: normaliseDraws(it && it.draws),
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
         price, unit: it.unit || '', amount,
@@ -247,5 +258,6 @@ function getOutboundReport(allLoads, { from, to } = {}) {
 }
 
 module.exports = {
+    normaliseDraws,
     loadOutboundLoads, addOutboundLoad, editOutboundLoad, deleteOutboundLoad, getOutboundLoad, getOutboundReport, getLoadMargin,
 };
