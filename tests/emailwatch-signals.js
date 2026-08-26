@@ -475,6 +475,116 @@ section('E4 — a gap can only ever be built from GROUNDED figures');
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// F. WHO WAS ACTUALLY ASKED — Apsara: "but she didnt ask edgemetals".
+//    Octavio addressed Aisha. Edge Metals was on the thread, not on the hook.
+//    replyWatch had NEVER read the To or Cc headers - not once in the file.
+// ══════════════════════════════════════════════════════════════════════════
+const BOSE = 'bose@edgemetals.com';   // reads authenticate as bose@, not apsara@
+
+section('F1 — the header rule, decided in code');
+{
+    const A = (to, cc) => rw.addressing(to, cc, BOSE);
+    ck('company in To: this is ours to answer',
+        A('Edge Metals Bose <bose@edgemetals.com>', 'octavio@fmc.example.com').inTo === true);
+    ck('company only in Cc: nobody here was asked',
+        A('Aisha Rahman <aisha@fmc.example.com>', 'bose@edgemetals.com').inTo === false);
+    ck('and the person who WAS asked is named from the header, not guessed',
+        A('Aisha Rahman <aisha@fmc.example.com>', 'bose@edgemetals.com').toLabel === 'Aisha Rahman');
+    ck('a different colleague in To still counts as ours',
+        A('apsara@edgemetals.com', '').inTo === true);
+    ck('multiple recipients: one company address is enough',
+        A('aisha@fmc.example.com, bose@edgemetals.com', '').inTo === true);
+    ck('company nowhere at all is still not ours',
+        A('aisha@fmc.example.com', 'someone@elsewhere.com').inTo === false);
+
+    // FAIL-OPEN. If we cannot establish the domain we must NOT reclassify
+    // every email as somebody else's problem.
+    ck('an unknown mailbox fails OPEN to the old behaviour',
+        rw.addressing('aisha@fmc.example.com', '', '').unknown === true &&
+        rw.addressing('aisha@fmc.example.com', '', '').inTo === true);
+    // THE ONE THAT NEARLY SHIPPED A SILENT OUTAGE. An email with no parseable
+    // To (Bcc, a list, a forward that lost its headers) must behave exactly as
+    // it did before this header was ever read - not vanish from her digest.
+    ck('an EMPTY To line fails OPEN, it is not evidence someone else was asked',
+        A(null, null).unknown === true && A(null, null).inTo === true);
+    ck('same for an unparseable To', A('   ', '').unknown === true && A('   ', '').inTo === true);
+}
+
+section('F2 — headers beat the model, in both directions');
+{
+    const base = { waiting_on: 'her', needs_reply: true, confidence: 0.9, urgency: 'normal',
+        summary: 's', asked_for: 'the final amount sent',
+        asked_for_quote: 'confirm the final amount that was sent yesterday',
+        deadline: null, is_order: false, order_buyer: null, key_figures: [] };
+    const body = 'Aisha, could you please confirm the final amount that was sent yesterday?';
+
+    // THE LIVE CASE. Model says "she needs to reply". The To line says Aisha.
+    AI = { ...base };
+    const a = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body,
+        to: 'Aisha Rahman <aisha@fmc.example.com>', cc: BOSE, myAddress: BOSE });
+    ck('a question addressed to a third party is not hers', a.waiting_on === 'someone_else', JSON.stringify(a));
+    ck('needs_reply is forced false', a.needs_reply === false);
+    ck('and the digest can name who was asked', a.asked_of === 'Aisha Rahman', a.asked_of);
+
+    // The reverse: model says someone else, headers say us. Headers win.
+    AI = { ...base, waiting_on: 'someone_else', asked_of: 'Aisha', needs_reply: false };
+    const b = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body,
+        to: BOSE, cc: '', myAddress: BOSE });
+    ck('a company address in To overrides the model saying someone else',
+        b.waiting_on === 'her', JSON.stringify(b));
+    ck('and asked_of is cleared so no line claims a third party', b.asked_of === null);
+
+    // REGRESSION: assess() called with no headers must behave exactly as before.
+    AI = { ...base };
+    const c = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body });
+    ck('no headers supplied means unchanged, never "somebody else\'s"',
+        c.waiting_on === 'her' && c.needs_reply === true, JSON.stringify(c));
+    ck('asked_of is null on an ordinary item', c.asked_of === null);
+
+    AI = { ...base, waiting_on: 'someone_else', asked_of: null };
+    const e = await rw.assess({ from: OCT, subject: 'payment', date: 'd', body });
+    ck('a "someone_else" naming nobody falls back to her rather than vanishing',
+        e.waiting_on === 'her', JSON.stringify(e));
+}
+
+section('F3 — the digest she should have received');
+{
+    const item = { needs_reply: false, waiting_on: 'someone_else', asked_of: 'Aisha', urgency: 'normal',
+        fromName: 'octavio fmc', summary: 'Asked Aisha to confirm the amount sent.',
+        asked_for: 'the final amount sent', key_figures: ['$58,313.56', '$58,813.56'], is_order: false };
+    const d = rw.buildDigest([item]);
+    ck('it is NOT counted as waiting on her', !/waiting on you/.test(d), d);
+    ck('the count says whose it is', /1 is for someone else to answer/.test(d), d);
+    ck('the line names who was asked', /asked Aisha for: the final amount sent/.test(d), d);
+    ck('and says plainly why she is seeing it', /you are only copied in/.test(d), d);
+    ck('the money gap still shows — she should see it even if it is not hers',
+        /\$500\.00 gap/.test(d), d);
+    ck('the footer does not tell her to reply to something nobody asked her',
+        /None of this is addressed to you/.test(d) && !/Nothing sent yet/.test(d), d);
+
+    const m = rw.buildChaseMessage([{ summary: 'Amount confirmation.', fromName: 'octavio fmc', ageDays: 4, waiting_on: 'someone_else', asked_of: 'Aisha' }]);
+    ck('a chase-up says Aisha has not answered, not that SHE has not replied',
+        /Aisha still hasn't answered/.test(m) && !/no reply yet/.test(m), m);
+}
+
+section('F4 — a mixed digest keeps all four buckets separate');
+{
+    const d = rw.buildDigest([
+        { needs_reply: true, waiting_on: 'her', urgency: 'normal', fromName: 'Kristal', summary: 'Wants a rate.', asked_for: 'a rate', is_order: false },
+        { needs_reply: false, waiting_on: 'them', urgency: 'normal', fromName: 'Andy Park', summary: 'Chasing the EDO.', asked_for: 'the EDO number', is_order: false },
+        { needs_reply: false, waiting_on: 'someone_else', asked_of: 'Aisha', urgency: 'normal', fromName: 'octavio fmc', summary: 'Asked Aisha.', asked_for: 'the amount', is_order: false },
+        { needs_reply: false, waiting_on: 'her', urgency: 'normal', fromName: 'Joey', summary: 'Order.', asked_for: null, is_order: true, order_buyer: 'Daekwang' },
+    ]);
+    ck('exactly one is waiting on her', /1 email waiting on you/.test(d), d);
+    ck('one order', /1 order came in/.test(d), d);
+    ck('one owed to her', /1 is waiting on someone else/.test(d), d);
+    ck('one for a third party', /1 is for someone else to answer/.test(d), d);
+    ck('the bystander is not folded into the reply count', !/[234] emails waiting on you/.test(d), d);
+}
+
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
