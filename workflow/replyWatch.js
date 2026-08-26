@@ -664,6 +664,79 @@ function groundFigures(figures, haystacks) {
     return out;
 }
 
+// ── THE GAP, COMPUTED IN CODE ──────────────────────────────────────────────
+// Apsara, 2026-08-26, twice: "still it didnt convey message properly". She had
+// already written the sentence she wanted, in her own words:
+//
+//   "Bose reported receiving $58,313.56, which is $500.00 LESS THAN the
+//    expected total of $58,813.56."
+//
+// The previous commit put both amounts on a line and left her to subtract
+// them. Two numbers side by side is not the message. "$500.00 gap" is.
+//
+// My reasoning error, stated plainly so it is not repeated: I argued that a
+// MODEL doing arithmetic will eventually produce a confident wrong number -
+// which is true - and then concluded that no arithmetic should happen at all.
+// Code subtracting two verbatim-grounded numbers cannot hallucinate. It is the
+// same split applyDeadlineUrgency already uses twenty lines below: the model
+// reads, the code computes.
+//
+// SAFETY, in order of importance:
+//   1. Operands are grounded key_figures ONLY - each already proven to appear
+//      verbatim in the email or thread. Nothing invented can enter the sum.
+//   2. Money only. A figure without a currency mark or 2-decimal form is a
+//      booking number, not an amount, and is never subtracted.
+//   3. EXACTLY two distinct amounts. Three or more is ambiguous - which pair?
+//      - and a guess there is exactly the confident-wrong-answer failure.
+//   4. Within 10% of each other. That is the signature of a short payment.
+//      A unit price beside a line total ($2,420 vs $58,813) is 96% apart and
+//      is NOT flagged - that is the false positive this guard exists for.
+//   5. Neutral wording. "gap", not "short" and not "underpaid": the code knows
+//      the two numbers differ, it does NOT know which one was supposed to be
+//      right, and saying so would be asserting something nobody established.
+const GAP_MAX_RELATIVE = 0.10;
+const CURRENCY_SIGN = /[$\u20ac\u00a3\u00a5\u20b9]|\b(usd|eur|gbp|inr|cad|aud)\b/i;
+
+// null unless this really looks like money.
+function parseMoneyFigure(text) {
+    const t = String(text || '');
+    const m = t.match(/-?[\d][\d,]*(?:\.\d{1,2})?/);
+    if (!m) return null;
+    const hasCurrency = CURRENCY_SIGN.test(t);
+    const hasCents = /\.\d{2}(?!\d)/.test(m[0]);
+    // A bare integer with no currency mark is a container or booking number.
+    if (!hasCurrency && !hasCents) return null;
+    const v = Number(m[0].replace(/,/g, ''));
+    return Number.isFinite(v) && v !== 0 ? Math.abs(v) : null;
+}
+
+const fmtGap = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Returns { gap, a, b, aText, bText } or null. Never throws, never guesses.
+function figureGap(figures) {
+    if (!Array.isArray(figures)) return null;
+    const money = [];
+    for (const f of figures) {
+        const v = parseMoneyFigure(f);
+        if (v === null) continue;
+        if (money.some((m) => m.v === v)) continue;      // same amount written twice
+        money.push({ v, text: String(f).trim() });
+    }
+    if (money.length !== 2) return null;                 // see guard 3
+    const hiV = Math.max(money[0].v, money[1].v);
+    const gap = Math.abs(money[0].v - money[1].v);
+    if (gap < 0.01) return null;
+    if (gap / hiV > GAP_MAX_RELATIVE) return null;       // see guard 4
+    // The gap is printed in the SAME currency mark the figures carry. A bare
+    // "500.00 gap" next to two dollar amounts reads as a unit-less number and
+    // is the kind of small thing that makes a line skimmable or not.
+    const sign = (String(money[0].text).match(/^[^\d\s-]+|[$\u20ac\u00a3\u00a5\u20b9]/) || [''])[0];
+    // Listed in the order the model reported them, NOT sorted: those come out
+    // in the order they appear in the thread, so "received vs expected" stays
+    // in the order she would narrate it herself.
+    return { gap, sign, aText: money[0].text, bText: money[1].text };
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -1161,7 +1234,12 @@ function buildDigest(matters, emailCount) {
         // the gap, because a wrong shortfall claim on a live money thread is a
         // worse failure than no claim at all.
         if (Array.isArray(f.key_figures) && f.key_figures.length) {
-            lines.push(`   ${f.key_figures.join('  ·  ')}`);
+            // When two grounded amounts sit close together, SAY THE GAP. This
+            // is the line Apsara had to compute in her own head twice.
+            const g = figureGap(f.key_figures);
+            lines.push(g
+                ? `   ⚠ ${g.sign}${fmtGap(g.gap)} gap — ${g.aText} vs ${g.bText}`
+                : `   ${f.key_figures.join('  ·  ')}`);
         }
         // An order gets one extra line saying what to type. Jarvis can raise
         // the proforma itself now, and a digest that reports an order without
@@ -1770,7 +1848,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };

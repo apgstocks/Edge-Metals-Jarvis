@@ -383,7 +383,7 @@ section('D2 — the digest she would have received instead');
         asked_for: 'the final amount sent', key_figures: ['$58,313.56', '$58,813.56'], is_order: false };
     const d = rw.buildDigest([item]);
     ck('both amounts are on the page', /\$58,313\.56/.test(d) && /\$58,813\.56/.test(d), d);
-    ck('the gap is visible to a human reading two lines', /58,313\.56\s+·\s+\$58,813\.56/.test(d), d);
+    ck('the gap does not have to be read off two numbers — it is stated', /\$500\.00 gap/.test(d), d);
     // The line Apsara actually got.
     ck('it is no longer just "wants confirmation of the amount"',
         !/^\s*2?\.?\s*·?\s*\*?Sender wants confirmation of payment amount sent\.\*?$/m.test(d), d);
@@ -399,6 +399,79 @@ section('D3 — REGRESSION: a response with no key_figures at all still works');
     const a = await rw.assess({ from: ANDY, subject: 's', date: 'd', body: 'could you please confirm the ERD for Oakland?' });
     ck('key_figures defaults to an empty array, never undefined', Array.isArray(a.key_figures) && a.key_figures.length === 0);
     ck('nothing else changed', a.asked_for === 'the ERD' && a.needs_reply === true);
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// E. THE GAP — Apsara, twice: "still it didnt convey message properly".
+//    She had already written the sentence she wanted:
+//      "Bose reported receiving $58,313.56, which is $500.00 LESS THAN the
+//       expected total of $58,813.56."
+//    Listing two amounts and leaving her to subtract them is not that.
+//    The subtraction happens in CODE, over verbatim-grounded operands only.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('E1 — what counts as money at all');
+{
+    ck('a dollar amount parses', rw.parseMoneyFigure('$58,313.56') === 58313.56);
+    ck('a currency code parses', rw.parseMoneyFigure('USD 58,313.56') === 58313.56);
+    ck('two decimals alone are enough', rw.parseMoneyFigure('58313.56') === 58313.56);
+    // The guard that stops a booking number being subtracted from a container count.
+    ck('a bare integer is NOT money', rw.parseMoneyFigure('DALA21235600') === null);
+    ck('nor is a quantity', rw.parseMoneyFigure('2x40HC') === null);
+    ck('nor is a year', rw.parseMoneyFigure('2026') === null);
+    ck('junk returns null rather than NaN', rw.parseMoneyFigure('') === null && rw.parseMoneyFigure(null) === null);
+}
+
+section('E2 — the gap is computed, and only when it is safe to compute one');
+{
+    const g = rw.figureGap(['$58,313.56', '$58,813.56']);
+    ck('the arithmetic is right', g && Math.abs(g.gap - 500) < 1e-9, JSON.stringify(g));
+    ck('the currency mark comes with it', g && g.sign === '$', JSON.stringify(g));
+    ck('and the figures stay in the order they were reported, not sorted',
+        g && g.aText === '$58,313.56' && g.bText === '$58,813.56', JSON.stringify(g));
+
+    // THE FALSE POSITIVE THIS GUARD EXISTS FOR: a unit price beside a total.
+    ck('a unit price vs a line total is NOT called a gap',
+        rw.figureGap(['$2,420.00', '$58,813.56']) === null);
+    // Ambiguity is refused rather than guessed — which pair would you subtract?
+    ck('three amounts produce no gap', rw.figureGap(['$58,313.56', '$58,813.56', '$100.00']) === null);
+    ck('one amount produces no gap', rw.figureGap(['$58,313.56']) === null);
+    ck('no amounts produce no gap', rw.figureGap(['DALA21235600', '2x40HC']) === null);
+    ck('identical amounts produce no gap', rw.figureGap(['$58,313.56', 'USD 58,313.56']) === null);
+    ck('a bad input returns null instead of throwing', rw.figureGap(null) === null && rw.figureGap(['x', {}]) === null);
+}
+
+section('E3 — the line she actually asked for');
+{
+    const item = { needs_reply: true, waiting_on: 'her', urgency: 'normal', fromName: 'octavio fmc',
+        summary: 'Bose received $58,313.56 against $58,813.56 expected — confirm what was sent.',
+        asked_for: 'the final amount sent', key_figures: ['$58,313.56', '$58,813.56'], is_order: false };
+    const d = rw.buildDigest([item]);
+    ck('the digest states the gap, in dollars, without her doing the sum',
+        /\$500\.00 gap — \$58,313\.56 vs \$58,813\.56/.test(d), d);
+    ck('it is marked so it cannot be skimmed past', /⚠/.test(d), d);
+    // Neutral wording on purpose: the code knows the numbers differ, it does
+    // NOT know which one was supposed to be correct.
+    ck('it does not assert who is short or who underpaid',
+        !/(short|underpaid|owes|missing)/i.test(d.split('\n').find((l) => /gap/.test(l)) || ''), d);
+
+    const noGap = rw.buildDigest([{ ...item, key_figures: ['$2,420.00', '$58,813.56'] }]);
+    ck('when no safe gap exists the figures are still listed plainly',
+        /\$2,420\.00\s+·\s+\$58,813\.56/.test(noGap) && !/gap/.test(noGap), noGap);
+}
+
+section('E4 — a gap can only ever be built from GROUNDED figures');
+{
+    // End to end: a model that invents the higher amount cannot manufacture a
+    // gap, because the invented operand is dropped before figureGap sees it.
+    AI = { waiting_on: 'her', needs_reply: true, confidence: 0.9, urgency: 'normal', summary: 's',
+           asked_for: null, asked_for_quote: null, deadline: null, is_order: false, order_buyer: null,
+           key_figures: ['$58,313.56', '$99,999.99'] };
+    const a = await rw.assess({ from: 'x@y.com', subject: 's', date: 'd', body: 'we received $58,313.56 yesterday' });
+    ck('the invented amount never survives assess()', !a.key_figures.some((f) => /99,999/.test(f)), JSON.stringify(a.key_figures));
+    ck('so no gap can be rendered from it', !/gap/.test(rw.buildDigest([{ ...a, fromName: 'x', urgency: 'normal' }])));
 }
 
 
