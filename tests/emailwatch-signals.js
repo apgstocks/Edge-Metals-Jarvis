@@ -416,7 +416,13 @@ section('E1 — what counts as money at all');
 {
     ck('a dollar amount parses', rw.parseMoneyFigure('$58,313.56') === 58313.56);
     ck('a currency code parses', rw.parseMoneyFigure('USD 58,313.56') === 58313.56);
-    ck('two decimals alone are enough', rw.parseMoneyFigure('58313.56') === 58313.56);
+    // WAS: "two decimals alone are enough". That was the bug — weights and unit
+    // prices are written the same way, so ["24.50 MT","25.00 MT"] produced a
+    // fabricated "0.50 gap". A currency mark is required now.
+    ck('two decimals alone are NOT money', rw.parseMoneyFigure('58313.56') === null);
+    ck('a weight is not money', rw.parseMoneyFigure('24.50 MT') === null);
+    ck('a per-unit RATE is not a comparable amount', rw.parseMoneyFigure('$2,420/MT') === null);
+    ck('nor written out', rw.parseMoneyFigure('$2,450 per MT') === null);
     // The guard that stops a booking number being subtracted from a container count.
     ck('a bare integer is NOT money', rw.parseMoneyFigure('DALA21235600') === null);
     ck('nor is a quantity', rw.parseMoneyFigure('2x40HC') === null);
@@ -582,6 +588,58 @@ section('F4 — a mixed digest keeps all four buckets separate');
     ck('one owed to her', /1 is waiting on someone else/.test(d), d);
     ck('one for a third party', /1 is for someone else to answer/.test(d), d);
     ck('the bystander is not folded into the reply count', !/[234] emails waiting on you/.test(d), d);
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// G. AUDIT FIXES, 2026-08-26. Two of these are bugs in code I wrote earlier
+//    this session and shipped with passing tests. Found by an adversarial
+//    audit, not by Apsara — which is the point.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('G1 — figureGap no longer invents discrepancies out of weights and rates');
+{
+    ck('two weights are not a money gap', rw.figureGap(['24.50 MT', '25.00 MT']) === null);
+    ck('two per-MT rates for two grades are not a gap', rw.figureGap(['$2,420/MT', '$2,450/MT']) === null);
+    ck('the real payment case still works', (rw.figureGap(['$58,313.56', '$58,813.56']) || {}).gap === 500);
+    ck('a currency code still counts', (rw.figureGap(['USD 58,313.56', 'USD 58,813.56']) || {}).gap === 500);
+}
+
+section('G2 — "waiting on you" means waiting on APSARA, not on the company');
+{
+    const MGR = 'apsara@edgemetals.com';
+    // This watcher reads BOSE's mailbox, so mail addressed to Bose is the
+    // COMMON case. My first version tested the company domain and so called
+    // all of it hers.
+    const asked_bose = rw.addressing('Edge Metals Bose <bose@edgemetals.com>', MGR, BOSE, MGR);
+    ck('a question addressed to Bose is not Apsara\'s to answer', asked_bose.inTo === false, JSON.stringify(asked_bose));
+    ck('and Bose is named as the person who was asked', asked_bose.toLabel === 'Edge Metals Bose', asked_bose.toLabel);
+    const asked_her = rw.addressing(`Apsara <${MGR}>`, BOSE, BOSE, MGR);
+    ck('a question addressed to Apsara IS hers', asked_her.inTo === true);
+    ck('one of several recipients still counts if she is one',
+        rw.addressing(`aisha@fmc.example.com, ${MGR}`, '', BOSE, MGR).inTo === true);
+    // Fail open: not knowing who the manager is must not reclassify the inbox.
+    ck('with no manager address it falls back to the company test',
+        rw.addressing('bose@edgemetals.com', '', BOSE, null).inTo === true);
+}
+
+section('G3 — a chase-up cannot burn one of its five chances with nothing sent');
+{
+    const old = new Date(Date.now() - 9 * 86400000).toISOString();
+    const item = () => ({ id: 'x1', threadId: null, from: 'a@b.com', fromName: 'A', subject: 's', summary: 's', firstFlaggedAt: old, chases: 0, lastChasedAt: null });
+
+    const outside = [item()];
+    const dueOutside = await rw.collectChaseUps(null, BOSE, outside, [], false);
+    ck('outside the alert window nothing is due', dueOutside.length === 0);
+    ck('and the counter is untouched — it stays due for the morning',
+        outside[0].chases === 0 && outside[0].lastChasedAt === null, JSON.stringify(outside[0]));
+    ck('the item is NOT dropped from tracked', outside.length === 1);
+
+    const inside = [item()];
+    const dueInside = await rw.collectChaseUps(null, BOSE, inside, [], true);
+    ck('inside the window it is due', dueInside.length === 1);
+    ck('and only then does it spend a chance', inside[0].chases === 1 && !!inside[0].lastChasedAt);
 }
 
 

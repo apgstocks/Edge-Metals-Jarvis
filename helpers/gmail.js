@@ -682,12 +682,27 @@ function parseAddressList(headerValue) {
 // fetched once and cached for the process lifetime rather than hardcoded in
 // config, so it stays correct automatically if the account ever changes.
 // Used to make sure a reply never ends up cc'ing yourself.
-let _myEmailAddress = null;
+// AUDIT FINDING 2026-08-26 - this cache was keyed on NOTHING. Three different
+// mailboxes are authenticated in this process (read = bose@, write = apsara@,
+// sender-read = apsara@) and whichever one called first won the singleton for
+// the whole process lifetime.
+//
+// scheduler.js registers quoteEmailReplyWatch / contactQuoteEmailReplyWatch /
+// generalEmailReplyWatch on the same */5 cron BEFORE replyWatch, and all three
+// call getMyEmailAddress(getGmailSenderRead()) = apsara@. So by the time
+// replyWatch asked, it was handed APSARA'S address while holding BOSE'S client.
+// Every "is this from me", "did she reply", and the thread ledger's
+// "HER (the manager)" marker was anchored to the wrong human, silently.
+//
+// Keyed by client identity now. WeakMap so a discarded client is collectable.
+const _myEmailByClient = new WeakMap();
 async function getMyEmailAddress(gmail) {
-    if (_myEmailAddress) return _myEmailAddress;
+    if (!gmail) return null;
+    if (_myEmailByClient.has(gmail)) return _myEmailByClient.get(gmail);
     const res = await gmail.users.getProfile({ userId: 'me' });
-    _myEmailAddress = res.data.emailAddress;
-    return _myEmailAddress;
+    const addr = res.data.emailAddress;
+    _myEmailByClient.set(gmail, addr);
+    return addr;
 }
 
 module.exports = {

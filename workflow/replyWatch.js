@@ -56,7 +56,7 @@
 // relationship. Confirmed sending is a different thing entirely, and that is
 // what this supports.
 
-const { getGmailRead, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
+const { getGmailRead, getGmailSenderRead, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
 const { callGeminiJSON } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { loadJson, saveJson } = require('../helpers/json');
@@ -714,10 +714,19 @@ function parseMoneyFigure(text) {
     const t = String(text || '');
     const m = t.match(/-?[\d][\d,]*(?:\.\d{1,2})?/);
     if (!m) return null;
-    const hasCurrency = CURRENCY_SIGN.test(t);
-    const hasCents = /\.\d{2}(?!\d)/.test(m[0]);
-    // A bare integer with no currency mark is a container or booking number.
-    if (!hasCurrency && !hasCents) return null;
+    // BUG IN MY OWN e276f20, found by audit before Apsara hit it: this used to
+    // accept "two decimal places" as proof of money. It is not. Weights and
+    // unit prices are written the same way, so ["24.50 MT", "25.00 MT"] - two
+    // legitimate different weights - came out as "0.50 gap", a fabricated
+    // discrepancy on a live customer thread. Exactly the confident-wrong-number
+    // failure the whole guard exists to prevent, introduced by the guard.
+    //
+    // A currency mark is now REQUIRED. Losing a gap on an unmarked amount costs
+    // her one subtraction; inventing one costs trust in every figure printed.
+    if (!CURRENCY_SIGN.test(t)) return null;
+    // And a unit suffix disqualifies it even with a currency mark: "$2,420/MT"
+    // is a RATE. Two rates for two grades in one email are not a discrepancy.
+    if (/(?:\/|\s?per\s?)\s*(mt|kg|lb|ton|tonne|cwt|unit|pc|cbm|container)\b/i.test(t)) return null;
     const v = Number(m[0].replace(/,/g, ''));
     return Number.isFinite(v) && v !== 0 ? Math.abs(v) : null;
 }
@@ -782,11 +791,22 @@ function companyDomain(myAddress) {
 
 // { inTo, inCc, toLabel } - toLabel is the display name of the first non-company
 // To recipient, which is who to name in the digest.
-function addressing(toHeader, ccHeader, myAddress) {
+// managerAddress (2026-08-26, audit): the digest goes to APSARA, so "waiting on
+// you" has to mean waiting on Apsara. My first version tested the company
+// DOMAIN, which closed the bug only for third parties OUTSIDE edgemetals.com -
+// and since this whole watcher reads BOSE'S mailbox, mail addressed to Bose is
+// the COMMON case, not the edge case. A customer asking Bose a question was
+// still landing in Apsara's "waiting on you" list.
+//
+// Falls back to the domain test when the manager address is unknown, because
+// telling her about a colleague's mail is a far smaller failure than silently
+// reclassifying her entire inbox as somebody else's.
+function addressing(toHeader, ccHeader, myAddress, managerAddress = null) {
     const domain = companyDomain(myAddress);
     const { parseAddressList } = require('../helpers/gmail');
     const to = parseAddressList(toHeader || '');
     const cc = parseAddressList(ccHeader || '');
+    const mgr = String(managerAddress || '').toLowerCase();
     // No domain (tests, or a profile fetch that failed) means we cannot tell,
     // and MUST NOT guess - fail open to the previous behaviour rather than
     // silently reclassifying every email as somebody else's problem.
@@ -804,9 +824,13 @@ function addressing(toHeader, ccHeader, myAddress) {
     // before the header was ever read.
     if (!to.length) return { inTo: true, inCc: false, toLabel: null, unknown: true };
     const atCompany = (a) => String(a || '').toLowerCase().endsWith('@' + domain);
-    const inTo = to.some(atCompany);
-    const inCc = cc.some(atCompany);
-    const other = to.find((a) => !atCompany(a)) || null;
+    // "Ours" is HER when we know who she is, the company otherwise.
+    const isMine = mgr ? (a) => String(a || '').toLowerCase() === mgr : atCompany;
+    const inTo = to.some(isMine);
+    const inCc = cc.some(isMine);
+    // Whoever was actually asked. A colleague counts - "Bose was asked this"
+    // is exactly what she needs the line to say.
+    const other = to.find((a) => !isMine(a)) || null;
     return { inTo, inCc, toLabel: other ? senderLabel(String(toHeader).split(',').find((p) => p.includes(other)) || other) : null };
 }
 
@@ -829,7 +853,7 @@ async function assess(email) {
     // actually supplied headers - assess() is called from tests without them,
     // and absent headers must mean "unchanged", never "somebody else's".
     if (email.to !== undefined || email.cc !== undefined) {
-        const addr = addressing(email.to, email.cc, email.myAddress);
+        const addr = addressing(email.to, email.cc, email.myAddress, email.managerAddress);
         if (!addr.unknown && !addr.inTo) {
             waiting_on = 'someone_else';
             // The model's name only if the header could not give one: a
@@ -1062,7 +1086,13 @@ const DAY_MS = 86400000;
 // `tracked` but not the store, and threading the store through purely to
 // record a side effect would make a pure-ish helper harder to test. The
 // caller records them.
-async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = []) {
+// canSend (2026-08-26, audit): the counter used to be incremented HERE while
+// the send was gated separately on inAlertWindow. An item that came due at
+// 02:00 silently spent one of its five chances and nothing went out. Five such
+// nights and it was dropped at the MAX_CHASES guard having NEVER ONCE been
+// shown to her - and it also left `tracked`, so it vanished from the backlog
+// count too and looked resolved. Worse than the digest simply not firing.
+async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], canSend = true) {
     const now = Date.now();
     const due = [];
     const keep = [];
@@ -1080,6 +1110,7 @@ async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = []) {
         const sinceChase = lastChase && !isNaN(lastChase) ? (now - lastChase) / DAY_MS : Infinity;
 
         if (ageDays >= AGING_DAYS && sinceChase >= RECHASE_DAYS) {
+            if (!canSend) { keep.push(t); continue; }   // stays due; costs nothing
             due.push({ ...t, ageDays: Math.floor(ageDays) });
             keep.push({ ...t, chases: (t.chases || 0) + 1, lastChasedAt: new Date().toISOString() });
         } else {
@@ -1439,6 +1470,18 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     }
 
     const me = (await getMyEmailAddress(gmail) || '').toLowerCase();
+    // APSARA'S address, not this mailbox's. This watcher reads bose@; the digest
+    // goes to Apsara, so "waiting on you" has to be measured against HER.
+    // Resolved from the sender-read client (apsara@). Null when that token is
+    // absent, which addressing() treats as "fall back to the company test"
+    // rather than reclassifying her whole inbox as somebody else's problem.
+    let managerAddress = null;
+    try {
+        const senderGmail = getGmailSenderRead();
+        if (senderGmail) managerAddress = (await getMyEmailAddress(senderGmail) || '').toLowerCase() || null;
+    } catch (e) {
+        console.warn('[REPLYWATCH] could not resolve the manager address, falling back to the company-domain test:', e.message);
+    }
     const store = loadStore();
     const seen = store.seen;
 
@@ -1575,7 +1618,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 history: senderHistoryLine(store, from),
                 thread: threadLedger,
                 // Read for the first time 2026-08-26 - see addressing().
-                to: header(msg, 'To'), cc: header(msg, 'Cc'), myAddress: me,
+                to: header(msg, 'To'), cc: header(msg, 'Cc'), myAddress: me, managerAddress,
             });
         } catch (err) {
             console.error('[REPLYWATCH] assess failed:', err.message);
@@ -1758,9 +1801,16 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // RECHASE_DAYS internally, so it costs a thread lookup per tracked item
     // and produces a message only rarely.
     let chaseUps = [];
+    // HOISTED 2026-08-26: collectChaseUps now needs to know whether a message
+    // can actually go out before it spends one of an item's five chances.
+    // Previously declared 20 lines BELOW this point - using it here as a const
+    // would have thrown ReferenceError on every scan (temporal dead zone).
+    const laHour = getLADate().getHours();
+    const inAlertWindow = laHour >= ALERT_START_HOUR && laHour < ALERT_END_HOUR;
+
     try {
         const repliedDuringChase = [];
-        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase);
+        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase, inAlertWindow && !!sendToManager);
         for (const who of repliedDuringChase) recordSenderEvent(store, who, 'replied');
     } catch (err) {
         console.error('[REPLYWATCH] chase-up pass failed (non-fatal):', err.message);
@@ -1782,8 +1832,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         console.error('[REPLYWATCH] deadline pass failed (non-fatal):', err.message);
     }
 
-    const laHour = getLADate().getHours();
-    const inAlertWindow = laHour >= ALERT_START_HOUR && laHour < ALERT_END_HOUR;
     // Only a GENUINELY urgent item bypasses the hourly gate.
     //
     // REAL BUG (2026-08-22, live): two digests went out five minutes apart
