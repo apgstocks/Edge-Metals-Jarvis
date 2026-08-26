@@ -168,6 +168,72 @@ function createApi() {
     // ── Public routes (no auth) ───────────────────────────────────────────────
     app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
+    // ── /healthz — the ONLY endpoint an external uptime monitor should watch ──
+    //
+    // Apsara, 2026-08-26: "can we use this [hetrixtools.com]". Yes — but not
+    // against either endpoint that existed when she asked, and the reason is
+    // the whole point of this route:
+    //
+    //   /health      is public and returns {status:'ok'} 200 for as long as the
+    //                Node process can answer a socket. WhatsApp logged out,
+    //                Gmail token dead, every scheduled scan throwing — still 200.
+    //   /api/health  runs real checks, but it is behind auth (a monitor cannot
+    //                reach it) AND it returns 200 even when ok:false. A monitor
+    //                watching status codes would never fire.
+    //
+    // So Jarvis had two health endpoints and no way for anything outside the
+    // box to learn it had stopped working. That is worse than no monitoring:
+    // it looks monitored and isn't. (The same sentence is already written at
+    // the top of tests/api-health.js about a different instance of this.)
+    //
+    // This route answers with a STATUS CODE — 503 when Jarvis is up but not
+    // WORKING — because every monitoring product on earth can alert on that,
+    // whereas keyword matching inside a JSON body is a paid feature on most,
+    // HetrixTools included at some tiers.
+    //
+    // PUBLIC, deliberately. A monitor cannot carry the dashboard session
+    // cookie. What it discloses is three booleans, a timestamp and an uptime —
+    // strictly less than the login page already on this port tells you. It
+    // exposes no data, no counts, and nothing actionable to an attacker.
+    const HEALTHZ_STALE_SCAN_MIN = 20;   // reply-watch cron is */5; four missed ticks
+    const HEALTHZ_BOOT_GRACE_S = 900;    // don't call a fresh boot "stalled"
+    app.get('/healthz', (req, res) => {
+        const problems = [];
+        let lastScanAt = null, staleMin = null;
+        const uptime = Math.round(process.uptime());
+
+        // index.js sets this. null means api.js is running standalone (tests),
+        // where "WhatsApp is down" is not a meaningful thing to report.
+        const waReady = typeof global.__jarvisWaReady === 'function' ? global.__jarvisWaReady() : null;
+        if (waReady === false) problems.push('whatsapp_disconnected');
+
+        try {
+            const store = require('./helpers/json').loadJson(cfg.REPLY_WATCH_FILE, {});
+            lastScanAt = store && store.lastScanAt ? store.lastScanAt : null;
+            const t = Date.parse(lastScanAt || '');
+            if (!isNaN(t)) staleMin = Math.round((Date.now() - t) / 60000);
+            // Only after the boot grace: a restart legitimately has no recent
+            // scan, and flapping on every deploy is how an alert gets muted.
+            if (uptime > HEALTHZ_BOOT_GRACE_S) {
+                if (staleMin === null) problems.push('no_scan_recorded');
+                else if (staleMin > HEALTHZ_STALE_SCAN_MIN) problems.push(`inbox_scan_stalled_${staleMin}m`);
+            }
+        } catch (e) {
+            // A heartbeat we cannot read is not a healthy heartbeat.
+            problems.push('heartbeat_unreadable');
+        }
+
+        res.status(problems.length ? 503 : 200).json({
+            ok: !problems.length,
+            problems,
+            whatsapp: waReady,
+            last_scan_at: lastScanAt,
+            last_scan_age_min: staleMin,
+            uptime_s: uptime,
+            at: new Date().toISOString(),
+        });
+    });
+
     // ── Price list change-detection webhook (Apps Script → here) ─────────────
     // Registered here, BEFORE the session-gate middleware below — public,
     // same tier as /health — because Apps Script's UrlFetchApp can't easily

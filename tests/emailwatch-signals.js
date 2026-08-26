@@ -181,6 +181,19 @@ section('The ledger survives a save/load round-trip');
         && again.senderStats['ops@zimex.com'].replied === 1);
     ck('and nothing else in the store was disturbed',
         Array.isArray(again.tracked) && Array.isArray(again.lastDigest));
+
+    // THE TRAP: saveStore writes an explicit ALLOWLIST of fields, so a new
+    // field added to the store object is silently dropped on every write and
+    // reads back as null forever. The heartbeat /healthz depends on would have
+    // looked correct in the code and been permanently stale in production.
+    const stamp = new Date().toISOString();
+    store.lastScanAt = stamp;
+    await rw.saveStore(store);
+    ck('the /healthz heartbeat survives saveStore\'s field allowlist',
+        rw.loadStore().lastScanAt === stamp, JSON.stringify(rw.loadStore().lastScanAt));
+    fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({ oldflat: 'x' }));
+    ck('a legacy store with no heartbeat reads as null, not undefined',
+        rw.loadStore().lastScanAt === null);
 }
 
 

@@ -286,7 +286,7 @@ function bulkMailSignal(headers) {
 // on 2026-08-22, so upgrading does not re-flag every email already assessed.
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {} };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null };
     if (raw.seen && typeof raw.seen === 'object') {
         return {
             seen: raw.seen,
@@ -301,9 +301,16 @@ function loadStore() {
             tracked: Array.isArray(raw.tracked) ? raw.tracked : [],
             // Per-sender reply history — see recordSenderEvent below.
             senderStats: (raw.senderStats && typeof raw.senderStats === 'object') ? raw.senderStats : {},
+            // HEARTBEAT. The last time a real (non-dryRun) scan finished. This
+            // is what an external uptime monitor needs and what neither health
+            // endpoint could answer: a process can be up, WhatsApp connected,
+            // and the inbox scan throwing on every single tick. Nothing about
+            // that is visible from outside - it looks perfectly healthy and
+            // does nothing.
+            lastScanAt: raw.lastScanAt || null,
         };
     }
-    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {} }; // legacy flat format
+    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null }; // legacy flat format
 }
 async function saveStore(store) {
     // Keep only what the lookback window could still surface. Anything older
@@ -321,6 +328,7 @@ async function saveStore(store) {
         lastDigestAt: store.lastDigestAt || null,
         tracked: store.tracked || [],
         senderStats: store.senderStats || {},
+        lastScanAt: store.lastScanAt || null,
     });
 }
 
@@ -1683,6 +1691,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         }
     }
 
+    // A completed real scan is the heartbeat. Stamped HERE, at the end, so it
+    // means "the scan ran through" and not "the function was entered" - a run
+    // that throws halfway leaves the old timestamp and correctly goes stale.
+    store.lastScanAt = new Date().toISOString();
     await saveStore(store);
     console.log(`[REPLYWATCH] assessed ${checked}, flagged ${flagged.length}, queued ${store.undelivered.length}, tracked ${store.tracked.length}, chased ${chaseUps.length}, sent ${delivered ? 'yes' : 'no'}`);
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
