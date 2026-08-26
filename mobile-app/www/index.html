@@ -369,6 +369,25 @@ body { overflow-y:auto; }
     <input id="loginPw" type="password" placeholder="Password" autocomplete="current-password">
     <button id="btnLogin" class="btn btn-primary">Sign in</button>
     <div id="loginErr"></div>
+    <!-- Server address, collapsed by default. Needed because the tunnel
+         hostname rotates (see API_BASE above) — without this, a rotation
+         means a new build. Hidden rather than removed: it's a field nobody
+         should touch on a normal day, and a visible URL box on a sign-in
+         screen invites exactly the wrong kind of experimentation. -->
+    <div style="margin-top:14px; text-align:center;">
+      <button id="btnToggleServer" class="btn" style="background:transparent; border:none; color:var(--text-faint); font-size:11px; padding:4px;">Server settings</button>
+    </div>
+    <div id="serverBox" class="hidden" style="margin-top:8px;">
+      <input id="serverUrl" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://your-tunnel.trycloudflare.com" style="font-size:12px;">
+      <div style="font-size:11px; color:var(--text-faint); margin-top:6px; line-height:1.5;">
+        Only change this if Jarvis can't be reached — for example after the server was restarted and its address changed.
+      </div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button id="btnResetServer" class="btn" style="flex:1; font-size:11px;">Use default</button>
+        <button id="btnSaveServer" class="btn btn-primary" style="flex:2; font-size:11px;">Save address</button>
+      </div>
+      <div id="serverMsg" style="font-family:var(--font-mono); font-size:11px; margin-top:7px;"></div>
+    </div>
   </div>
 </div>
 
@@ -656,7 +675,35 @@ body { overflow-y:auto; }
 // config.js in the mobile-app project root for the single source of
 // truth; this constant just reads it). Left as a placeholder because the
 // Jarvis VM deployment is still pending as of this build. ──────────────
-const API_BASE = (window.JARVIS_CONFIG && window.JARVIS_CONFIG.API_BASE) || 'http://10.0.2.2:4000';
+// ── Server address ────────────────────────────────────────────────────────
+// Resolved at RUNTIME, not baked in at build time. Added 2026-08-24 while
+// preparing a Play Store release, because the address this app talks to is a
+// randomly-generated *.trycloudflare.com hostname tied to one cloudflared
+// process — config.js says so itself: reboot the VM or restart the tunnel and
+// you get a DIFFERENT URL.
+//
+// Sideloading, that costs a rebuild and a reinstall. Through a store it would
+// brick every installed copy until a new build cleared review — days, caused
+// by a VM reboot. An app whose backend address can rotate must not have that
+// address compiled into it.
+//
+// Order: what she last saved on this device, else the bundled config.js, else
+// the emulator default. localStorage wins so a rotation is a retype on the
+// login screen rather than a release.
+const DEFAULT_API_BASE = (window.JARVIS_CONFIG && window.JARVIS_CONFIG.API_BASE) || 'http://10.0.2.2:4000';
+function storedApiBase() {
+  try { return localStorage.getItem('jarvis_api_base') || ''; } catch (e) { return ''; }
+}
+function setStoredApiBase(url) {
+  try {
+    const clean = String(url || '').trim().replace(/\/+$/, '');
+    if (clean) localStorage.setItem('jarvis_api_base', clean);
+    else localStorage.removeItem('jarvis_api_base');
+  } catch (e) { /* private mode — falls back to the bundled default */ }
+}
+// `let`, and read through a getter everywhere, so changing it takes effect
+// without a reload.
+let API_BASE = storedApiBase() || DEFAULT_API_BASE;
 
 const TOKEN_KEY = 'jarvis_sid';
 function getToken() { return localStorage.getItem(TOKEN_KEY); }
@@ -2653,6 +2700,59 @@ let editingLoadId = null;
 
 // ── App shell (new — replaces the dashboard's sidebar/tab system, which
 // doesn't exist here since this app has exactly one screen) ─────────────
+// Wires the server box. Verifies the address before saving it rather than
+// accepting anything typed — a wrong URL saved silently would leave the app
+// unable to reach anything AND unable to explain why, which is a worse state
+// than the rotation it exists to fix.
+function wireServerBox() {
+  const toggle = $('btnToggleServer');
+  if (!toggle || toggle.dataset.wired) return;
+  toggle.dataset.wired = '1';
+  toggle.addEventListener('click', () => {
+    const box = $('serverBox');
+    box.classList.toggle('hidden');
+    if (!box.classList.contains('hidden')) {
+      $('serverUrl').value = storedApiBase() || DEFAULT_API_BASE;
+      $('serverMsg').textContent = '';
+    }
+  });
+  $('btnResetServer').addEventListener('click', () => {
+    setStoredApiBase('');
+    API_BASE = DEFAULT_API_BASE;
+    $('serverUrl').value = DEFAULT_API_BASE;
+    $('serverMsg').style.color = 'var(--text-muted)';
+    $('serverMsg').textContent = 'Back to the address this app shipped with.';
+  });
+  $('btnSaveServer').addEventListener('click', async () => {
+    const url = String($('serverUrl').value || '').trim().replace(/\/+$/, '');
+    const msg = $('serverMsg');
+    if (!/^https?:\/\//i.test(url)) {
+      msg.style.color = 'var(--status-danger)';
+      msg.textContent = 'Needs to start with https:// (or http:// on a local network).';
+      return;
+    }
+    const btn = $('btnSaveServer');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    msg.style.color = 'var(--text-muted)'; msg.textContent = 'Trying to reach it…';
+    try {
+      // /api/health is unauthenticated and cheap — the right thing to probe
+      // with, since a 401 from an authenticated route would look like a
+      // failure when the address is actually correct.
+      const r = await fetch(url + '/api/health', { method: 'GET' });
+      if (!r.ok) throw new Error(`server answered ${r.status}`);
+      setStoredApiBase(url);
+      API_BASE = url;
+      msg.style.color = 'var(--status-success, #3fae55)';
+      msg.textContent = '✓ Reached it. Sign in below.';
+    } catch (e) {
+      msg.style.color = 'var(--status-danger)';
+      msg.textContent = `Couldn't reach that address. ${e.message}`;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save address';
+    }
+  });
+}
+
 function showLoginScreen(err) {
   // Dismiss every overlay first. These are top-level siblings of #appShell,
   // so hiding #appShell does NOT hide them — without this a session that
@@ -2670,6 +2770,14 @@ function showLoginScreen(err) {
   $('loginScreen').classList.remove('hidden');
   $('appShell').classList.add('hidden');
   $('loginErr').textContent = err || '';
+  wireServerBox();
+  // Open the server box automatically when the failure looks like the app
+  // can't reach the server at all — that is exactly the rotation case, and
+  // making her find a hidden button while nothing works would be unkind.
+  if (/reach|network|failed to fetch|timeout/i.test(String(err || ''))) {
+    $('serverBox').classList.remove('hidden');
+    $('serverUrl').value = storedApiBase() || DEFAULT_API_BASE;
+  }
 }
 function showAppShell() {
   $('loginScreen').classList.add('hidden');

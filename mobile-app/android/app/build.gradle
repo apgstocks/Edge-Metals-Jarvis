@@ -1,5 +1,22 @@
 apply plugin: 'com.android.application'
 
+// ── Release signing ────────────────────────────────────────────────────────
+// Reads from keystore.properties, which is GITIGNORED and must never be
+// committed. Play identifies an app by its signing key forever: lose it and
+// you can no longer publish an update to this listing, at all, under any
+// circumstances. Back the .jks file and these credentials up somewhere that
+// survives a laptop dying.
+//
+// A missing keystore.properties is not an error — the debug build and every
+// existing `assembleDebug` workflow keep working untouched, and only
+// `bundleRelease` needs it. That way nobody has to set up signing to keep
+// sideloading test builds, which is still the fastest way to try a change.
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
 android {
     namespace "com.edgemetals.loads"
     compileSdk rootProject.ext.compileSdkVersion
@@ -16,8 +33,24 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            // Only attach the signing config when the properties actually
+            // exist — referencing an unconfigured one makes the whole Gradle
+            // project fail to configure, which would break assembleDebug too.
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
