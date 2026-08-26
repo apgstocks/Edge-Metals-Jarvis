@@ -345,7 +345,54 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         : allLoads;
 
     const items = filtered.flatMap(l => Array.isArray(l.items) ? l.items : []);
-    const byType = items.length ? groupItemsByDescription(items) : [];
+    let byType = items.length ? groupItemsByDescription(items) : [];
+
+    // ── On-hand (2026-08-24) ────────────────────────────────────────────────
+    // Apsara: "when this outbound gets updated — inventory should also get
+    // decreased na?" Correct, and it overrides her earlier "keep them
+    // separate": a figure that only ever grows is a purchase log, not
+    // inventory.
+    //
+    // `net` is deliberately LEFT ALONE, still meaning "how much came in".
+    // helpers/pdf.js's inventory PDF and helpers/inventoryExcel.js both read
+    // it, and quietly changing what it means would alter two documents nobody
+    // asked to change. onHand/shipped are added alongside; the UI shows
+    // on-hand, the exports keep reporting purchases.
+    //
+    // ONLY MEANINGFUL WITHOUT A DATE FILTER, and this matters. On-hand is a
+    // point in time, not a range: "bought this week minus shipped ever" is a
+    // nonsense figure that would read as authoritative. So a filtered report
+    // returns onHand null and the UI falls back to showing purchases, which
+    // is the honest answer to "what came in this week".
+    const wholeHistory = !from && !to;
+    if (wholeHistory) {
+        let shippedByType = new Map();
+        try {
+            const outbound = require('./outboundLoads').loadOutboundLoads();
+            for (const o of outbound) {
+                for (const it of (o.items || [])) {
+                    const k = String(it.description || 'Other').trim().toLowerCase();
+                    shippedByType.set(k, (shippedByType.get(k) || 0) + (Number(it.net_weight) || 0));
+                }
+            }
+        } catch (e) {
+            // Outbound unreadable — report purchases rather than a wrong
+            // on-hand. A missing subtrahend must not become zero.
+            shippedByType = null;
+        }
+        if (shippedByType) {
+            byType = byType.map((g) => {
+                const shipped = shippedByType.get(String(g.description).trim().toLowerCase()) || 0;
+                return { ...g, shipped: round2(shipped), onHand: round2((g.net || 0) - shipped) };
+            });
+            // Material shipped that was never recorded as bought still has to
+            // appear, or the tab shows nothing while the yard shows a hole.
+            for (const [k, shipped] of shippedByType) {
+                if (byType.some((g) => String(g.description).trim().toLowerCase() === k)) continue;
+                byType.push({ description: k, count: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(shipped), onHand: round2(-shipped) });
+            }
+        }
+    }
 
     const dayMap = new Map();
     for (const l of filtered) {
@@ -407,6 +454,10 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     return {
         loadCount: filtered.length,
         unit: filtered.find(l => l.weight_unit)?.weight_unit || 'lb',
+        // Tells the client whether byType[].onHand is a real figure or absent
+        // because a date filter is on — better than inferring it from an
+        // undefined, which reads the same as "nothing shipped".
+        onHandAvailable: wholeHistory && byType.some((g) => g.onHand !== undefined),
         byType,
         byDay,
         bySeller,

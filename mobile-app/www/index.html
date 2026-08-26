@@ -2798,11 +2798,27 @@ const INV_SUBTABS = [
 let mobInvFrom = '', mobInvTo = '', mobInvSubTab = 'byType';
 
 function mobInvByTypeHtml(data) {
-  return data.byType.length ? data.byType.map(g => `
-    <div style="display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--border-subtle); font-size:13px;">
-      <span style="color:var(--text-strong);">${esc(g.description)}</span>
-      <span style="color:var(--text-muted); font-family:var(--font-mono); font-size:12px;">${g.count} item${g.count === 1 ? '' : 's'} · ${g.net} ${esc(data.unit)}</span>
-    </div>`).join('') : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
+  // ON HAND leads when it's available (2026-08-24, Apsara: "when this outbound
+  // gets updated — inventory should also get decreased na?"). It's absent
+  // whenever a date filter is on, because "bought this week minus shipped
+  // ever" is not a real number — see getInventoryReport. In that case this
+  // falls back to showing what came in, which is the honest answer to a
+  // date-ranged question.
+  const oh = data.onHandAvailable;
+  return data.byType.length ? `
+    ${oh ? '' : '<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); padding-bottom:7px;">Showing what came IN for this range — clear the dates to see what\'s on hand.</div>'}
+    ${data.byType.map(g => `
+    <div style="padding:9px 0; border-bottom:1px solid var(--border-subtle);">
+      <div style="display:flex; justify-content:space-between; font-size:13px;">
+        <span style="color:var(--text-strong);">${esc(g.description)}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:${oh && g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${oh ? `${g.onHand} ${esc(data.unit)}` : `${g.net} ${esc(data.unit)}`}</span>
+      </div>
+      ${oh ? `<div style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:3px;">
+        <span>${g.count} item${g.count === 1 ? '' : 's'} in${g.shipped ? ` · ${g.shipped} shipped` : ''}</span>
+        <span>${g.net} bought</span>
+      </div>` : `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:3px;">${g.count} item${g.count === 1 ? '' : 's'}</div>`}
+      ${oh && g.onHand < 0 ? '<div style="font-size:10.5px; color:var(--status-danger); margin-top:3px;">More shipped than recorded as bought — a load may be missing.</div>' : ''}
+    </div>`).join('')}` : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
 }
 function mobInvByDayHtml(data) {
   return data.byDay.length ? data.byDay.map(d => `

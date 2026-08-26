@@ -617,10 +617,13 @@ const INV_SUBTABS = [
 let invFrom = '', invTo = '', invSubTab = 'byType';
 
 function invByTypeHtml(data) {
+  // See mobInvByTypeHtml in the app for why On hand is absent under a date
+  // filter — same rule, same reason, both clients.
   return data.byType.length ? `
+    ${data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net</th><th style="padding:8px 6px;">Amount</th>
+        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${data.onHandAvailable ? '<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">On hand</th>' : ''}<th style="padding:8px 6px;">Amount</th>
       </tr></thead>
       <tbody>
         ${data.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
@@ -629,7 +632,9 @@ function invByTypeHtml(data) {
           <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
-          <td style="padding:8px 6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+          ${data.onHandAvailable ? `<td style="padding:8px 6px; color:var(--text-muted);">${g.shipped || 0} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px; font-weight:700; color:${g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${g.onHand} ${esc(data.unit)}${g.onHand < 0 ? ' ⚠' : ''}</td>` : ''}
+          <td style="padding:8px 6px;">${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</td>
         </tr>`).join('')}
       </tbody>
     </table>
