@@ -152,7 +152,14 @@ try {
         //   'her'    - they need something only she can give   -> reply item
         //   'them'   - she is waiting on THEM; this is progress -> chase item
         //   'nobody' - closed loop, FYI, notification
-        waiting_on: z.enum(['her', 'them', 'nobody']).optional().default('her'),
+        // 'someone_else' added 2026-08-26. Apsara: "but she didnt ask
+        // edgemetals". Octavio's question was addressed to AISHA. Nobody at
+        // Edge Metals was asked anything - Apsara is a bystander on the thread
+        // - and the digest still filed it under "emails waiting on you".
+        waiting_on: z.enum(['her', 'them', 'someone_else', 'nobody']).optional().default('her'),
+        // Who the question is actually aimed at, when it is not Edge Metals.
+        // Display name preferred; whatever the To header carries otherwise.
+        asked_of: z.string().nullable().optional().default(null),
         // KEY FIGURES (2026-08-26). Apsara, on a live digest:
         //
         //     2. . Sender wants confirmation of payment amount sent.
@@ -737,6 +744,55 @@ function figureGap(figures) {
     return { gap, sign, aText: money[0].text, bText: money[1].text };
 }
 
+// ── WHO WAS ACTUALLY ASKED ─────────────────────────────────────────────────
+// Apsara, 2026-08-26, on a live digest: "but she didnt ask edgemetals".
+//
+// Octavio addressed his question to Aisha. Edge Metals was on the thread, not
+// on the hook. The digest reported it as "1 email waiting on you".
+//
+// THE CAUSE, and it is embarrassing once seen: replyWatch never read the To or
+// Cc headers. Not once, anywhere in the file. The classifier was asked "is
+// this waiting on a reply from her?" while being shown FROM, SUBJECT, DATE and
+// BODY only. It had no way to know who the message was addressed to, so it
+// answered the only question it could see the inputs for - "does this text
+// contain a request?" - and every request became her request.
+//
+// Worse, the one identity the file did have was the WRONG PERSON: getGmailRead
+// authenticates as bose@edgemetals.com (see config.js:159 - reads are bose@,
+// sends are apsara@), so `me` throughout this file is Bose. Everything flagged
+// out of Bose's mailbox was then presented to Apsara as hers to answer.
+//
+// This is decided in CODE from the headers, not by the model, for the same
+// reason as needs_reply and applyDeadlineUrgency: "is anyone @edgemetals.com
+// in the To line" is a lookup, not a judgement, and a model re-deriving it per
+// call will disagree with itself. The model only supplies the NAME to show.
+//
+// The rule: if no company address appears in To, nobody here was asked. The
+// item is still surfaced - she may well want to know Aisha was asked and has
+// not answered - but it can never be counted as waiting on her.
+function companyDomain(myAddress) {
+    const m = String(myAddress || '').split('@')[1];
+    return m ? m.toLowerCase() : null;
+}
+
+// { inTo, inCc, toLabel } - toLabel is the display name of the first non-company
+// To recipient, which is who to name in the digest.
+function addressing(toHeader, ccHeader, myAddress) {
+    const domain = companyDomain(myAddress);
+    const { parseAddressList } = require('../helpers/gmail');
+    const to = parseAddressList(toHeader || '');
+    const cc = parseAddressList(ccHeader || '');
+    // No domain (tests, or a profile fetch that failed) means we cannot tell,
+    // and MUST NOT guess - fail open to the previous behaviour rather than
+    // silently reclassifying every email as somebody else's problem.
+    if (!domain) return { inTo: true, inCc: false, toLabel: null, unknown: true };
+    const atCompany = (a) => String(a || '').toLowerCase().endsWith('@' + domain);
+    const inTo = to.some(atCompany);
+    const inCc = cc.some(atCompany);
+    const other = to.find((a) => !atCompany(a)) || null;
+    return { inTo, inCc, toLabel: other ? senderLabel(String(toHeader).split(',').find((p) => p.includes(other)) || other) : null };
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -748,7 +804,32 @@ async function assess(email) {
     // Direction decides which grounding signal applies. A sender who OWES her
     // something never asks for it in their own words, so checking their quote
     // against REQUEST_SIGNAL would null out every honest progress report.
-    const waiting_on = ['her', 'them', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
+    let waiting_on = ['her', 'them', 'someone_else', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
+    let asked_of = res.asked_of ? String(res.asked_of).trim() : null;
+
+    // HEADERS BEAT THE MODEL. If no company address is in To, nobody here was
+    // asked, whatever the prose sounds like. Applied only when the caller
+    // actually supplied headers - assess() is called from tests without them,
+    // and absent headers must mean "unchanged", never "somebody else's".
+    if (email.to !== undefined || email.cc !== undefined) {
+        const addr = addressing(email.to, email.cc, email.myAddress);
+        if (!addr.unknown && !addr.inTo) {
+            waiting_on = 'someone_else';
+            // The model's name only if the header could not give one: a
+            // display name lifted straight from To is evidence, a name the
+            // model produced is a guess.
+            asked_of = addr.toLabel || asked_of;
+        } else if (addr.inTo) {
+            // She IS on the To line. Whatever the model thought about someone
+            // else being asked, this one is addressed here.
+            if (waiting_on === 'someone_else') waiting_on = 'her';
+            asked_of = null;
+        }
+    } else if (waiting_on === 'someone_else' && !asked_of) {
+        // A 'someone_else' with nobody named is unusable in a digest line and
+        // is more likely a confused model than a real bystander thread.
+        waiting_on = 'her';
+    }
     if (res.asked_for && !quoteAppearsIn(res.asked_for_quote, email.body, waiting_on === 'them' ? 'progress' : 'request')) {
         console.warn(`[REPLYWATCH] asked_for "${String(res.asked_for).slice(0, 60)}" had no verifiable quote in the email — dropping it as ungrounded`);
         res.asked_for = null;
@@ -763,6 +844,7 @@ async function assess(email) {
 
     return {
         waiting_on,
+        asked_of: waiting_on === 'someone_else' ? asked_of : null,
         key_figures,
         // Coupled in CODE, not left to the model. Same principle as
         // applyDeadlineUrgency below: the judgement ("who is blocked here")
@@ -1458,6 +1540,8 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 // there is not enough history to say anything honest.
                 history: senderHistoryLine(store, from),
                 thread: threadLedger,
+                // Read for the first time 2026-08-26 - see addressing().
+                to: header(msg, 'To'), cc: header(msg, 'Cc'), myAddress: me,
             });
         } catch (err) {
             console.error('[REPLYWATCH] assess failed:', err.message);
@@ -1506,6 +1590,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 is_order: !!a.is_order, order_buyer: a.order_buyer || null,
                 needs_reply: !!a.needs_reply,
                 waiting_on: a.waiting_on || 'her',
+                asked_of: a.asked_of || null,
                 key_figures: Array.isArray(a.key_figures) ? a.key_figures : [],
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
@@ -1848,7 +1933,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, addressing, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
