@@ -300,6 +300,111 @@ function ghostStripCandidates(longest) {
     return out;
 }
 
+// ── The confidence cliff ────────────────────────────────────────────────────
+// Added 2026-08-27. This is the deterministic fix for the ghost cell, and it
+// removes the need to ask a second engine about it at all.
+//
+// Vision has been reporting which digits are fake all along and this file was
+// throwing the information away. Measured per-symbol on the Socome corpus:
+//
+//   true 3475  read "883475"  confidences  0.50 0.73 | 0.97 0.98 0.99 0.98
+//   true 3939  read "983939"  confidences  0.35 0.70 | 0.96 0.99 0.99 0.99
+//   true 3599  read "8.3599"  confidences  0.74 0.52 | 0.96 0.95 0.98 0.98
+//   true 4210  read "4210"    confidences       0.99 1.00 0.99 0.97
+//   true 4223  read "4223"    confidences       0.99 0.99 0.99 0.99
+//
+// The permanently-lit placeholder cells score 0.35-0.74. The real digits
+// score 0.95+. The boundary is not subtle.
+//
+// ⚠ THIS IS NOT THE CONFIDENCE GATE THAT WAS TRIED AND ABANDONED. That one
+// (see the note in gemini.js) used a single pooled score for the whole read,
+// and the measurement that killed it is still correct: correct reads scored
+// anywhere from 0.46 to 0.95 while a known-wrong read scored 0.83, so no
+// absolute cutoff can separate them. Confirmed again here — 3815's real
+// digits read 0.82/0.86/0.93/0.89, below 3475's ghost cells in absolute
+// terms. An absolute threshold would mangle it.
+//
+// What works is RELATIVE and POSITIONAL: strip a LEADING symbol only when its
+// own confidence is far below the median of everything after it. A cliff at
+// the start of the run, not a level. On 3815 there is no cliff (0.82 against
+// a median of 0.89) so nothing is stripped; on 883475 there is a chasm (0.50
+// against a median of 0.98) so the placeholder goes.
+//
+// This is also why it is safe for the 5-digit weighbridge, which the
+// digit-count approach could never be: the leading "8" of a genuine 81460 is
+// a real glyph and reads at 0.97, so there is no cliff and nothing is
+// stripped. The old note records a correct 71920 read pooling at 0.56 — flat
+// across its digits, no cliff, untouched by this rule.
+//
+// ⚠ The constants below are fitted to ten photos of ONE display. The
+// mechanism generalises (a placeholder that is not a real glyph matches
+// poorly); the exact numbers may not. They are deliberately conservative:
+// GHOST_CONF_MAX is low enough that a merely-blurry leading digit survives,
+// and CLIFF_CONF_MIN is high enough that stripping only happens when what
+// remains is genuinely crisp. Revisit with more photos before loosening.
+const GHOST_CONF_MAX = 0.80;   // a leading symbol this unsure may be a placeholder
+const CLIFF_CONF_MIN = 0.95;   // ...but only if what follows is this certain
+// Above this, a reading is trustworthy enough to publish without a second
+// opinion. Below it the caller should corroborate before showing a number.
+const TRUSTWORTHY_CONF = 0.90;
+
+function medianOf(a) {
+    if (!a || !a.length) return 0;
+    const s = [...a].sort((x, y) => x - y);
+    return s[Math.floor(s.length / 2)];
+}
+
+// Strips leading placeholder symbols off ONE contiguous digit run.
+function stripGhostByConfidence(text, confs) {
+    let t = text;
+    let c = (confs || []).slice();
+    let stripped = '';
+    // Never strip below 3 digits: the plausible floor is 200, so a 3-digit
+    // reading is legitimate and must not be eaten.
+    while (t.length > 3 && c.length === t.length) {
+        const rest = c.slice(1);
+        if (!(c[0] < GHOST_CONF_MAX && medianOf(rest) >= CLIFF_CONF_MIN)) break;
+        const v = parseFloat(t.slice(1));
+        if (!Number.isFinite(v) || v < PLAUSIBLE_LOAD_WEIGHT_MIN || v > PLAUSIBLE_LOAD_WEIGHT_MAX) break;
+        stripped += t[0];
+        t = t.slice(1);
+        c = rest;
+    }
+    return { text: t, confs: c, stripped };
+}
+
+// Picks the weight out of the confidence-carrying runs returned by
+// detectTextWithConfidence. Returns null when nothing plausible is present.
+//
+// `minConf` is the weakest symbol in the digits actually being returned —
+// which is the number the caller wants, and is NOT what the abandoned pooled
+// gate measured. Panel text elsewhere in the crop (a model number, a capacity
+// rating) cannot drag it down, because runs are scored separately.
+function extractWeightFromRuns(runs) {
+    if (!Array.isArray(runs) || !runs.length) return null;
+    let best = null;
+    for (const run of runs) {
+        if (!run || !run.text) continue;
+        const s = stripGhostByConfidence(run.text, run.confs);
+        const v = parseFloat(s.text);
+        if (!Number.isFinite(v) || v < PLAUSIBLE_LOAD_WEIGHT_MIN || v > PLAUSIBLE_LOAD_WEIGHT_MAX) continue;
+        // Longest IN-RANGE run wins, matching extractWeightNumberFromCrop —
+        // an implausible number must never win by being a longer string.
+        if (!best || s.text.length > best.digits) {
+            best = {
+                weight: v,
+                digits: s.text.length,
+                minConf: s.confs.length ? Math.min(...s.confs) : 0,
+                strippedGhost: s.stripped || null,
+                rawRun: run.text,
+            };
+        }
+    }
+    if (!best) return null;
+    best.trustworthy = best.minConf >= TRUSTWORTHY_CONF;
+    return best;
+}
+
 // Returns { weight, ambiguous, candidates } instead of a bare number so the
 // caller can decide how much to trust it. `ambiguous: true` means more than
 // one number in the photo fell inside the plausible load-weight range (e.g.
@@ -553,4 +658,4 @@ function plausibleWeightOrStripped(weight) {
     return null;
 }
 
-module.exports = { detectText, detectTextWithConfidence, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage, plausibleWeightOrStripped };
+module.exports = { detectText, detectTextWithConfidence, extractWeightNumber, extractWeightNumberFromCrop, extractPlausibleWeightFromFullImage, plausibleWeightOrStripped, extractWeightFromRuns, stripGhostByConfidence, TRUSTWORTHY_CONF };

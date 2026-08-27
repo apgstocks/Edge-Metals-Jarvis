@@ -111,6 +111,72 @@ section('a real misread is still flagged, not rescued');
     ck('gate flags rather than accepting a stripped 896', gateAccepts(r, 896).accepted === null);
 }
 
+section('the confidence cliff — deterministic ghost removal');
+{
+    // Real per-symbol confidences measured off the corpus. The rule strips a
+    // LEADING symbol only when it is far less certain than the median of what
+    // follows, so it needs a cliff, not just a low number.
+    const strip = visionOcr.stripGhostByConfidence;
+
+    const a = strip('883475', [0.50, 0.73, 0.97, 0.98, 0.99, 0.98]);
+    ck('883475 loses its "88" placeholder', a.text === '3475' && a.stripped === '88');
+    const b = strip('983939', [0.35, 0.70, 0.96, 0.99, 0.99, 0.99]);
+    ck('983939 loses its "98" placeholder', b.text === '3939' && b.stripped === '98');
+
+    // THE case an absolute threshold gets wrong. 3815's real digits are
+    // genuinely mediocre — 0.82 is lower than some ghost cells — but they are
+    // FLAT, so there is no cliff and nothing may be removed.
+    const c = strip('3815', [0.82, 0.86, 0.93, 0.89]);
+    ck('3815 is left alone despite a low leading 0.82 (no cliff)', c.text === '3815' && !c.stripped);
+
+    // The weighbridge. A real leading digit is a real glyph and reads high,
+    // so there is no cliff. This is why the rule is safe where a digit-count
+    // rule was not.
+    for (const [txt, confs] of [['81460', [0.97, 0.98, 0.99, 0.98, 0.97]], ['71920', [0.56, 0.56, 0.58, 0.55, 0.57]]]) {
+        const r = strip(txt, confs);
+        ck(`${txt} is never shortened (no confidence cliff)`, r.text === txt && !r.stripped);
+    }
+
+    // A low leading symbol is not enough on its own — what follows must be
+    // crisp, or we are just guessing about a blurry photo.
+    const d = strip('48250', [0.50, 0.60, 0.62, 0.58, 0.61]);
+    ck('a uniformly unsure read is not stripped', d.text === '48250' && !d.stripped);
+
+    // Never eat a legitimate 3-digit weight (the plausible floor is 200).
+    const e = strip('8475', [0.10, 0.99, 0.99, 0.99]);
+    ck('stripping stops at 3 digits', e.text === '475');
+    const f = strip('475', [0.10, 0.99, 0.99]);
+    ck('a 3-digit run is never stripped further', f.text === '475' && !f.stripped);
+
+    // Refuses to strip into an implausible number.
+    const g = strip('8100', [0.20, 0.99, 0.99, 0.99]);
+    ck('will not strip when the remainder falls under the 200 lb floor', g.text === '8100' && !g.stripped);
+}
+
+section('trustworthiness decides whether a second opinion is needed');
+{
+    const pick = visionOcr.extractWeightFromRuns;
+    const ghost = pick([{ text: '883475', confs: [0.50, 0.73, 0.97, 0.98, 0.99, 0.98] }]);
+    ck('ghost read resolves to 3475', ghost && ghost.weight === 3475);
+    ck('...and is trustworthy enough to publish alone', ghost.trustworthy === true);
+    ck('...and says what it removed', ghost.strippedGhost === '88');
+
+    // The known bad read. It must NOT be trusted on its own — this is the
+    // read that used to be published-but-flagged.
+    const bad = pick([{ text: '4896', confs: [0.50, 0.58, 0.69, 0.97] }]);
+    ck('the 4896 misread is picked up', bad && bad.weight === 4896);
+    ck('...but is NOT trustworthy (0.50)', bad.trustworthy === false);
+
+    const mediocre = pick([{ text: '3815', confs: [0.82, 0.86, 0.93, 0.89] }]);
+    ck('a merely-mediocre read is not trusted alone', mediocre.trustworthy === false);
+    ck('...but still reports the right number for corroboration', mediocre.weight === 3815);
+
+    // Panel text must not win by being longer, matching the older rule.
+    const panel = pick([{ text: '1000001', confs: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9] }, { text: '80720', confs: [0.97, 0.97, 0.97, 0.97, 0.97] }]);
+    ck('an out-of-range capacity rating cannot beat the real reading', panel && panel.weight === 80720);
+    ck('no runs at all yields nothing', pick([]) === null);
+}
+
 section('the speed fast lane must never fire on a ghost read');
 {
     // The fast lane returns in ~450ms by corroborating the plain Vision read

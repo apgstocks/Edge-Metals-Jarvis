@@ -2227,6 +2227,53 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
         // published without a "verify against the display" flag.
         const tFast = Date.now();
         try {
+            // CONFIDENCE LANE. One Vision call, ~350ms, no second opinion.
+            //
+            // Vision reports a confidence per SYMBOL, and on this display the
+            // permanently-lit placeholder cells score 0.35-0.74 while the real
+            // digits score 0.95+. That makes the ghost removable
+            // deterministically rather than by hoping a second engine happens
+            // to disagree in the right direction — see the long note in
+            // visionOcr.js, including why this is not the pooled-confidence
+            // gate that was measured useless and abandoned.
+            //
+            // Measured on the Socome corpus: 7 of 10 photos come back
+            // trustworthy and correct here at ~350ms, including all three
+            // ghost photos that used to cost a full Gemini wait. The known
+            // bad read (4896 for a true 4146) scores 0.50 and is NOT
+            // trustworthy, so it falls through to the slower corroboration
+            // path instead of being published — which is a better outcome
+            // than the old one, where it was published-but-flagged.
+            //
+            // DOCUMENT_TEXT_DETECTION is what carries per-symbol confidence,
+            // and it is not a tax: measured at a median 333ms against 416ms
+            // for the plain TEXT_DETECTION call it replaces here.
+            try {
+                const withConf = await withTimeout(
+                    visionOcr.detectTextWithConfidence(imageBase64),
+                    Math.min(2000, remainingBudget()), 'Scanner confidence read',
+                );
+                const picked = withConf && withConf.runs ? visionOcr.extractWeightFromRuns(withConf.runs) : null;
+                if (picked && picked.trustworthy) {
+                    const confMs = Date.now() - tFast;
+                    const ghostNote = picked.strippedGhost
+                        ? ` after dropping the low-confidence leading "${picked.strippedGhost}" (placeholder cells)`
+                        : '';
+                    console.log(`[GEMINI] Scanner confidence lane: read ${picked.weight}${ghostNote} at min symbol confidence ${picked.minConf.toFixed(2)} in ${confMs}ms — accepting`);
+                    return {
+                        weight: picked.weight, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                        displays_seen: 'scanner crop — every digit read at high per-symbol confidence',
+                        raw_text: `${withConf.text || picked.rawRun} (scanner confidence lane — min symbol confidence ${picked.minConf.toFixed(2)}${ghostNote})`,
+                        ambiguous: false,
+                    };
+                }
+                if (picked) {
+                    console.log(`[GEMINI] Scanner confidence lane: read ${picked.weight} but min symbol confidence is only ${picked.minConf.toFixed(2)} — not trusting it alone, corroborating`);
+                }
+            } catch (err) {
+                console.warn('[GEMINI] Scanner confidence lane failed, falling through:', err.message);
+            }
+
             // AGREEMENT GATE. Cloud Vision and Gemini read the same crop in
             // PARALLEL, and the number is published only when they
             // independently agree.
