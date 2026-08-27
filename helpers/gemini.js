@@ -2270,6 +2270,65 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
                 if (picked) {
                     console.log(`[GEMINI] Scanner confidence lane: read ${picked.weight} but min symbol confidence is only ${picked.minConf.toFixed(2)} — not trusting it alone, corroborating`);
                 }
+
+                // BURST AGREEMENT. Only reached when the primary frame was NOT
+                // confident on its own, so this costs nothing on the ~7-in-10
+                // scans that already answered above.
+                //
+                // The scanner sends several frames grabbed off the live
+                // preview about 150ms apart. The weight on the display does
+                // not change in that window; the sensor noise does. So two
+                // frames landing on the same number is independent evidence,
+                // in a way that re-rendering one frame is provably not — the
+                // greyscale pass reproduces the plain read's ghost digit
+                // exactly, which is why frames and not filters.
+                //
+                // Aimed squarely at the known failure: an overexposed capture
+                // where the segments bleed together and Vision returns a
+                // confident-looking 4896 for a true 4146. A neighbouring frame
+                // with slightly different exposure reads it correctly, and two
+                // frames agreeing beats one frame insisting.
+                const extraFrames = Array.isArray(opts.extraFrames) ? opts.extraFrames.slice(0, 4) : [];
+                if (extraFrames.length) {
+                    const tBurst = Date.now();
+                    const reads = await Promise.all(extraFrames.map(async (f) => {
+                        try {
+                            const wc = await withTimeout(visionOcr.detectTextWithConfidence(f), Math.min(2000, remainingBudget()), 'Scanner burst frame');
+                            return wc && wc.runs ? visionOcr.extractWeightFromRuns(wc.runs) : null;
+                        } catch (e) { return null; }
+                    }));
+                    const all = [picked, ...reads].filter((r) => r && r.weight != null);
+                    // Count how many DISTINCT frames produced each number, and
+                    // require the winner to be backed by at least two of them.
+                    const tally = new Map();
+                    for (const r of all) {
+                        const cur = tally.get(r.weight) || { n: 0, bestConf: 0 };
+                        cur.n += 1;
+                        cur.bestConf = Math.max(cur.bestConf, r.minConf || 0);
+                        tally.set(r.weight, cur);
+                    }
+                    let winner = null;
+                    for (const [weight, v] of tally) {
+                        if (v.n < 2) continue;
+                        // A tie on count is broken by confidence, never by
+                        // which frame happened to arrive first.
+                        if (!winner || v.n > winner.n || (v.n === winner.n && v.bestConf > winner.bestConf)) {
+                            winner = { weight, n: v.n, bestConf: v.bestConf };
+                        }
+                    }
+                    const burstMs = Date.now() - tBurst;
+                    if (winner) {
+                        const total = all.length;
+                        console.log(`[GEMINI] Scanner burst: ${winner.n} of ${total} frames read ${winner.weight} (best confidence ${winner.bestConf.toFixed(2)}) in ${burstMs}ms — accepting`);
+                        return {
+                            weight: winner.weight, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                            displays_seen: `${winner.n} of ${total} camera frames independently read the same number`,
+                            raw_text: `burst of ${total} frames — ${winner.n} agreed on ${winner.weight}, best symbol confidence ${winner.bestConf.toFixed(2)}`,
+                            ambiguous: false,
+                        };
+                    }
+                    console.log(`[GEMINI] Scanner burst: ${all.length} frames produced ${tally.size} different numbers in ${burstMs}ms — no majority, corroborating`);
+                }
             } catch (err) {
                 console.warn('[GEMINI] Scanner confidence lane failed, falling through:', err.message);
             }

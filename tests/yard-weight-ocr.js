@@ -153,6 +153,64 @@ section('the confidence cliff — deterministic ghost removal');
     ck('will not strip when the remainder falls under the 200 lb floor', g.text === '8100' && !g.stripped);
 }
 
+section('a placeholder can only be a stuck cell, never a real digit');
+{
+    const strip = visionOcr.stripGhostByConfidence;
+    // Found by testing, not by reading: an underexposed frame of the true
+    // 3475 dimmed its leading "3" enough to manufacture a textbook cliff, and
+    // the rule stripped it and returned 475 at 0.92 confidence. Confident and
+    // wrong. A seven-segment cell stuck on cannot display a 3, so the glyph
+    // itself is the check.
+    const t = strip('3475', [0.35, 0.97, 0.98, 0.97]);
+    ck('a real leading "3" is NOT stripped even with a textbook cliff', t.text === '3475' && !t.stripped);
+    for (const bad of ['1234', '2475', '4475', '5475', '6475', '7475']) {
+        const r = strip(bad, [0.30, 0.98, 0.98, 0.98]);
+        ck(`leading "${bad[0]}" is not a placeholder glyph, so ${bad} survives`, r.text === bad && !r.stripped);
+    }
+    for (const good of ['8475', '9475', '0475']) {
+        const r = strip(good, [0.30, 0.98, 0.98, 0.98]);
+        ck(`leading "${good[0]}" is a plausible stuck cell, so ${good} is stripped`, r.text === '475');
+    }
+}
+
+section('burst agreement across frames');
+{
+    // Mirrors the tally in the scanner gate. Restated rather than imported for
+    // the same reason as gateAccepts above.
+    function burstWinner(reads) {
+        const tally = new Map();
+        for (const r of reads.filter((x) => x && x.weight != null)) {
+            const cur = tally.get(r.weight) || { n: 0, bestConf: 0 };
+            cur.n += 1;
+            cur.bestConf = Math.max(cur.bestConf, r.minConf || 0);
+            tally.set(r.weight, cur);
+        }
+        let winner = null;
+        for (const [weight, v] of tally) {
+            if (v.n < 2) continue;
+            if (!winner || v.n > winner.n || (v.n === winner.n && v.bestConf > winner.bestConf)) winner = { weight, n: v.n, bestConf: v.bestConf };
+        }
+        return winner;
+    }
+    ck('two frames agreeing wins', (burstWinner([
+        { weight: 4146, minConf: 0.60 }, { weight: 4146, minConf: 0.71 }, { weight: 4896, minConf: 0.50 },
+    ]) || {}).weight === 4146);
+    ck('three different numbers produce no winner', burstWinner([
+        { weight: 4146, minConf: 0.6 }, { weight: 4896, minConf: 0.5 }, { weight: 4446, minConf: 0.4 },
+    ]) === null);
+    ck('a single frame is never a majority', burstWinner([{ weight: 4146, minConf: 0.99 }]) === null);
+    ck('a lone high-confidence read cannot outvote a pair', (burstWinner([
+        { weight: 4896, minConf: 0.99 }, { weight: 4146, minConf: 0.55 }, { weight: 4146, minConf: 0.58 },
+    ]) || {}).weight === 4146);
+    ck('a tie is broken by confidence, not arrival order', (burstWinner([
+        { weight: 1111, minConf: 0.40 }, { weight: 1111, minConf: 0.41 },
+        { weight: 2222, minConf: 0.90 }, { weight: 2222, minConf: 0.91 },
+    ]) || {}).weight === 2222);
+    ck('null reads are ignored rather than counted', burstWinner([
+        { weight: null }, { weight: null }, { weight: 4146, minConf: 0.6 },
+    ]) === null);
+}
+
 section('trustworthiness decides whether a second opinion is needed');
 {
     const pick = visionOcr.extractWeightFromRuns;

@@ -1232,7 +1232,16 @@ async function processWeightImage(row, roleKey, base64, mime, statusEl, opts = {
   try {
     const result = await api('/api/vision/read-weight', {
       method: 'POST',
-      body: JSON.stringify({ image_base64: base64, mime_type: mime, pre_cropped: !!opts.preCropped }),
+      // opts.frames — extra frames from the scanner's burst (see
+      // doScanCapture). Sent alongside, never instead of, image_base64, so
+      // the server keeps treating that as the primary read and an older
+      // server that ignores the field behaves exactly as before.
+      body: JSON.stringify({
+        image_base64: base64,
+        mime_type: mime,
+        pre_cropped: !!opts.preCropped,
+        ...(opts.frames && opts.frames.length ? { frames: opts.frames } : {}),
+      }),
     });
     // Full reasoning (raw_text/displays_seen) goes to the console instead of
     // the on-screen status now — useful for debugging a bad read without
@@ -1710,6 +1719,37 @@ async function doScanCapture() {
     shutter.disabled = false; shutter.textContent = 'Capture weight';
     return;
   }
+  // BURST. Grab a few more frames off the same live preview, ~140ms apart.
+  //
+  // The weight on the display is static across that third of a second; the
+  // sensor noise is not. So two frames agreeing on a number is independent
+  // evidence — which matters because re-processing ONE frame is provably not:
+  // measured 2026-08-27, a greyscale re-render reproduces the plain read's
+  // ghost digit exactly, so filters cannot corroborate the reads that
+  // actually go wrong. Separate frames can.
+  //
+  // Deliberately at the SAME exposure. Varying it was the obvious idea and
+  // testing killed it: darkening the true-3475 photo enough to fix the
+  // overexposed 4146 photo made Vision read the 3475 as 475 at 0.92
+  // confidence. Deliberately mis-exposed frames vote wrong things
+  // confidently, so the burst uses whatever exposure the preview settled on
+  // and relies on natural variation between frames.
+  //
+  // Costs about 420ms of camera time and nothing in extra round trips — the
+  // frames ride along on the request that was already being made, and the
+  // server only looks at them when the primary frame was not confident on
+  // its own, which measured as roughly 3 scans in 10.
+  const BURST_FRAMES = 3;
+  const BURST_GAP_MS = 140;
+  const frames = [];
+  for (let i = 1; i < BURST_FRAMES; i++) {
+    await new Promise((r) => setTimeout(r, BURST_GAP_MS));
+    const extra = cropScanFrame();
+    // A dropped frame is not an error — the burst is best-effort extra
+    // evidence, and one good frame is still a perfectly valid read.
+    if (extra && extra.base64) frames.push(extra.base64);
+  }
+  console.log(`[scanner] burst captured ${frames.length + 1} frames`);
   console.log(`[scanner] cropped ${shot.w}x${shot.h}px, ~${Math.round(shot.base64.length * 3 / 4 / 1024)}KB`);
   // Low-resolution guard. The crop is a fraction of the frame, so a device
   // that only gave us a small stream can produce a crop too thin to read
@@ -1731,7 +1771,7 @@ async function doScanCapture() {
   }
   const statusEl = row.querySelector('.ld-item-status');
   closeScanner(); // release the camera before the network round trip
-  await processWeightImage(row, roleKey, shot.base64, 'image/jpeg', statusEl, { preCropped: true });
+  await processWeightImage(row, roleKey, shot.base64, 'image/jpeg', statusEl, { preCropped: true, frames });
 }
 
 // Small floating "Take Photo / Choose File" menu, shown when a row's 📷

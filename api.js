@@ -959,9 +959,27 @@ function createApi() {
     // New Load form BEFORE a load exists yet, so it can't be scoped to a
     // load id. largeJson (10mb) because base64 photos inflate ~33% over binary.
     app.post('/api/vision/read-weight', largeJson, async (req, res) => {
-        const { image_base64, mime_type, pre_cropped } = req.body || {};
+        const { image_base64, mime_type, pre_cropped, frames } = req.body || {};
         if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
         try {
+            // frames: added 2026-08-27. The scanner now grabs several frames off
+            // the live preview instead of one, and sends the extras here.
+            //
+            // image_base64 REMAINS the primary frame and remains required, so
+            // the APK already on Apsara's phone — which knows nothing about
+            // this field — keeps working byte-for-byte as before. frames is
+            // purely additional evidence when a newer client sends it.
+            //
+            // Why extra frames and not more processing of one frame: measured
+            // 2026-08-27, re-rendering the SAME pixels fails in correlated
+            // ways (a greyscale pass reproduces the plain read's ghost digit
+            // exactly), so it cannot corroborate the cases that actually go
+            // wrong. Separate frames carry independent sensor noise, so two of
+            // them agreeing is real evidence. The weight itself is static
+            // while this happens, which is what makes the comparison valid.
+            const extraFrames = Array.isArray(frames)
+                ? frames.filter((f) => typeof f === 'string' && f.length > 100).slice(0, 4)
+                : [];
             // pre_cropped: sent by the mobile app's guided scanner (2026-08-17)
             // when the user has already framed the display inside the on-screen
             // box, so the uploaded image IS the display. Lets the pipeline skip
@@ -969,7 +987,10 @@ function createApi() {
             // older client that doesn't send this field is simply undefined
             // here and gets the unchanged full-locate behavior.
             const { extractWeightFromImage } = require('./helpers/gemini');
-            const result = await extractWeightFromImage(image_base64, mime_type, undefined, { preCropped: !!pre_cropped });
+            const result = await extractWeightFromImage(image_base64, mime_type, undefined, {
+                preCropped: !!pre_cropped,
+                extraFrames,
+            });
             res.json({ ok: true, ...result });
         } catch (err) {
             console.error('[API] read-weight failed:', err.message);

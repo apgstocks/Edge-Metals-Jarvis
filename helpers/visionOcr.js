@@ -354,6 +354,16 @@ function medianOf(a) {
     return s[Math.floor(s.length / 2)];
 }
 
+// A placeholder cell is a seven-segment element sitting fully or almost fully
+// lit, so it can only ever be read as one of these. Requiring it is what stops
+// the cliff rule from eating a REAL leading digit that merely happens to be
+// unsure — found by testing 2026-08-27: an underexposed frame of the true
+// 3475 dimmed its leading "3" enough to manufacture a cliff (0.35 against a
+// median of 0.97), and the rule stripped it and returned 475 at a confidence
+// of 0.92. Confident, wrong, and exactly the failure this whole file exists to
+// prevent. A "3" is not a thing a stuck cell can display, so this closes it.
+const GHOST_GLYPHS = new Set(['8', '9', '0']);
+
 // Strips leading placeholder symbols off ONE contiguous digit run.
 function stripGhostByConfidence(text, confs) {
     let t = text;
@@ -363,6 +373,7 @@ function stripGhostByConfidence(text, confs) {
     // reading is legitimate and must not be eaten.
     while (t.length > 3 && c.length === t.length) {
         const rest = c.slice(1);
+        if (!GHOST_GLYPHS.has(t[0])) break;
         if (!(c[0] < GHOST_CONF_MAX && medianOf(rest) >= CLIFF_CONF_MIN)) break;
         const v = parseFloat(t.slice(1));
         if (!Number.isFinite(v) || v < PLAUSIBLE_LOAD_WEIGHT_MIN || v > PLAUSIBLE_LOAD_WEIGHT_MAX) break;
