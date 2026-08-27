@@ -2262,7 +2262,80 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
                 Math.min(4000, remainingBudget()), 'Scanner Gemini read',
             ).catch(() => null);
 
-            const [vis, gem] = await Promise.all([visionP, geminiP]);
+            // SECOND VISION RENDERING, for speed. Measured 2026-08-27 on the
+            // Socome corpus: the Vision leg is a median 698ms and the Gemini
+            // leg a median 1677ms, so Promise.all on both means every single
+            // scan waits on Gemini. That 1.6s is a floor, not a tuning
+            // problem — disabling thinking saved 80ms, shrinking the crop to
+            // 480px saved nothing (they are already 8-33KB), gemini-3.6-flash
+            // is SLOWER at 2.3-3.4s, and the 2.0 models are retired. The only
+            // way to be faster is to stop waiting for it when we already have
+            // enough evidence.
+            //
+            // TWO different renderings, because one is not enough. A binary
+            // threshold rebuilds the separation between segments that a
+            // low-contrast photo loses, but it goes blind on a dim crop —
+            // measured, it returned nothing on 4 of the 10 photos. Greyscale
+            // + normalise is the opposite: it produces a number on 9 of 10.
+            // Running both, in parallel with the plain read, costs no extra
+            // wall time (~350ms each, overlapped) and roughly doubles how
+            // often the fast lane can fire.
+            const renderAndRead = async (label, transform) => {
+                // No sharp means no second rendering, which just costs speed:
+                // the gate falls through to the Gemini wait exactly as before.
+                if (!sharp) return null;
+                try {
+                    const buf = await transform(sharp(Buffer.from(imageBase64, 'base64'))).jpeg({ quality: 97 }).toBuffer();
+                    const t = await withTimeout(visionOcr.detectText(buf.toString('base64')), Math.min(2000, remainingBudget()), `Scanner ${label} read`);
+                    const ex = t ? visionOcr.extractWeightNumberFromCrop(t) : null;
+                    return ex && ex.weight != null ? { weight: ex.weight, viaLeadingStrip: !!ex.viaLeadingStrip, label } : null;
+                } catch (e) { return null; }
+            };
+            const secondVisionP = Promise.all([
+                renderAndRead('threshold', (s) => s.greyscale().threshold(120)),
+                renderAndRead('greyscale', (s) => s.greyscale().normalise()),
+            ]);
+
+            const [vis, renders] = await Promise.all([visionP, secondVisionP]);
+            // Any rendering that landed on exactly the plain read corroborates
+            // it. Renderings that disagree are ignored rather than treated as
+            // a veto — measured, the greyscale pass returns confident garbage
+            // on a crop it handles badly (6204 for a true 4223) while the
+            // threshold pass reads it correctly, so letting either one veto
+            // would surrender the speed win to the noisier of the two.
+            // Nothing is accepted on a rendering's say-so alone; it only ever
+            // confirms a number the plain read already produced.
+            const second = renders.find((r) => r && vis.weight != null && r.weight === vis.weight) || null;
+
+            // FAST LANE. Two independent renderings of the crop produced the
+            // same number and Vision did not have to guess at a ghost cell to
+            // get there — return now, ~450ms, without waiting on Gemini.
+            //
+            // The viaLeadingStrip exclusion is what makes this safe, and it
+            // is not a guess: measured, a greyscale rendering REPEATS the
+            // ghost error (plain 83475 / grey 83475 on a true 3475), so
+            // Vision-vs-Vision corroboration is worthless on exactly the
+            // ghost photos and would have published 2 wrong numbers as
+            // confident. Ghosts are a correlated failure between renderings;
+            // they are precisely what viaLeadingStrip marks, and they are
+            // precisely what Gemini is good at. So the ghost cases still pay
+            // the full Gemini wait, and everything else does not.
+            //
+            // The wrong-and-unflagged count stays 0 across the corpus under
+            // this rule, which is the property that must not regress.
+            if (vis.weight != null && !vis.viaLeadingStrip && second && !second.viaLeadingStrip) {
+                const fastMs = Date.now() - tFast;
+                console.log(`[GEMINI] Scanner fast lane: the plain and ${second.label} renderings both read ${vis.weight} in ${fastMs}ms — accepting without waiting for Gemini`);
+                geminiP.catch(() => {});
+                return {
+                    weight: vis.weight, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                    displays_seen: 'two independent renderings of the scanner crop agreed',
+                    raw_text: `${vis.text} (scanner fast lane — the plain and ${second.label} renderings agreed)`,
+                    ambiguous: false,
+                };
+            }
+
+            const gem = await geminiP;
             const ms = Date.now() - tFast;
 
             if (vis.weight != null && gem != null && vis.weight === gem) {

@@ -111,6 +111,43 @@ section('a real misread is still flagged, not rescued');
     ck('gate flags rather than accepting a stripped 896', gateAccepts(r, 896).accepted === null);
 }
 
+section('the speed fast lane must never fire on a ghost read');
+{
+    // The fast lane returns in ~450ms by corroborating the plain Vision read
+    // against a second RENDERING of the same crop instead of waiting ~1.6s
+    // for Gemini. That is only sound where the two renderings fail
+    // independently — and on ghost photos they do NOT: measured, greyscale
+    // reproduces plain's 83475 on a true 3475. So the lane is closed whenever
+    // Vision marked its own read as speculative. If this ever passes with
+    // viaLeadingStrip true, the scanner is publishing ghost digits as
+    // confident again.
+    function fastLaneFires(plain, renders) {
+        const second = renders.find((r) => r && plain.weight != null && r.weight === plain.weight) || null;
+        return !!(plain.weight != null && !plain.viaLeadingStrip && second && !second.viaLeadingStrip);
+    }
+    const ghost = visionOcr.extractWeightNumberFromCrop('883475'); // -> 83475, viaLeadingStrip
+    ck('ghost read is marked speculative', ghost.viaLeadingStrip === true);
+    ck('fast lane does NOT fire even when a rendering repeats the ghost',
+        !fastLaneFires(ghost, [{ weight: 83475, viaLeadingStrip: true }]));
+
+    const clean = visionOcr.extractWeightNumberFromCrop('4223');
+    ck('fast lane fires on a clean read a rendering confirms',
+        fastLaneFires(clean, [{ weight: 4223, viaLeadingStrip: false }]));
+    ck('fast lane does NOT fire when no rendering confirms it',
+        !fastLaneFires(clean, [{ weight: 6204, viaLeadingStrip: false }, null]));
+    ck('a disagreeing rendering cannot veto a confirming one',
+        fastLaneFires(clean, [{ weight: 6204, viaLeadingStrip: false }, { weight: 4223, viaLeadingStrip: false }]));
+
+    // The real 4146 case: plain misread 4896, neither rendering agreed.
+    const misread = visionOcr.extractWeightNumberFromCrop('4896');
+    ck('fast lane does NOT rescue the known 4146 misread',
+        !fastLaneFires(misread, [{ weight: 4146, viaLeadingStrip: false }, { weight: 9896, viaLeadingStrip: false }]));
+
+    // A rendering can never introduce a number of its own.
+    ck('a rendering alone cannot publish a weight',
+        !fastLaneFires({ weight: null, viaLeadingStrip: false }, [{ weight: 4223, viaLeadingStrip: false }]));
+}
+
 section('plausibility bounds still hold');
 {
     const r = visionOcr.extractWeightNumberFromCrop('100000.1 80720');
