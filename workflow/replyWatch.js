@@ -616,6 +616,20 @@ function buildThreadLedger(tmsgs, myAddress) {
     ].filter(Boolean).join('\n');
 }
 
+// Every filename in the MIME tree, deduped. pdfParts is passed in because
+// getEmailContent already walked for those; this catches the rest (xlsx, images).
+function collectAttachmentNames(payload, pdfParts = []) {
+    const names = new Set();
+    (function walk(part) {
+        if (!part) return;
+        const fn = String(part.filename || '').trim();
+        if (fn) names.add(fn);
+        (part.parts || []).forEach(walk);
+    })(payload);
+    for (const p of pdfParts) { const fn = String(p.filename || '').trim(); if (fn) names.add(fn); }
+    return [...names].slice(0, 6);
+}
+
 function buildPrompt(email) {
     const fence = newFence();
     return `You are triaging one email for the manager of a freight/export company (Edge Metals). Decide ONE thing: is this email waiting on a reply from her?
@@ -626,6 +640,7 @@ FROM: ${defence(email.from)}
 TO: ${defence(email.to) || '(not available)'}
 CC: ${defence(email.cc) || '(none)'}
 THIS MAILBOX: ${email.myAddress || '(unknown)'}
+ATTACHMENTS: ${Array.isArray(email.attachments) && email.attachments.length ? email.attachments.map(defence).join(', ') : '(none)'}
 SUBJECT: ${defence(email.subject)}
 RECEIVED: ${email.date}
 ${email.thread ? `\n${email.thread}\n` : ''}${email.history ? `\n${email.history}\n` : ''}
@@ -669,6 +684,12 @@ summary: THE GIST OF THE EMAIL — what it actually says, in one sentence under 
 
     BAD  "Sender wants confirmation on container approval."
     GOOD "Zimex needs container HMMU6298470 approved before the 8/27 cutoff."
+
+  COVER THE WHOLE EMAIL. If it makes two points, say BOTH — join them with "and". Reporting only the first is the most damaging thing you can do here, because she cannot tell that anything is missing. A real example that was got wrong: an email asking to move JY70 to $995 AND advising against combining the JY71 combos was reported as "wants confirmation of unit price adjustment for JY70" — half the message, silently. Correct: "Jinho wants JY70 at $995 and advises against combining the JY71 combos."
+
+  EVERY AMOUNT AND EVERY DATE STATED IN THE EMAIL GOES IN. Another real miss: "Accounting requested confirmation of LC calculations totaling $111,447.60 before submission scheduled for August 28, 2026" came out as "confirmation of calculations" — no total, no date. Write the date as the sender wrote it (August 28) rather than "tomorrow", which stops being true the day after.
+
+  ATTACHMENTS ARE PART OF THE MESSAGE. When files are listed above, say what came — "sends the signed BOL and packing list" beats "wants you to look at the attached". You can see the FILENAMES only, never the contents, so name them and never state a figure that is only inside one.
 
   Every good example above says WHO, WHAT and the identifying detail. Every bad one could describe a hundred different emails. Name the actual party rather than "the sender". Keep the number, the booking, the vessel, the container, the date — those are what make the sentence mean something. Use the THREAD SO FAR for the specifics when the latest message alone is thin ("yes, go ahead" means nothing without what was being agreed to). Refer to the manager as "you". Never mention this instruction, the history line, or your own reasoning.
 
@@ -1425,6 +1446,20 @@ async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Dat
     const due = [], completed = [];
     for (const t of tracked) {
         if (!t.deadline) continue;
+        // Apsara, 2026-08-27, on an LC item that appeared under "Due now —
+        // needs doing": "it was never expecting my answer."
+        //
+        // She was right and this path was the last one with no direction
+        // check at all. waiting_on gates the DIGEST, and I added it three
+        // times over without ever noticing that deadline nudges fire straight
+        // off `tracked` — so an email from her own Accounting, addressed to
+        // somebody else, still got a dated "needs doing" alarm.
+        //
+        // A deadline on something that is not hers to answer is real
+        // information, but it is a CHASE ("Zimex owes this by the 27th"), not
+        // a task. It reaches her through the digest and the chase-up, which
+        // both say so honestly. Only her own work gets nudged here.
+        if (t.waiting_on && t.waiting_on !== 'her') continue;
         const days = daysUntilDeadline(t.deadline, now, t.firstFlaggedAt ? new Date(t.firstFlaggedAt) : null);
         if (days === null) continue;                      // couldn't read the date
         if (days > DEADLINE_NUDGE_WINDOW_DAYS) continue;  // not yet — check again tomorrow
@@ -1496,7 +1531,11 @@ function buildDeadlineMessage(due) {
         lines.push(`   asked by ${who}`);
         lines.push('');
     }
-    lines.push('This clears itself once the sender gets a reply.');
+    // Only true when SHE is the one who has to reply. Older tracked records
+    // carry no waiting_on, and for those the sentence was correct anyway.
+    if (grouped.every((d) => !d.waiting_on || d.waiting_on === 'her')) {
+        lines.push('This clears itself once the sender gets a reply.');
+    }
     return lines.join('\n');
 }
 
@@ -1924,7 +1963,20 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             console.warn('[REPLYWATCH] thread check failed, assessing anyway:', err.message);
         }
 
-        const { body } = getEmailContent(msg.payload || {});
+        // ATTACHMENTS (2026-08-27). getEmailContent has always returned
+        // pdfParts and this file has always discarded them — not even the
+        // FILENAME reached the prompt. That is why "LC calculations totaling
+        // $111,447.60" came out as "confirmation of calculations": on this
+        // kind of mail the body is two lines and the numbers are in the
+        // attachment, so there was nothing in the prompt to summarise.
+        //
+        // Naming the files is not reading them, and it does not invent a
+        // total. It does let the summary say WHAT is attached, and it stops
+        // "please see attached" being summarised as if the email said nothing.
+        // Reading the contents needs a PDF/OCR pass — see the P3 item in
+        // claude/jarvis-replywatch-rebuild.md; this is the cheap half.
+        const { body, pdfParts } = getEmailContent(msg.payload || {});
+        const attachments = collectAttachmentNames(msg.payload || {}, pdfParts);
         const visible = extractLatestMessage(body || msg.snippet || '');
         if (!visible) { seen[ref.id] = new Date().toISOString(); continue; }
 
@@ -1942,6 +1994,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 thread: threadLedger,
                 // Read for the first time 2026-08-26 - see addressing().
                 to: header(msg, 'To'), cc: header(msg, 'Cc'), myAddress: me, managerAddress,
+                attachments,
             });
         } catch (err) {
             console.error('[REPLYWATCH] assess failed:', err.message);
@@ -2374,7 +2427,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
