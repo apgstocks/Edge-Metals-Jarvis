@@ -6,8 +6,11 @@ bookings.json
 .DS_Store
 .wwebjs_cache/
 
-# Built APKs — 6MB binaries, rebuilt from source, do not belong in git
+# Built APKs and Play bundles — multi-MB binaries, rebuilt from source, do
+# not belong in git. The .aab was missing here and a 4.5MB bundle very nearly
+# went in with the v1.1 build.
 *.apk
+*.aab
 _to_delete/quoteAgentClient.js.old
 _to_delete/negotiator_rollback_2026-08-17/migrate-quotes-to-agent.js
 _to_delete/negotiator_rollback_2026-08-17/negotiatorClient.js
