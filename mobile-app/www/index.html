@@ -1689,15 +1689,27 @@ function layoutScanBox() {
 // ever uploaded, so pointing the phone at the ground costs nothing.
 let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, busy: false, locked: false, blanks: 0 };
 const SCAN_LIVE = {
-    INTERVAL_MS: 700,   // between attempts — slower than the eye, fast enough to feel live
-    NEEDED: 2,          // frames that must agree before the number is accepted
-    MAX_SENDS: 10,      // hard ceiling per scanner session, so a bad aim cannot bill forever
-    // Consecutive frames yielding no number at all before giving up early.
-    // Measured against a photo with no display in it: the ceiling alone let
-    // the loop grind for 24s before stopping, which is a long time to stand
-    // holding a phone at nothing. Four unreadable frames in a row means the
-    // aim is wrong, not that the next one will be luckier.
-    MAX_BLANKS: 4,
+    // NO CEILING AND NO GIVE-UP, per Apsara 2026-08-27 ("time is something i
+    // can't compromise. i don't want hard cut"). An earlier version stopped
+    // after 10 uploads or 4 unreadable frames, which is the wrong shape: it
+    // abandons the read at the exact moment the operator is still standing
+    // there pointing at the scale, and makes them re-open the scanner to try
+    // again. A barcode scanner does not give up on you; neither does this.
+    //
+    // Cost is controlled by not uploading instead of by stopping. The local
+    // red-lit check means pointing at the ground, the sky or a truck sends
+    // nothing at all, and the interval backs off while nothing is readable,
+    // so an idle scanner left open is close to free without ever refusing to
+    // keep trying.
+    INTERVAL_MS: 650,       // while a display is in view and being read
+    IDLE_INTERVAL_MS: 1600, // once several frames running have yielded nothing
+    BACKOFF_AFTER: 3,       // unreadable frames before easing off the pace
+    NEEDED: 2,              // clean frames that must agree before locking
+    // Flagged agreement needs more corroboration than clean agreement, so a
+    // display that CAN be read cleanly gets several chances first. Not a
+    // give-up — reaching it is a result, and it is handed over with its
+    // warning intact.
+    NEEDED_FLAGGED: 3,
 };
 
 // Fraction of pixels in the crop that look like a lit red LED segment.
@@ -1729,6 +1741,15 @@ function scanLiveStatus(text, tone) {
     el.textContent = text;
 }
 
+// Changes the tick rate without restarting the session, so backing off never
+// discards the agreement tally built up so far.
+function setScanPace(ms) {
+    if (!scanLive.on || scanLive.pace === ms) return;
+    scanLive.pace = ms;
+    if (scanLive.timer) clearInterval(scanLive.timer);
+    scanLive.timer = setInterval(doScanLiveTick, ms);
+}
+
 function stopScanLive() {
     scanLive.on = false;
     if (scanLive.timer) { clearInterval(scanLive.timer); scanLive.timer = null; }
@@ -1737,24 +1758,25 @@ function stopScanLive() {
     scanLive.busy = false;
     scanLive.locked = false;
     scanLive.blanks = 0;
+    scanLive.pace = null;
 }
 
 async function doScanLiveTick() {
     if (!scanLive.on || scanLive.busy || scanLive.locked || !scanTarget) return;
-    if (scanLive.sent >= SCAN_LIVE.MAX_SENDS) {
-        scanLiveStatus('Could not settle on a number — hold steadier, or press Capture weight.', '');
-        stopScanLive();
-        return;
-    }
     const shot = cropScanFrame({ withCanvas: true });
     if (!shot) return;
     // On-device gate. A display fills a good part of the box with lit red; the
     // ground does not. Cheap, and it is why idle pointing costs nothing.
     const frac = shot.canvas ? litRedFraction(shot.canvas) : 1;
     if (frac < 0.012) {
+        // Not pointed at a display. Costs nothing, counts as nothing, and
+        // waits as long as it needs to — this is what makes "never give up"
+        // affordable rather than expensive.
+        setScanPace(SCAN_LIVE.IDLE_INTERVAL_MS);
         scanLiveStatus('Point at the scale display…', 'work');
         return;
     }
+    setScanPace(SCAN_LIVE.INTERVAL_MS);
     scanLive.busy = true;
     scanLive.sent += 1;
     try {
@@ -1786,7 +1808,7 @@ async function doScanLiveTick() {
             // something that is not going to improve, hand the number over
             // with its warning intact and let the operator decide. This is
             // the behaviour Apsara asked for — show it, flagged, editable.
-            if (rec.clean === 0 && rec.flagged >= SCAN_LIVE.NEEDED) {
+            if (rec.clean === 0 && rec.flagged >= SCAN_LIVE.NEEDED_FLAGGED) {
                 scanLive.locked = true;
                 const { row, roleKey } = scanTarget;
                 const statusEl = row.querySelector('.ld-item-status');
@@ -1825,15 +1847,20 @@ async function doScanLiveTick() {
                 return;
             }
             scanLive.blanks = 0;
+            setScanPace(SCAN_LIVE.INTERVAL_MS);
             scanLiveStatus(`Reading… ${w}?`, 'work');
         } else {
+            // Nothing readable this time. Keep going — the next frame has a
+            // different exposure and blur and is often the easier read — but
+            // ease the pace so an awkwardly-aimed phone is not uploading at
+            // full rate. Guidance changes; the scanner does not stop.
             scanLive.blanks += 1;
-            if (scanLive.blanks >= SCAN_LIVE.MAX_BLANKS) {
-                scanLiveStatus('No display found — move closer, or press Capture weight.', '');
-                stopScanLive();
-                return;
+            if (scanLive.blanks >= SCAN_LIVE.BACKOFF_AFTER) {
+                setScanPace(SCAN_LIVE.IDLE_INTERVAL_MS);
+                scanLiveStatus('Still looking — try moving a little closer.', 'work');
+            } else {
+                scanLiveStatus('Reading…', 'work');
             }
-            scanLiveStatus('Reading…', 'work');
         }
     } catch (err) {
         console.warn('[scanner] live tick failed:', err && err.message);
@@ -1845,6 +1872,7 @@ async function doScanLiveTick() {
 function startScanLive() {
     stopScanLive();
     scanLive.on = true;
+    scanLive.pace = SCAN_LIVE.INTERVAL_MS;
     scanLiveStatus('Point at the scale display…', 'work');
     scanLive.timer = setInterval(doScanLiveTick, SCAN_LIVE.INTERVAL_MS);
 }

@@ -988,15 +988,21 @@ function createApi() {
             // here and gets the unchanged full-locate behavior.
             const { extractWeightFromImage } = require('./helpers/gemini');
             // live: a tick from the continuous scanner, which will ask again
-            // in 700ms. A fast no beats a slow maybe there — the slow
-            // pipeline's whole value is squeezing an answer out of one image,
-            // and this caller has more images coming. Measured: without this,
-            // an unreadable frame cost 5.6s and ten of them took most of a
-            // minute before the scanner gave up.
+            // in well under a second.
+            //
+            // fastOnly rather than a shorter budget, deliberately. A budget is
+            // a hard cut — it abandons a read that is already running and can
+            // return a half-finished answer. fastOnly instead never STARTS the
+            // slow pipeline on a live frame, because that pipeline exists to
+            // wring an answer out of a single image and this caller has a
+            // stream of them. Nothing is interrupted; a frame that does not
+            // read quickly just yields nothing and the next one is read
+            // instead. Measured: unreadable frames cost 5.6s each on the full
+            // path, which is the entire reason live scanning felt slow.
             const result = await extractWeightFromImage(image_base64, mime_type, undefined, {
                 preCropped: !!pre_cropped,
                 extraFrames,
-                ...(live ? { budgetMs: 1800 } : {}),
+                ...(live ? { fastOnly: true } : {}),
             });
             res.json({ ok: true, ...result });
         } catch (err) {

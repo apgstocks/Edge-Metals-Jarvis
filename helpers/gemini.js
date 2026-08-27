@@ -2535,6 +2535,30 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
         } catch (err) {
             console.warn('[GEMINI] Scanner fast path failed, falling through:', err.message);
         }
+
+        // opts.fastOnly — the caller is reading the display continuously and
+        // another frame is already on the way.
+        //
+        // This is deliberately NOT a timeout. Nothing in flight gets cut off;
+        // the slow pipeline simply never starts, because its whole purpose is
+        // to wring an answer out of ONE image and this caller has a stream of
+        // them. Spending 5s rescuing a frame that will be replaced in 700ms is
+        // wasted work AND makes the scanner feel stuck — the frame after it
+        // has a different exposure and a different blur, and is usually the
+        // easier read anyway.
+        //
+        // Returns an empty read rather than throwing, so the live loop just
+        // treats it as "nothing this time" and carries on. No abandonment, no
+        // cut-off answer, no re-open.
+        if (opts.fastOnly) {
+            return {
+                weight: null, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                displays_seen: 'live frame — no confident read, waiting for the next frame',
+                raw_text: 'live scan frame produced nothing certain; the next frame will be read instead',
+                ambiguous: true,
+                fastOnlyMiss: true,
+            };
+        }
     }
 
     // Added 2026-08-11 to end a genuinely expensive class of confusion: the
