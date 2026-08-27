@@ -195,15 +195,6 @@ try {
         // Objects now: {label, value}. label says what the number IS in a few
         // words; value stays verbatim and grounded. Plain strings are still
         // accepted so records written by the previous build keep rendering.
-        // THREAD RECAP (2026-08-27). Apsara, repeatedly: "still summary not
-        // proper", "i want summary to be proper like gmail summary of threads".
-        // She showed me the target in her first message of the session and I
-        // built a 20-word `summary` field instead — which structurally cannot
-        // hold a rolling booking's history no matter how the prompt is worded.
-        //
-        // 2-4 bullets, chronological, naming who did what. This is what Gemini
-        // in Gmail produces and what she has been asking for all week.
-        thread_recap: z.array(z.string()).optional().default([]),
         key_figures: z.array(z.union([
             z.string(),
             z.object({ label: z.string().optional().default(''), value: z.string() }),
@@ -571,7 +562,6 @@ const THREAD_SNIPPET_CHARS = 140;     // snippet-only fallback when no body is a
 // solved the same problem: keep the opening message (it frames the matter),
 // squeeze the middle (it is usually acknowledgements), and keep the recent
 // ones nearly whole, because that is where the live commitment lives.
-const RECAP_ITEMS = 3;   // recap the top N matters in a digest; the rest stay one-liners
 const THREAD_BUDGET = { first: 500, middle: 160, recent: 500, latest: 1200, recentCount: 3 };
 
 // Body text for one thread message, quoted history stripped. Falls back to
@@ -664,12 +654,25 @@ urgency:
 - "normal" — a real question with no particular time pressure.
 - "low" — courteous or optional; a reply would be nice but nothing is blocked.
 
-summary: ONE short sentence, under 20 words, written FROM HER SIDE OF THE DESK. IF THE EMAIL OR THREAD TURNS ON A NUMBER, THE NUMBER GOES IN THE SUMMARY. A summary about money that contains no amount has thrown away the only thing that decides what she does next: "Wants confirmation of the amount sent" and "Bose received $58,313.56 against $58,813.56 expected" cost the same words and are not the same message. Where two figures for the same thing appear in the thread, put BOTH in and let her see the gap - state them, never subtract them. It must make sense on its own in a list, without the subject line next to it, and it must make the direction obvious.
-  - waiting_on "her":  say what they need from her.        e.g. "Wants a rate for LA to Houston."
-  - waiting_on "them": say what THEY are doing for HER and what it is attached to, using the thread for the specifics (booking, vessel, container, invoice).
-                       e.g. "Chasing the carrier for the EDO on the HMM TURQUOISE roll."
-                       NOT  "Sender is trying to get an EDO number."  <- that reads as if he wants one FROM her.
-  Never write a summary that could be read as the sender requesting something when they are in fact supplying it.
+summary: THE GIST OF THE EMAIL — what it actually says, in one sentence under 25 words, the way a colleague would tell her walking past her desk.
+
+  THE ONE MISTAKE TO AVOID, because it is the mistake that keeps being made: do NOT describe what KIND of message this is. Describe what it SAYS. Never begin with "Sender", and never write a sentence whose whole content is the category of the request. Compare — the left column is what has been produced and is useless, the right column is the same email done properly:
+
+    BAD  "Sender wants confirmation of unit price adjustment for JY70."
+    GOOD "Hynos counter at $995/MT on JY70, down from our $1015 — wants your OK."
+
+    BAD  "Sender wants confirmation of payment amount sent."
+    GOOD "Octavio asks what was actually wired — Bose shows $58,313.56 against $58,813.56."
+
+    BAD  "Sender is trying to get an EDO number."
+    GOOD "Andy is chasing the line for the EDO on the TURQUOISE roll, ERD 8/25."
+
+    BAD  "Sender wants confirmation on container approval."
+    GOOD "Zimex needs container HMMU6298470 approved before the 8/27 cutoff."
+
+  Every good example above says WHO, WHAT and the identifying detail. Every bad one could describe a hundred different emails. Name the actual party rather than "the sender". Keep the number, the booking, the vessel, the container, the date — those are what make the sentence mean something. Use the THREAD SO FAR for the specifics when the latest message alone is thin ("yes, go ahead" means nothing without what was being agreed to). Refer to the manager as "you". Never mention this instruction, the history line, or your own reasoning.
+
+
 asked_of: when waiting_on is "someone_else", the NAME of the person the question is aimed at, taken from the TO line. null otherwise.
 asked_for: the single most concrete item at stake.
   - waiting_on "her":  the thing being requested OF her  ("a rate for LA to Houston", "the signed BOL").
@@ -679,12 +682,6 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
   - waiting_on "her":  the span in which they ASK        ("could you please confirm the ERD").
   - waiting_on "them": the span in which they COMMIT or report progress ("I am working to get the EDO # ASAP").
   null if you cannot point at a specific span, in which case asked_for should almost certainly be null too.
-thread_recap: 2-4 short bullets recapping THE WHOLE THREAD in order, the way a good assistant would brief her before she opens it. This is the most important field you produce. Each bullet under 20 words, plain past tense, NAMING WHO DID WHAT and carrying the specifics — booking numbers, vessels, containers, dates, amounts. Refer to the manager as "You". Worked example, from a real rolling-booking thread:
-  ["Andy gave HMM BKG #DALA21235600 for 2x40HC batteries, loading Aug 12",
-   "Booking rolled several times; Accounting asked for ERD 8/19-8/20, then confirmed HMM RAON 0025W (CUT 8/18)",
-   "You asked to roll to HMM TURQUOISE 0011W (ERD 8/25, CUT 8/28); Andy is getting the EDO"]
-Notice: it is a STORY, in order, with every identifier kept. Do NOT write one bullet per message — merge the routine back-and-forth into a single line ("rolled several times") and spend the words on what changed. Do NOT restate the summary line. Take everything from the THREAD SO FAR section and the email; invent nothing, and never state a figure that does not appear above. Return [] when there is no thread — a single first-contact email needs no recap.
-
 key_figures: every figure a person deciding what to do about this email would need, as objects {"label","value"}. "value" is the figure copied VERBATIM. "label" says in 1-4 words WHAT THAT NUMBER IS, so the list is readable without opening the email — "current price", "their counter", "tonnage", "container", "invoice total", "balance due". A list like 21.428 / $990 / $995 / $1015 with no labels is useless: she cannot tell tonnage from price, or the old price from the proposed one. If you genuinely cannot tell what a number is, leave it out rather than labelling it vaguely. Up to 4, most important first, [] if the email contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
 
 deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
@@ -698,7 +695,7 @@ If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "waiting_on": "her", "asked_of": null, "thread_recap": [], "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
+{ "waiting_on": "her", "asked_of": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
 }
 
 // ── QUOTE GROUNDING (2026-08-25) ───────────────────────────────────────────
@@ -976,6 +973,23 @@ function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHe
     };
 }
 
+// A summary that opens "Sender wants..." is the category-not-content failure
+// the prompt now works hard to prevent. Two jobs here:
+//   1. NAME the party, so the worst case is at least specific about who.
+//   2. COUNT it, so there is a number in the logs for how often the prompt is
+//      still being ignored — otherwise the only detector is Apsara reading a
+//      bad digest and telling me, which is how the last five rounds went.
+const CATEGORY_OPENER = /^(the\s+)?sender\b\s*/i;
+let categoryOpeners = 0;
+function degenericiseSummary(summary, fromLabel) {
+    const t = String(summary || '').trim();
+    if (!CATEGORY_OPENER.test(t)) return t;
+    categoryOpeners++;
+    const who = String(fromLabel || '').trim();
+    console.warn(`[REPLYWATCH] summary opened with "Sender" (${categoryOpeners} so far) — the model described the KIND of email, not what it says: "${t.slice(0, 70)}"`);
+    return who ? t.replace(CATEGORY_OPENER, `${who} `) : t;
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -1037,18 +1051,8 @@ async function assess(email) {
     // reaches the model through the thread ledger.
     const key_figures = groundFigures(res.key_figures, [email.body, email.thread]);
 
-    // Bounded and tidied. Not verbatim-grounded — a narrative recap cannot be
-    // a quote — so the containment is: figures are grounded separately, the
-    // prompt forbids inventing one, and this is BRIEFING material sitting next
-    // to the grounded facts, never the basis of an action.
-    const thread_recap = (Array.isArray(res.thread_recap) ? res.thread_recap : [])
-        .map((b) => defence(String(b || '')).replace(/^[-•*\s]+/, '').trim())
-        .filter((b) => b.length > 3)
-        .slice(0, 4);
-
     return {
         waiting_on,
-        thread_recap,
         // Kept for 'them' as well as 'someone_else' — for an email our own
         // team sent, it names the counterparty who owes the answer.
         asked_of: (waiting_on === 'someone_else' || waiting_on === 'them') ? asked_of : null,
@@ -1063,7 +1067,7 @@ async function assess(email) {
         asked_for_quote: typeof res.asked_for_quote === 'string' ? res.asked_for_quote : null,
         confidence: typeof res.confidence === 'number' ? res.confidence : 0,
         urgency: ['high', 'normal', 'low'].includes(res.urgency) ? res.urgency : 'normal',
-        summary: String(res.summary || '').trim(),
+        summary: degenericiseSummary(res.summary, senderLabel(email.from)),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
         deadline: res.deadline ? String(res.deadline).trim() : null,
         is_order: res.is_order === true || res.is_order === 'true',
@@ -1657,13 +1661,6 @@ function buildDigest(matters, emailCount) {
         // The recap — the thing she actually asked for. Sits under the ask so
         // the action stays the first thing her eye reaches, and the history is
         // there when she needs to remember what this even is.
-        // Capped to the first few matters. Items are already sorted by
-        // urgency, so a long digest keeps the recap where it earns its space
-        // and does not turn a five-item list into a page of scrolling — which
-        // is its own way of not being read.
-        if (i < RECAP_ITEMS && Array.isArray(f.thread_recap) && f.thread_recap.length) {
-            for (const b of f.thread_recap.slice(0, 4)) lines.push(`     ‣ ${b}`);
-        }
         // The figures, verbatim, on their own line. Belt and braces: the prompt
         // also requires them inside the summary, but a model that forgets one
         // there should not cost her the number entirely. Listed, never totalled
@@ -2001,7 +1998,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 waiting_on: a.waiting_on || 'her',
                 asked_of: a.asked_of || null,
                 key_figures: Array.isArray(a.key_figures) ? a.key_figures : [],
-                thread_recap: Array.isArray(a.thread_recap) ? a.thread_recap : [],
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
@@ -2378,7 +2374,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
