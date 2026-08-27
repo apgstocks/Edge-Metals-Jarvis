@@ -335,8 +335,13 @@ section('"put a reminder in internal group" + "if a reply is sent alrdy, cancel"
         const msg = rw.buildDeadlineMessage([
             mk('Monday Noon', 'Transfer cargo to RadMetals', 'brian@radmetals.com', 'brian@radmetals.com', 't1'),
         ]);
+        // Deadline rendering changed 2026-08-27: a RELATIVE word is no longer
+        // echoed back (live output read "tomorrow tomorrow"), and an absolute
+        // one is parenthesised. Apsara's actual requirement — the task on the
+        // SAME line as the deadline, not the line below — is what this pins,
+        // and it is unchanged.
         ckTrue('the description sits on the deadline line, not the next one',
-            /TODAY Monday Noon\* — Transfer cargo to RadMetals/.test(msg),
+            /TODAY \(Monday Noon\)\* — Transfer cargo to RadMetals/.test(msg),
             'the task is the headline; the deadline is context for it');
         ckTrue('the description is NOT on its own line',
             !/\n\s+Transfer cargo to RadMetals/.test(msg));
@@ -395,8 +400,10 @@ section('"put a reminder in internal group" + "if a reply is sent alrdy, cancel"
     {
         // Overdue must stay unmistakable now that the line is denser.
         const msg = rw.buildDeadlineMessage([mk('8/20', 'send the BL draft', 'Zimex', 'ops@zimex.com', 't7', -3)]);
+        // Same rendering change: days-late now leads (it is the fact that
+        // matters and it cannot go stale), with the sender's own date after it.
         ckTrue('overdue still reads as overdue, with the task beside it',
-            /OVERDUE 8\/20 \(3d ago\)\* — send the BL draft/.test(msg));
+            /OVERDUE by 3d \(8\/20\)\* — send the BL draft/.test(msg), msg);
     }
 }
 
