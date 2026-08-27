@@ -258,6 +258,48 @@ function expectedWeightDigits() {
     return Number(process.env.EXPECTED_WEIGHT_DIGITS) || null;
 }
 
+// ⚠ WHY EXPECTED_WEIGHT_DIGITS IS STILL OFF BY DEFAULT (measured 2026-08-27).
+// It is tempting to just set it to 4 and be done: on the 10-photo Socome
+// corpus that alone moves the scanner from 6/10 to 8/10. Do NOT do that
+// globally. This function is shared by BOTH capture paths, and the yard has
+// two displays with different digit counts — the 4-digit Socome indicator
+// (3475, 4210, ...) and the 5-digit weighbridge, whose real confirmed
+// readings are recorded at the top of this file (71920, 81460, 81528,
+// ~87520). With expDigits=4 the rightmost-N rule turns a true 81460 into
+// 1460, silently and unflagged, which is the single worst failure this file
+// can produce. The env var stays opt-in for a single-scale yard.
+//
+// Instead, the ghost prefix is resolved by CORROBORATION: the scanner gate
+// already runs Gemini over the identical crop in parallel, and on exactly
+// the photos where Vision keeps a ghost digit, Gemini reads the true value
+// (measured: Vision 83475 / Gemini 3475, Vision 83939 / Gemini 3939). So
+// this function now also reports the alternative readings a ghost strip
+// would produce, and the caller accepts one only when the second engine
+// independently landed on it. That needs no configuration and cannot
+// truncate a genuine 5-digit weighbridge reading, because 81460 is only
+// ever replaced by 1460 if Gemini also said 1460.
+const GHOST_PREFIX_CHARS = /^[890.]+$/;
+
+// The readings a leading-ghost strip would yield, with a note on whether the
+// removed prefix actually looks like ghost contamination. The Socome
+// indicator holds two cells permanently lit as "8.8.", and every ghost case
+// observed here has been a leading 8, 9 or 0 — so a prefix of "88", "98" or
+// "8." is corroboration-eligible, while stripping a "4" off a real 4896 is
+// not. Purely additive: callers that only read .weight are unaffected.
+function ghostStripCandidates(longest) {
+    const out = [];
+    if (!longest) return out;
+    for (let strip = 1; strip <= 3 && strip < longest.length; strip++) {
+        const prefix = longest.slice(0, strip);
+        const suffix = longest.slice(strip);
+        const val = parseFloat(suffix);
+        if (!Number.isFinite(val)) continue;
+        if (val < PLAUSIBLE_LOAD_WEIGHT_MIN || val > PLAUSIBLE_LOAD_WEIGHT_MAX) continue;
+        out.push({ value: val, prefix, ghostLike: GHOST_PREFIX_CHARS.test(prefix) });
+    }
+    return out;
+}
+
 // Returns { weight, ambiguous, candidates } instead of a bare number so the
 // caller can decide how much to trust it. `ambiguous: true` means more than
 // one number in the photo fell inside the plausible load-weight range (e.g.
@@ -392,7 +434,15 @@ function extractWeightNumberFromCrop(rawText) {
         const v = parseFloat(m);
         return Number.isFinite(v) && v >= PLAUSIBLE_LOAD_WEIGHT_MIN && v <= PLAUSIBLE_LOAD_WEIGHT_MAX;
     });
-    if (inRange.length === 1) return { weight: parseFloat(inRange[0]), viaLeadingStrip: false };
+    // candidates is attached even on a CLEAN in-range read, because a ghost
+    // digit does not always push the number out of range: "83475" is a
+    // perfectly plausible weight on its face, so it is returned here as a
+    // confident match and the true 3475 never gets considered. Reporting the
+    // alternatives lets the caller notice when the second engine read the
+    // shorter one. Nothing changes unless that corroboration exists.
+    if (inRange.length === 1) {
+        return { weight: parseFloat(inRange[0]), viaLeadingStrip: false, candidates: ghostStripCandidates(inRange[0]) };
+    }
 
     if (inRange.length > 1) {
         // Bug found + fixed 2026-08-11 via a real live crop from a
@@ -408,7 +458,7 @@ function extractWeightNumberFromCrop(rawText) {
         // the longest among the IN-RANGE candidates only, so an
         // implausible number can never win purely by being a longer string.
         const longestInRange = inRange.reduce((a, b) => (b.length > a.length ? b : a));
-        return { weight: parseFloat(longestInRange), viaLeadingStrip: false };
+        return { weight: parseFloat(longestInRange), viaLeadingStrip: false, candidates: ghostStripCandidates(longestInRange) };
     }
 
     const longest = allCandidates.reduce((a, b) => (b.length > a.length ? b : a));
@@ -458,7 +508,7 @@ function extractWeightNumberFromCrop(rawText) {
             const val = parseFloat(suffix);
             if (Number.isFinite(val) && val >= PLAUSIBLE_LOAD_WEIGHT_MIN && val <= PLAUSIBLE_LOAD_WEIGHT_MAX) {
                 console.warn(`[VISION-OCR] Crop read "${longest}" isn't a plausible weight, but stripping ${strip} leading digit(s) gives "${suffix}" — using that, flagged as lower-confidence (dead/ghost LED cell contamination has been on the left edge in every case seen so far, but is not guaranteed to be — see caveat above)`);
-                return { weight: val, viaLeadingStrip: true };
+                return { weight: val, viaLeadingStrip: true, candidates: ghostStripCandidates(longest) };
             }
         }
     }

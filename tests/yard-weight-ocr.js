@@ -1,0 +1,125 @@
+// ── tests/yard-weight-ocr.js ────────────────────────────────────────────────
+// Covers the 2026-08-27 scanner fix: the yard display's permanently-lit
+// leading cells ("8.8.") were being read as real digits, so a true 3475 was
+// published as 83475 — in range, plausible, and therefore confident.
+//
+// The dangerous part of this fix is not the ghost handling, it is everything
+// it must NOT do. This yard has TWO displays: the 4-digit Socome indicator
+// and the 5-digit weighbridge, whose real confirmed readings (71920, 81460,
+// 81528, ~87520) start with the same 8 that the ghost cell produces. Any rule
+// that turns "83475" into "3475" is one bad condition away from turning a
+// genuine 81460 into 1460 — silently, and unflagged, which is the single
+// worst thing this pipeline can do. Most of the assertions below exist to
+// pin that down, not to prove the happy path.
+//
+// Pure functions only: no network, no API keys, no fixtures. The end-to-end
+// accuracy number (8/10 on the Socome corpus) is measured separately against
+// real photos; this suite guards the decision logic that produced it.
+const assert = require('assert');
+const visionOcr = require('../helpers/visionOcr');
+
+let pass = 0, fail = 0;
+const failures = [];
+function ck(name, cond) {
+    if (cond) { pass++; console.log('  PASS  ' + name); }
+    else { fail++; failures.push(name); console.log('  FAIL  ' + name); }
+}
+function section(t) { console.log('\n=== ' + t + ' ==='); }
+
+// Mirrors the corroboration rule in the scanner gate in helpers/gemini.js.
+// Restated here rather than imported because importing gemini.js pulls in the
+// whole model client; if the two ever drift, the end-to-end corpus run is the
+// tie-breaker.
+function gateAccepts(visionResult, geminiWeight) {
+    if (visionResult.weight != null && geminiWeight != null && visionResult.weight === geminiWeight) {
+        return { accepted: geminiWeight, reason: 'exact agreement' };
+    }
+    // Note the viaLeadingStrip condition — it is the load-bearing part.
+    if (visionResult.viaLeadingStrip && visionResult.weight != null && geminiWeight != null && visionResult.weight !== geminiWeight) {
+        const c = (visionResult.candidates || []).find((x) => x.ghostLike && x.value === geminiWeight);
+        if (c) return { accepted: geminiWeight, reason: `ghost prefix "${c.prefix}"` };
+    }
+    return { accepted: null, reason: 'flagged for review' };
+}
+
+section('the ghost cases that were being published wrong');
+{
+    // Vision's actual raw text on these two photos, with the true weights.
+    const r = visionOcr.extractWeightNumberFromCrop('883475');
+    ck('883475 alone still resolves to the in-range 83475 (Vision cannot tell on its own)', r && r.weight === 83475);
+    ck('...but reports 3475 as a ghost-strip candidate', !!(r.candidates || []).find((c) => c.value === 3475));
+    ck('...and marks the "88" prefix as ghost-like', !!(r.candidates || []).find((c) => c.value === 3475 && c.ghostLike));
+    ck('gate accepts 3475 once Gemini corroborates it', gateAccepts(r, 3475).accepted === 3475);
+
+    const r2 = visionOcr.extractWeightNumberFromCrop('983939');
+    ck('983939 offers 3939 as a ghost-like candidate', !!(r2.candidates || []).find((c) => c.value === 3939 && c.ghostLike));
+    ck('gate accepts 3939 once Gemini corroborates it', gateAccepts(r2, 3939).accepted === 3939);
+
+    const r3 = visionOcr.extractWeightNumberFromCrop('8.3599');
+    ck('8.3599 resolves to 3599 by the existing strip', r3 && r3.weight === 3599);
+}
+
+section('the 5-digit weighbridge must not collapse');
+{
+    // Every one of these is a REAL reading confirmed at this yard.
+    for (const real of [71920, 81460, 81528, 87520]) {
+        const r = visionOcr.extractWeightNumberFromCrop(String(real));
+        ck(`${real} reads as itself`, r && r.weight === real);
+        ck(`${real} is NOT silently shortened when Gemini agrees`, gateAccepts(r, real).accepted === real);
+        // The nightmare: Gemini misreads and drops the leading digit. The gate
+        // may only follow it if it genuinely corroborates — and it must never
+        // publish the short number as CLEAN when the two disagree by more than
+        // a ghost cell.
+        // THE case this fix could have broken. Vision reads the weighbridge
+        // correctly and CLEANLY; Gemini drops the leading digit. Because that
+        // leading digit is an 8 on three of these four, a naive ghost rule
+        // would call it corroboration and publish the short number as
+        // confident. It must flag instead — a clean Vision read can only be
+        // overturned by exact agreement.
+        const shortened = Number(String(real).slice(1));
+        ck(`${real} is NOT collapsed to ${shortened} when Gemini drops the leading digit`,
+            gateAccepts(r, shortened).accepted === null);
+    }
+}
+
+section('EXPECTED_WEIGHT_DIGITS is not required, and is not safe to default');
+{
+    const saved = process.env.EXPECTED_WEIGHT_DIGITS;
+    delete process.env.EXPECTED_WEIGHT_DIGITS;
+    const r = visionOcr.extractWeightNumberFromCrop('883475');
+    ck('ghost candidates are produced with the env var OFF', !!(r.candidates || []).length);
+    ck('the fix does not depend on the env var', gateAccepts(r, 3475).accepted === 3475);
+
+    // Demonstrates WHY it is left off: with it set to 4, the rightmost-N rule
+    // takes the tail of a genuine 5-digit weighbridge reading.
+    process.env.EXPECTED_WEIGHT_DIGITS = '4';
+    const bad = visionOcr.extractWeightNumberFromCrop('881460');
+    ck('with the env var set to 4, a ghosted 81460 is truncated to 1460 — documented hazard, hence the default is off',
+        bad && bad.weight === 1460);
+    if (saved === undefined) delete process.env.EXPECTED_WEIGHT_DIGITS;
+    else process.env.EXPECTED_WEIGHT_DIGITS = saved;
+}
+
+section('a real misread is still flagged, not rescued');
+{
+    // True 4146, Vision read 4896, Gemini read 886. Neither engine is right
+    // and the gate must not manufacture agreement out of them.
+    const r = visionOcr.extractWeightNumberFromCrop('4896');
+    ck('4896 reads as 4896', r && r.weight === 4896);
+    ck('stripping the "4" off 4896 is NOT ghost-eligible', !(r.candidates || []).find((c) => c.value === 896 && c.ghostLike));
+    ck('gate flags rather than accepting Gemini\'s 886', gateAccepts(r, 886).accepted === null);
+    ck('gate flags rather than accepting a stripped 896', gateAccepts(r, 896).accepted === null);
+}
+
+section('plausibility bounds still hold');
+{
+    const r = visionOcr.extractWeightNumberFromCrop('100000.1 80720');
+    ck('the capacity rating 100000.1 cannot beat the in-range 80720 by being longer', r && r.weight === 80720);
+    ck('nothing below the 200 lb floor becomes a candidate',
+        !(visionOcr.extractWeightNumberFromCrop('8899').candidates || []).find((c) => c.value < 200));
+}
+
+console.log('\n================================================================');
+console.log(`${pass} passed, ${fail} failed`);
+if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log('  - ' + f)); }
+process.exit(fail ? 1 : 0);

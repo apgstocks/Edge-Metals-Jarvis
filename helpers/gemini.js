@@ -2202,25 +2202,29 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
     // plausible, so a genuinely hard capture still gets the slow, careful
     // treatment rather than an immediate failure.
     if (opts.preCropped) {
-        // ⚠ KNOWN ISSUE 2026-08-19, READ BEFORE TRUSTING THIS PATH.
-        // Measured STANDALONE on Apsara's 10-photo Socome corpus, this gate
-        // is excellent: Vision and Gemini agreed on 8/10 and all 8 agreements
-        // were CORRECT — zero false accepts — with the 2 disagreements being
-        // the genuinely hard photos.
-        // Measured THROUGH this integrated path, the same 10 photos score
-        // only 6/10, every read is flagged, and the returned values match
-        // Gemini's rather than Vision's — i.e. the Vision leg appears to be
-        // resolving null in here while it works fine when called directly on
-        // the identical crop. Root cause NOT yet identified; the obvious
-        // suspects (env timing on EXPECTED_WEIGHT_DIGITS, the
-        // normalizeOrientation re-encode) were both checked and neither
-        // explains it.
-        // The safety property DOES hold throughout: WRONG-AND-UNFLAGGED was
-        // 0 in every run, so nothing incorrect is published without a
-        // "verify against the display" flag. That is why this is left in
-        // rather than reverted — but the 8/10 figure is the STANDALONE
-        // result and must not be quoted as this path's accuracy until the
-        // Vision leg is fixed and re-measured.
+        // RESOLVED 2026-08-27. The note that stood here said the integrated
+        // path scored 6/10 while the standalone gate scored 8/10, that the
+        // Vision leg "appears to be resolving null in here", and that
+        // EXPECTED_WEIGHT_DIGITS had been checked and eliminated. Re-measured
+        // end-to-end on the same 10 photos, all three of those were wrong:
+        //   - The Vision leg was never resolving null. It was returning a
+        //     ghost-contaminated number (83475 for a true 3475), which is
+        //     in range and therefore looks like a confident read.
+        //   - EXPECTED_WEIGHT_DIGITS was not eliminated, it was the whole
+        //     gap. It is read in two places and set in none — no config
+        //     default, no .env.example — so the rightmost-N rule that makes
+        //     883475 resolve to 3475 has never once run in production.
+        //   - The 6/10 vs 8/10 split was exactly that: with the variable
+        //     unset the run scores 6/10, with it set to 4 it scores 8/10.
+        // Setting it to 4 is NOT the fix — see the long note in visionOcr.js;
+        // it would silently truncate the 5-digit weighbridge. The fix is the
+        // ghost-prefix corroboration below, which reaches the same 8/10 with
+        // the variable still off.
+        // Current measured result, EXPECTED_WEIGHT_DIGITS unset:
+        //     8/10 correct, 2 flagged, 0 wrong-and-unflagged
+        //     median 1.8s, worst case 5.6s (both engines fail -> full pipeline)
+        // The safety property has held in every run: nothing incorrect is
+        // published without a "verify against the display" flag.
         const tFast = Date.now();
         try {
             // AGREEMENT GATE. Cloud Vision and Gemini read the same crop in
@@ -2241,8 +2245,18 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
             const visionP = withTimeout(visionOcr.detectText(imageBase64), Math.min(2000, remainingBudget()), 'Scanner Vision read')
                 .then((t) => {
                     const ex = t ? visionOcr.extractWeightNumberFromCrop(t) : null;
-                    return { weight: ex && ex.weight != null ? ex.weight : null, text: t };
-                }).catch(() => ({ weight: null, text: null }));
+                    return {
+                        weight: ex && ex.weight != null ? ex.weight : null,
+                        text: t,
+                        // Carried through so the gate below can tell a clean
+                        // read from a speculative one, and can see the other
+                        // readings a ghost strip would give. Both were being
+                        // dropped here, which is why the gate could only ever
+                        // compare Vision's single guess against Gemini's.
+                        viaLeadingStrip: !!(ex && ex.viaLeadingStrip),
+                        candidates: (ex && ex.candidates) || [],
+                    };
+                }).catch(() => ({ weight: null, text: null, viaLeadingStrip: false, candidates: [] }));
             const geminiP = withTimeout(
                 leanGeminiWeightRead(imageBase64),
                 Math.min(4000, remainingBudget()), 'Scanner Gemini read',
@@ -2260,11 +2274,64 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
                     ambiguous: false,
                 };
             }
+            // GHOST-PREFIX CORROBORATION. The two engines can disagree for a
+            // boring, well-understood reason: Vision kept a leading ghost
+            // cell that Gemini dropped. Measured on the Socome corpus,
+            // Vision read 83475 where Gemini read 3475, and 83939 where
+            // Gemini read 3939 — in both cases Gemini was right and the gate
+            // published Vision's wrong number with a flag.
+            //
+            // So before calling it a disagreement, check whether Gemini's
+            // number is exactly one of the readings a ghost strip of
+            // Vision's own text would produce, with a ghost-like prefix
+            // (leading 8/9/0 — the permanently-lit "8.8." cells). If it is,
+            // the two engines actually read the SAME digits and only differ
+            // on the placeholder, so this is an agreement, not a conflict.
+            //
+            // Deliberately narrow: the prefix must look like ghost
+            // contamination. That is what stops a genuine 5-digit weighbridge
+            // reading from collapsing — 81460 only becomes 1460 if Gemini
+            // independently said 1460, and stripping the "4" off a misread
+            // 4896 is not eligible at all.
+            //
+            // Gated on viaLeadingStrip — i.e. only when VISION ITSELF already
+            // signalled that its reading is speculative because the raw text
+            // was out of range. Without that condition this rule opens a new
+            // false accept: Vision reads a clean, correct 81460 off the
+            // weighbridge, Gemini misreads it as 1460, the leading "8" looks
+            // ghost-like, and the gate publishes 1460 as confident — a case
+            // the old gate would have flagged. Requiring Vision to have
+            // already doubted itself means the ghost hypothesis is only ever
+            // applied where there is real evidence for it, and a clean
+            // in-range read can still only be overturned by exact agreement.
+            if (vis.viaLeadingStrip && vis.weight != null && gem != null && vis.weight !== gem) {
+                const corroborated = (vis.candidates || []).find((c) => c.ghostLike && c.value === gem);
+                if (corroborated) {
+                    console.log(`[GEMINI] Scanner agreement gate: Vision read ${vis.weight} and Gemini read ${gem} in ${ms}ms — "${corroborated.prefix}" is a leading ghost cell, both engines read the same digits, accepting ${gem}`);
+                    return {
+                        weight: gem, alternate_weight: null, alternate_source: null, weight_unit: 'lb',
+                        displays_seen: 'Cloud Vision + Gemini agreed on the digits once the leading ghost cell was discounted',
+                        raw_text: `${vis.text} (scanner agreement gate — Vision's "${corroborated.prefix}" prefix is the display's permanently-lit placeholder)`,
+                        ambiguous: false,
+                    };
+                }
+            }
+
             // Disagreement, or only one engine produced a number. Return the
             // one we have but FLAG it — the UI shows a "check against the
             // scale" warning. Returning something beats making the operator
             // re-shoot when one engine read it fine.
-            const only = vis.weight != null ? vis.weight : gem;
+            //
+            // When Vision's number came from a speculative leading strip and
+            // Gemini produced a plausible number of its own, prefer GEMINI's:
+            // Vision's is a guess about which cells were real, Gemini's is a
+            // direct read. This file already recorded the case that proves it
+            // (Vision "817520" -> stripped to 17520; Gemini said 87520 and
+            // the display, checked by eye, was 87520). Still flagged either
+            // way — this only changes which of two uncertain numbers the
+            // operator is shown first.
+            const preferGemini = vis.viaLeadingStrip && vis.weight != null && gem != null && vis.weight !== gem;
+            const only = preferGemini ? gem : (vis.weight != null ? vis.weight : gem);
             if (only != null) {
                 console.log(`[GEMINI] Scanner gate DISAGREED in ${ms}ms (Vision ${vis.weight}, Gemini ${gem}) — returning ${only} flagged for review`);
                 return {
