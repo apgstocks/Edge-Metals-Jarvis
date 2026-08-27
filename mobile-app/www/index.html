@@ -130,6 +130,19 @@ input::placeholder { color:var(--steel-500); }
 }
 #scanBox::before { top:-2px; left:-2px; border-right:none; border-bottom:none; border-radius:4px 0 0 0; }
 #scanBox::after { bottom:-2px; right:-2px; border-left:none; border-top:none; border-radius:0 0 4px 0; }
+/* Left-edge start marker — added 2026-08-27.
+   The written hint below the box has said "leave out the dim 8.8. cells"
+   since the scanner shipped, and 3 of the 9 real captures still contain
+   them. That is not the operator ignoring it; a sentence is the wrong tool
+   for an aiming problem at arm's length in a yard. What was missing is a
+   REFERENCE to line the first digit against, so this turns "read and
+   remember an instruction" into "put the digit next to the arrow".
+   Purely an overlay: it changes nothing about what is captured, so a
+   misaligned shot still falls through to the same software handling. */
+#scanStart { position:absolute; pointer-events:none; display:flex; flex-direction:column; align-items:center; gap:3px; }
+#scanStartBar { width:4px; border-radius:2px; background:var(--leaf-300); box-shadow:0 0 0 1px rgba(0,0,0,.55), 0 0 10px rgba(0,0,0,.5); }
+#scanStartLabel { font-family:var(--font-mono); font-size:9.5px; font-weight:700; letter-spacing:.09em; color:#fff; background:rgba(0,0,0,.72); border-radius:3px; padding:2px 5px; white-space:nowrap; }
+#scanGhostTag { position:absolute; pointer-events:none; font-family:var(--font-mono); font-size:10px; font-weight:700; color:#fff; background:rgba(190,60,60,.85); border-radius:3px; padding:2px 6px; white-space:nowrap; text-decoration:line-through; }
 #scanHint { position:absolute; left:0; right:0; text-align:center; color:#fff; font-family:var(--font-sans); font-size:13px; line-height:1.45; text-shadow:0 1px 4px rgba(0,0,0,.9); padding:0 24px; pointer-events:none; }
 #scanFoot { padding:16px 20px calc(16px + env(safe-area-inset-bottom, 0px)); background:#0C0E10; display:flex; align-items:center; gap:12px; }
 #scanShutter { flex:1; padding:15px; font-size:14px; font-weight:700; }
@@ -605,7 +618,9 @@ body { overflow-y:auto; }
     <div class="scan-shade" id="scanShadeLeft"></div>
     <div class="scan-shade" id="scanShadeRight"></div>
     <div id="scanBox"></div>
-    <div id="scanHint">Fit ONLY the weight digits in the box.<br>Leave out the dim <b>8.8.</b> cells on the left — they are not part of the weight.</div>
+    <div id="scanStart"><div id="scanStartBar"></div><div id="scanStartLabel">1ST DIGIT</div></div>
+    <div id="scanGhostTag">8.8.</div>
+    <div id="scanHint">Line the <b>first weight digit</b> up against the green bar.<br>The dim <b>8.8.</b> cells stay to its left, outside the box.</div>
   </div>
   <div id="scanErr"></div>
   <div id="scanFoot">
@@ -1626,6 +1641,28 @@ function layoutScanBox() {
   set('scanShadeBottom', { left:'0px', top:`${by + bh}px`, width:`${W}px`, height:`${Math.max(0, H - by - bh)}px` });
   set('scanShadeLeft',   { left:'0px', top:`${by}px`, width:`${bx}px`, height:`${bh}px` });
   set('scanShadeRight',  { left:`${bx + bw}px`, top:`${by}px`, width:`${Math.max(0, W - bx - bw)}px`, height:`${bh}px` });
+  // Start marker, sitting ON the box's left edge — the reference the first
+  // real digit gets lined up against — with the "8.8." tag just outside it
+  // showing where the placeholder cells belong. Positioned here rather than
+  // in CSS because only this function knows the computed box geometry, and
+  // it already re-runs on resize and orientation change.
+  const startBar = $('scanStart');
+  if (startBar) {
+    Object.assign(startBar.style, { left: `${bx - 2}px`, top: `${by}px`, height: `${bh}px` });
+    const bar = $('scanStartBar');
+    if (bar) bar.style.height = `${Math.max(0, bh - 18)}px`;
+  }
+  const ghostTag = $('scanGhostTag');
+  if (ghostTag) {
+    // Right-aligned to just left of the box, so it reads as "this bit stays
+    // out here". Clamped to 0 so it can never sit off-screen on a narrow
+    // viewport where the box nearly fills the width.
+    const tagW = 34;
+    Object.assign(ghostTag.style, {
+      left: `${Math.max(2, bx - tagW - 10)}px`,
+      top: `${by + Math.round(bh / 2) - 8}px`,
+    });
+  }
   $('scanHint').style.top = `${by + bh + 14}px`;
   return { bx, by, bw, bh, W, H };
 }
