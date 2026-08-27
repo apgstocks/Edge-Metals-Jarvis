@@ -802,6 +802,124 @@ section('I4 — figures say what they are');
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// J. THE DRAIN. "+47 older items still open" was never 47 things she was
+//    behind on — it was a queue with no exit. hasSheReplied asks bose@'s
+//    thread copy, but her replies are sent from apsara@ and never land there.
+// ══════════════════════════════════════════════════════════════════════════
+
+// A fake Gmail client: listMessages/getMessage only touch users.messages.*
+const fakeGmail = (msgs) => ({
+    _queries: [],
+    users: {
+        messages: {
+            list: async function ({ q }) { this._q = q; fakeGmail._lastQuery = q; return { data: { messages: msgs.map((m) => ({ id: m.id })) } }; },
+            get: async ({ id }) => ({ data: msgs.find((m) => m.id === id) }),
+        },
+    },
+});
+const sentMsg = (id, to, cc, whenMs) => ({
+    id, internalDate: String(whenMs),
+    payload: { headers: [{ name: 'To', value: to }, { name: 'Cc', value: cc || '' }, { name: 'Date', value: new Date(whenMs).toUTCString() }] },
+});
+
+section('J1 — sheWroteSince is conservative by construction');
+{
+    const store = { sentIndex: {}, sentIndexUpdatedAt: null };
+    // An index that was never built must be UNKNOWN, never "she answered" —
+    // a false positive here silently deletes a real item from her queue.
+    ck('no index yet reads as unknown, not as answered',
+        rw.sheWroteSince(store, 'a@b.com', new Date().toISOString()) === null);
+
+    const built = { sentIndex: { 'a@b.com': '2026-08-26T10:00:00Z' }, sentIndexUpdatedAt: '2026-08-27T00:00:00Z' };
+    ck('wrote AFTER it was flagged -> answered',
+        rw.sheWroteSince(built, 'a@b.com', '2026-08-25T00:00:00Z') === true);
+    ck('wrote BEFORE it was flagged -> not answered',
+        rw.sheWroteSince(built, 'a@b.com', '2026-08-27T00:00:00Z') === false);
+    ck('a built index with no record of them -> not answered',
+        rw.sheWroteSince(built, 'nobody@x.com', '2026-08-25T00:00:00Z') === false);
+    ck('a display-name address still matches the ledger key',
+        rw.sheWroteSince(built, 'Alice <a@b.com>', '2026-08-25T00:00:00Z') === true);
+    ck('an unparseable flag time reads as unknown',
+        rw.sheWroteSince(built, 'a@b.com', 'not a date') === null);
+    ck('no address reads as unknown', rw.sheWroteSince(built, '', '2026-08-25T00:00:00Z') === null);
+}
+
+section('J2 — the index is built from her SENT mail, incrementally');
+{
+    const now = Date.now();
+    const g = fakeGmail([
+        sentMsg('s1', 'Kristal <kristal@zimex.com>', '', now - 3600000),
+        sentMsg('s2', 'someone@else.com', 'Andy Park <andy@hmm.com>', now - 7200000),
+    ]);
+    const store = {};
+    await rw.refreshSentIndex(store, g);
+    ck('a To recipient is indexed', !!store.sentIndex['kristal@zimex.com']);
+    ck('a CC recipient is indexed too — answering by cc is still answering',
+        !!store.sentIndex['andy@hmm.com'], JSON.stringify(store.sentIndex));
+    ck('the sweep stamps its own time', !!store.sentIndexUpdatedAt);
+    ck('the first sweep looks back 30 days to drain the existing backlog',
+        /in:sent after:/.test(fakeGmail._lastQuery), fakeGmail._lastQuery);
+
+    // A failed sweep must NOT advance the watermark, or the window is skipped.
+    const broken = { users: { messages: { list: async () => { throw new Error('gmail 500'); } } } };
+    const before = store.sentIndexUpdatedAt;
+    await rw.refreshSentIndex(store, broken);
+    ck('a failed sweep leaves the watermark alone so the window is re-read',
+        store.sentIndexUpdatedAt === before);
+    ck('and it does not throw', true);
+
+    ck('no sender-read client is a no-op, not a crash',
+        typeof (await rw.refreshSentIndex({}, null)) === 'object');
+}
+
+section('J3 — an answered item leaves the queue instead of being chased');
+{
+    const old = new Date(Date.now() - 9 * 86400000).toISOString();
+    const store = {
+        sentIndex: { 'kristal@zimex.com': new Date(Date.now() - 86400000).toISOString() },
+        sentIndexUpdatedAt: new Date().toISOString(),
+    };
+    const tracked = [
+        { id: 'a', from: 'kristal@zimex.com', fromName: 'Kristal', summary: 'answered', firstFlaggedAt: old, chases: 0 },
+        { id: 'b', from: 'never@replied.com', fromName: 'Nobody', summary: 'not answered', firstFlaggedAt: old, chases: 0 },
+    ];
+    const due = await rw.collectChaseUps(null, BOSE, tracked, [], true, store);
+    ck('the answered sender is not chased', !due.some((d) => d.id === 'a'), JSON.stringify(due.map((d) => d.id)));
+    ck('the unanswered one still is', due.some((d) => d.id === 'b'));
+
+    // NOTE: collectChaseUps mutates `tracked` in place, and the answered item
+    // is now GONE from it — which is the whole point of the drain, and is why
+    // this second case has to build fresh objects rather than copy the array.
+    ck('the answered item was removed from tracked, not just skipped',
+        tracked.length === 1 && tracked[0].id === 'b', JSON.stringify(tracked.map((t) => t.id)));
+
+    // Without the store the old behaviour holds — both get chased.
+    const t2 = [
+        { id: 'a', from: 'kristal@zimex.com', fromName: 'Kristal', summary: 'answered', firstFlaggedAt: old, chases: 0, lastChasedAt: null },
+        { id: 'b', from: 'never@replied.com', fromName: 'Nobody', summary: 'not answered', firstFlaggedAt: old, chases: 0, lastChasedAt: null },
+    ];
+    const due2 = await rw.collectChaseUps(null, BOSE, t2, [], true, null);
+    ck('with no sent index nothing is silently dropped', due2.length === 2, JSON.stringify(due2.map((d) => d.id)));
+}
+
+section('J4 — the index survives the store allowlist (the trap that ate lastScanAt)');
+{
+    fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({ seen: {}, tracked: [] }));
+    const store = rw.loadStore();
+    ck('a store written before this change loads with an empty index',
+        store.sentIndex && typeof store.sentIndex === 'object' && store.sentIndexUpdatedAt === null);
+    store.sentIndex['kristal@zimex.com'] = '2026-08-26T10:00:00Z';
+    store.sentIndexUpdatedAt = '2026-08-27T00:00:00Z';
+    await rw.saveStore(store);
+    const again = rw.loadStore();
+    ck('the index survives a save/load round-trip',
+        again.sentIndex['kristal@zimex.com'] === '2026-08-26T10:00:00Z', JSON.stringify(again.sentIndex));
+    ck('and so does its watermark', again.sentIndexUpdatedAt === '2026-08-27T00:00:00Z');
+}
+
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

@@ -56,7 +56,7 @@
 // relationship. Confirmed sending is a different thing entirely, and that is
 // what this supports.
 
-const { getGmailRead, getGmailSenderRead, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
+const { getGmailRead, getGmailSenderRead, parseAddressList, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
 const { callGeminiJSON } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { loadJson, saveJson } = require('../helpers/json');
@@ -332,7 +332,7 @@ function bulkMailSignal(headers) {
 // on 2026-08-22, so upgrading does not re-flag every email already assessed.
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null };
     if (raw.seen && typeof raw.seen === 'object') {
         return {
             seen: raw.seen,
@@ -354,9 +354,13 @@ function loadStore() {
             // that is visible from outside - it looks perfectly healthy and
             // does nothing.
             lastScanAt: raw.lastScanAt || null,
+            // {recipient -> ISO of the last time she wrote to them}. See
+            // refreshSentIndex: this is what lets an item LEAVE `tracked`.
+            sentIndex: (raw.sentIndex && typeof raw.sentIndex === 'object') ? raw.sentIndex : {},
+            sentIndexUpdatedAt: raw.sentIndexUpdatedAt || null,
         };
     }
-    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null }; // legacy flat format
+    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null }; // legacy flat format
 }
 async function saveStore(store) {
     // Keep only what the lookback window could still surface. Anything older
@@ -375,6 +379,10 @@ async function saveStore(store) {
         tracked: store.tracked || [],
         senderStats: store.senderStats || {},
         lastScanAt: store.lastScanAt || null,
+        // The same allowlist that silently swallowed lastScanAt. A sent index
+        // that is rebuilt from scratch every run is not an index.
+        sentIndex: store.sentIndex || {},
+        sentIndexUpdatedAt: store.sentIndexUpdatedAt || null,
     });
 }
 
@@ -877,7 +885,6 @@ function companyDomain(myAddress) {
 // its own rather than needing a rule of its own.
 function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHeader = null) {
     const domain = companyDomain(myAddress);
-    const { parseAddressList } = require('../helpers/gmail');
     const to = parseAddressList(toHeader || '');
     const cc = parseAddressList(ccHeader || '');
     const mgr = String(managerAddress || '').toLowerCase();
@@ -1174,6 +1181,99 @@ async function hasSheReplied(gmail, threadId, myAddress) {
 
 const DAY_MS = 86400000;
 
+// ══ THE SENT INDEX — the drain that never existed ═════════════════════════
+//
+// Apsara, 2026-08-27: the backlog line read "+47 older items still open",
+// up from +24 four days earlier. It was never 47 things she was behind on.
+// It was a queue with NO WAY OUT.
+//
+// hasSheReplied() asks bose@'s copy of a thread "is the last message from me?"
+// It can essentially never be true, because config.js:159 splits the accounts:
+// reads are bose@, sends are apsara@. Her reply is composed with cc = the
+// original thread's Cc minus self, and bose@ is not added - so on mail
+// addressed TO bose@, her answer never lands in bose@'s copy at all. The last
+// message stays the customer's, permanently.
+//
+// The only other exits from `tracked` are burning MAX_CHASES over 13 days and
+// a manual "ignore N". So every genuinely handled item sat in the count for
+// nearly two weeks after she dealt with it.
+//
+// It also POISONED THE CLASSIFIER. senderStats.replied only increments from
+// those same dead signals, so it stayed 0 for nearly everyone, and
+// senderHistoryLine then fired its negative branch into the prompt: "she has
+// answered none of them... evidence this sender's mail does not actually need
+// her." A self-reinforcing suppression loop, pointed at her best customers.
+//
+// THE FIX: ask apsara@'s SENT mail instead. Thread ids do not survive across
+// mailboxes, so the match is on RECIPIENT ADDRESS + TIME, not threadId.
+//
+// Done as an INCREMENTAL INDEX rather than a per-item search. A search per
+// tracked item would be ~47 Gmail calls every five minutes - 13,000 a day.
+// Instead: one query per run for mail sent since the last sweep (normally
+// zero or one message), folded into a map of {recipient -> last time she
+// wrote to them}. The first run sweeps 30 days to drain the existing backlog.
+const SENT_INDEX_BOOTSTRAP_DAYS = 30;
+const SENT_INDEX_OVERLAP_MS = 10 * 60 * 1000;   // re-read a small overlap; Gmail's after: is day-granular
+const SENT_INDEX_MAX_FETCH = 300;               // bounds the bootstrap run
+
+const gmailDateStr = (d) => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+
+// Mutates store.sentIndex / store.sentIndexUpdatedAt. Never throws outward:
+// a failed sweep must degrade to "we cannot tell", never to "she answered".
+async function refreshSentIndex(store, senderGmail) {
+    store.sentIndex = store.sentIndex || {};
+    if (!senderGmail) return store.sentIndex;
+    const lastAt = Date.parse(store.sentIndexUpdatedAt || '');
+    const since = Number.isFinite(lastAt)
+        ? new Date(lastAt - SENT_INDEX_OVERLAP_MS)
+        : new Date(Date.now() - SENT_INDEX_BOOTSTRAP_DAYS * DAY_MS);
+    try {
+        const refs = await listMessages(senderGmail, `in:sent after:${gmailDateStr(since)}`, SENT_INDEX_MAX_FETCH);
+        let scanned = 0;
+        for (const ref of refs) {
+            let msg = null;
+            try { msg = await getMessage(senderGmail, ref.id); } catch (e) { continue; }
+            const at = new Date(Number(msg.internalDate) || Date.parse(header(msg, 'Date') || '') || Date.now()).toISOString();
+            // To AND Cc: answering a thread by cc'ing the person who asked is
+            // still answering them.
+            for (const raw of [header(msg, 'To'), header(msg, 'Cc')]) {
+                for (const addr of parseAddressList(raw || '')) {
+                    const k = String(addr).toLowerCase();
+                    if (!k) continue;
+                    if (!store.sentIndex[k] || store.sentIndex[k] < at) store.sentIndex[k] = at;
+                }
+            }
+            scanned++;
+        }
+        store.sentIndexUpdatedAt = new Date().toISOString();
+        if (scanned) console.log(`[REPLYWATCH] sent index: folded in ${scanned} sent message(s)`);
+    } catch (err) {
+        // Deliberately do NOT stamp sentIndexUpdatedAt on failure - the next
+        // run must re-sweep the same window rather than skip past it.
+        console.warn('[REPLYWATCH] sent-mail sweep failed (backlog will not drain this run):', err.message);
+    }
+    // Bound the map. Anything older than the bootstrap window can no longer
+    // answer a question about a tracked item, which itself expires sooner.
+    const cutoff = new Date(Date.now() - SENT_INDEX_BOOTSTRAP_DAYS * DAY_MS).toISOString();
+    for (const [k, v] of Object.entries(store.sentIndex)) if (v < cutoff) delete store.sentIndex[k];
+    return store.sentIndex;
+}
+
+// Did she write to this address after the item was flagged?
+// Returns true / false / null(unknown). Conservative by construction: an
+// address we have no record for is null, never false, so a failed or
+// not-yet-bootstrapped index can never be read as "she answered".
+function sheWroteSince(store, address, sinceISO) {
+    const key = senderKey(address || '');
+    if (!key || !store || !store.sentIndex) return null;
+    if (!store.sentIndexUpdatedAt) return null;          // index never built
+    const at = store.sentIndex[key];
+    if (!at) return false;                               // index IS built and has nothing for them
+    const since = Date.parse(sinceISO || '');
+    if (!Number.isFinite(since)) return null;
+    return Date.parse(at) > since;
+}
+
 // Re-examines everything still tracked and returns the ones worth chasing.
 // Mutates `tracked` in place: drops answered items, bumps chase counters.
 // repliedSenders is collected rather than written here: this function takes
@@ -1186,7 +1286,7 @@ const DAY_MS = 86400000;
 // nights and it was dropped at the MAX_CHASES guard having NEVER ONCE been
 // shown to her - and it also left `tracked`, so it vanished from the backlog
 // count too and looked resolved. Worse than the digest simply not firing.
-async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], canSend = true) {
+async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], canSend = true, store = null) {
     const now = Date.now();
     const due = [];
     const keep = [];
@@ -1196,8 +1296,13 @@ async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], c
         if (isNaN(firstAt)) continue;                 // unparseable — drop
         if ((t.chases || 0) >= MAX_CHASES) continue;  // said its piece
 
+        // Two independent ways to learn she dealt with it. The thread check is
+        // authoritative when it fires; the sent index is the one that actually
+        // fires, because her replies go out from a different account than the
+        // one polled. Either being true drops the item.
         const answered = await hasSheReplied(gmail, t.threadId, myAddress);
-        if (answered === true) { repliedSenders.push(t.from || t.fromName); continue; }  // she dealt with it
+        const wrote = sheWroteSince(store, t.from, t.firstFlaggedAt);
+        if (answered === true || wrote === true) { repliedSenders.push(t.from || t.fromName); continue; }
 
         const ageDays = (now - firstAt) / DAY_MS;
         const lastChase = t.lastChasedAt ? Date.parse(t.lastChasedAt) : null;
@@ -1246,7 +1351,7 @@ async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], c
 // completed alongside the ones actually due, so the caller can drop them and
 // say what it cleared.
 const DEADLINE_NUDGE_WINDOW_DAYS = 1; // nudge when due within this many days
-async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Date(), repliedSenders = []) {
+async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Date(), repliedSenders = [], store = null) {
     const todayKey = now.toISOString().slice(0, 10);
     const due = [], completed = [];
     for (const t of tracked) {
@@ -1259,7 +1364,7 @@ async function collectDeadlineReminders(gmail, myAddress, tracked, now = new Dat
         // she answered this morning is closed out today rather than sitting
         // tracked until tomorrow's pass.
         const answered = await hasSheReplied(gmail, t.threadId, myAddress);
-        if (answered === true) { repliedSenders.push(t.from || t.fromName); completed.push({ ...t, daysToDeadline: days }); continue; }
+        if (answered === true || sheWroteSince(store, t.from, t.firstFlaggedAt) === true) { repliedSenders.push(t.from || t.fromName); completed.push({ ...t, daysToDeadline: days }); continue; }
 
         if (t.lastDeadlineNudgeOn === todayKey) continue; // already nudged today
         due.push({ ...t, daysToDeadline: days });
@@ -1941,6 +2046,35 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // RECHASE_DAYS internally, so it costs a thread lookup per tracked item
     // and produces a message only rarely.
     let chaseUps = [];
+    // ── DRAIN ──────────────────────────────────────────────────────────────
+    // Runs BEFORE the chase pass, so an item she answered is gone rather than
+    // chased. This is what turns `tracked` from an accumulator into a queue.
+    try {
+        const senderGmail = getGmailSenderRead();
+        if (!senderGmail) {
+            console.warn('[REPLYWATCH] no sender-read token — the backlog CANNOT drain. Run scripts/gmail-auth.js --role=sender-read.');
+        } else {
+            await refreshSentIndex(store, senderGmail);
+            const before = (store.tracked || []).length;
+            const drained = [];
+            store.tracked = (store.tracked || []).filter((t) => {
+                if (sheWroteSince(store, t.from, t.firstFlaggedAt) !== true) return true;
+                drained.push(t);
+                // Feed the historical prior with a REAL reply. senderStats
+                // .replied has been stuck at 0 for nearly everyone, which is
+                // what made senderHistoryLine tell the model her best
+                // customers do not need her.
+                recordSenderEvent(store, t.from || t.fromName, 'replied');
+                return false;
+            });
+            if (drained.length) {
+                console.log(`[REPLYWATCH] drained ${drained.length} of ${before} tracked item(s) — she has since written to those senders`);
+            }
+        }
+    } catch (err) {
+        console.error('[REPLYWATCH] drain pass failed (non-fatal):', err.message);
+    }
+
     // HOISTED 2026-08-26: collectChaseUps now needs to know whether a message
     // can actually go out before it spends one of an item's five chances.
     // Previously declared 20 lines BELOW this point - using it here as a const
@@ -1950,7 +2084,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
     try {
         const repliedDuringChase = [];
-        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase, inAlertWindow && !!sendToManager);
+        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase, inAlertWindow && !!sendToManager, store);
         for (const who of repliedDuringChase) recordSenderEvent(store, who, 'replied');
     } catch (err) {
         console.error('[REPLYWATCH] chase-up pass failed (non-fatal):', err.message);
@@ -1962,7 +2096,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     let deadlineDue = [], deadlineDone = [];
     try {
         const repliedAtDeadline = [];
-        const res = await collectDeadlineReminders(gmail, me, store.tracked, new Date(), repliedAtDeadline);
+        const res = await collectDeadlineReminders(gmail, me, store.tracked, new Date(), repliedAtDeadline, store);
         for (const who of repliedAtDeadline) recordSenderEvent(store, who, 'replied');
         deadlineDue = res.due; deadlineDone = res.completed;
         if (deadlineDone.length) {
@@ -2162,7 +2296,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
