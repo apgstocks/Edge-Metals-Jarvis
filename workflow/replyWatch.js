@@ -195,6 +195,15 @@ try {
         // Objects now: {label, value}. label says what the number IS in a few
         // words; value stays verbatim and grounded. Plain strings are still
         // accepted so records written by the previous build keep rendering.
+        // THREAD RECAP (2026-08-27). Apsara, repeatedly: "still summary not
+        // proper", "i want summary to be proper like gmail summary of threads".
+        // She showed me the target in her first message of the session and I
+        // built a 20-word `summary` field instead — which structurally cannot
+        // hold a rolling booking's history no matter how the prompt is worded.
+        //
+        // 2-4 bullets, chronological, naming who did what. This is what Gemini
+        // in Gmail produces and what she has been asking for all week.
+        thread_recap: z.array(z.string()).optional().default([]),
         key_figures: z.array(z.union([
             z.string(),
             z.object({ label: z.string().optional().default(''), value: z.string() }),
@@ -544,13 +553,45 @@ const defence = (t) => String(t || '').replace(FENCE_PATTERN, '[removed]');
 // Compact, one line per message, her own messages marked. Six lines is enough
 // for a rolling-booking thread to show its shape and short enough that it can
 // never crowd out the email itself.
-const MAX_THREAD_LINES = 6;
-const THREAD_SNIPPET_CHARS = 140;
+const MAX_THREAD_LINES = 8;
+const THREAD_SNIPPET_CHARS = 140;     // snippet-only fallback when no body is available
+
+// TAPERED BUDGET (2026-08-27). Apsara: "i want summary to be proper like gmail
+// summary of threads" — and she showed me the target in her FIRST message of
+// this session, quoting Gemini-in-Gmail:
+//
+//   "Andy provided HMM BKG #DALA21235600 for 2x40HC batteries, initially
+//    loading Aug 12. Booking rolled multiple times; Accounting requested new
+//    ERD of 8/19 or 8/20, then confirmed HMM RAON 0025W (CUT 8/18). You
+//    requested rolling to HMM TURQUOISE 0011W (ERD 8/25, CUT 8/28); Andy is
+//    working to get EDO # ASAP."
+//
+// A 140-character snippet per message cannot produce that. Gmail summarises
+// message BODIES. The numbers here follow inbox-zero's reply-tracker, which
+// solved the same problem: keep the opening message (it frames the matter),
+// squeeze the middle (it is usually acknowledgements), and keep the recent
+// ones nearly whole, because that is where the live commitment lives.
+const RECAP_ITEMS = 3;   // recap the top N matters in a digest; the rest stay one-liners
+const THREAD_BUDGET = { first: 500, middle: 160, recent: 500, latest: 1200, recentCount: 3 };
+
+// Body text for one thread message, quoted history stripped. Falls back to
+// the snippet when the message came back metadata-only.
+function threadMessageText(m) {
+    try {
+        if (m && m.payload && (m.payload.parts || m.payload.body)) {
+            const { body } = getEmailContent(m.payload);
+            const visible = extractLatestMessage(body || '');
+            if (visible && visible.trim()) return visible.trim();
+        }
+    } catch (e) { /* fall through to the snippet */ }
+    return String((m && m.snippet) || '').trim();
+}
 
 function buildThreadLedger(tmsgs, myAddress) {
     if (!Array.isArray(tmsgs) || tmsgs.length < 2) return '';
     const me = String(myAddress || '').toLowerCase();
-    const rows = tmsgs.slice(-MAX_THREAD_LINES).map((m) => {
+    const kept = tmsgs.slice(-MAX_THREAD_LINES);
+    const rows = kept.map((m, i) => {
         const hs = (m && m.payload && m.payload.headers) || [];
         const pick = (n) => (hs.find((h) => (h.name || '').toLowerCase() === n) || {}).value || '';
         const from = pick('from');
@@ -560,9 +601,17 @@ function buildThreadLedger(tmsgs, myAddress) {
             const t = Date.parse(d || pick('date'));
             return isNaN(t) ? '' : new Date(t).toISOString().slice(5, 10);   // MM-DD
         })();
-        // Snippets are sender-written too — a forged fence in message 3 of a
-        // thread is the same attack one layer back.
-        const snip = defence(String((m && m.snippet) || '')).replace(/\s+/g, ' ').trim().slice(0, THREAD_SNIPPET_CHARS);
+        // Tapered: the first message frames the matter, the middle is mostly
+        // acknowledgement, the last few carry the live commitment.
+        const fromEnd = kept.length - 1 - i;
+        const budget = fromEnd === 0 ? THREAD_BUDGET.latest
+            : fromEnd < THREAD_BUDGET.recentCount ? THREAD_BUDGET.recent
+            : i === 0 ? THREAD_BUDGET.first
+            : THREAD_BUDGET.middle;
+        // Sender-written text — a forged fence in message 3 of a thread is the
+        // same attack one layer back.
+        const raw = defence(threadMessageText(m)).replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();
+        const snip = raw.length > budget ? raw.slice(0, budget) + ' …' : raw;
         // "HER (the manager)" rather than her name: the model has to be able to
         // tell at a glance which side of the desk each line came from, and a
         // display name it has never seen before does not do that.
@@ -630,6 +679,12 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
   - waiting_on "her":  the span in which they ASK        ("could you please confirm the ERD").
   - waiting_on "them": the span in which they COMMIT or report progress ("I am working to get the EDO # ASAP").
   null if you cannot point at a specific span, in which case asked_for should almost certainly be null too.
+thread_recap: 2-4 short bullets recapping THE WHOLE THREAD in order, the way a good assistant would brief her before she opens it. This is the most important field you produce. Each bullet under 20 words, plain past tense, NAMING WHO DID WHAT and carrying the specifics — booking numbers, vessels, containers, dates, amounts. Refer to the manager as "You". Worked example, from a real rolling-booking thread:
+  ["Andy gave HMM BKG #DALA21235600 for 2x40HC batteries, loading Aug 12",
+   "Booking rolled several times; Accounting asked for ERD 8/19-8/20, then confirmed HMM RAON 0025W (CUT 8/18)",
+   "You asked to roll to HMM TURQUOISE 0011W (ERD 8/25, CUT 8/28); Andy is getting the EDO"]
+Notice: it is a STORY, in order, with every identifier kept. Do NOT write one bullet per message — merge the routine back-and-forth into a single line ("rolled several times") and spend the words on what changed. Do NOT restate the summary line. Take everything from the THREAD SO FAR section and the email; invent nothing, and never state a figure that does not appear above. Return [] when there is no thread — a single first-contact email needs no recap.
+
 key_figures: every figure a person deciding what to do about this email would need, as objects {"label","value"}. "value" is the figure copied VERBATIM. "label" says in 1-4 words WHAT THAT NUMBER IS, so the list is readable without opening the email — "current price", "their counter", "tonnage", "container", "invoice total", "balance due". A list like 21.428 / $990 / $995 / $1015 with no labels is useless: she cannot tell tonnage from price, or the old price from the proposed one. If you genuinely cannot tell what a number is, leave it out rather than labelling it vaguely. Up to 4, most important first, [] if the email contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
 
 deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
@@ -643,7 +698,7 @@ If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "waiting_on": "her", "asked_of": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
+{ "waiting_on": "her", "asked_of": null, "thread_recap": [], "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
 }
 
 // ── QUOTE GROUNDING (2026-08-25) ───────────────────────────────────────────
@@ -982,8 +1037,18 @@ async function assess(email) {
     // reaches the model through the thread ledger.
     const key_figures = groundFigures(res.key_figures, [email.body, email.thread]);
 
+    // Bounded and tidied. Not verbatim-grounded — a narrative recap cannot be
+    // a quote — so the containment is: figures are grounded separately, the
+    // prompt forbids inventing one, and this is BRIEFING material sitting next
+    // to the grounded facts, never the basis of an action.
+    const thread_recap = (Array.isArray(res.thread_recap) ? res.thread_recap : [])
+        .map((b) => defence(String(b || '')).replace(/^[-•*\s]+/, '').trim())
+        .filter((b) => b.length > 3)
+        .slice(0, 4);
+
     return {
         waiting_on,
+        thread_recap,
         // Kept for 'them' as well as 'someone_else' — for an email our own
         // team sent, it names the counterparty who owes the answer.
         asked_of: (waiting_on === 'someone_else' || waiting_on === 'them') ? asked_of : null,
@@ -1589,6 +1654,16 @@ function buildDigest(matters, emailCount) {
         const who = (f.waiting_on === 'them' && f.asked_of) ? f.asked_of : f.fromName;
         const tail = f.waiting_on === 'someone_else' ? '   (you are only copied in)' : '';
         lines.push(`   ${who}${f.asked_for ? ` — ${verb}: ${f.asked_for}` : (f.waiting_on === 'someone_else' ? ` — asked ${f.asked_of || 'someone else'}` : '')}${tail}`);
+        // The recap — the thing she actually asked for. Sits under the ask so
+        // the action stays the first thing her eye reaches, and the history is
+        // there when she needs to remember what this even is.
+        // Capped to the first few matters. Items are already sorted by
+        // urgency, so a long digest keeps the recap where it earns its space
+        // and does not turn a five-item list into a page of scrolling — which
+        // is its own way of not being read.
+        if (i < RECAP_ITEMS && Array.isArray(f.thread_recap) && f.thread_recap.length) {
+            for (const b of f.thread_recap.slice(0, 4)) lines.push(`     ‣ ${b}`);
+        }
         // The figures, verbatim, on their own line. Belt and braces: the prompt
         // also requires them inside the summary, but a model that forgets one
         // there should not cost her the number entirely. Listed, never totalled
@@ -1806,7 +1881,13 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         let threadLedger = '';
         try {
             if (msg.threadId) {
-                const thread = await gmail.users.threads.get({ userId: 'me', id: msg.threadId, format: 'metadata', metadataHeaders: ['From', 'Date'] });
+                // format:'full' rather than 'metadata' (2026-08-27) — the
+                // ledger now needs BODIES to produce a Gmail-quality recap.
+                // Still ONE call: it also serves the has-she-replied check
+                // below, so this costs no extra round trip, only a larger
+                // response. Attachment bytes are not inlined by the API at
+                // this size, so the payload stays reasonable.
+                const thread = await gmail.users.threads.get({ userId: 'me', id: msg.threadId, format: 'full' });
                 const tmsgs = thread?.data?.messages || [];
                 // THE ACTUAL ROOT CAUSE of "intent is totally wrong"
                 // (2026-08-25). extractLatestMessage deliberately strips the
@@ -1920,6 +2001,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 waiting_on: a.waiting_on || 'her',
                 asked_of: a.asked_of || null,
                 key_figures: Array.isArray(a.key_figures) ? a.key_figures : [],
+                thread_recap: Array.isArray(a.thread_recap) ? a.thread_recap : [],
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
@@ -2296,7 +2378,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
