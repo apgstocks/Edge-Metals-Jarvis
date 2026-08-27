@@ -620,7 +620,7 @@ body { overflow-y:auto; }
     <div id="scanBox"></div>
     <div id="scanStart"><div id="scanStartBar"></div><div id="scanStartLabel">1ST DIGIT</div></div>
     <div id="scanGhostTag">8.8.</div>
-    <div id="scanHint">Line the <b>first weight digit</b> up against the green bar.<br>The dim <b>8.8.</b> cells stay to its left, outside the box.</div>
+    <div id="scanHint">Just <b>point at the display</b> — it reads on its own and locks when sure.<br>Line the first weight digit against the green bar; the dim <b>8.8.</b> cells stay outside.</div>
   </div>
   <div id="scanErr"></div>
   <div id="scanFoot">
@@ -1667,7 +1667,141 @@ function layoutScanBox() {
   return { bx, by, bw, bh, W, H };
 }
 
+// ── Live scanning — per Apsara 2026-08-27 ("what if we can do scanning when
+//    i point at the scale?"). ────────────────────────────────────────────────
+//
+// Instead of aiming, holding still and pressing a shutter, the scanner reads
+// continuously while the phone is pointed at the display and locks the moment
+// enough frames agree.
+//
+// This is the honest answer to the ghost cell, and to most of the rest.
+// Everything before it was an attempt to squeeze certainty out of ONE
+// photograph: confidence cliffs, ghost stripping, re-renderings, exposure.
+// Each helps, none is decisive, because a single frame sometimes simply does
+// not contain the answer — an overexposed capture where the segments bleed,
+// or a placeholder cell that reads exactly like a real 8. With a stream, no
+// individual frame has to be decisive. Frames that disagree are just
+// outvoted, and the read ends when the yard, the light and the angle happen
+// to line up rather than at the arbitrary instant a thumb moved.
+//
+// Deliberately conservative about spend: a cheap on-device check runs first
+// and only frames that actually contain a bright red display in the box are
+// ever uploaded, so pointing the phone at the ground costs nothing.
+let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, busy: false, locked: false };
+const SCAN_LIVE = {
+    INTERVAL_MS: 700,   // between attempts — slower than the eye, fast enough to feel live
+    NEEDED: 2,          // frames that must agree before the number is accepted
+    MAX_SENDS: 10,      // hard ceiling per scanner session, so a bad aim cannot bill forever
+};
+
+// Fraction of pixels in the crop that look like a lit red LED segment.
+// Pure canvas arithmetic on a frame we already have — no network, no cost.
+// Purpose is to skip uploading the ground, the sky or a truck, not to judge
+// the reading itself.
+function litRedFraction(canvas) {
+    try {
+        const ctx = canvas.getContext('2d');
+        const { width: w, height: h } = canvas;
+        if (!w || !h) return 0;
+        const d = ctx.getImageData(0, 0, w, h).data;
+        let lit = 0, total = 0;
+        // Sample every 4th pixel — plenty for a ratio, and keeps this well
+        // under a frame budget on a mid-range phone.
+        for (let i = 0; i < d.length; i += 16) {
+            total++;
+            const r = d[i], g = d[i + 1], b = d[i + 2];
+            if (r > 110 && r - g > 45 && r - b > 45) lit++;
+        }
+        return total ? lit / total : 0;
+    } catch (e) { return 0; }
+}
+
+function scanLiveStatus(text, tone) {
+    const el = $('scanErr');
+    if (!el) return;
+    el.style.color = tone === 'good' ? 'var(--status-good, #4ade80)' : (tone === 'work' ? 'var(--text-muted, #9aa)' : '');
+    el.textContent = text;
+}
+
+function stopScanLive() {
+    scanLive.on = false;
+    if (scanLive.timer) { clearInterval(scanLive.timer); scanLive.timer = null; }
+    scanLive.tally = new Map();
+    scanLive.sent = 0;
+    scanLive.busy = false;
+    scanLive.locked = false;
+}
+
+async function doScanLiveTick() {
+    if (!scanLive.on || scanLive.busy || scanLive.locked || !scanTarget) return;
+    if (scanLive.sent >= SCAN_LIVE.MAX_SENDS) {
+        scanLiveStatus('Could not settle on a number — hold steadier, or press Capture weight.', '');
+        stopScanLive();
+        return;
+    }
+    const shot = cropScanFrame({ withCanvas: true });
+    if (!shot) return;
+    // On-device gate. A display fills a good part of the box with lit red; the
+    // ground does not. Cheap, and it is why idle pointing costs nothing.
+    const frac = shot.canvas ? litRedFraction(shot.canvas) : 1;
+    if (frac < 0.012) {
+        scanLiveStatus('Point at the scale display…', 'work');
+        return;
+    }
+    scanLive.busy = true;
+    scanLive.sent += 1;
+    try {
+        const result = await api('/api/vision/read-weight', {
+            method: 'POST',
+            body: JSON.stringify({ image_base64: shot.base64, mime_type: 'image/jpeg', pre_cropped: true }),
+        });
+        const w = result && result.weight != null ? result.weight : null;
+        if (w != null) {
+            const n = (scanLive.tally.get(w) || 0) + 1;
+            scanLive.tally.set(w, n);
+            console.log(`[scanner] live frame ${scanLive.sent}: ${w} (seen ${n}x, flagged=${!!result.ambiguous})`);
+            if (n >= SCAN_LIVE.NEEDED) {
+                // Locked. Two independent frames of a static display agreeing
+                // is stronger evidence than anything obtainable from one.
+                scanLive.locked = true;
+                scanLiveStatus(`Locked: ${w}`, 'good');
+                const { row, roleKey } = scanTarget;
+                const statusEl = row.querySelector('.ld-item-status');
+                const field = row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare');
+                if (field) { field.value = w; recomputeRowTotals(row); syncItemsFromDom(); }
+                if (statusEl) {
+                    statusEl.style.color = '';
+                    statusEl.textContent = `Read ${w} lb — ${SCAN_LIVE.NEEDED} camera frames agreed.`;
+                }
+                // 'ok' + autohide matches the existing successful-read toast
+                // rather than introducing a second success style. Wording
+                // still asks for a glance at the scale: two frames agreeing is
+                // strong evidence, not a guarantee, and the field stays
+                // editable either way.
+                showWeighToast('ok', `Weight read: ${w} lb`, `${SCAN_LIVE.NEEDED} camera frames agreed. Confirm it matches the scale.`, 4000);
+                setTimeout(() => { stopScanLive(); closeScanner(); }, 450);
+                return;
+            }
+            scanLiveStatus(`Reading… ${w}?`, 'work');
+        } else {
+            scanLiveStatus('Reading…', 'work');
+        }
+    } catch (err) {
+        console.warn('[scanner] live tick failed:', err && err.message);
+    } finally {
+        scanLive.busy = false;
+    }
+}
+
+function startScanLive() {
+    stopScanLive();
+    scanLive.on = true;
+    scanLiveStatus('Point at the scale display…', 'work');
+    scanLive.timer = setInterval(doScanLiveTick, SCAN_LIVE.INTERVAL_MS);
+}
+
 function closeScanner() {
+  stopScanLive();
   if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   const v = $('scanVideo');
   if (v) v.srcObject = null;
@@ -1712,6 +1846,10 @@ async function openScanner(row, roleKey) {
   try { await v.play(); } catch (e) { /* autoplay attr usually covers this */ }
   layoutScanBox();
   window.addEventListener('resize', layoutScanBox);
+  // Start reading immediately. The shutter stays live as a manual override —
+  // if the light is awkward or she wants to force a read on a particular
+  // moment, pressing it still works exactly as before and stops the loop.
+  startScanLive();
   return true;
 }
 
@@ -1721,7 +1859,7 @@ async function openScanner(row, roleKey) {
 // and the centering offset — getting this wrong would crop the wrong
 // region, which is exactly the "digits sliced off" failure mode that
 // caused bad reads before (see helpers/gemini.js's 73600 case).
-function cropScanFrame() {
+function cropScanFrame(opts) {
   const v = $('scanVideo');
   const geom = layoutScanBox();
   const vw = v.videoWidth, vh = v.videoHeight;
@@ -1738,6 +1876,13 @@ function cropScanFrame() {
   const canvas = document.createElement('canvas');
   canvas.width = sw; canvas.height = sh;
   canvas.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+  // opts.withCanvas — the live loop inspects these pixels locally (see
+  // litRedFraction) to decide whether the frame is even worth uploading.
+  // Returned only on request so the ordinary capture path keeps handing back
+  // the same small object it always did and nothing holds a canvas alive.
+  if (opts && opts.withCanvas) {
+    return { base64: canvas.toDataURL('image/jpeg', 0.95).split(',')[1], w: sw, h: sh, canvas };
+  }
   // quality 0.95 to match captureViaNativeCamera — seven-segment digits are
   // exactly the high-contrast thin-edge content JPEG artifacts damage most
   // (that finding is documented on the native path; same reasoning here).
@@ -1748,6 +1893,9 @@ async function doScanCapture() {
   if (!scanTarget) return;
   const { row, roleKey } = scanTarget;
   const shutter = $('scanShutter');
+  // Manual capture overrides the live loop — otherwise a tick could land
+  // mid-capture and race it to the same field.
+  stopScanLive();
   shutter.disabled = true; shutter.textContent = 'Reading…';
   $('scanErr').textContent = '';
   const shot = cropScanFrame();
