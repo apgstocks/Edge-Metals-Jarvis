@@ -1687,11 +1687,17 @@ function layoutScanBox() {
 // Deliberately conservative about spend: a cheap on-device check runs first
 // and only frames that actually contain a bright red display in the box are
 // ever uploaded, so pointing the phone at the ground costs nothing.
-let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, busy: false, locked: false };
+let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, busy: false, locked: false, blanks: 0 };
 const SCAN_LIVE = {
     INTERVAL_MS: 700,   // between attempts — slower than the eye, fast enough to feel live
     NEEDED: 2,          // frames that must agree before the number is accepted
     MAX_SENDS: 10,      // hard ceiling per scanner session, so a bad aim cannot bill forever
+    // Consecutive frames yielding no number at all before giving up early.
+    // Measured against a photo with no display in it: the ceiling alone let
+    // the loop grind for 24s before stopping, which is a long time to stand
+    // holding a phone at nothing. Four unreadable frames in a row means the
+    // aim is wrong, not that the next one will be luckier.
+    MAX_BLANKS: 4,
 };
 
 // Fraction of pixels in the crop that look like a lit red LED segment.
@@ -1730,6 +1736,7 @@ function stopScanLive() {
     scanLive.sent = 0;
     scanLive.busy = false;
     scanLive.locked = false;
+    scanLive.blanks = 0;
 }
 
 async function doScanLiveTick() {
@@ -1753,13 +1760,48 @@ async function doScanLiveTick() {
     try {
         const result = await api('/api/vision/read-weight', {
             method: 'POST',
-            body: JSON.stringify({ image_base64: shot.base64, mime_type: 'image/jpeg', pre_cropped: true }),
+            // live:true asks the server for a fast answer instead of a
+            // thorough one — another frame is 700ms away, so a slow rescue of
+            // this particular frame is wasted work.
+            body: JSON.stringify({ image_base64: shot.base64, mime_type: 'image/jpeg', pre_cropped: true, live: true }),
         });
         const w = result && result.weight != null ? result.weight : null;
         if (w != null) {
-            const n = (scanLive.tally.get(w) || 0) + 1;
-            scanLive.tally.set(w, n);
-            console.log(`[scanner] live frame ${scanLive.sent}: ${w} (seen ${n}x, flagged=${!!result.ambiguous})`);
+            // Clean and flagged agreement are counted SEPARATELY, and only
+            // clean agreement can lock.
+            //
+            // Caught by testing this against the real photos 2026-08-27: the
+            // 4146 capture returns a flagged 4896 on every single frame, so
+            // counting flagged frames toward the lock turned a read the
+            // shutter path correctly warns about into a confident wrong
+            // number on a ticket. Repetition is not corroboration when the
+            // frames are wrong the same way — which is the same lesson as the
+            // greyscale re-render, arriving from a different direction.
+            const rec = scanLive.tally.get(w) || { clean: 0, flagged: 0 };
+            if (result.ambiguous) rec.flagged += 1; else rec.clean += 1;
+            scanLive.tally.set(w, rec);
+            const n = rec.clean;
+            console.log(`[scanner] live frame ${scanLive.sent}: ${w} (clean ${rec.clean}, flagged ${rec.flagged})`);
+            // Frames that agree but are all flagged: stop burning uploads on
+            // something that is not going to improve, hand the number over
+            // with its warning intact and let the operator decide. This is
+            // the behaviour Apsara asked for — show it, flagged, editable.
+            if (rec.clean === 0 && rec.flagged >= SCAN_LIVE.NEEDED) {
+                scanLive.locked = true;
+                const { row, roleKey } = scanTarget;
+                const statusEl = row.querySelector('.ld-item-status');
+                const field = row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare');
+                if (field) { field.value = w; recomputeRowTotals(row); syncItemsFromDom(); }
+                if (statusEl) {
+                    statusEl.style.color = 'var(--status-warn, #d9a441)';
+                    statusEl.textContent = `Read ${w} lb — CHECK THIS against the display before saving.`;
+                }
+                showWeighToast('flagged', `Weight ${w} lb — please verify`,
+                    'Every frame read the same number but none was confident. Check it against the scale.');
+                scanLiveStatus(`${w} — verify against the display`, '');
+                setTimeout(() => { stopScanLive(); closeScanner(); }, 900);
+                return;
+            }
             if (n >= SCAN_LIVE.NEEDED) {
                 // Locked. Two independent frames of a static display agreeing
                 // is stronger evidence than anything obtainable from one.
@@ -1782,8 +1824,15 @@ async function doScanLiveTick() {
                 setTimeout(() => { stopScanLive(); closeScanner(); }, 450);
                 return;
             }
+            scanLive.blanks = 0;
             scanLiveStatus(`Reading… ${w}?`, 'work');
         } else {
+            scanLive.blanks += 1;
+            if (scanLive.blanks >= SCAN_LIVE.MAX_BLANKS) {
+                scanLiveStatus('No display found — move closer, or press Capture weight.', '');
+                stopScanLive();
+                return;
+            }
             scanLiveStatus('Reading…', 'work');
         }
     } catch (err) {

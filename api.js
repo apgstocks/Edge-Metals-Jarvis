@@ -959,7 +959,7 @@ function createApi() {
     // New Load form BEFORE a load exists yet, so it can't be scoped to a
     // load id. largeJson (10mb) because base64 photos inflate ~33% over binary.
     app.post('/api/vision/read-weight', largeJson, async (req, res) => {
-        const { image_base64, mime_type, pre_cropped, frames } = req.body || {};
+        const { image_base64, mime_type, pre_cropped, frames, live } = req.body || {};
         if (!image_base64) return res.status(400).json({ error: 'image_base64 required' });
         try {
             // frames: added 2026-08-27. The scanner now grabs several frames off
@@ -987,9 +987,16 @@ function createApi() {
             // older client that doesn't send this field is simply undefined
             // here and gets the unchanged full-locate behavior.
             const { extractWeightFromImage } = require('./helpers/gemini');
+            // live: a tick from the continuous scanner, which will ask again
+            // in 700ms. A fast no beats a slow maybe there — the slow
+            // pipeline's whole value is squeezing an answer out of one image,
+            // and this caller has more images coming. Measured: without this,
+            // an unreadable frame cost 5.6s and ten of them took most of a
+            // minute before the scanner gave up.
             const result = await extractWeightFromImage(image_base64, mime_type, undefined, {
                 preCropped: !!pre_cropped,
                 extraFrames,
+                ...(live ? { budgetMs: 1800 } : {}),
             });
             res.json({ ok: true, ...result });
         } catch (err) {

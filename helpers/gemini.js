@@ -2177,7 +2177,15 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
     // the long reads were never the OCR being slow, they were the pipeline
     // compensating for a badly-framed image. Give it a good frame and the
     // compensation isn't needed.
-    const TOTAL_BUDGET_MS = Number(process.env.WEIGHT_READ_BUDGET_MS)
+    // opts.budgetMs — a caller that will ask again shortly wants a fast no
+    // rather than a slow maybe. The live scanner sets it: it reads the same
+    // display every 700ms, so a frame that cannot be read quickly is worth
+    // abandoning, and the full slow pipeline is wasted effort on a frame that
+    // is about to be replaced. Measured why this matters: a hopeless image
+    // took 5.6s per attempt, so ten attempts spent nearly a minute before the
+    // scanner gave up. Absent, behaviour is exactly as before.
+    const TOTAL_BUDGET_MS = Number(opts.budgetMs)
+        || Number(process.env.WEIGHT_READ_BUDGET_MS)
         || (opts.preCropped ? 5000 : 5000);
     // Never returns 0 — a tiny non-zero floor means a Gemini call that is
     // just about to resolve still gets a chance, instead of the budget
@@ -3974,7 +3982,8 @@ async function extractWeightFromImageInner(imageBase64, mimeType = 'image/jpeg',
 // "Couldn't read a number — enter manually", which is a safe, honest
 // outcome and far better than a wrong weight on a ticket.
 async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retries = 2, opts = {}) {
-    const budget = Number(process.env.WEIGHT_READ_BUDGET_MS)
+    const budget = Number(opts.budgetMs)
+        || Number(process.env.WEIGHT_READ_BUDGET_MS)
         || (opts.preCropped ? 5000 : 5000);
     // Small grace on top of the internal budget so the internal logic — which
     // can still return a good flagged answer — normally wins the race, and
