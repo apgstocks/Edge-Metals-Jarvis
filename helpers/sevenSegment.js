@@ -34,6 +34,43 @@
 //      real photos to tune against — tuning against the single available
 //      photo would just overfit to it.
 //
+// ── UPDATE 2026-08-28: measured against the corpus this file asked for ──────
+// The 10-photo corpus at test/fixtures/socome now exists — the thing the note
+// above said was missing. Result, unmodified:
+//
+//     correct 0    WRONG 0    declined 10    median 25ms, max 42ms
+//
+// Read that carefully, because it is two separate findings.
+//
+// The SAFETY design works, and works well. Ten real photos and not one
+// confident wrong answer — it declines with a reason every time ("4 of 5
+// digits did not match a seven-segment pattern"). On a weight ticket that is
+// exactly the right way to fail, and it is better behaviour than a
+// from-scratch decoder written against this same corpus on 2026-08-28, which
+// produced confident garbage (0 correct, 8 wrong) and was discarded.
+//
+// The ACCURACY is not close. Partial reads show where it goes: "?218" for a
+// true 4210, "?22?" for 4223, "?9??" for 3939. Digit segmentation is roughly
+// working; per-digit decoding is not, because LED bloom fills the gaps that
+// distinguish one glyph from another. That is the same "de-blooming" item
+// listed as route 2 above, and the corpus now says it is the whole problem
+// rather than a refinement.
+//
+// So route 1 (the agreement gate) is NOT currently viable either: a reader
+// that declines every frame can never agree with anything. It would add a
+// second opinion that is always silent.
+//
+// Recommendation for whoever picks this up: this is not a thresholding tweak.
+// The published work on seven-segment recognition moved to trained models for
+// exactly this reason — PARSeq reports 3.6% character error, Cascade R-CNN
+// F1 0.999, where classical segment decoding is repeatedly described as
+// unreliable under uncontrolled lighting. Reproduced here, twice. A model
+// needs roughly 300 labelled images; the yard produces those for free if the
+// scanner starts saving each capture with the weight that was finally saved
+// against it.
+//
+// Still deliberately NOT wired in. Nothing above changes that.
+//
 // Both need more sample photos across the yard's actual displays and
 // lighting before any threshold in this file should be considered settled.
 // Per Apsara 2026-08-19: "i just need to read it in 2s. use opencv if thats

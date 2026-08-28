@@ -1687,7 +1687,7 @@ function layoutScanBox() {
 // Deliberately conservative about spend: a cheap on-device check runs first
 // and only frames that actually contain a bright red display in the box are
 // ever uploaded, so pointing the phone at the ground costs nothing.
-let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, busy: false, locked: false, blanks: 0 };
+let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, inFlight: 0, locked: false, blanks: 0, pace: null };
 const SCAN_LIVE = {
     // NO CEILING AND NO GIVE-UP, per Apsara 2026-08-27 ("time is something i
     // can't compromise. i don't want hard cut"). An earlier version stopped
@@ -1701,9 +1701,25 @@ const SCAN_LIVE = {
     // nothing at all, and the interval backs off while nothing is readable,
     // so an idle scanner left open is close to free without ever refusing to
     // keep trying.
-    INTERVAL_MS: 650,       // while a display is in view and being read
+    // Pace while a display is in view. Faster than the old 650ms because
+    // frames now OVERLAP — see MAX_INFLIGHT — so this is the rate at which
+    // looks are STARTED, not the round-trip time of each one.
+    INTERVAL_MS: 320,
     IDLE_INTERVAL_MS: 1600, // once several frames running have yielded nothing
     BACKOFF_AFTER: 3,       // unreadable frames before easing off the pace
+    // Reads allowed in flight at once.
+    //
+    // The loop used to wait for each read to come back before starting the
+    // next, so every cycle cost the interval PLUS a full round trip, and the
+    // two frames needed to lock could not overlap at all. In a yard on mobile
+    // data that round trip is the dominant cost — the server side is ~330ms
+    // and largely fixed. Overlapping two looks means the second is already
+    // travelling while the first is being read, which takes time-to-lock from
+    // roughly two round trips to roughly one.
+    //
+    // Held at 2 on purpose. More in flight would not lock any sooner (two
+    // agreeing frames is the requirement) and would just spend more per scan.
+    MAX_INFLIGHT: 2,
     NEEDED: 2,              // clean frames that must agree before locking
     // Flagged agreement needs more corroboration than clean agreement, so a
     // display that CAN be read cleanly gets several chances first. Not a
@@ -1755,14 +1771,15 @@ function stopScanLive() {
     if (scanLive.timer) { clearInterval(scanLive.timer); scanLive.timer = null; }
     scanLive.tally = new Map();
     scanLive.sent = 0;
-    scanLive.busy = false;
+    scanLive.inFlight = 0;
     scanLive.locked = false;
     scanLive.blanks = 0;
     scanLive.pace = null;
 }
 
 async function doScanLiveTick() {
-    if (!scanLive.on || scanLive.busy || scanLive.locked || !scanTarget) return;
+    if (!scanLive.on || scanLive.locked || !scanTarget) return;
+    if (scanLive.inFlight >= SCAN_LIVE.MAX_INFLIGHT) return;
     const shot = cropScanFrame({ withCanvas: true });
     if (!shot) return;
     // On-device gate. A display fills a good part of the box with lit red; the
@@ -1777,7 +1794,7 @@ async function doScanLiveTick() {
         return;
     }
     setScanPace(SCAN_LIVE.INTERVAL_MS);
-    scanLive.busy = true;
+    scanLive.inFlight += 1;
     scanLive.sent += 1;
     try {
         const result = await api('/api/vision/read-weight', {
@@ -1865,7 +1882,7 @@ async function doScanLiveTick() {
     } catch (err) {
         console.warn('[scanner] live tick failed:', err && err.message);
     } finally {
-        scanLive.busy = false;
+        scanLive.inFlight = Math.max(0, scanLive.inFlight - 1);
     }
 }
 
@@ -1875,6 +1892,13 @@ function startScanLive() {
     scanLive.pace = SCAN_LIVE.INTERVAL_MS;
     scanLiveStatus('Point at the scale display…', 'work');
     scanLive.timer = setInterval(doScanLiveTick, SCAN_LIVE.INTERVAL_MS);
+    // Look IMMEDIATELY rather than after one interval. The operator has
+    // usually already aimed at the display before the overlay finishes
+    // opening, so waiting a full tick to take the first look was dead time on
+    // every single scan. The camera may need a moment to produce a frame, so
+    // this is a short delay rather than none — cropScanFrame returns null
+    // until the stream is live, which the loop treats as a normal miss.
+    setTimeout(doScanLiveTick, 120);
 }
 
 function closeScanner() {
