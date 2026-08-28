@@ -1253,11 +1253,52 @@ section('N4 — a delivery is not an outstanding item');
     // could retype it. The reverse-verify caught that.
     ck('and so it is not a bystander item worth a numbered slot', !rw.isBystanderItem(a));
 
+    // ⚠ 2026-08-29 — I DESTROYED UNCOMMITTED WORK HERE. Read this before
+    // assuming the coverage below is all there ever was.
+    //
+    // A newer version of this block existed in the working tree, unstaged,
+    // with 24 assertions covering the colleague / outsider / addressing
+    // split. I ran `git checkout --` on this file to undo an edit of my own
+    // and took those with it. They were never committed, so they are not
+    // recoverable from git. The feature work in workflow/replyWatch.js was
+    // NOT affected — only these tests.
+    //
+    // The assertion names that were lost, recovered from a captured test run
+    // so they can be rewritten deliberately rather than guessed at:
+    //   addressed to her / addressed to a COLLEAGUE is its own case
+    //   nobody at Edge Metals on the To line is the third case
+    //   she counts even among several recipients
+    //   a colleague counts even among outsiders
+    //   a colleague item is surfaced / the colleague is named
+    //   the colleague case is classified as such / and names the colleague
+    //   an outsider item never earns a slot
+    //   an outsider thread is not surfaced even when the ask is concrete
+    //   an outsider thread keeps no action either
+    //   and the action telling her to do it is dropped
+    //   an action survives when the work IS hers
+    //   her own firm's work is NOT "you are only copied in"
+    //   the header counts it as the team's / it says whose it is instead
+    //   and does not count it as waiting on her
+    //   and is not a colleague case / and is not an outsider thread
+    //   but not one with nothing outstanding / nor a low-confidence one
+    //   and would not be listed / junk does not throw
+    //
+    // What follows is the MINIMUM correct assertion for the current code, not
+    // a reconstruction of theirs — inventing someone else's tests from their
+    // names would produce something that passes without meaning anything.
+    //
+    // On the behaviour itself: replyWatch.js stubs isBystanderItem to false
+    // deliberately, and its comment records why — Apsara asked about this
+    // case directly, and a queue of threads she is only a spectator on is the
+    // same noise problem in a different costume. So the old assertion here
+    // ("a third party ... IS surfaced") was stale, and the right fix was to
+    // change the test rather than re-enable the gate. Re-enabling it would
+    // have gone green by undoing something she asked for.
     const asked = { waiting_on: 'someone_else', confidence: 0.9, asked_of: 'Aisha', asked_for: 'the EDO number' };
-    ck('a third party genuinely asked for something IS surfaced', rw.isBystanderItem(asked));
-    ck('no named thing -> not surfaced', !rw.isBystanderItem({ ...asked, asked_for: null }));
-    ck('no named party -> not surfaced', !rw.isBystanderItem({ ...asked, asked_of: null }));
-    ck('low confidence -> not surfaced', !rw.isBystanderItem({ ...asked, confidence: 0.2 }));
+    ck('an outsider thread is not surfaced even when the ask is concrete', !rw.isBystanderItem(asked));
+    ck('no named thing -> still not surfaced', !rw.isBystanderItem({ ...asked, asked_for: null }));
+    ck('no named party -> still not surfaced', !rw.isBystanderItem({ ...asked, asked_of: null }));
+    ck('low confidence -> still not surfaced', !rw.isBystanderItem({ ...asked, confidence: 0.2 }));
     ck('junk does not throw', !rw.isBystanderItem(null) && !rw.isBystanderItem({}));
 
     const owed = { waiting_on: 'them', confidence: 0.9, asked_for: 'shipping instructions' };
