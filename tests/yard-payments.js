@@ -121,6 +121,46 @@ const section=(t)=>console.log('\n=== '+t+' ===');
 
   }
 
+  section('the yard assistant can answer WHEN a seller was paid');
+  {
+    // Apsara asked the bot "when did we pay a seller" and it said it did not
+    // have that. It was telling the truth: the brief carried a COUNT of
+    // payments and no dates at all. These assert the FACTS are present —
+    // the model's phrasing is not tested, only that it has what it needs.
+    const { buildYardBrief } = require(R+'helpers/yardBrief.js');
+    const { addLoad } = require(R+'helpers/loads.js');
+    const l = await addLoad({ date:'2026-08-20', seller:'Zeta Metals', weight_unit:'lb',
+      items:[{ description:'Auto Casting', gross_weight:4210, tare_weight:200, price:2.2 }] });
+    await P.addPayment({ load_id:l.id, mode:'Zelle', amount:4000, paid_on:'2026-08-22' });
+    await P.addPayment({ load_id:l.id, mode:'Cash',  amount:2000, paid_on:'2026-08-26' });
+    await P.addAdvance({ seller:'Zeta Metals', mode:'Wire', amount:3000, paid_on:'2026-08-18' });
+
+    const b = buildYardBrief({});
+    const json = JSON.stringify(b);
+    ck('the brief carries payment DATES at all', /paid_on/.test(json));
+    ck('it carries a payment ledger, not just a count', Array.isArray(b.recent_payments) && b.recent_payments.length >= 3);
+    ck('every payment row names its date', b.recent_payments.every((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.paid_on)));
+    ck('every payment row names the seller — questions are asked by NAME',
+       b.recent_payments.every((r) => !!r.seller));
+    ck('rows carry the mode', b.recent_payments.every((r) => !!r.mode));
+    ck('newest first, so "when did we last pay" is answerable',
+       b.recent_payments[0].paid_on >= b.recent_payments[b.recent_payments.length - 1].paid_on);
+
+    const z = b.by_seller.find((x) => x.seller === 'Zeta Metals');
+    ck('each seller carries when they were last paid', z && z.last_paid_on === '2026-08-26');
+    ck('and how many payments they have had', z && z.payments === 2);
+
+    // The wording that made the model contradict itself.
+    // Pinned to the row with no load_id — the only true advance. An earlier
+    // version matched /advance/, which also hits "advance money allocated to
+    // this load" and picked the wrong row.
+    const adv = b.recent_payments.find((r) => r.load_id === null);
+    ck('an advance is described as money ALREADY PAID, not as unpaid',
+       adv && /already paid/.test(adv.kind));
+    ck('...and still says it is not yet tied to a load',
+       adv && /not yet allocated/.test(adv.kind));
+  }
+
   section('the ticket reflects it');
   {
     const { generateLoadPdf } = require(R+'helpers/pdf');

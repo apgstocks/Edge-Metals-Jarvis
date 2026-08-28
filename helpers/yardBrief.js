@@ -57,7 +57,7 @@ function bySeller(loads) {
     const m = new Map();
     for (const l of loads) {
         const key = String(l.seller || 'Unknown').trim() || 'Unknown';
-        if (!m.has(key)) m.set(key, { seller: key, loads: 0, net_weight: 0, amount: 0, paid: 0, pending: 0, last_date: null });
+        if (!m.has(key)) m.set(key, { seller: key, loads: 0, net_weight: 0, amount: 0, paid: 0, pending: 0, last_date: null, last_paid_on: null, payments: 0 });
         const row = m.get(key);
         row.loads += 1;
         row.net_weight += num(l.net_weight);
@@ -66,6 +66,15 @@ function bySeller(loads) {
         row.paid += num(p.paid);
         row.pending += num(p.pending);
         if (!row.last_date || ymd(l.date) > row.last_date) row.last_date = ymd(l.date);
+        // WHEN we last paid them, per Apsara 2026-08-29 — asked "when did we
+        // pay a seller" and the bot correctly said it did not have that,
+        // because the brief carried only a COUNT of payments and no dates at
+        // all. It was answering honestly about a gap in what it was given.
+        for (const pay of (p.payments || [])) {
+            row.payments += 1;
+            const on = ymd(pay.paid_on);
+            if (on && (!row.last_paid_on || on > row.last_paid_on)) row.last_paid_on = on;
+        }
     }
     return [...m.values()]
         // Sorted on the numeric value BEFORE the money fields become strings,
@@ -161,6 +170,52 @@ function buildYardBrief(opts = {}) {
             loads: outstanding.slice(0, 30),
         },
         payments_recorded: listPayments().length,
+        // The payment LEDGER itself, newest first, so "when did we pay Acme"
+        // and "what have we paid this week" are answerable from facts rather
+        // than declined. Each row names its seller, resolved here from the
+        // load, because the payment record stores a load_id and the question
+        // is always asked by NAME.
+        //
+        // Capped at 60. The aggregates above answer "how much"; this list is
+        // for "when" and "which", and an unbounded ledger would crowd out the
+        // rest of the brief on a busy yard.
+        recent_payments: (() => {
+            const byId = new Map(loads.map((l) => [l.id, l]));
+            const saleById = new Map(sales.map((l) => [l.id, l]));
+            return listPayments()
+                .slice()
+                .sort((a, b) => String(b.paid_on || '').localeCompare(String(a.paid_on || '')))
+                .slice(0, 60)
+                .map((p) => {
+                    const l = byId.get(p.load_id) || saleById.get(p.load_id);
+                    // A payment whose load is no longer in the records leaves
+                    // nothing to attribute it to. Deleting a load deletes its
+                    // payments, so this should not arise — but if it ever does,
+                    // the money is REPORTED and labelled rather than hidden or
+                    // silently pinned to the wrong seller. A missing row is a
+                    // worse answer than an unattributed one.
+                    const orphan = !!p.load_id && !l && !p.seller;
+                    return {
+                        paid_on: ymd(p.paid_on),
+                        // An ADVANCE names its seller directly and has no load.
+                        seller: p.seller || (l ? (l.seller || l.buyer || null) : null)
+                            || (orphan ? 'unknown — the load for this payment is no longer in the records' : null),
+                        mode: p.mode,
+                        amount: money(p.amount),
+                        load_id: p.load_id || null,
+                        // Wording matters here. "advance (not yet applied to
+                        // a load)" read to the model as NOT PAID, and it
+                        // answered "Bell Scrap has not been paid anything"
+                        // in the same breath as describing their $3,000
+                        // advance. An advance IS money that left the bank;
+                        // what is outstanding is only which load it belongs
+                        // to. Said plainly so it cannot be misread.
+                        kind: p.is_advance
+                            ? 'money already paid to this seller as an advance; not yet allocated to a specific load'
+                            : (p.applied_from ? 'advance money allocated to this load' : 'payment against this load'),
+                    };
+                });
+        })(),
     };
 }
 
