@@ -1038,6 +1038,232 @@ function updateItemTotals() {
 }
 
 
+// Drafts live on the SERVER (data/load_drafts.json, see helpers/loadDrafts.js).
+//
+// They were in localStorage first, which answered "don't lose my typing" but
+// not what was actually asked: a draft you can come back to has to survive a
+// closed tab, a flat phone, and being picked up on a different device.
+// Browser storage cannot do any of that.
+//
+// Photos ride along. A draft that keeps the descriptions but loses the weight
+// photos has lost the expensive half — re-typing a description takes seconds,
+// re-weighing a truck does not.
+const DRAFT_DEBOUNCE_MS = 900;
+let draftTimer = null;
+let currentDraftId = null;     // round-trips so autosave updates ONE record
+let draftSaveInFlight = false;
+
+// An item counts once it has a description or any weight — an untouched blank
+// row must not make the form look like work in progress. Mirrors
+// isWorthSaving() in helpers/loadDrafts.js; the server has the final say.
+function itemHasContent(it) {
+  if (!it) return false;
+  return !!(String(it.description || '').trim()
+    || Number(it.gross_weight) || Number(it.tare_weight) || Number(it.net_weight));
+}
+
+// Says on screen what the draft is doing. A silent autosave is
+// indistinguishable from a broken one.
+function setDraftStatus(state, detail) {
+  const el = $('draftStatus');
+  if (!el) return;
+  el.className = state === 'saving' ? 'saving' : (state === 'saved' ? '' : 'idle');
+  if (state === 'saved') {
+    el.innerHTML = `<span class="dot"></span><span>Draft saved ${detail}</span>`;
+  } else if (state === 'saving') {
+    el.innerHTML = '<span class="dot"></span><span>Saving draft…</span>';
+  } else if (state === 'waiting') {
+    el.innerHTML = '<span>Autosaves once 2 items are entered</span>';
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function currentDraftPayload() {
+  syncItemsFromDom();
+  return {
+    id: currentDraftId,
+    kind: (typeof loadModalMode !== 'undefined' && loadModalMode === 'sale') ? 'sale' : 'purchase',
+    date: $('ld_date') ? $('ld_date').value : '',
+    seller: $('ld_seller') ? $('ld_seller').value : '',
+    seller_address: $('ld_seller_address') ? $('ld_seller_address').value : '',
+    seller_phone: $('ld_seller_phone') ? $('ld_seller_phone').value : '',
+    description: editingLoadDescription || '',
+    items: (currentLoadItems || []).filter(itemHasContent),
+  };
+}
+
+async function saveLoadDraft() {
+  // Drafts are only for NEW loads. An edit already has a saved record behind
+  // it, and a stale draft restored over one is a way to silently revert a
+  // correction someone else made.
+  if (editingLoadId) { setDraftStatus('none'); return; }
+  const payload = currentDraftPayload();
+  if (payload.items.length < 2) { setDraftStatus('waiting'); return; }
+  if (draftSaveInFlight) { queueLoadDraftSave(); return; }  // coalesce, never overlap
+  draftSaveInFlight = true;
+  try {
+    const r = await api('/api/load-drafts', { method: 'POST', body: JSON.stringify(payload) });
+    if (r && r.saved && r.id) {
+      currentDraftId = r.id;
+      setDraftStatus('saved', new Date(r.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } else {
+      currentDraftId = null;
+      setDraftStatus('waiting');
+    }
+  } catch (e) {
+    // Never blocks the form, and never claims a save it did not get. If the
+    // safety net is not there, the person relying on it needs to know.
+    const el = $('draftStatus');
+    if (el) { el.className = 'idle'; el.innerHTML = '<span style="color:var(--status-danger);">Draft not saved — check connection</span>'; }
+  } finally {
+    draftSaveInFlight = false;
+  }
+}
+
+function queueLoadDraftSave() {
+  if (draftTimer) clearTimeout(draftTimer);
+  if (!editingLoadId) {
+    const filled = (currentLoadItems || []).filter(itemHasContent).length;
+    if (filled >= 2) setDraftStatus('saving');
+  }
+  draftTimer = setTimeout(saveLoadDraft, DRAFT_DEBOUNCE_MS);
+}
+
+// Called after a real load is saved. DELETES the draft rather than converting
+// it — a record that is both a draft and a load at the same moment is exactly
+// the ambiguity the separate store exists to prevent.
+async function clearLoadDraft() {
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+  const id = currentDraftId;
+  currentDraftId = null;
+  setDraftStatus('none');
+  if (!id) return;
+  try { await api(`/api/load-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
+}
+
+async function fetchLoadDrafts() {
+  try { return asArray(await api('/api/load-drafts')); } catch (e) { return []; }
+}
+
+// Fills the form from a draft and ADOPTS its id, so continuing to type keeps
+// updating the same record instead of spawning a second one.
+function applyLoadDraft(d) {
+  if (!d) return;
+  currentDraftId = d.id;
+  if ($('ld_date') && d.date) $('ld_date').value = d.date;
+  if ($('ld_seller')) $('ld_seller').value = d.seller || '';
+  if ($('ld_seller_address')) $('ld_seller_address').value = d.seller_address || '';
+  if ($('ld_seller_phone')) $('ld_seller_phone').value = d.seller_phone || '';
+  editingLoadDescription = d.description || '';
+  currentLoadItems = Array.isArray(d.items) && d.items.length ? d.items.slice() : [blankLoadItem()];
+  renderItemRows();
+  const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
+  setDraftStatus('saved', new Date(d.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+}
+
+// Offered on a blank form, never applied on its own — silently replacing what
+// is on screen with something typed hours ago turns a safety net into a
+// hazard.
+async function offerLoadDraft() {
+  const bar = $('draftBar');
+  if (!bar) return;
+  bar.classList.add('hidden');
+  if (editingLoadId) return;
+  const drafts = await fetchLoadDrafts();
+  if (!drafts.length) return;
+  const d = drafts[0];   // server returns newest first
+  const mins = Math.round((Date.now() - new Date(d.updated_at).getTime()) / 60000);
+  const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago`
+    : new Date(d.updated_at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+  const more = drafts.length > 1 ? ` (${drafts.length - 1} more below)` : '';
+  $('draftBarText').textContent = `Unfinished load from ${ago} — ${(d.items || []).length} items${d.seller ? `, ${d.seller}` : ''}.${more}`;
+  bar.dataset.draftId = d.id;
+  bar.classList.remove('hidden');
+}
+
+// The strip above the Loads deck. This is what "can be edited later" means in
+// practice — an unfinished load is visible from the list, not only from the
+// moment you happen to open a blank form.
+function draftStripHtml() {
+  if (!pendingDrafts.length) return '';
+  const card = (d) => {
+    const items = Array.isArray(d.items) ? d.items : [];
+    const names = items.map(i => String(i.description || '').trim()).filter(Boolean);
+    const when = d.updated_at ? new Date(d.updated_at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
+    return `
+      <div class="draft-card">
+        <div class="d-main">
+          <div class="d-title">${esc(d.seller || 'Unnamed load')}${d.kind === 'sale' ? ' — sale' : ''}</div>
+          <div class="d-sub">${items.length} item${items.length === 1 ? '' : 's'}${names.length ? ' · ' + esc(names.slice(0, 3).join(', ')) : ''} · last edited ${esc(when)}</div>
+        </div>
+        <button class="btn btn-resume-draft" data-id="${esc(d.id)}" style="padding:7px 14px; font-size:12px;">Continue</button>
+        <button class="btn btn-drop-draft" data-id="${esc(d.id)}" style="padding:7px 12px; font-size:12px;">Delete</button>
+      </div>`;
+  };
+  return `<div class="draft-strip">
+      <div class="draft-strip-head">Unfinished — not saved as loads yet (${pendingDrafts.length})</div>
+      ${pendingDrafts.map(card).join('')}
+    </div>`;
+}
+
+// Reopens a draft in the load modal. Adopts its id, so finishing it updates
+// the same draft and then deletes it on save rather than leaving a twin.
+async function resumeDraft(id) {
+  const d = pendingDrafts.find(x => x.id === id) || (await fetchLoadDrafts()).find(x => x.id === id);
+  if (!d) return;
+  resetLoadModal(d.kind === 'sale' ? 'sale' : 'purchase');
+  $('loadModal').classList.remove('hidden');
+  applyLoadDraft(d);
+}
+
+async function restoreLoadDraft() {
+  const bar = $('draftBar');
+  const id = bar && bar.dataset.draftId;
+  const drafts = await fetchLoadDrafts();
+  applyLoadDraft(drafts.find((x) => x.id === id) || drafts[0]);
+}
+
+// Discards from the bar: removes the RECORD, not just the notice.
+async function discardOfferedDraft() {
+  const bar = $('draftBar');
+  const id = bar && bar.dataset.draftId;
+  if (bar) bar.classList.add('hidden');
+  if (!id) return;
+  try { await api(`/api/load-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
+  if (currentDraftId === id) { currentDraftId = null; setDraftStatus('waiting'); }
+}
+
+function draftStripHtml() {
+  if (!pendingDrafts.length) return '';
+  const card = (d) => {
+    const items = Array.isArray(d.items) ? d.items : [];
+    const names = items.map(i => String(i.description || '').trim()).filter(Boolean);
+    const when = d.updated_at ? new Date(d.updated_at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
+    return `
+      <div class="draft-card">
+        <div class="d-main">
+          <div class="d-title">${esc(d.seller || 'Unnamed load')}${d.kind === 'sale' ? ' — sale' : ''}</div>
+          <div class="d-sub">${items.length} item${items.length === 1 ? '' : 's'}${names.length ? ' · ' + esc(names.slice(0, 3).join(', ')) : ''} · last edited ${esc(when)}</div>
+        </div>
+        <button class="btn btn-resume-draft" data-id="${esc(d.id)}" style="padding:7px 14px; font-size:12px;">Continue</button>
+        <button class="btn btn-drop-draft" data-id="${esc(d.id)}" style="padding:7px 12px; font-size:12px;">Delete</button>
+      </div>`;
+  };
+  return `<div class="draft-strip">
+      <div class="draft-strip-head">Unfinished — not saved as loads yet (${pendingDrafts.length})</div>
+      ${pendingDrafts.map(card).join('')}
+    </div>`;
+}
+
+async function resumeDraft(id) {
+  const d = pendingDrafts.find(x => x.id === id) || (await fetchLoadDrafts()).find(x => x.id === id);
+  if (!d) return;
+  resetLoadModal(d.kind === 'sale' ? 'sale' : 'purchase');
+  $('loadModal').classList.remove('hidden');
+  applyLoadDraft(d);
+}
+
 // ── Payments (mirrors dashboard/index.html) ────────────────────────────────
 // Same helper, same wording, same rules. The website copy is the reference;
 // if these two ever disagree about what "part paid" means, the number on a
@@ -3659,6 +3885,10 @@ function wireDeckEvents() {
 
 
 let loadsCache = [];
+// Unfinished loads shown above the deck. Held separately from loadsCache on
+// purpose — every total and filter in this tab reads loadsCache, and a draft
+// must not reach any of them.
+let pendingDrafts = [];
 let currentLoadItems = [];
 let editingLoadId = null;
 // The load-level description input is gone from the form (2026-08-28), but the
