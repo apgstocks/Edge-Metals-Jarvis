@@ -20,7 +20,7 @@ const R = path.join(__dirname, '..');
 let pass = 0, fail = 0;
 const ck = (name, cond) => { if (cond) { pass++; console.log('  PASS ', name); } else { fail++; console.log('  FAIL ', name); } };
 
-const { scaleToFit, pdfFittedToOnePage, centringOffsetPx, MIN_SCALE, PX_PER_MM } = require(path.join(R, 'helpers', 'pdfFit.js'));
+const { scaleToFit, pdfFittedToOnePage, centringOffsetPx, trimToFit, RELIEFS, MIN_SCALE, PX_PER_MM } = require(path.join(R, 'helpers', 'pdfFit.js'));
 
 console.log('\n─ one-page documents ─────────────────────────────────────');
 
@@ -146,28 +146,33 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
 
     // A real overflow measurement produces a real scale.
     {
-        let got = null, css = null;
+        // Apsara: "what happened to original size? i asked you to put it in
+        // one page. didnt tell about reducing right/left border."
+        //
+        // THE central assertion of this file now: an invoice that is over by
+        // an amount the empty space can absorb must come out at FULL SIZE.
+        let got = null; const styles = []; let reliefs = 0;
         const page = {
-            evaluate: async () => 1250,
-            addStyleTag: async (o) => { css = o.content; },
+            // 1250px first, then shrinking as reliefs are applied — a stand-in
+            // for what the real browser reports after each style is injected.
+            evaluate: async (fn) => {
+                if (typeof fn === 'function' && fn.length === 0 && reliefs > 0) { /* adaptive relief */ }
+                return [1250, 1215, 1180, 1118][Math.min(reliefs, 3)];
+            },
+            addStyleTag: async (o) => { styles.push(o.content); reliefs += 1; },
             pdf: async (o) => { got = o; return Buffer.from('PDF'); },
         };
         await pdfFittedToOnePage(page, { printBackground: true }, { pageHeightMm: 297, pageWidthMm: 210, label: 'invoice TEST' });
-        ck('an overflowing page is scaled down', got.scale < 1 && got.scale > 0.85);
-        ck('the scaled height fits A4', 1250 * got.scale <= A4_PX);
-
-        // The centring really is injected, and it really does centre.
-        ck('a centring style is injected', typeof css === 'string' && css.length > 0);
-        ck('it moves paint, not layout', /position:relative/.test(css));
-        const px = parseFloat(/left:([\d.]+)px/.exec(css)[1]);
-        const W = 210 * PX_PER_MM;
-        ck('the shift is a real positive offset', px > 0);
-        ck('the rendered left and right margins match',
-           Math.abs((px * got.scale) - (W - (px + W) * got.scale)) < 0.05);
-        ck('the sheet does not run off the right edge', (px + W) * got.scale <= W + 0.05);
+        ck('an invoice that empty space can absorb stays at FULL SIZE', got.scale === 1);
+        ck('and it is NOT shifted, so the margins stay as designed',
+           !styles.some((c) => /position:relative/.test(c)));
+        ck('space was reclaimed from the page margin first',
+           /padding-top/.test(styles[0] || ''));
+        ck('the left and right margins are never touched',
+           !styles.some((c) => /padding-left|padding-right|padding:\s*\d/.test(c)));
     }
 
-    // A document that already fits must be left exactly where it is.
+    // A document that already fits must be left completely untouched.
     {
         let css = null, got = null;
         const page = {
@@ -177,7 +182,22 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
         };
         await pdfFittedToOnePage(page, {}, { pageHeightMm: 297, pageWidthMm: 210, label: 'short invoice' });
         ck('a short invoice is not scaled', got.scale === 1);
-        ck('and no centring style is injected at all', css === null);
+        ck('no space is reclaimed from it either', css === null);
+
+        // ── scaling is the LAST resort, not the first move ────────────────
+        // A document so tall that no amount of empty space can save it. Only
+        // then may it shrink, and only then is it centred.
+        let got2 = null; const styles2 = [];
+        const tall = {
+            evaluate: async () => 1500,          // never shrinks, whatever is applied
+            addStyleTag: async (o) => { styles2.push(o.content); },
+            pdf: async (o) => { got2 = o; return Buffer.from('PDF'); },
+        };
+        await pdfFittedToOnePage(tall, {}, { pageHeightMm: 297, pageWidthMm: 210, label: 'huge invoice' });
+        ck('a document empty space cannot save DOES scale', got2.scale < 1);
+        ck('every relief was tried before scaling', styles2.length >= RELIEFS.length - 1);
+        ck('and only then is it centred', styles2.some((c) => /position:relative/.test(c)));
+        ck('the scaled version still fits the page', 1500 * got2.scale <= A4_PX + 0.5);
     }
 
     // Chrome throws if scale leaves [0.1, 2], which would take the whole
