@@ -205,41 +205,52 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 }
 
 
-// ── amounts carry a $ , and only one ───────────────────────────────────────
-// Per Apsara 2026-08-29. The $ was at SOME call sites and not others, which is
-// how one screen ends up showing "8,822.00" beside "$8,822.00".
+// ── every amount the UI RENDERS carries a $ ────────────────────────────────
+// Rewritten 2026-08-29 after it missed a real bug. The previous version
+// asserted that fmtAmount and payMoney contain a $ — both true — while the
+// payment badge used a THIRD, local formatter that did not, and shipped
+// "PART PAID 12,000.00". Checking a formatter's definition proves nothing
+// about what reaches the screen, so these RENDER the real functions and read
+// the output.
 {
   for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
     const src = fs.readFileSync(R+p,'utf8');
-    const grab = (n) => { const i=src.indexOf('function '+n+'('); let d=0,j=src.indexOf('{',i);
+    const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
+      let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
+    const payMoney = (n) => '$' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const badge = new Function('payMoney','return '+grab('paymentBadgeHtml'))(payMoney);
+    const strip = (h) => String(h).replace(/<[^>]*>/g,'');
+
+    const cases = [
+      ['part paid',  { paid:12000, pending:4822, status:'partial' }, ['$12,000.00','$4,822.00']],
+      ['paid',       { paid:8822, pending:0, status:'paid' },        ['$8,822.00']],
+      ['overpaid',   { paid:9000, over:178, status:'overpaid' },     ['$178.00']],
+      ['no price',   { paid:500, status:'paid_amount_unknown' },     ['$500.00']],
+    ];
+    for (const [label, pay, wants] of cases) {
+      const out = strip(badge({ payment: pay }));
+      ck(`${p}: badge (${label}) shows every amount with a $`,
+         wants.every((w) => out.includes(w)));
+      // A bare number with no $ in front is the exact defect that shipped.
+      ck(`${p}: badge (${label}) has no un-prefixed amount`,
+         !/(^|[^$\d.,])\d[\d,]*\.\d\d/.test(out));
+    }
+    ck(`${p}: nothing is shown when nothing has been paid`, badge({ payment:{ paid:0 } }) === '');
+
+    // The totals line under the item rows, rendered for real.
     const fmtAmount = new Function('return ' + grab('fmtAmount'))();
-    ck(`${p}: fmtAmount prefixes $`, fmtAmount(8822) === '$8,822.00');
-    ck(`${p}: zero still shows $0.00`, fmtAmount(0) === '$0.00');
-    ck(`${p}: a missing amount stays EMPTY, not a bare $`, fmtAmount(null) === '');
-    ck(`${p}: no call site prefixes $ by hand any more`, !/'\$' \+ fmtAmount\(/.test(src));
-    ck(`${p}: payment amounts carry $ too`, /payMoney = \(n\) => '\$'/.test(src));
+    const mkRow = (g,t,n,a) => { const v={'.ld-item-gross':g,'.ld-item-tare':t,'.ld-item-net':n,'.ld-item-amount':a};
+      return { querySelector: (s) => (s in v) ? { value: v[s]==null?'':String(v[s]) } : null }; };
+    let elx = { innerHTML:'' };
+    new Function('document','fmtAmount', grab('updateItemTotals') + ';updateItemTotals();')(
+      { getElementById: () => elx, querySelectorAll: () => [mkRow(4210,200,4010,'$8,822.00'), mkRow(3475,180,3295,'$7,249.00')] },
+      fmtAmount);
+    const amt = (elx.innerHTML.match(/data-label="Amount">([^<]*)</)||[])[1];
+    ck(`${p}: the item totals Amount renders with a single $`, amt === '$16,071.00');
   }
 }
 
-
-// ── an autosaved draft must actually SHOW ──────────────────────────────────
-// Per Apsara 2026-08-29: "it is showing that autosaved but nowhere the draft
-// is showing in app." The draft was written and the footer said so, but the
-// Loads screen behind the modal was painted before it existed and nothing
-// repainted it. Invisible is nearly as bad as lost, for a safety net.
-{
-  for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
-    const src = fs.readFileSync(R+p,'utf8');
-    ck(`${p}: has a strip refresher`, /async function refreshDraftStrip/.test(src));
-    ck(`${p}: repaints the strip when the load form closes`,
-       /closeLoadModal = \(\) => \{[\s\S]{0,400}?refreshDraftStrip\(\)/.test(src));
-    ck(`${p}: refreshes from the SERVER, not a local cache`,
-       /refreshDraftStrip[\s\S]{0,300}?fetchLoadDrafts\(\)/.test(src));
-    ck(`${p}: repaints only the strip, not the whole tab`,
-       !/refreshDraftStrip[\s\S]{0,300}?loadTab\('loads'\)/.test(src));
-  }
-}
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

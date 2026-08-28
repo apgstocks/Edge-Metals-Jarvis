@@ -3905,7 +3905,17 @@ function renderPayHistory() {
 function paymentBadgeHtml(l) {
   const p = l && l.payment;
   if (!p || !p.paid) return '';
-  const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Uses payMoney rather than a local formatter of its own.
+  //
+  // This badge had its OWN copy that did not add the $, which is how it ended
+  // up printing "PART PAID 12,000.00" after every other amount on the screen
+  // had one. Worse, my patch for that targeted a variable name this function
+  // no longer used — the two hosts had been aligned in between and the local
+  // was renamed — so it silently changed nothing, and the test I wrote checked
+  // fmtAmount and payMoney without ever rendering the badge. Deleting the
+  // duplicate is the fix; there is now one money formatter in the payments UI
+  // and nothing to keep in step.
+  const money = payMoney;
   if (p.status === 'paid') {
     return `<span class="pay-badge pay-full">PAID ${money(p.paid)}</span>`;
   }
