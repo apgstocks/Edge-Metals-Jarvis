@@ -117,6 +117,14 @@ input::placeholder { color:var(--steel-500); }
   background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400);
   border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px; color:var(--text-muted); }
 #draftBar.hidden { display:none; }
+/* Draft status — per Apsara 2026-08-28 ("how do i know that it is getting
+   autosaved?"). A silent autosave is indistinguishable from no autosave, so
+   it has to say so. Muted rather than loud: this is a reassurance, not an
+   alert, and it is on screen the whole time a load is being typed. */
+#draftStatus { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
+#draftStatus .dot { width:6px; height:6px; border-radius:50%; background:var(--status-good, #4ade80); flex:none; }
+#draftStatus.saving .dot { background:var(--copper-400); }
+#draftStatus.idle { color:var(--text-faint); }
 /* Floating variant — per Apsara 2026-08-28 ("the item list is going down,
    when i scroll down only i can see. i dont like this behaviour").
    .modal-body is max-height:62vh with overflow-y:auto, so an absolutely
@@ -147,7 +155,7 @@ input::placeholder { color:var(--steel-500); }
 .modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
 .modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
 .modal-body { padding:24px 26px; max-height:62vh; overflow-y:auto; }
-.modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
+.modal-foot { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
 
 /* ── Collapsible sidebar for phone widths ─────────────────────────────────
    Desktop: sidebar sits in normal flex flow, always visible, unchanged.
@@ -2640,15 +2648,36 @@ function itemHasContent(it) {
     || Number(it.gross_weight) || Number(it.tare_weight) || Number(it.net_weight));
 }
 
+// Says, on screen, what the draft is doing. A silent autosave is
+// indistinguishable from a broken one — the only honest way to answer "how do
+// I know it saved?" is for it to tell you, every time, with a timestamp that
+// visibly moves as you type.
+function setDraftStatus(state, detail) {
+  const el = $('draftStatus');
+  if (!el) return;
+  el.className = state === 'saving' ? 'saving' : (state === 'saved' ? '' : 'idle');
+  if (state === 'saved') {
+    el.innerHTML = `<span class="dot"></span><span>Draft saved ${detail}</span>`;
+  } else if (state === 'saving') {
+    el.innerHTML = '<span class="dot"></span><span>Saving draft…</span>';
+  } else if (state === 'waiting') {
+    // Explains the gap rather than showing nothing, so a blank status is
+    // never mistaken for a failure — it is a real state with a reason.
+    el.innerHTML = '<span>Autosaves once 2 items are entered</span>';
+  } else {
+    el.innerHTML = '';
+  }
+}
+
 function saveLoadDraft() {
   try {
     // Drafts are only for NEW loads. An edit already has a saved record
     // behind it, and restoring a stale draft over a real load is a way to
     // silently revert someone else's correction.
-    if (editingLoadId) return;
+    if (editingLoadId) { setDraftStatus('none'); return; }
     syncItemsFromDom();
     const items = (currentLoadItems || []).filter(itemHasContent);
-    if (items.length < 2) return;
+    if (items.length < 2) { setDraftStatus('waiting'); return; }
     const draft = {
       at: Date.now(),
       date: $('ld_date') ? $('ld_date').value : '',
@@ -3746,6 +3775,10 @@ function renderLoads(loads) {
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
         </div>
         <div class="modal-foot">
+          <!-- Sits in the footer, beside Save, because that is where the eye
+               already goes when wondering whether work is safe. -->
+          <span id="draftStatus"></span>
+          <span style="flex:1;"></span>
           <button id="btnCancelLoad" class="btn">Cancel</button>
           <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
         </div>
