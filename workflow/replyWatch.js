@@ -1051,7 +1051,22 @@ async function assess(email) {
     // actually supplied headers - assess() is called from tests without them,
     // and absent headers must mean "unchanged", never "somebody else's".
     if (email.to !== undefined || email.cc !== undefined) {
-        const addr = addressing(email.to, email.cc, email.myAddress, email.managerAddress, email.from);
+        // FAIL OPEN, and this is not hypothetical: tests/integration.js caught
+        // addressing() throwing on every single email (a stale mock, but the
+        // shape is what matters). assess() catches it one level up, returns
+        // null, and the caller then does NOT mark the message seen — so every
+        // email in the mailbox fails assessment, is retried on the next tick,
+        // and NOTHING is ever flagged. A total silent outage of the watcher,
+        // announced by one console line.
+        //
+        // Addressing is an ENRICHMENT. It must never be able to take down the
+        // judgement it was added to improve.
+        let addr = { unknown: true, inTo: true, inCc: false, toLabel: null, fromInternal: false };
+        try {
+            addr = addressing(email.to, email.cc, email.myAddress, email.managerAddress, email.from);
+        } catch (e) {
+            console.error('[REPLYWATCH] addressing failed, treating direction as unknown (non-fatal):', e.message);
+        }
         if (!addr.unknown && addr.fromInternal && !addr.inTo) {
             // OUR OWN TEAM wrote this to an outsider. Not inbound work. Either
             // they owe us a reply, or we were delivering - and the owedItem

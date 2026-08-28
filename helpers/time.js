@@ -111,6 +111,14 @@ function parseNaturalTime(text) {
     const lower = String(text).toLowerCase().trim()
         .replace(/\b(la|los angeles|pacific|pst|pdt)\s*time\b/g, '')
         .replace(/\b(pst|pdt)\b/g, '')
+        // "@7am" is her shorthand for "at 7am" and it was the canonical live
+        // bug this chrono work was started for — every hand-rolled pattern
+        // recognised "7am" and none of them survived the "@". chrono does not
+        // rescue it either: with no day in the text it reports the day as
+        // UNCERTAIN, and the certainty guard below then correctly refuses to
+        // guess. So the fix belongs here, in normalisation, not in either
+        // parser: drop an "@" that is sitting directly in front of a time.
+        .replace(/(^|\s)@\s*(?=\d)/g, '$1')
         .trim();
 
     // Relative-to-real-now spans are timezone-agnostic by construction —
