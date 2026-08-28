@@ -100,6 +100,31 @@ const section=(t)=>console.log('\n=== '+t+' ===');
     ck('an overpayment is stated rather than hidden', /OVERPAID/.test(t));
   }
 
+
+  section('money is rounded to the cent on customer documents');
+  {
+    const { round2 } = require(R+'helpers/money.js');
+    // The cases that actually misbehave with freight numbers.
+    ck('13.5 x 1.15 rounds to 15.52, not 15.524999999999999', round2(13.5*1.15)===15.52);
+    ck('1.005 x 100 rounds to 100.5', round2(1.005*100)===100.5);
+    ck('21 x 2420 stays exact', round2(21*2420)===50820);
+
+    // Accumulating RAW drifts; accumulating ROUNDED lines does not, and the
+    // printed rows then add up to the printed total.
+    let raw=0, perLine=0;
+    for (let i=0;i<10;i++) { raw += 13.5*1.15; perLine += round2(13.5*1.15); }
+    ck('summing raw line values drifts', String(raw)==='155.25000000000003');
+    ck('summing ROUNDED lines does not', round2(perLine)===155.2);
+
+    // And the source files must keep doing it.
+    const files = ['helpers/invoiceSheet.js','helpers/proformaPdf.js','helpers/invoicePdf.js'];
+    for (const f of files) {
+      const src = fs.readFileSync(R+f,'utf8');
+      const lines = src.split('\n').filter(l => /(weight|qty) \* rate/.test(l) && !/^\s*(\/\/|\*)/.test(l));
+      ck(`${f}: every qty x rate is wrapped in round2`, lines.length>0 && lines.every(l=>/round2\(/.test(l)));
+    }
+  }
+
   console.log('\n================================================================');
   console.log(`${pass} passed, ${fail} failed`);
   if (fail) { console.log('\nFAILED:'); failures.forEach(f=>console.log('  - '+f)); }

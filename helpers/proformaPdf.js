@@ -116,6 +116,8 @@ function formatQty(value) {
     return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+const { round2 } = require('./money');
+
 function formatMoney2(value) {
     return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -129,13 +131,21 @@ function buildProformaDc2Html(data) {
         const items = (cont.items || []).map((item) => {
             const qty = Number(item.qty) || 0;
             const rate = Number(item.rate) || 0;
+            // Rounded ONCE, per line, and the total built from the rounded
+            // lines — per Apsara 2026-08-28. qty * rate is raw floating point
+            // (13.5 x 1.15 = 15.524999999999999), and accumulating the raw
+            // values drifts: ten such lines total 155.25000000000003 while the
+            // printed lines add to 155.20. On a document a customer checks by
+            // hand, the total has to equal the rows above it — so the same
+            // rounded figure is both printed and summed.
+            const lineAmount = round2(qty * rate);
             totalQty += qty;
-            totalDue += qty * rate;
+            totalDue += lineAmount;
             return {
                 desc: item.desc || '',
                 qtyFmt: formatQty(qty),
                 rateFmt: formatRate(rate),
-                amountFmt: '$' + formatMoney2(qty * rate),
+                amountFmt: '$' + formatMoney2(lineAmount),
             };
         });
         return { container_no: cont.container_no || '', items };

@@ -16,6 +16,7 @@
 // substitution from the old template is not used by this one.
 
 const fs = require('fs');
+const { round2 } = require('./money');
 const path = require('path');
 const puppeteer = require('puppeteer');
 
@@ -125,7 +126,10 @@ function buildInvoiceClassicHtml(data) {
     const itemRowsHtml = lineItems.map((item, i) => {
         const qty = Number(item.weight) || 0;
         const rate = Number(item.rate) || 0;
-        const amount = Number(item.amount != null ? item.amount : qty * rate);
+        // round2 on the fallback: when the sheet supplied no amount this
+        // computes one, and qty * rate is raw floating point. An invoice line
+        // reading 15.524999999999999 is not a thing to send a customer.
+        const amount = round2(Number(item.amount != null ? item.amount : qty * rate));
         // Booking#/Container#/Seal# use a smaller 8.5pt (was 8pt, bumped
         // one step less than the other columns' +1pt) + tighter padding
         // and nowrap+hidden-overflow — real Helvetica (reportlab) renders
