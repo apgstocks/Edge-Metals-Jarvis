@@ -113,6 +113,10 @@ input::placeholder { color:var(--steel-500); }
    should get matched and show all possible matches"). */
 .ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
 .ac-dropdown.hidden { display:none; }
+#draftBar { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px;
+  background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400);
+  border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px; color:var(--text-muted); }
+#draftBar.hidden { display:none; }
 /* Floating variant — per Apsara 2026-08-28 ("the item list is going down,
    when i scroll down only i can see. i dont like this behaviour").
    .modal-body is max-height:62vh with overflow-y:auto, so an absolutely
@@ -2612,6 +2616,105 @@ let editingLoadId = null;
 // longer show.
 let editingLoadDescription = '';
 
+// ── Draft autosave — per Apsara 2026-08-28 ────────────────────────────────
+// "as soon as i type 2 item details, it should get autosaved", clarified as a
+// draft to come back to rather than a real load record.
+//
+// Deliberately LOCAL and invisible. No load number is assigned, nothing
+// appears in the Loads list, nothing lands in a report, and nobody else sees
+// it. A half-finished load that becomes a real record the moment a second
+// item is typed would show up in the day's figures and in the yard report,
+// which is a worse problem than the one this solves.
+//
+// Only starts once TWO item rows carry real data, which is the point at which
+// enough has been typed to be worth losing.
+const LOAD_DRAFT_KEY = 'edgeyard.loadDraft.v1';
+const DRAFT_DEBOUNCE_MS = 700;
+let draftTimer = null;
+
+// An item counts once it has a description or any weight — an untouched blank
+// row must not make the form look like work in progress.
+function itemHasContent(it) {
+  if (!it) return false;
+  return !!(String(it.description || '').trim()
+    || Number(it.gross_weight) || Number(it.tare_weight) || Number(it.net_weight));
+}
+
+function saveLoadDraft() {
+  try {
+    // Drafts are only for NEW loads. An edit already has a saved record
+    // behind it, and restoring a stale draft over a real load is a way to
+    // silently revert someone else's correction.
+    if (editingLoadId) return;
+    syncItemsFromDom();
+    const items = (currentLoadItems || []).filter(itemHasContent);
+    if (items.length < 2) return;
+    const draft = {
+      at: Date.now(),
+      date: $('ld_date') ? $('ld_date').value : '',
+      seller: $('ld_seller') ? $('ld_seller').value : '',
+      seller_address: $('ld_seller_address') ? $('ld_seller_address').value : '',
+      seller_phone: $('ld_seller_phone') ? $('ld_seller_phone').value : '',
+      // Photos are stripped. A scanner capture is 20-30KB of base64 each and
+      // localStorage is a ~5MB budget for the whole origin, so a few loads
+      // with photos would blow the quota and take the draft with them. The
+      // typed work is what is worth recovering; a photo can be retaken.
+      items: items.map(({ grossPhoto, tarePhoto, ...rest }) => rest),
+    };
+    localStorage.setItem(LOAD_DRAFT_KEY, JSON.stringify(draft));
+  } catch (e) { /* quota or private mode — a draft is a convenience, never a blocker */ }
+}
+
+function queueLoadDraftSave() {
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveLoadDraft, DRAFT_DEBOUNCE_MS);
+}
+
+function clearLoadDraft() {
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+  try { localStorage.removeItem(LOAD_DRAFT_KEY); } catch (e) {}
+  const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
+}
+
+function readLoadDraft() {
+  try {
+    const raw = localStorage.getItem(LOAD_DRAFT_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.items) || d.items.length < 2) return null;
+    return d;
+  } catch (e) { return null; }
+}
+
+// Offered, never applied automatically. Silently replacing what is on screen
+// with something typed hours ago is how a draft becomes a hazard rather than
+// a safety net.
+function offerLoadDraft() {
+  const bar = $('draftBar');
+  if (!bar) return;
+  const d = readLoadDraft();
+  if (!d) { bar.classList.add('hidden'); return; }
+  const when = new Date(d.at);
+  const mins = Math.round((Date.now() - d.at) / 60000);
+  const ago = mins < 1 ? 'just now'
+    : mins < 60 ? `${mins} min ago`
+    : when.toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+  $('draftBarText').textContent = `Unfinished load from ${ago} — ${d.items.length} items${d.seller ? `, ${d.seller}` : ''}.`;
+  bar.classList.remove('hidden');
+}
+
+function restoreLoadDraft() {
+  const d = readLoadDraft();
+  if (!d) return;
+  if ($('ld_date') && d.date) $('ld_date').value = d.date;
+  if ($('ld_seller')) $('ld_seller').value = d.seller || '';
+  if ($('ld_seller_address')) $('ld_seller_address').value = d.seller_address || '';
+  if ($('ld_seller_phone')) $('ld_seller_phone').value = d.seller_phone || '';
+  currentLoadItems = d.items.length ? d.items.slice() : [blankLoadItem()];
+  renderItemRows();
+  const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
+}
+
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
 // comment in renderLoads: a plain file input already gives mobile users a
@@ -3202,6 +3305,8 @@ function resetLoadModal(mode) {
   applyLoadModalMode(mode);
   renderItemRows();
   stopCamera();
+  // A new blank form is exactly where an unfinished one is worth offering.
+  offerLoadDraft();
   refreshAddressBookCache();
   // Re-render after the fetch lands so any description typed via "Others…"
   // on a previous load shows up as a real option, not just the base list —
@@ -3594,6 +3699,14 @@ function renderLoads(loads) {
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
+          <!-- Offered, not applied. Restoring automatically would overwrite
+               whatever is on screen with something typed hours ago. -->
+          <div id="draftBar" class="hidden">
+            <span id="draftBarText"></span>
+            <span style="flex:1;"></span>
+            <button id="btnRestoreDraft" class="btn" style="padding:6px 12px; font-size:12px;">Restore</button>
+            <button id="btnDiscardDraft" class="btn" style="padding:6px 12px; font-size:12px;">Discard</button>
+          </div>
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date" style="max-width:170px;"></div>
             <div class="field"><label id="ld_fixed_label">Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
@@ -3674,6 +3787,16 @@ function wireLoadsEvents() {
     $('loadModal').classList.remove('hidden');
   });
   const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+
+  // Autosave the draft on any edit inside the load form. One delegated
+  // listener rather than per-field wiring, because item rows are re-rendered
+  // constantly and individually-bound handlers would be lost on every
+  // renderItemRows(). Debounced, so typing a description is one write and not
+  // one per keystroke.
+  $('loadModal').addEventListener('input', queueLoadDraftSave);
+  $('loadModal').addEventListener('change', queueLoadDraftSave);
+  $('btnRestoreDraft').addEventListener('click', restoreLoadDraft);
+  $('btnDiscardDraft').addEventListener('click', clearLoadDraft);
   $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
   $('btnCancelLoad').addEventListener('click', closeLoadModal);
 
@@ -3832,6 +3955,11 @@ function wireLoadsEvents() {
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
+      // The work is committed, so the draft has done its job. Cleared only
+      // AFTER the request resolves — clearing before it would throw the
+      // recovery copy away at the exact moment a failed save makes it most
+      // valuable.
+      clearLoadDraft();
       // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
       // type a new name if it is not there in address book, it should be
       // created as new contact with name, address(optional), phone
