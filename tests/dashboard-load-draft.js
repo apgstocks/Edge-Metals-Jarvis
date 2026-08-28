@@ -91,5 +91,53 @@ const statusSrc = grab('setDraftStatus');
 ck('every state renders something distinguishable',
    /Draft saved/.test(statusSrc) && /Saving draft/.test(statusSrc) && /Autosaves once 2 items/.test(statusSrc));
 
+// ── item totals ────────────────────────────────────────────────────────────
+// Per Apsara 2026-08-28: the running gross/tare/net at the foot of the item
+// list. Extracted from the page and executed against a DOM stand-in, so the
+// shipped arithmetic is what gets checked.
+(function testItemTotals(){
+// minimal DOM stand-in
+function mkRow(g,t,n,a){ const vals={'.ld-item-gross':g,'.ld-item-tare':t,'.ld-item-net':n,'.ld-item-amount':a};
+  return { querySelector:(sel)=> (sel in vals) ? { value: vals[sel]==null?'':String(vals[sel]) } : null }; }
+let el;
+global.document = {
+  getElementById:(id)=> id==='ld_item_totals' ? el : null,
+  querySelectorAll:()=> global.__rows,
+};
+global.fmtAmount = (n)=> n==null?'':('$'+Number(n).toFixed(2));
+eval(grab('updateItemTotals'));
+
+
+const run=(rows)=>{ global.__rows=rows; el={innerHTML:''}; updateItemTotals(); return el.innerHTML; };
+const nums=(html)=>[...html.matchAll(/class="tl-num[^"]*"[^>]*>([^<]*)</g)].map(m=>m[1]);
+
+let h=run([mkRow(4210,200,4010,'$8823.00'), mkRow(3475,180,3295,'$7249.00')]);
+ck('gross totals correctly', nums(h)[0]==='7,685');
+ck('tare totals correctly',  nums(h)[1]==='380');
+ck('net totals correctly',   nums(h)[2]==='7,305');
+ck('amount totals correctly, ignoring the $ and commas', nums(h)[3]==='$16072.00');
+ck('the item count is shown', /2 items/.test(h));
+
+h=run([mkRow(1000,100,900,'$100.00')]);
+ck('singular wording for one item', /1 item\)/.test(h) && !/1 items/.test(h));
+
+h=run([mkRow('', '', '', ''), mkRow('','','','')]);
+ck('all-blank rows render nothing at all', h==='');
+
+h=run([mkRow(4210,'', '', ''), mkRow('',180,'','')]);
+ck('a half-filled load still totals what it has', nums(h)[0]==='4,210' && nums(h)[1]==='180');
+
+h=run([mkRow(1.005,0.005,1,''), mkRow(1.005,0.005,1,'')]);
+ck('floating point is rounded to 2dp, not 2.0100000000000002', nums(h)[0]==='2.01');
+
+h=run([mkRow(4210,200,4010,''), mkRow(3475,180,3295,'')]);
+ck('no amounts means the amount cell stays empty', nums(h)[3]==='');
+
+h=run([mkRow(-100,0,-100,'')]);
+ck('a negative typo still adds up rather than being dropped', nums(h)[0]==='-100');
+
+
+})();
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
