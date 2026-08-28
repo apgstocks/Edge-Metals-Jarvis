@@ -266,7 +266,7 @@ async function generateProformaDc2Pdf(data, opts = {}) {
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        }, { pageHeightPx: 1500, label: `proforma ${data && data.inv_no ? data.inv_no : ''}`.trim() });
+        }, { pageHeightPx: 1500, pageWidthPx: 816, label: `proforma ${data && data.inv_no ? data.inv_no : ''}`.trim() });
         // puppeteer resolves page.pdf() with a Uint8Array, not a Node
         // Buffer — Buffer.isBuffer(Uint8Array) is false, so passing it
         // straight to Express's res.send() gets JSON-stringified byte-by-

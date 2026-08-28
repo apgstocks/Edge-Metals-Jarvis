@@ -92,6 +92,39 @@ function scaleToFit(contentPx, pageHeightMm) {
     return { scale: ideal, fits: true, targetPx, ideal };
 }
 
+// ── centring the scaled sheet ──────────────────────────────────────────────
+// Apsara, 2026-08-29, on the first one-page invoice: "this should be center".
+//
+// She is right, and it is a consequence of how the scaling works. Chrome's
+// print scale multiplies every position by the scale factor about the TOP-LEFT
+// corner of the paper. So at 0.9 the design keeps its 15mm left margin, the
+// sheet shrinks, and every millimetre freed by shrinking piles up on the
+// right: ~15mm left against ~26mm right. Nothing is misaligned inside the
+// document — the whole document is sitting in the corner of the paper.
+//
+// The correction is a pure horizontal shift, and it is done with `position:
+// relative; left:` for one specific reason: relative positioning moves where a
+// box is PAINTED without changing the layout, so it cannot alter where Chrome
+// decides to break pages. The one-page behaviour that now works stays exactly
+// as it is. A transform or a margin would both feed back into layout.
+//
+// The arithmetic, with S the scale and W the paper width:
+//   the shift is applied before scaling, so it lands at  left x S
+//   the freed space is                                   W x (1 - S)
+//   half of it on each side means                        left = W(1-S) / 2S
+// which puts the rendered left edge at W(1-S)/2 and the right edge at the
+// mirror of it. Checked at S=0.9 on a 210mm page: 10.5mm each side.
+//
+// HORIZONTAL ONLY, deliberately. A vertical shift would push content down into
+// the space at the bottom, and vertical overflow is the one kind Chrome
+// answers by adding a page — which would undo the entire fix. A document that
+// starts at the top of the sheet also simply looks right; a letterhead
+// floating in the middle of the page does not.
+function centringOffsetPx(pageWidthPx, scale) {
+    if (!(scale < 1) || !Number.isFinite(pageWidthPx) || pageWidthPx <= 0) return 0;
+    return (pageWidthPx * (1 - scale)) / (2 * scale);
+}
+
 // Renders `page` to a one-page PDF where it reasonably can.
 //
 // `pdfOptions` is passed through to page.pdf() untouched apart from `scale`,
@@ -132,7 +165,23 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
     // Chrome rejects a scale outside [0.1, 2] with an exception that would
     // take the whole document down.
     const safe = Math.min(2, Math.max(0.1, scale));
+
+    // Put the shrunken sheet back in the middle of the paper. Only when it was
+    // actually scaled — an unscaled document already sits where it was
+    // designed to, and nudging it would be a bug, not a fix.
+    if (safe < 1) {
+        const pageWidthPx = opts.pageWidthPx || (opts.pageWidthMm || 210) * PX_PER_MM;
+        const left = centringOffsetPx(pageWidthPx, safe);
+        try {
+            await page.addStyleTag({ content: `body{position:relative;left:${left.toFixed(2)}px;}` });
+        } catch (err) {
+            // Centring is cosmetic. A document that is correct but sitting a
+            // few millimetres left is still a correct document.
+            console.warn(`[PDF] could not centre ${label}:`, err.message);
+        }
+    }
+
     return page.pdf({ ...pdfOptions, scale: safe });
 }
 
-module.exports = { pdfFittedToOnePage, scaleToFit, measureContentPx, MIN_SCALE, SAFETY, PX_PER_MM };
+module.exports = { pdfFittedToOnePage, scaleToFit, centringOffsetPx, measureContentPx, MIN_SCALE, SAFETY, PX_PER_MM };

@@ -278,7 +278,7 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        }, { pageHeightMm: 297, label: `invoice ${data && data.inv_no ? data.inv_no : ''}`.trim() });
+        }, { pageHeightMm: 297, pageWidthMm: 210, label: `invoice ${data && data.inv_no ? data.inv_no : ''}`.trim() });
         // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
         // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
         return Buffer.from(pdf);

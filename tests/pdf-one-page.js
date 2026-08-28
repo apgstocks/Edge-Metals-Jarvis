@@ -20,7 +20,7 @@ const R = path.join(__dirname, '..');
 let pass = 0, fail = 0;
 const ck = (name, cond) => { if (cond) { pass++; console.log('  PASS ', name); } else { fail++; console.log('  FAIL ', name); } };
 
-const { scaleToFit, pdfFittedToOnePage, MIN_SCALE, PX_PER_MM } = require(path.join(R, 'helpers', 'pdfFit.js'));
+const { scaleToFit, pdfFittedToOnePage, centringOffsetPx, MIN_SCALE, PX_PER_MM } = require(path.join(R, 'helpers', 'pdfFit.js'));
 
 console.log('\n─ one-page documents ─────────────────────────────────────');
 
@@ -94,6 +94,39 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
     ck('  and lands inside its page', 1600 * scaleToFit(1600, asMm).scale <= 1500);
 }
 
+
+// ── the scaled sheet sits in the middle of the paper ──────────────────────
+// Apsara, on the first one-page invoice: "this should be center". Chrome
+// scales about the paper's top-left, so every millimetre freed by shrinking
+// piled up on the right — ~15mm left against ~26mm right.
+{
+    const W = 210 * PX_PER_MM;
+    // The margins are computed in the RENDERED document, which is the only
+    // place the answer matters: shift is applied pre-scale, so it lands at
+    // offset x scale.
+    for (const contentPx of [1190, 1218, 1250, 1440, 1650]) {
+        const s = scaleToFit(contentPx, 297).scale;
+        const off = centringOffsetPx(W, s);
+        const left = off * s;
+        const right = W - (off + W) * s;
+        ck(`${contentPx}px: left and right margins are equal`, Math.abs(left - right) < 0.01);
+        ck(`  ${contentPx}px: the sheet stays on the paper`, off * s >= 0 && (off + W) * s <= W + 0.01);
+    }
+
+    // A document that already fits must not be nudged at all — it is sitting
+    // exactly where it was designed to sit.
+    ck('an unscaled document is not shifted', centringOffsetPx(W, 1) === 0);
+    ck('a scale above 1 is not shifted either', centringOffsetPx(W, 1.2) === 0);
+    ck('a nonsense page width does not shift anything', centringOffsetPx(0, 0.9) === 0);
+    ck('a NaN page width does not shift anything', centringOffsetPx(NaN, 0.9) === 0);
+
+    // The proforma's page is 816px wide, not A4.
+    const s2 = 0.9;
+    const off2 = centringOffsetPx(816, s2);
+    ck('the proforma centres on its own 816px page',
+       Math.abs((off2 * s2) - (816 - (off2 + 816) * s2)) < 0.01);
+}
+
 // ── it degrades safely, and passes options through ────────────────────────
 (async () => {
     // A fake puppeteer page. Measuring is an optimisation; if it throws, the
@@ -113,14 +146,38 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
 
     // A real overflow measurement produces a real scale.
     {
-        let got = null;
+        let got = null, css = null;
         const page = {
             evaluate: async () => 1250,
+            addStyleTag: async (o) => { css = o.content; },
             pdf: async (o) => { got = o; return Buffer.from('PDF'); },
         };
-        await pdfFittedToOnePage(page, { printBackground: true }, { pageHeightMm: 297, label: 'invoice TEST' });
+        await pdfFittedToOnePage(page, { printBackground: true }, { pageHeightMm: 297, pageWidthMm: 210, label: 'invoice TEST' });
         ck('an overflowing page is scaled down', got.scale < 1 && got.scale > 0.85);
         ck('the scaled height fits A4', 1250 * got.scale <= A4_PX);
+
+        // The centring really is injected, and it really does centre.
+        ck('a centring style is injected', typeof css === 'string' && css.length > 0);
+        ck('it moves paint, not layout', /position:relative/.test(css));
+        const px = parseFloat(/left:([\d.]+)px/.exec(css)[1]);
+        const W = 210 * PX_PER_MM;
+        ck('the shift is a real positive offset', px > 0);
+        ck('the rendered left and right margins match',
+           Math.abs((px * got.scale) - (W - (px + W) * got.scale)) < 0.05);
+        ck('the sheet does not run off the right edge', (px + W) * got.scale <= W + 0.05);
+    }
+
+    // A document that already fits must be left exactly where it is.
+    {
+        let css = null, got = null;
+        const page = {
+            evaluate: async () => 800,
+            addStyleTag: async (o) => { css = o.content; },
+            pdf: async (o) => { got = o; return Buffer.from('PDF'); },
+        };
+        await pdfFittedToOnePage(page, {}, { pageHeightMm: 297, pageWidthMm: 210, label: 'short invoice' });
+        ck('a short invoice is not scaled', got.scale === 1);
+        ck('and no centring style is injected at all', css === null);
     }
 
     // Chrome throws if scale leaves [0.1, 2], which would take the whole
@@ -144,6 +201,14 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
         ck('the invoice fits to A4, matching its @page', /pageHeightMm:\s*297/.test(inv));
         ck('the proforma fits to its own 1500px page', /pageHeightPx:\s*1500/.test(pro));
         ck('neither still calls page.pdf directly', !/await page\.pdf\(/.test(inv) && !/await page\.pdf\(/.test(pro));
+        ck('the invoice tells the fitter how wide its page is', /pageWidthMm:\s*210/.test(inv));
+        ck('the proforma tells it too', /pageWidthPx:\s*816/.test(pro));
+        const fit = fs.readFileSync(path.join(R, 'helpers/pdfFit.js'), 'utf8');
+        // position:relative moves paint, not layout — so centring cannot undo
+        // the pagination fix by nudging content onto a second page.
+        ck('centring uses relative positioning, not a margin or transform',
+           /position:relative;left:/.test(fit) && !/transform:\s*translate/.test(fit));
+        ck('centring is horizontal only', !/\btop:\$\{/.test(fit));
     }
 
     console.log(`\n  ${pass} passed, ${fail} failed`);
