@@ -467,10 +467,31 @@ function senderHistoryLine(store, from) {
     return `HISTORY WITH THIS SENDER: she has replied to ${replied} of ${flagged} flagged emails from them (${pct}%). ${pct >= 60 ? 'She reliably answers this sender — an active working relationship.' : 'She answers them only sometimes.'}`;
 }
 
+// How long a numbered digest stays answerable. Her digests are hourly and
+// overnight batches are held to the morning, so 12 hours covers every real
+// "I'll deal with that when I sit down" gap.
+//
+// Biased SHORT on purpose. A false reject costs one extra "ask for a fresh
+// list" — the caller already handles null with exactly that message. A false
+// accept drafts an email about the WRONG MATTER to a real customer, because
+// replyToDigestItem re-searches Gmail for the newest thread with that address
+// rather than using the stored one.
+const DIGEST_INDEX_TTL_MS = 12 * 60 * 60 * 1000;
+
 function resolveDigestIndex(n) {
-    const { lastDigest } = loadStore();
+    const { lastDigest, lastDigestAt } = loadStore();
     const i = parseInt(n, 10);
     if (!Number.isInteger(i) || i < 1 || i > (lastDigest || []).length) return null;
+    // THE CHECK THE CALLER ALREADY CLAIMED WAS HERE. workflow/actions.js:2967
+    // reads "Out of range OR A STALE DIGEST — ask rather than guess", and the
+    // staleness half was never implemented: the list was answerable forever.
+    // If WhatsApp was down for a day, "reply to 1" resolved to whoever was
+    // first in a list she last saw on Tuesday.
+    const at = Date.parse(lastDigestAt || '');
+    if (Number.isFinite(at) && Date.now() - at > DIGEST_INDEX_TTL_MS) {
+        console.warn(`[REPLYWATCH] refusing "#${i}" — that digest is ${Math.round((Date.now() - at) / 3600000)}h old; numbers may point at different mail now`);
+        return null;
+    }
     return lastDigest[i - 1] || null;
 }
 
@@ -1134,6 +1155,16 @@ const urgencyRank = (u) => (u in URGENCY_RANK ? URGENCY_RANK[u] : URGENCY_RANK.n
 // said on a Monday sensibly means a week away. Anchored to arrival it stays
 // the Monday the sender meant, so the reminder actually fires. Absolute dates
 // ("8/24") are unaffected either way.
+// The LA calendar day for a real instant, expressed as UTC midnight — the same
+// shape parseDeadline's own results use, so the two are directly comparable.
+function laMidnightUTC(instant) {
+    const p = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(instant instanceof Date ? instant : new Date(instant));
+    const [y, m, d] = p.split('-').map(Number);
+    return Date.UTC(y, m - 1, d);
+}
+
 function parseDeadline(text, now = new Date(), anchor = null) {
     const s = String(text || '').trim().toLowerCase();
     if (!s) return null;
@@ -1148,18 +1179,22 @@ function parseDeadline(text, now = new Date(), anchor = null) {
         if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
             const dt = new Date(Date.UTC(y, mo - 1, d));
             // No year stated and the date is long past → they mean next year.
-            if (!m[3] && dt.getTime() < now.getTime() - 180 * DAY_MS) dt.setUTCFullYear(y + 1);
+            if (!m[3] && dt.getTime() < laMidnightUTC(now) - 180 * DAY_MS) dt.setUTCFullYear(y + 1);
             return dt;
         }
     }
-    const todayUTC = () => new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+    // Was Date.UTC(base.getUTC*) — i.e. the SERVER's calendar day. The VM runs
+    // UTC and she runs LA, so from 5pm LA onwards "today" resolved to
+    // tomorrow, and every evening's "eod" was a day out.
+    const todayUTC = () => new Date(laMidnightUTC(base));
     if (/\b(asap|immediately|urgent(ly)?|right away|today|eod|end of day|cob)\b/.test(s)) return todayUTC();
     if (/\btomorrow\b/.test(s)) return new Date(todayUTC().getTime() + DAY_MS);
     // A bare weekday ("by Monday", "Friday noon") — the NEXT one from today.
     const WD = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
     for (const [name, idx] of Object.entries(WD)) {
         if (new RegExp(`\\b${name}\\b`).test(s)) {
-            let delta = (idx - base.getUTCDay() + 7) % 7;
+            // Day of week in LA, for the same reason.
+            let delta = (idx - new Date(laMidnightUTC(base)).getUTCDay() + 7) % 7;
             if (delta === 0) delta = 7; // "by Monday" said ON Monday means the next one
             return new Date(todayUTC().getTime() + delta * DAY_MS);
         }
@@ -1171,11 +1206,19 @@ function parseDeadline(text, now = new Date(), anchor = null) {
     return null;
 }
 // Whole days from today until the deadline. Negative = already overdue.
+// AUDIT FINDING: "today" was computed in UTC. The VM runs UTC and she runs on
+// Los Angeles time, so from 5pm LA onwards the server is already on tomorrow's
+// date — and a deadline of TODAY printed as "OVERDUE by 1d" every single
+// evening. Both sides of the subtraction are taken in LA now.
 function daysUntilDeadline(text, now = new Date(), anchor = null) {
     const d = parseDeadline(text, now, anchor);
     if (!d) return null;
-    const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    return Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - startOfToday) / DAY_MS);
+    // ASYMMETRIC ON PURPOSE, and my first version got it wrong: parseDeadline
+    // returns a CALENDAR DAY built at UTC midnight, so its own UTC components
+    // already ARE the intended date and converting it to LA shifts it a day
+    // earlier. Only `now` — a real instant — needs the timezone treatment.
+    const deadlineDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    return Math.round((deadlineDay - laMidnightUTC(now)) / DAY_MS);
 }
 // The urgency an item deserves once its stated deadline is accounted for.
 function applyDeadlineUrgency(item, now = new Date()) {
@@ -2044,6 +2087,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 // helpers/gmail.js's preferredReplyAddress for why From is
                 // often the wrong place to answer.
                 id: ref.id, threadId: msg.threadId, fromName: senderLabel(from),
+                receivedAt: parseEmailDate(header(msg, 'Date')) || null,
                 from: preferredReplyAddress(hs) || from, subject,
                 summary: a.summary, asked_for: a.asked_for, deadline: a.deadline,
                 is_order: !!a.is_order, order_buyer: a.order_buyer || null,
@@ -2055,7 +2099,17 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
                 // can only be raised, never lowered.
                 ...(() => {
-                    const withDeadline = applyDeadlineUrgency({ urgency: a.urgency, deadline: a.deadline });
+                    // receivedAt (AUDIT FINDING): applyDeadlineUrgency reads
+                    // item.receivedAt to anchor a relative deadline, and this
+                    // — its ONLY call site — never passed one. So "by Monday"
+                    // in an email that arrived on Friday was resolved against
+                    // TODAY, which is the exact bug the anchor parameter was
+                    // written to prevent. Dead code with a comment explaining
+                    // what it would do if anyone used it.
+                    const withDeadline = applyDeadlineUrgency({
+                        urgency: a.urgency, deadline: a.deadline,
+                        receivedAt: parseEmailDate(header(msg, 'Date')) || null,
+                    });
                     return { urgency: withDeadline.urgency, daysToDeadline: withDeadline.daysToDeadline ?? null };
                 })(),
             });
@@ -2131,6 +2185,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // Carried so deadline reminders can fire off tracked state without
             // re-reading the mailbox — see collectDeadlineReminders.
             deadline: f.deadline || null, asked_for: f.asked_for || null,
+            receivedAt: f.receivedAt || null,
             key_figures: Array.isArray(f.key_figures) ? f.key_figures : [],
             asked_of: f.asked_of || null,
             lastDeadlineNudgeOn: null,
@@ -2430,4 +2485,5 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
-    parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter };
+    parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
+    DIGEST_INDEX_TTL_MS };

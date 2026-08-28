@@ -1006,6 +1006,81 @@ section('K3 — the recap bullets are gone; only the input they needed remains')
 }
 
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// L. AUDIT ITEMS P4 + P12. Neither was reported by Apsara — both are the
+//    kind that produce a confidently wrong answer with nothing in the log.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('L1 — "reply to 1" against a day-old digest is refused, not guessed');
+{
+    const item = (name) => ({ id: 'm' + name, from: `${name}@x.com`, fromName: name, summary: 's' });
+    const write = (at) => fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({
+        seen: {}, tracked: [], undelivered: [], lastDigest: [item('Kristal'), item('Andy')], lastDigestAt: at,
+    }));
+
+    write(new Date().toISOString());
+    ck('a fresh digest resolves', (rw.resolveDigestIndex(1) || {}).fromName === 'Kristal');
+    ck('and position 2 too', (rw.resolveDigestIndex(2) || {}).fromName === 'Andy');
+
+    // THE DANGEROUS CASE. actions.js:2967 already said "or a stale digest —
+    // ask rather than guess"; the staleness half was never implemented, so a
+    // list she last saw on Tuesday stayed answerable. replyToDigestItem then
+    // re-searches Gmail for the newest thread with that address, so "reply to
+    // 1: confirmed" drafts about the WRONG MATTER to a real customer.
+    write(new Date(Date.now() - 13 * 3600000).toISOString());
+    ck('a 13-hour-old digest is refused', rw.resolveDigestIndex(1) === null);
+
+    write(new Date(Date.now() - 11 * 3600000).toISOString());
+    ck('11 hours still resolves — an evening digest answered next morning',
+        (rw.resolveDigestIndex(1) || {}).fromName === 'Kristal');
+
+    // Bias check: the cost of a false reject is one extra question; the cost
+    // of a false accept is an email to a customer about the wrong thing.
+    ck('the window is 12 hours', rw.DIGEST_INDEX_TTL_MS === 12 * 3600000, String(rw.DIGEST_INDEX_TTL_MS));
+
+    write(null);
+    ck('a digest with no timestamp still resolves (older stores)',
+        (rw.resolveDigestIndex(1) || {}).fromName === 'Kristal');
+    ck('out of range is still null', rw.resolveDigestIndex(9) === null);
+    ck('junk input is still null', rw.resolveDigestIndex('abc') === null);
+}
+
+section('L2 — a deadline is anchored to the email, and measured in LA time');
+{
+    // P4: applyDeadlineUrgency reads item.receivedAt, and its only call site
+    // never passed one — so "by Monday" in a Friday email resolved against
+    // today. The parameter existed, documented, and dead.
+    const friday = new Date('2026-08-21T17:00:00Z');       // Fri 21 Aug
+    const anchored = rw.applyDeadlineUrgency(
+        { urgency: 'low', deadline: 'Monday', receivedAt: friday.toISOString() },
+        new Date('2026-08-24T17:00:00Z'));                 // read on Mon 24th
+    const unanchored = rw.applyDeadlineUrgency(
+        { urgency: 'low', deadline: 'Monday' },
+        new Date('2026-08-24T17:00:00Z'));
+    ck('the anchored reading is not the same as the unanchored one',
+        anchored.daysToDeadline !== unanchored.daysToDeadline,
+        `anchored=${anchored.daysToDeadline} unanchored=${unanchored.daysToDeadline}`);
+
+    // P4b: "today" was computed in UTC. The VM runs UTC, she runs LA — so
+    // after 5pm LA the server is already on tomorrow and a deadline of TODAY
+    // printed as "OVERDUE by 1d" every evening.
+    const evening = new Date('2026-08-27T02:30:00Z');      // 26 Aug, 7:30pm LA
+    ck('a deadline of TODAY reads as 0 days in the LA evening, not -1',
+        rw.daysUntilDeadline('8/26', evening) === 0, String(rw.daysUntilDeadline('8/26', evening)));
+    ck('and tomorrow is +1, not 0',
+        rw.daysUntilDeadline('8/27', evening) === 1, String(rw.daysUntilDeadline('8/27', evening)));
+    // The same bug one layer deeper: parseDeadline resolved "today" from the
+    // SERVER's UTC day, so after 5pm LA "eod" meant tomorrow.
+    ck('"today" in the LA evening is still today',
+        rw.daysUntilDeadline('today', evening) === 0, String(rw.daysUntilDeadline('today', evening)));
+    ck('"tomorrow" in the LA evening is +1',
+        rw.daysUntilDeadline('tomorrow', evening) === 1, String(rw.daysUntilDeadline('tomorrow', evening)));
+    const morning = new Date('2026-08-26T16:00:00Z');      // 26 Aug, 9am LA
+    ck('the morning reading is unchanged', rw.daysUntilDeadline('8/26', morning) === 0, String(rw.daysUntilDeadline('8/26', morning)));
+    ck('an unparseable deadline is still null', rw.daysUntilDeadline('whenever', evening) === null);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
