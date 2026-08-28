@@ -85,10 +85,27 @@ function bySeller(loads) {
 }
 
 function summarise(loads) {
+    const amount = loads.reduce((a, l) => a + num(l.amount), 0);
+    const netW = loads.reduce((a, l) => a + num(l.net_weight), 0);
     return {
         count: loads.length,
-        net_weight: round2(loads.reduce((a, l) => a + num(l.net_weight), 0)),
-        amount: money(loads.reduce((a, l) => a + num(l.amount), 0)),
+        net_weight: round2(netW),
+        amount: money(amount),
+        // AVERAGES ARE PRE-COMPUTED, added 2026-08-29.
+        //
+        // The model is now allowed to calculate (Apsara: "don't restrict AI"),
+        // and the very first thing it computed unprompted was wrong: asked for
+        // the average per load it reported a total of 11,281.00 against a true
+        // 12,446.50, and an average of 5,657.50 which does not even divide from
+        // its own total. Fluent, confident, wrong — about money.
+        //
+        // The restriction stays lifted, because a bot that refuses is worth
+        // less than one that occasionally needs checking. But every figure
+        // computed HERE is one it never has to derive, so the common questions
+        // land on exact arithmetic this codebase did. That is the cheapest way
+        // to make an unrestricted model mostly right.
+        average_amount_per_load: loads.length ? money(amount / loads.length) : null,
+        average_net_weight_per_load: loads.length ? round2(netW / loads.length) : null,
     };
 }
 
@@ -129,6 +146,11 @@ function buildYardBrief(opts = {}) {
         generated_at: new Date().toISOString(),
         today,
         window_days: days,
+        // Read by the model, not by any screen. Points it at the figures that
+        // were computed in code so it prefers them over deriving its own.
+        accuracy_note: 'Every total, average and balance in this data was calculated in code and is exact. '
+            + 'Use these figures directly wherever they answer the question. Only work something out yourself '
+            + 'when nothing here covers it, and say which rows you used when you do.',
         business: {
             name: 'Edge Trading',
             note: 'Edge Trading BUYS scrap from sellers (purchases/loads) and SELLS to buyers (sales/outbound loads). Weights are in lb unless a load says otherwise.',
@@ -168,6 +190,44 @@ function buildYardBrief(opts = {}) {
             count: outstanding.length,
             total_pending: money(outstanding.reduce((a, r) => a + num(r.pending), 0)),
             loads: outstanding.slice(0, 30),
+            // Pre-computed "owed from date X onwards", per Apsara 2026-08-29:
+            // she asked "how much we owe sellers, start from aug 27" and the
+            // bot refused — correctly, because answering needs a SUM and the
+            // rules forbid it from doing arithmetic on money.
+            //
+            // Rather than relax that rule, the sums are done here. One entry
+            // per distinct load date that actually has money outstanding, each
+            // holding the total owed for that date and every later one. So a
+            // question with any start date lands on an exact figure this code
+            // computed, not one the model added up.
+            //
+            // Bounded by the number of distinct dates with outstanding money,
+            // which is small — and it costs nothing the aggregate above did
+            // not already cost.
+            pending_from_date_onwards: (() => {
+                const dates = [...new Set(outstanding.map((r) => r.date).filter(Boolean))].sort();
+                return dates.map((d) => {
+                    const rows = outstanding.filter((r) => r.date >= d);
+                    return {
+                        from_date: d,
+                        loads: rows.length,
+                        total_pending: money(rows.reduce((a, r) => a + num(r.pending), 0)),
+                        sellers: [...new Set(rows.map((r) => r.seller).filter(Boolean))],
+                    };
+                });
+            })(),
+            // The same question asked per counterparty, which is how it is
+            // usually meant — "who do we owe, and how much".
+            by_seller: (() => {
+                const m = new Map();
+                for (const r of outstanding) {
+                    const k = r.seller || 'Unknown';
+                    m.set(k, (m.get(k) || 0) + num(r.pending));
+                }
+                return [...m.entries()]
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([seller, pending]) => ({ seller, pending: money(pending) }));
+            })(),
         },
         payments_recorded: listPayments().length,
         // The payment LEDGER itself, newest first, so "when did we pay Acme"

@@ -12,12 +12,26 @@
 // can write. The worst outcome of a bad answer here is a wrong sentence, not a
 // wrong message sent to a supplier.
 //
-// THE MODEL DOES NO ARITHMETIC. Every figure comes pre-computed from
-// helpers/yardBrief.js, which reuses the same tested code the screens use. A
-// model asked to total forty loads returns a fluent, confident, slightly wrong
-// number — and slightly wrong, about money, in a confident tone is the worst
-// possible failure for this. The prompt says so explicitly, and the fallback
-// below assumes the model may still get it wrong.
+// IT MAY DO ARITHMETIC — changed 2026-08-29 at Apsara's instruction: "don't
+// restrict AI, make sure it answers whatever questions with knowledge of edge
+// yard data only."
+//
+// It previously refused to add anything up, on the reasoning that a model
+// totalling forty loads returns a fluent, confident, slightly wrong number.
+// That guard also made it refuse ordinary questions — "how much do we owe
+// from Aug 27" was declined because no pre-computed figure matched — and a
+// bot that will not answer is worth less than one that occasionally needs
+// checking. Her call, and a reasonable one.
+//
+// The accuracy work is kept and now serves as a floor rather than a fence:
+// helpers/yardBrief.js still pre-computes the common totals with the same
+// tested code the screens use, and the prompt tells the model to PREFER those
+// exact figures and only calculate when nothing fits. So the frequent
+// questions are still answered from arithmetic this codebase did.
+//
+// The one restriction that did NOT relax is the source: only the DATA. It may
+// combine and total what it is given; it may not introduce a number, name or
+// date that is not in there.
 
 const { buildYardBrief } = require('./yardBrief');
 
@@ -26,9 +40,11 @@ const SYSTEM_RULES = [
     'You answer questions about the yard data you are given. Nothing else.',
     '',
     'HARD RULES:',
-    '1. Use ONLY the DATA below. If the answer is not in it, say plainly that you do not have that information and name what you would need. Never guess and never fill a gap with something plausible.',
-    '2. Do NOT do arithmetic — no adding, subtracting or totalling. Every total, balance and weight you need has already been calculated and is in the DATA. Quote those figures exactly as given. If a question needs a number that is not there, say so instead of working it out.',
-    '   You MAY read dates, compare them, and SELECT the rows that match — listing the payments made in August, or naming the most recent one, is reading the data, not calculating. Only refuse when a figure genuinely is not present.',
+    '1. Use ONLY the DATA below — it is the entire world you know about. You may combine, filter and total what is in it, but never introduce a figure, name, date or fact that is not derivable from it. If the DATA genuinely cannot answer, say so plainly and name what is missing.',
+    '2. WORK OUT whatever the question needs from the DATA — totals, balances, filters by date or seller, comparisons, counts. Answer the question actually asked rather than declining because a figure is not pre-computed.',
+    '   Prefer a figure that is ALREADY in the DATA when one fits: many totals are pre-calculated for you and those are exact. Only compute when the question needs something that is not there.',
+    '   When you do compute, be careful and name what you added up, so the figure can be checked.',
+    '   A date range wider than the records is not a gap: if a question starts from a date earlier than every record, every record qualifies. Answer it rather than reporting the data starts later.',
     '3. Money figures are US dollars. Weights are pounds (lb) unless a record says otherwise. Keep the two decimal places exactly as given.',
     '4. You cannot DO anything — you cannot create, edit, delete, send or pay. If asked to, say that you can only answer questions, and tell them where in the app to do it.',
     '5. Be brief. One or two sentences for a simple question. Use a short list only when the answer really is a list.',
