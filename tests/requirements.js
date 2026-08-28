@@ -1021,9 +1021,18 @@ section('WIRING — a feature that nothing calls is a dead feature');
         return (d && d.intent) || null;
     };
 
+    // Grown 2026-08-29 after three more live misses in one minute:
+    //   "Check my mailbox for any new mail" -> summarised two random payment debits
+    //   "Email digest"                      -> "What specifically would you like to see?"
+    //   "All mails received today which needed my attentiom" -> searched for that sentence
     for (const t of ['Any new mails?', 'any new mails', 'Any mails?', 'anything new?',
                      'any new emails', 'whats new in mail', 'any messages?', 'New mails?',
-                     'latest emails', 'unread mails'])
+                     'latest emails', 'unread mails',
+                     'Check my mailbox for any new mail', 'check my inbox for any new mail today',
+                     'show my mailbox', 'see my inbox', 'pull up my inbox',
+                     'Email digest', 'email digest', 'digest', 'todays digest', 'show me the digest',
+                     'All mails received today which needed my attentiom',
+                     'all mails today that need my attention', 'emails needing my reply'])
         ck(`"${t}" -> the inbox`, intent(t), 'show_pending_replies');
 
     // The phrasings that were already handled must not regress.
@@ -1032,7 +1041,17 @@ section('WIRING — a feature that nothing calls is a dead feature');
 
     // THE HALF THAT MATTERS MORE: a NAMED sender must never be swallowed by
     // this branch — that would turn a real search into a generic inbox dump.
-    for (const t of ['any mail from Zimex', 'any new mails from jinho', 'anything new on DALA21235600'])
+    // THE DANGEROUS DIRECTION. Two of my own first-cut patterns swallowed a
+    // named sender — "check my inbox for Zimex" and "show me the digest from
+    // Zimex" both reached the inbox branch, which would answer a targeted
+    // question with a generic dump and bury the thread she asked about.
+    // "check my mailbox for mail from Kristal" broke it a third way: the guard
+    // examined only the FIRST preposition, saw the generic word "mail" after
+    // "for", and declared nobody named.
+    for (const t of ['any mail from Zimex', 'any new mails from jinho', 'anything new on DALA21235600',
+                     'check my inbox for Zimex', 'show me the digest from Zimex',
+                     'check my mailbox for mail from Kristal', 'any mails for Bose',
+                     'mails from jinho that need my attention'])
         ckTrue(`"${t}" is NOT the inbox question`, intent(t) !== 'show_pending_replies', String(intent(t)));
     ck('"did Zimex reply" still routes to search', intent('did Zimex reply'), 'search_mail');
     ckTrue('"new booking from LA" is untouched', intent('new booking from LA') !== 'show_pending_replies');
