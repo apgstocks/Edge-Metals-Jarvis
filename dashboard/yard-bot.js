@@ -101,13 +101,23 @@
   // API rejects unauthenticated calls regardless — it is about not offering a
   // yard assistant to someone who has not proved who they are.
   function isSignedIn() {
+    // FAIL SAFE: hidden ONLY when the login screen is definitively on screen.
+    // Everything else — including any state this code does not recognise —
+    // shows the bubble.
+    //
+    // Reversed 2026-08-29 after Apsara reported "yard assistant not there".
+    // The first version required BOTH that the login screen was hidden AND
+    // that #appShell was visible, so any boot sequence that did not match that
+    // assumption hid the assistant permanently, with no way to tell why. I
+    // could not reproduce it here, which is exactly the point: a gate that
+    // defaults to OFF turns every unanticipated state into a missing feature,
+    // while one that defaults to ON turns the same states into, at worst, a
+    // bubble on a screen it need not be on.
+    //
+    // The requirement was only ever "not on the sign-in page". This meets it
+    // and fails in the harmless direction.
     var login = document.getElementById('loginScreen');
-    var shell = document.getElementById('appShell');
-    if (login || shell) {
-      var loginUp = login && !login.classList.contains('hidden');
-      var shellUp = shell && !shell.classList.contains('hidden');
-      return !loginUp && !!shellUp;
-    }
+    if (login && !login.classList.contains('hidden')) return false;
     return true;
   }
 
@@ -177,6 +187,12 @@
       var mo = new MutationObserver(applySignedInGate);
       watched.forEach(function (n) { mo.observe(n, { attributes: true, attributeFilter: ['class'] }); });
     }
+    // A slow poll as well. The observer covers the ordinary class swap, but if
+    // a host ever signs in some other way — replacing the element, a full
+    // re-render — the observer never fires and the bubble would stay hidden
+    // for the whole session. Two seconds costs nothing and removes that as a
+    // way for this to silently disappear.
+    setInterval(applySignedInGate, 2000);
   }
 
   function greet() {
