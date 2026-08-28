@@ -372,7 +372,13 @@ function createApi() {
     // directly whether sales should be denied to staff: "no". They already
     // create loads, weigh them and price them; a sale is the same job in the
     // other direction, on the same form.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
+    // '/api/load-drafts' added 2026-08-28. Staff record loads, so staff must
+    // be able to save and resume an unfinished one — a draft they cannot
+    // write is a draft that does not exist for the people actually standing
+    // at the scale. Carries no financial exposure beyond what '/api/loads'
+    // already allows them, since a draft becomes a load through that same
+    // endpoint and its same checks.
+    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -1379,6 +1385,49 @@ function createApi() {
     // buyer pricing — a business-data exposure call Apsara didn't ask for,
     // so this defaults to normal authenticated (manager/team) access only.
     // No photo/Drive/PDF integration (not asked for) — a plain CRUD store.
+    // ── Load drafts ───────────────────────────────────────────────────────
+    // Unfinished loads, per Apsara 2026-08-28 ("draft needs to be saved and
+    // can be edited later"). Server-side so a draft survives a closed tab, a
+    // flat phone, and being picked up on a different device.
+    //
+    // largeJson because a draft carries its weight PHOTOS as base64 — a draft
+    // that loses those has lost the expensive half of the work. Re-typing a
+    // description is quick; re-weighing a truck is not.
+    //
+    // These deliberately do NOT touch loads.json. A draft is invisible to
+    // every report, total, inventory calculation and statement in this file,
+    // because it is not in the store any of them read.
+    app.get('/api/load-drafts', (req, res) => {
+        try {
+            const { listDrafts } = require('./helpers/loadDrafts');
+            res.json(listDrafts());   // bare array, matching /api/loads
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/load-drafts', largeJson, async (req, res) => {
+        try {
+            const { saveDraft, isWorthSaving, deleteDraft } = require('./helpers/loadDrafts');
+            const body = req.body || {};
+            // A draft that has fallen BELOW the threshold — rows cleared back
+            // out — should disappear rather than linger as a stale offer to
+            // restore something the operator deliberately emptied.
+            if (!isWorthSaving(body)) {
+                if (body.id) await deleteDraft(String(body.id));
+                return res.json({ ok: true, saved: false, id: null });
+            }
+            const draft = await saveDraft({ ...body, created_by: (req.role || null) });
+            res.json({ ok: true, saved: true, id: draft.id, updated_at: draft.updated_at });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/load-drafts/:id', async (req, res) => {
+        try {
+            const { deleteDraft } = require('./helpers/loadDrafts');
+            const removed = await deleteDraft(String(req.params.id));
+            res.json({ ok: true, removed });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/outbound-loads', (req, res) => {
         try {
             const { loadOutboundLoads, getLoadMargin } = require('./helpers/outboundLoads');

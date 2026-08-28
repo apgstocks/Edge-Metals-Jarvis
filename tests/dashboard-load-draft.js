@@ -27,14 +27,25 @@ ck('a tare weight alone counts', itemHasContent({tare_weight:200}));
 ck('whitespace is not content', !itemHasContent({description:'   '}));
 ck('null is not content', !itemHasContent(null));
 
-// the 2-item gate and photo stripping, as written in saveLoadDraft
+// the gate, persistence and id handling, as written in saveLoadDraft
 const saveSrc=grab('saveLoadDraft');
 ck('draft is skipped entirely while editing an existing load',
    /if \(editingLoadId\)[\s\S]{0,80}?return;/.test(saveSrc));
 ck('draft needs 2 items with content',
    /items\.length < 2\)[\s\S]{0,80}?return;/.test(saveSrc));
-ck('photos are stripped before storing', /grossPhoto, tarePhoto, \.\.\.rest/.test(saveSrc));
-ck('storage failure cannot break the form',
+ck('drafts are persisted to the server, not the browser',
+   /api\('\/api\/load-drafts'/.test(saveSrc) && !/localStorage/.test(saveSrc));
+ck('an autosave reuses one draft id instead of spawning records',
+   /id: currentDraftId/.test(grab('currentDraftPayload')) && /currentDraftId = r\.id/.test(saveSrc));
+ck('overlapping autosaves are coalesced, never concurrent',
+   /draftSaveInFlight/.test(saveSrc));
+// Photos are now KEPT. They were stripped when drafts lived in localStorage
+// against a ~5MB budget; on the server there is room, and a draft that loses
+// the weight photos has lost the expensive half of the work — re-typing a
+// description takes seconds, re-weighing a truck does not.
+ck('photos are NOT stripped now that drafts are server-side',
+   !/grossPhoto, tarePhoto, \.\.\.rest/.test(grab('currentDraftPayload')));
+ck('a save failure cannot break the form',
    /\bcatch\s*\(e\)/.test(saveSrc) && !/\bthrow\b[\s\S]*$/.test(saveSrc.slice(saveSrc.indexOf('catch (e)'))));
 
 // restore must not fire by itself
@@ -55,12 +66,12 @@ ck('gate: 2 filled rows -> draft saved', counts[2]>=2);
 // so these assert that the form actually SAYS what it is doing — and, more
 // importantly, that it never claims to have saved without checking.
 const saveSrc2 = grab('saveLoadDraft');
-ck('reports success only after reading the value back',
-   /getItem\(LOAD_DRAFT_KEY\)/.test(saveSrc2) && /write did not stick/.test(saveSrc2));
-ck('the success message carries a timestamp, so it visibly moves',
-   /setDraftStatus\('saved', new Date\(draft\.at\)\.toLocaleTimeString/.test(saveSrc2));
-ck('a storage failure is reported, not swallowed',
-   /could not be saved/.test(saveSrc2));
+ck('reports success only when the SERVER confirms it saved',
+   /r && r\.saved && r\.id/.test(saveSrc2));
+ck('the success message carries the server timestamp, so it visibly moves',
+   /setDraftStatus\('saved', new Date\(r\.updated_at/.test(saveSrc2));
+ck('a failed save is reported, not swallowed',
+   /Draft not saved/.test(saveSrc2));
 ck('a failure still does not block the form (no throw, no return before save)',
    !/throw new Error\('quota/.test(saveSrc2));
 ck('fewer than 2 items explains itself instead of showing nothing',

@@ -107,6 +107,19 @@ const FILES = {
     // special-casing around it everywhere, for zero benefit over a
     // deliberately separate, much simpler store.
     OUTBOUND_LOADS_FILE: path.join(DATA_DIR, 'outbound_loads.json'),
+    // Unfinished loads — per Apsara 2026-08-28: "draft needs to be saved and
+    // can be edited later." A load being typed is autosaved here once two
+    // items carry real content, and can be reopened and finished from any
+    // device rather than only the browser it was started in.
+    //
+    // Its OWN store, for the same reason OUTBOUND_LOADS_FILE is: a `draft`
+    // flag on loads.json would put half-finished loads one forgotten filter
+    // away from the day's totals, the yard report, the inventory netting and
+    // the seller statements. A separate file makes that leak impossible
+    // rather than merely unlikely — nothing that reads loads.json can see a
+    // draft, because it is not in there. A draft is DELETED, not converted,
+    // when the real load is saved.
+    LOAD_DRAFTS_FILE: path.join(DATA_DIR, 'load_drafts.json'),
     // Yard expenses — per Apsara 2026-08-19 ("for admin access in mobile
     // app, i want expense tracker"). Its own flat store for the same reason
     // OUTBOUND_LOADS_FILE is separate from LOADS_FILE: an expense shares
