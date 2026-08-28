@@ -252,5 +252,44 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 }
 
 
+
+// ── the payment DATE reaches the load card ─────────────────────────────────
+// Per Apsara 2026-08-29: "record payment date as well." It was already stored,
+// shown in the Pay form's history and printed on the ticket — the load card
+// was the one place it never reached, which is where she looks while working.
+{
+  for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
+    const src = fs.readFileSync(R+p,'utf8');
+    const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
+      let d=0,j=src.indexOf('{',i);
+      for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
+    const payMoney = (n) => '$' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const badge = new Function('payMoney','return '+grab('paymentBadgeHtml'))(payMoney);
+    const strip = (h) => String(h).replace(/<[^>]*>/g,'');
+    const rows = [{ paid_on:'2026-08-20', mode:'Zelle', amount:8000 },
+                  { paid_on:'2026-08-22', mode:'Cash',  amount:4000 }];
+
+    ck(`${p}: a part-paid badge shows the payment date`,
+       /Aug 22/.test(strip(badge({ payment:{ paid:12000, pending:4822, status:'partial', payments:rows } }))));
+    ck(`${p}: a settled badge shows it too`,
+       /Aug 22/.test(strip(badge({ payment:{ paid:8822, pending:0, status:'paid', payments:[rows[1]] } }))));
+    ck(`${p}: with instalments it shows the LAST date, not the first`,
+       !/Aug 20/.test(strip(badge({ payment:{ paid:12000, pending:1, status:'partial', payments:rows } }))));
+    ck(`${p}: no payment dates -> no stray separator`,
+       strip(badge({ payment:{ paid:100, pending:5, status:'partial', payments:[] } })) === 'PART PAID $100.00 · $5.00 pending');
+
+    // THE TIMEZONE TRAP. new Date('2026-08-22') is UTC midnight, which renders
+    // as the 21st anywhere west of Greenwich. A payment dated the 22nd showing
+    // as the 21st is the kind of small wrongness nobody notices until it
+    // matters, so this pins the date to what was actually entered.
+    const out = strip(badge({ payment:{ paid:1, pending:1, status:'partial', payments:[{ paid_on:'2026-01-01', amount:1 }] } }));
+    ck(`${p}: a 1 Jan payment does not render as 31 Dec`, /Jan 1/.test(out) && !/Dec 31/.test(out));
+    ck(`${p}: the date is parsed from the string, not through UTC`,
+       /new Date\(Number\(m\[1\]\), Number\(m\[2\]\) - 1, Number\(m\[3\]\)\)/.test(src));
+    ck(`${p}: a malformed date is dropped rather than printed as Invalid Date`,
+       !/Invalid/.test(strip(badge({ payment:{ paid:1, pending:1, status:'partial', payments:[{ paid_on:'nonsense', amount:1 }] } }))));
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

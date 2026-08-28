@@ -1340,6 +1340,29 @@ async function resumeDraft(id) {
 function paymentBadgeHtml(l) {
   const p = l && l.payment;
   if (!p || !p.paid) return '';
+  // Shows WHEN, not just how much — per Apsara 2026-08-29 ("record payment
+  // date as well"). The date was already captured, stored, listed in the Pay
+  // form's history and printed on the ticket; the load card was the one place
+  // it never reached, which is the place she actually looks while working.
+  //
+  // The LAST payment's date, since with instalments "when did this last move"
+  // is the useful fact — the full sequence is in the Pay form.
+  //
+  // Parsed by splitting the string rather than new Date('2026-08-22'), which
+  // JavaScript reads as UTC midnight and then renders in local time: west of
+  // Greenwich that prints the day BEFORE. A payment dated the 22nd showing as
+  // the 21st on a ticket is exactly the sort of small wrongness nobody
+  // notices until it matters.
+  const payDate = (ymd) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''));
+    if (!m) return '';
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+  };
+  const rows = (p.payments || []).filter((r) => r && r.paid_on);
+  const lastOn = rows.length ? payDate(rows[rows.length - 1].paid_on) : '';
+  const on = lastOn ? ` · ${lastOn}` : '';
+
   // Uses payMoney rather than a local formatter of its own.
   //
   // This badge had its OWN copy that did not add the $, which is how it ended
@@ -1352,15 +1375,15 @@ function paymentBadgeHtml(l) {
   // and nothing to keep in step.
   const money = payMoney;
   if (p.status === 'paid') {
-    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}</span>`;
+    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}${on}</span>`;
   }
   if (p.status === 'overpaid') {
-    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}</span>`;
+    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}${on}</span>`;
   }
   if (p.status === 'paid_amount_unknown') {
-    return `<span class="pay-badge pay-part">PAID ${money(p.paid)} · load has no price yet</span>`;
+    return `<span class="pay-badge pay-part">PAID ${money(p.paid)}${on} · load has no price yet</span>`;
   }
-  return `<span class="pay-badge pay-part">PART PAID ${money(p.paid)} · ${money(p.pending)} pending</span>`;
+  return `<span class="pay-badge pay-part">PART PAID ${money(p.paid)}${on} · ${money(p.pending)} pending</span>`;
 }
 
 let payingLoad = null;
