@@ -847,6 +847,21 @@ function policyDecide(ctx) {
         // "send price list" asked which city — this reply should be 1/2/3 or a
         // partial city name. Self-contained: doesn't touch actions.resolvePending
         // at all, same pattern as await_bkg_no above.
+        // She has told us what the link is for. Deliberately NOT a fixed set
+        // of options: "check the totals", "import these loads", "log this
+        // invoice" are all plausible and inventing a menu would just be a
+        // second guess. Her instruction and the link are handed to the AI
+        // path together, which either does something sensible or says plainly
+        // that it cannot — both better than silence.
+        if (p.type === 'await_link_purpose') {
+            // NO bespoke cancel branch here. The global cancel handler above
+            // already catches "cancel"/"never mind" for EVERY pending and
+            // routes it through resolve_pending — verified, it fires before
+            // this point. A second cancel path would be dead code today and a
+            // divergence the first time the shared one changed.
+            ctx.pastedLink = p.url || null;
+            // Fall through to the AI path with the link attached.
+        }
         if (p.type === 'await_pricelist_city') {
             const cityMatch = resolveListSelection(ctx.text, ['Los Angeles', 'Houston', 'San Antonio']);
             if (cityMatch) return { intent: 'send_pricelist_city', resolvedBy: 'policy', data: { city: cityMatch, target_name: p.target_name || null } };
@@ -1188,6 +1203,24 @@ function policyDecide(ctx) {
         if ((m = t.match(/^(?:send\s+)?price\s*list(?:\s+(?:to\s+)?(.+))?$/)) ||
             (m = t.match(/^send\s+prices?(?:\s+to\s+(.+))?$/)))
             return { intent: 'ask_pricelist_city', resolvedBy: 'policy', data: { target_name: m[1] ? m[1].trim() : null } };
+
+        // ── A PASTED LINK: ASK, DO NOT GUESS ────────────────────────────
+        // Apsara, 2026-08-27, on the sheet-link bug: "it should have asked
+        // instead."
+        //
+        // 62821e0 stopped the WRONG answer ("No booking found for
+        // 2098848345", the sheet's tab id). That left the right answer
+        // missing: a link she has deliberately pasted is her handing Jarvis
+        // something, and the only honest response when we cannot tell what
+        // for is to ask.
+        //
+        // Manager/team only — this whole section is inside that gate. A
+        // trucker pasting a tracking link must keep flowing to the paths that
+        // already handle counterparty messages; interrogating them would be a
+        // new and unwanted behaviour on a lane that works.
+        if (isBareUrl(ctx.text)) {
+            return { intent: 'ask_link_purpose', resolvedBy: 'policy', data: { url: ctx.text.trim() } };
+        }
 
         // Bare booking number → status.
         //
@@ -1540,7 +1573,13 @@ ${a.semanticMemory}
 ═══ URGENT ═══
 ${a.urgentBookings}
 
-═══ ALL ACTIVE BOOKINGS (your full knowledge base — not just activeBooking) ═══
+${ctx.pastedLink ? `═══ LINK SHE JUST PASTED ═══
+${ctx.pastedLink}
+The message below is her telling you what she wants done with it. You CANNOT open
+links. Say plainly what you can and cannot do with it rather than pretending to
+have read it, and never invent its contents.
+
+` : ''}═══ ALL ACTIVE BOOKINGS (your full knowledge base — not just activeBooking) ═══
 ${a.bookingsTable}
 
 ═══ PORT SUMMARY ═══
@@ -1907,6 +1946,10 @@ async function route(decision, ctx, sendMessage) {
             }
             return actions.relayQuestionToContact(chatId, target_name, note, bkg_no);
         }
+        case 'ask_link_purpose': {
+            await actions.setPending(chatId, { type: 'await_link_purpose', url: d.url });
+            return send(chatId, actions.describeLink(d.url));
+        }
         case 'ask_pricelist_city': {
             await actions.setPending(chatId, { type: 'await_pricelist_city', target_name: d.target_name || null });
             return send(chatId, 'Which price list?\n1. Los Angeles\n2. Houston\n3. San Antonio');
@@ -1989,6 +2032,7 @@ function pendingHint(p) {
     if (p.type === 'await_followup_minutes') return 'reply with a number of minutes (e.g. 15) or a time like "2 hours"';
     if (p.type === 'await_bkg_no') return 'reply with the booking number';
     if (p.type === 'await_pricelist_city') return 'reply 1, 2, or 3, or the city name';
+    if (p.type === 'await_link_purpose') return 'tell me what to do with that link, or say cancel';
     if (p.options && p.options.length) return `reply with one of: ${p.options.join(', ')}`;
     return 'reply yes/no';
 }

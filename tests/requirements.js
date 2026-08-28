@@ -886,6 +886,63 @@ section('WIRING — a feature that nothing calls is a dead feature');
     ckTrue('a booking number is not a link', !isBareUrl('DALA21235600'));
     ckTrue('empty input does not throw', !isBareUrl('') && resolveBookingNumber(null) === null);
 }
+// ══════════════════════════════════════════════════════════════════════════
+// A pasted link: ASK, never guess. Apsara: "it should have asked instead."
+// ══════════════════════════════════════════════════════════════════════════
+{
+    console.log('\n=== a pasted link makes Jarvis ask, not guess ===');
+    const actions = require(R('workflow/actions.js'));
+    const rw_brain = require(R('workflow/brain.js'));
+    const SHEET = 'https://docs.google.com/spreadsheets/d/1gwEOzIWGPU7sXyE4gc30OmKqc3kGzcTIln8XKjYjlJQ/edit?gid=2098848345#gid=2098848345';
+
+    // It names WHAT the link is, so a wrong paste is obvious immediately.
+    const d = actions.describeLink(SHEET);
+    ckTrue('it says the link is a Google Sheet', /Google Sheet/.test(d), d);
+    ckTrue('and identifies the tab, proving the link arrived intact', /tab 2098848345/.test(d), d);
+    ckTrue('it asks rather than assuming', /What should I do with it\?/.test(d), d);
+    ckTrue('and offers a way out', /cancel/i.test(d), d);
+    // Deliberately no invented menu — that would be a second guess wearing a
+    // question mark, which is the thing being fixed.
+    ckTrue('it does NOT invent a menu of options', !/\n\s*1\./.test(d), d);
+
+    ckTrue('a Drive file is named as one', /Drive file/.test(actions.describeLink('https://drive.google.com/file/d/1x/view')));
+    ckTrue('a PDF is named as one', /PDF/.test(actions.describeLink('https://example.com/rates.pdf')));
+    ckTrue('an unknown link names its host', /tracking-co\.com/.test(actions.describeLink('https://www.tracking-co.com/x/9876543210')));
+    ckTrue('junk does not throw or print undefined', !/undefined/.test(actions.describeLink(null)));
+
+    // Routing: the manager pasting a bare link must reach ask_link_purpose,
+    // NOT show_booking_status (which is what produced "No booking found").
+    const dec = rw_brain.policyDecide({ text: SHEET, textLower: String(SHEET).toLowerCase(), chatId: 'sim@c.us', isManagerOrTeam: true, isManager: true, session: {}, pendingAction: null, role: 'manager' });
+    ck('a bare link routes to ask_link_purpose', dec && dec.intent, 'ask_link_purpose');
+    ck('and carries the url through', dec && dec.data && dec.data.url, SHEET);
+
+    const withText = rw_brain.policyDecide({ text: 'check ' + SHEET, textLower: String('check ' + SHEET).toLowerCase(), chatId: 'sim@c.us', isManagerOrTeam: true, isManager: true, session: {}, pendingAction: null, role: 'manager' });
+    ckTrue('a link WITH an instruction is not intercepted — she already said what she wants',
+        !withText || withText.intent !== 'ask_link_purpose', JSON.stringify(withText));
+
+    // A trucker pasting a link must not be interrogated — that lane works today.
+    const trucker = rw_brain.policyDecide({ text: SHEET, textLower: String(SHEET).toLowerCase(), chatId: 'sim@c.us', isManagerOrTeam: false, isManager: false, session: {}, pendingAction: null, role: 'trucker' });
+    ckTrue('a trucker pasting a link is left alone',
+        !trucker || trucker.intent !== 'ask_link_purpose', JSON.stringify(trucker));
+
+    // Her answer resolves the pending and carries the link to the AI path.
+    const answered = rw_brain.policyDecide({ text: 'check the totals against the invoice',
+        textLower: 'check the totals against the invoice', chatId: 'sim@c.us',
+        isManagerOrTeam: true, isManager: true, session: {},
+        pendingAction: { type: 'await_link_purpose', url: SHEET }, role: 'manager' });
+    ckTrue('answering does not get swallowed as a booking lookup',
+        !answered || answered.intent !== 'show_booking_status', JSON.stringify(answered));
+
+    const cancelled = rw_brain.policyDecide({ text: 'cancel', textLower: 'cancel', chatId: 'sim@c.us',
+        isManagerOrTeam: true, isManager: true, session: {},
+        pendingAction: { type: 'await_link_purpose', url: SHEET }, role: 'manager' });
+    // Cancel goes through the SHARED pending-cancel path, not a bespoke one —
+    // same behaviour as every other question Jarvis asks.
+    ckTrue('"cancel" drops the link through the standard resolve_pending path',
+        cancelled && cancelled.intent === 'resolve_pending' && (cancelled.data || {}).answer === 'no',
+        JSON.stringify(cancelled));
+}
+
 
 console.log(`\n${'='.repeat(60)}`);
 console.log(`${pass} passed, ${fail} failed`);

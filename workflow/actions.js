@@ -100,6 +100,34 @@ function isSamePendingQuestion(a, b) {
     return aLane === bLane;
 }
 
+// ── describeLink ───────────────────────────────────────────────────────────
+// Apsara, 2026-08-27: "it should have asked instead."
+//
+// Name what the link IS before asking what to do with it. "What do you want me
+// to do with this?" is a worse question than "That's a Google Sheet, tab
+// 2098848345 — what should I do with it?", because the second one proves the
+// link arrived intact and lets her correct a wrong paste immediately.
+//
+// Deliberately does NOT offer a menu of options. Inventing "1. read it 2.
+// import it 3. log it" would be a second guess dressed up as a question, and
+// the whole point of this change is to stop guessing.
+function describeLink(url) {
+    const u = String(url || '').trim();
+    let what = 'a link';
+    let detail = '';
+    let m;
+    if ((m = u.match(/docs\.google\.com\/spreadsheets\/d\/([\w-]+)/))) {
+        what = 'a Google Sheet';
+        const gid = (u.match(/[?&#]gid=(\d+)/) || [])[1];
+        detail = gid ? ` (tab ${gid})` : '';
+    } else if (/docs\.google\.com\/document\//.test(u)) what = 'a Google Doc';
+    else if (/docs\.google\.com\/presentation\//.test(u)) what = 'a Google Slides deck';
+    else if (/drive\.google\.com/.test(u)) what = 'a Google Drive file';
+    else if (/\.pdf(\?|$)/i.test(u)) what = 'a PDF';
+    else if ((m = u.match(/^https?:\/\/([^/]+)/i))) { what = 'a link'; detail = ` to ${m[1].replace(/^www\./, '')}`; }
+    return `That's ${what}${detail}. What should I do with it?\n(Or say "cancel" and I'll drop it.)`;
+}
+
 async function setPending(chatId, action) {
 const existing = getPending(chatId);
 if (existing) {
@@ -5506,6 +5534,7 @@ async function showWritingStyle(chatId) {
 }
 
 module.exports = {
+    describeLink,
     showPendingReplies, replyToDigestItem, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,
