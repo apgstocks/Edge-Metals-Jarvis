@@ -212,7 +212,12 @@ function buildProformaDc2Html(data) {
         });
     });
 
-    const signatureBlock = '<div style="height:34px;margin-bottom:2px;"></div>'; // no signature.png shipped — same "blank if missing" fallback as the Flask version
+    // Was a hardcoded empty spacer, with a comment claiming no signature image
+    // was shipped. It was — inlined as base64 inside the INVOICE template,
+    // which is why the invoice had a signature and the proforma never did.
+    // Now both draw the same file via helpers/signature.js, which still falls
+    // back to exactly this empty 34px block if the image cannot be read.
+    const signatureBlock = require('./signature').signatureBlockHtml();
 
     let html = loadTemplate();
     const subs = {

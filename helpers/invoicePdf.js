@@ -237,6 +237,12 @@ function buildInvoiceClassicHtml(data) {
         packing_rows: packingRowsHtml.join('\n'),
         total_net_lbs_fmt: formatInt(totalNetLbs),
         total_net_mt_fmt: totalNetMt.toFixed(3),
+        // The signature used to be base64-inlined directly in the template.
+        // Pulled out to assets/shared/signature.png so the proforma can draw
+        // the SAME image — one file, not two copies that can drift apart.
+        // Dimensions preserved exactly (9mm block, 8mm x 35mm image) so this
+        // renders pixel-identically to what it replaced.
+        signature_block: require('./signature').signatureBlockHtml({ height: '9mm', maxHeight: '8mm', maxWidth: '35mm', align: 'center', justify: 'center', marginBottom: null }),
     };
     for (const [key, val] of Object.entries(subs)) {
         html = html.split(`{{${key}}}`).join(val);
