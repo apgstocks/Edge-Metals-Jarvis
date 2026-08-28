@@ -187,7 +187,7 @@ input::placeholder { color:var(--steel-500); }
 .modal-stripe { height:5px; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px); }
 .modal-head { display:flex; align-items:center; justify-content:space-between; padding:20px 26px; border-bottom:1px solid var(--border-subtle); }
 .modal-body { padding:24px 26px; max-height:62vh; overflow-y:auto; }
-.modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
+.modal-foot { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
 
 /* App shell specific to this standalone build — a simple top bar instead
    of the dashboard's sidebar (there's only one screen here). */
@@ -239,6 +239,23 @@ body { overflow-y:auto; }
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
+      #draftBar { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px;
+        background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400);
+        border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px; color:var(--text-muted); }
+      #draftBar.hidden { display:none; }
+      /* A silent autosave is indistinguishable from a broken one, so it says
+         what it is doing — muted, because this is reassurance not an alert. */
+      #draftStatus { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
+      #draftStatus .dot { width:6px; height:6px; border-radius:50%; background:var(--status-good, #4ade80); flex:none; }
+      #draftStatus.saving .dot { background:var(--copper-400); }
+      #draftStatus.idle { color:var(--text-faint); }
+      .draft-strip { margin-bottom:22px; }
+      .draft-strip-head { font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px; }
+      .draft-card { display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:8px;
+        background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400); border-radius:var(--radius-sm); }
+      .draft-card .d-main { flex:1; min-width:0; }
+      .draft-card .d-title { font-size:13px; color:var(--text-strong); font-weight:600; }
+      .draft-card .d-sub { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px; }
       /* Payment badge. Shown only once something has been paid — an "UNPAID"
          tag on every load is noise. Amber carries the pending figure, which
          is the number anyone looking at a part-paid load actually wants. */
@@ -2822,6 +2839,9 @@ function resetLoadModal(mode) {
   $('loadModalErr').textContent = '';
   applyLoadModalMode(mode);
   renderItemRows();
+  // A new blank form is exactly where an unfinished one is worth offering.
+  offerLoadDraft();
+  setDraftStatus(editingLoadId ? 'none' : 'waiting');
   stopCamera();
   refreshAddressBookCache();
   refreshCustomItemTypes().then(renderItemRows);
@@ -3087,6 +3107,23 @@ function renderLoads(loads) {
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
+      #draftBar { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px;
+        background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400);
+        border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px; color:var(--text-muted); }
+      #draftBar.hidden { display:none; }
+      /* A silent autosave is indistinguishable from a broken one, so it says
+         what it is doing — muted, because this is reassurance not an alert. */
+      #draftStatus { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
+      #draftStatus .dot { width:6px; height:6px; border-radius:50%; background:var(--status-good, #4ade80); flex:none; }
+      #draftStatus.saving .dot { background:var(--copper-400); }
+      #draftStatus.idle { color:var(--text-faint); }
+      .draft-strip { margin-bottom:22px; }
+      .draft-strip-head { font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px; }
+      .draft-card { display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:8px;
+        background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400); border-radius:var(--radius-sm); }
+      .draft-card .d-main { flex:1; min-width:0; }
+      .draft-card .d-title { font-size:13px; color:var(--text-strong); font-weight:600; }
+      .draft-card .d-sub { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px; }
       /* Payment badge. Shown only once something has been paid — an "UNPAID"
          tag on every load is noise. Amber carries the pending figure, which
          is the number anyone looking at a part-paid load actually wants. */
@@ -3274,6 +3311,7 @@ function renderLoads(loads) {
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
       <!-- Sellers holding unapplied advance money. Mirrors the website. -->
+      <div id="draftStrip">${draftStripHtml()}</div>
       <div id="advStrip"></div>
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
@@ -3372,6 +3410,14 @@ function renderLoads(loads) {
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
+          <!-- Offered, not applied. Restoring automatically would overwrite
+               whatever is on screen with something typed hours ago. -->
+          <div id="draftBar" class="hidden">
+            <span id="draftBarText"></span>
+            <span style="flex:1;"></span>
+            <button id="btnRestoreDraft" class="btn" style="padding:6px 12px; font-size:12px;">Restore</button>
+            <button id="btnDiscardDraft" class="btn" style="padding:6px 12px; font-size:12px;">Discard</button>
+          </div>
           <!-- Mirrors the website form exactly, per Apsara 2026-08-28 ("this
                change should be there in mobile as well"):
                  - Buyer box removed. It was disabled and always showed the
@@ -3415,6 +3461,10 @@ function renderLoads(loads) {
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
         </div>
         <div class="modal-foot">
+          <!-- Sits beside Save, because that is where the eye goes when
+               wondering whether work is safe. -->
+          <span id="draftStatus"></span>
+          <span style="flex:1;"></span>
           <button id="btnCancelLoad" class="btn">Cancel</button>
           <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
         </div>
@@ -3515,6 +3565,13 @@ function wireLoadsEvents() {
       btn.disabled = false; btn.textContent = 'Record payment';
     }
   });
+  // Autosave on any edit inside the load form. One delegated listener rather
+  // than per-field wiring, because item rows are re-rendered constantly and
+  // individually-bound handlers would be lost on every renderItemRows().
+  $('loadModal').addEventListener('input', queueLoadDraftSave);
+  $('loadModal').addEventListener('change', queueLoadDraftSave);
+  $('btnRestoreDraft').addEventListener('click', restoreLoadDraft);
+  $('btnDiscardDraft').addEventListener('click', discardOfferedDraft);
   $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
   $('btnCancelLoad').addEventListener('click', closeLoadModal);
 
@@ -3670,6 +3727,10 @@ function wireLoadsEvents() {
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
+      // Cleared only AFTER the request resolves — clearing before would throw
+      // the recovery copy away at the moment a failed save makes it most
+      // valuable.
+      clearLoadDraft();
       // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
       // type a new name if it is not there in address book, it should be
       // created as new contact with name, address(optional), phone
@@ -3782,6 +3843,23 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = originalLabel;
     }
   }));
+  // Draft strip actions, delegated on the strip so a re-render does not leave
+  // dead handlers behind.
+  const dstrip = $('draftStrip');
+  if (dstrip) {
+    dstrip.addEventListener('click', async (ev) => {
+      const resume = ev.target.closest('.btn-resume-draft');
+      if (resume) { resumeDraft(resume.dataset.id); return; }
+      const drop = ev.target.closest('.btn-drop-draft');
+      if (drop) {
+        if (!confirm('Delete this unfinished load?\n\nIt has not been saved as a load, so nothing else is affected.')) return;
+        try { await api(`/api/load-drafts/${encodeURIComponent(drop.dataset.id)}`, { method: 'DELETE' }); } catch (e) {}
+        pendingDrafts = pendingDrafts.filter(x => x.id !== drop.dataset.id);
+        dstrip.innerHTML = draftStripHtml();
+      }
+    });
+  }
+
   loadAdvanceStrip();
 
   document.querySelectorAll('.btn-pay-load').forEach(btn => btn.addEventListener('click', (ev) => {
@@ -4185,10 +4263,14 @@ async function renderCurrentMobileTab() {
       // deletion is what rolls the inventory back. Tagged with _kind so the
       // card, the edit handler and the delete handler each know which store
       // the record actually lives in.
-      const [inbound, sales] = await Promise.all([
+      const [inbound, sales, drafts] = await Promise.all([
         api('/api/loads'),
         api('/api/outbound-loads').catch(() => []),
+        // Fetched alongside rather than merged INTO the deck: a draft is not a
+        // load, must not appear in any total, and gets its own strip.
+        api('/api/load-drafts').catch(() => []),
       ]);
+      pendingDrafts = asArray(drafts);
       const merged = [
         ...asArray(inbound).map(l => ({ ...l, _kind: 'purchase' })),
         // asArray: the endpoint returns a bare array, but a non-array here

@@ -138,5 +138,38 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+
+// ── the draft autosave exists on BOTH, and agrees ──────────────────────────
+{
+  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  for (const [label, src] of [['website', web], ['app', app]]) {
+    ck(`${label}: autosaves the load form`, /queueLoadDraftSave/.test(src));
+    ck(`${label}: says what the draft is doing`, /id="draftStatus"/.test(src) && /function setDraftStatus/.test(src));
+    ck(`${label}: offers an unfinished load rather than applying it`,
+       /id="draftBar"/.test(src) && /function offerLoadDraft|async function offerLoadDraft/.test(src));
+    ck(`${label}: lists unfinished loads above the deck`, /id="draftStrip"/.test(src) && /function draftStripHtml/.test(src));
+    ck(`${label}: saves drafts to the SERVER, not the browser`,
+       /\/api\/load-drafts/.test(src) && !/localStorage[\s\S]{0,80}Draft/i.test(src));
+    ck(`${label}: never drafts while editing an existing load`,
+       /if \(editingLoadId\)[\s\S]{0,80}?return;/.test(src));
+    ck(`${label}: clears the draft only after a save resolves`, /clearLoadDraft\(\);/.test(src));
+  }
+  const grabFn = (src, name) => {
+    for (const kw of ['async function ','function ']) {
+      const i = src.indexOf(kw+name+'('); if (i<0) continue;
+      let d=0, j=src.indexOf('{', i);
+      for (let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} }
+    }
+    return null;
+  };
+  const strip = (t) => String(t).replace(/\s+/g,' ').trim();
+  for (const fn of ['itemHasContent','setDraftStatus','currentDraftPayload','saveLoadDraft',
+                    'queueLoadDraftSave','clearLoadDraft','applyLoadDraft','offerLoadDraft',
+                    'restoreLoadDraft','discardOfferedDraft','draftStripHtml','resumeDraft']) {
+    ck(`draft: ${fn} is identical in both`, !!grabFn(web,fn) && strip(grabFn(web,fn)) === strip(grabFn(app,fn)));
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
