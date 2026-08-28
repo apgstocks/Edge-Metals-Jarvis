@@ -22,7 +22,25 @@ const { updateLoad } = require('./loads');
 // pdf_link/pdf_drive_id fields, so every reader downstream keeps working
 // without knowing which kind it is looking at.
 async function generateAndStoreLoadPdfs(load, opts = {}) {
-    const buf = await generateLoadPdf(load, opts);
+    // Payment status is looked up HERE rather than being passed in by each
+    // caller. Every route and the scheduler's end-of-day report funnel through
+    // this function, so doing it once means no caller can generate a ticket
+    // that silently omits a payment — which is exactly what "on generating
+    // invoice, this should get reflected" has to mean in practice.
+    //
+    // Best-effort: a failure to read the ledger must not stop a ticket being
+    // produced. A ticket without the payment block is a lesser problem than no
+    // ticket at all.
+    let payment = opts.payment || null;
+    if (!payment) {
+        try {
+            const { paymentSummary } = require('./payments');
+            payment = paymentSummary(load.id, load.amount);
+        } catch (e) {
+            console.warn('[LOADS-PDF] payment lookup failed, ticket will omit it:', e.message);
+        }
+    }
+    const buf = await generateLoadPdf(load, { ...opts, payment });
     const file = await uploadLoadPdf(load.id, buf);
 
     // Added 2026-08-12 per Apsara: the weights PDF exists to be photo-backed

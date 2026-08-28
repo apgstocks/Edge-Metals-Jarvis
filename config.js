@@ -120,6 +120,18 @@ const FILES = {
     // draft, because it is not in there. A draft is DELETED, not converted,
     // when the real load is saved.
     LOAD_DRAFTS_FILE: path.join(DATA_DIR, 'load_drafts.json'),
+    // Payments against a load — per Apsara 2026-08-28. A load can be settled
+    // in instalments, so this is a LEDGER of payments keyed by load, not a
+    // paid/unpaid flag on the load itself.
+    //
+    // Its own store for the same reason as the two above, plus one specific
+    // to money: a payment must never be silently rewritten by a load edit.
+    // Loads are re-saved wholesale on every edit (see editLoad in
+    // helpers/loads.js, which rebuilds the record), so a payments array living
+    // on the load would be one dropped field away from erasing a receipt.
+    // Keeping payments outside that write path means editing a weight cannot
+    // touch what was paid.
+    PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
     // Yard expenses — per Apsara 2026-08-19 ("for admin access in mobile
     // app, i want expense tracker"). Its own flat store for the same reason
     // OUTBOUND_LOADS_FILE is separate from LOADS_FILE: an expense shares

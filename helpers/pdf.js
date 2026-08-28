@@ -741,6 +741,47 @@ function generateLoadPdf(load, opts = {}) {
                 doc.moveDown(0.6);
             }
 
+            // Payment status, per Apsara 2026-08-28 ("on generating invoice,
+            // this should get reflected"). Drawn ABOVE the signature, because
+            // the balance is one of the numbers being attested to.
+            //
+            // Only appears when a payment actually exists. A ticket for an
+            // unpaid load is the ordinary case and does not need a row of
+            // zeros announcing it; a "PAID 0.00" line on every document is
+            // noise that makes the real ones easier to miss.
+            //
+            // The figures come from the CALLER (opts.payment), not from a
+            // lookup in here: helpers/payments.js owns that arithmetic, and a
+            // second implementation living in the PDF layer is how a ticket
+            // ends up disagreeing with the screen it was generated from.
+            const pay = opts && opts.payment;
+            if (pay && Array.isArray(pay.payments) && pay.payments.length) {
+                ensureSpace(doc, 90);
+                drawSectionHeading(doc, 'Payment');
+                const money = (n) => (n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+                doc.font('Helvetica').fontSize(9).fillColor('#333');
+                pay.payments.forEach((p) => {
+                    const bits = [p.paid_on, p.mode, money(p.amount)];
+                    if (p.reference) bits.push(`ref ${p.reference}`);
+                    doc.text(bits.join('   ·   '), { continued: false });
+                });
+                doc.moveDown(0.3);
+                const label = pay.status === 'paid' ? 'PAID IN FULL'
+                    : pay.status === 'partial' ? 'PART PAID'
+                    : pay.status === 'overpaid' ? 'OVERPAID'
+                    : 'PAID';
+                doc.font('Helvetica-Bold').fontSize(10).fillColor('#111')
+                    .text(`${label}   Paid ${money(pay.paid)}` + (pay.total != null ? ` of ${money(pay.total)}` : ''));
+                if (pay.status === 'partial') {
+                    doc.font('Helvetica-Bold').fontSize(10).fillColor('#8a3b1e')
+                        .text(`Balance due ${money(pay.pending)}`);
+                } else if (pay.status === 'overpaid') {
+                    doc.font('Helvetica-Bold').fontSize(10).fillColor('#8a3b1e')
+                        .text(`Overpaid by ${money(pay.over)}`);
+                }
+                doc.fillColor('#000').moveDown(0.8);
+            }
+
             // Signature block last, per Apsara 2026-08-17 — a signature
             // belongs at the end of the document, under the numbers it's
             // attesting to.

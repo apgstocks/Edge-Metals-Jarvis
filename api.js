@@ -1048,9 +1048,14 @@ function createApi() {
             // A load whose PDF predates versioning has no field at all, so it
             // reads as 0 and is correctly reported stale — those really were
             // built by older code.
+            // payment: attached SERVER-SIDE for the same reason pdf_stale is.
+            // The paid/pending arithmetic lives in one place, so a card, a
+            // ticket and an invoice cannot each round it slightly differently.
+            const { paymentSummary } = require('./helpers/payments');
             res.json(loadLoads().map(l => ({
                 ...l,
                 pdf_stale: !!l.pdf_link && (Number(l.pdf_template_version) || 0) < PDF_TEMPLATE_VERSION,
+                payment: paymentSummary(l.id, l.amount),
             })));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -1345,6 +1350,11 @@ function createApi() {
             const doomedMonth = doomed && doomed.date;
             const found = await deleteLoad(req.params.id);
             if (!found) return res.status(404).json({ error: 'not found' });
+            // Payments follow the load. A deleted load leaving its
+            // receipts behind would sum against nothing and quietly inflate
+            // any future "what have we paid" figure.
+            await require('./helpers/payments').deletePaymentsForLoad(req.params.id);
+
             // Live sheet sync — this is the "if load deleted, modify
             // accordingly" half of the requirement. Works with no delete
             // handling of its own because every sync rebuilds from current
@@ -1385,6 +1395,58 @@ function createApi() {
     // buyer pricing — a business-data exposure call Apsara didn't ask for,
     // so this defaults to normal authenticated (manager/team) access only.
     // No photo/Drive/PDF integration (not asked for) — a plain CRUD store.
+    // ── Payments against a load ───────────────────────────────────────────
+    // Per Apsara 2026-08-28: Pay beside Edit/Delete, mode + amount, anything
+    // short of the load total is partial with a pending balance.
+    //
+    // A ledger, not a flag — see helpers/payments.js for why a load can carry
+    // several payments and why they are stored outside the load record.
+    app.get('/api/payments', (req, res) => {
+        try {
+            const { listPayments, PAYMENT_MODES } = require('./helpers/payments');
+            const loadId = req.query && req.query.load_id;
+            const all = listPayments();
+            res.json({ modes: PAYMENT_MODES, payments: loadId ? all.filter((p) => p.load_id === loadId) : all });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/payments', async (req, res) => {
+        try {
+            const { addPayment, paymentSummary } = require('./helpers/payments');
+            const b = req.body || {};
+            const payment = await addPayment({ ...b, created_by: (req.role || null) });
+            // The fresh summary comes back with the payment so the client can
+            // repaint the card without a second round trip, and so the
+            // partial/pending figure it shows is the SERVER's arithmetic
+            // rather than a second implementation of it in the browser.
+            const amount = amountForLoad(b.load_id, b.load_kind);
+            res.json({ ok: true, payment, summary: paymentSummary(b.load_id, amount) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/payments/:id', async (req, res) => {
+        try {
+            const { deletePayment } = require('./helpers/payments');
+            res.json({ ok: true, removed: await deletePayment(String(req.params.id)) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // One place that answers "what is this load worth", for either store, so
+    // the payment routes and the load listings cannot disagree about the
+    // figure a balance is measured against.
+    function amountForLoad(loadId, kind) {
+        try {
+            if (kind === 'sale') {
+                const { loadOutboundLoads } = require('./helpers/outboundLoads');
+                const l = loadOutboundLoads().find((x) => x.id === loadId);
+                return l ? l.amount : null;
+            }
+            const { loadLoads } = require('./helpers/loads');
+            const l = loadLoads().find((x) => x.id === loadId);
+            return l ? l.amount : null;
+        } catch (e) { return null; }
+    }
+
     // ── Load drafts ───────────────────────────────────────────────────────
     // Unfinished loads, per Apsara 2026-08-28 ("draft needs to be saved and
     // can be edited later"). Server-side so a draft survives a closed tab, a
@@ -1431,7 +1493,13 @@ function createApi() {
     app.get('/api/outbound-loads', (req, res) => {
         try {
             const { loadOutboundLoads, getLoadMargin } = require('./helpers/outboundLoads');
-            const loads = loadOutboundLoads().map((l) => ({ ...l, ...getLoadMargin(l) }));
+            const { paymentSummary } = require('./helpers/payments');
+            const loads = loadOutboundLoads().map((l) => ({
+                ...l, ...getLoadMargin(l),
+                // Sales get payment tracking too: a buyer paying in
+                // instalments is the same problem from the other side.
+                payment: paymentSummary(l.id, l.amount),
+            }));
             // Returns a BARE ARRAY, matching GET /api/loads.
             //
             // It used to return { loads: [...] } while its sibling returned an
@@ -1549,6 +1617,11 @@ function createApi() {
             const { deleteOutboundLoad } = require('./helpers/outboundLoads');
             const found = await deleteOutboundLoad(req.params.id);
             if (!found) return res.status(404).json({ error: 'not found' });
+            // Payments follow the load. A deleted load leaving its
+            // receipts behind would sum against nothing and quietly inflate
+            // any future "what have we paid" figure.
+            await require('./helpers/payments').deletePaymentsForLoad(req.params.id);
+
             res.json({ ok: true });
         } catch (err) {
             console.error('[API] delete outbound load failed:', err.message);
