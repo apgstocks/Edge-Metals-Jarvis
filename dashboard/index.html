@@ -409,9 +409,23 @@ function fmtRate(n) {
   const d = s.includes('.') ? s.split('.')[1].length : 0;
   return d >= 2 ? s : Number(n).toFixed(2);
 }
+// Per Apsara 2026-08-29: "for amount in app/website, always use $ before."
+//
+// The $ lives HERE rather than at each call site, because it was already at
+// SOME call sites and not others — five places prefixed it by hand and the
+// rest did not, which is exactly how a screen ends up showing "8,822.00" next
+// to "$8,822.00" for the same kind of figure. One function owns it now and
+// the manual prefixes are gone.
+//
+// Still returns EMPTY for a null/blank amount, deliberately: a bare "$" in an
+// empty cell reads as zero dollars when it actually means "no price yet".
+//
+// Safe for the one place that reads a formatted amount back
+// (updateItemTotals) because that already strips non-numeric characters
+// before parsing — checked, not assumed.
 function fmtAmount(n) {
   if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Mirrors helpers/loads.js's normalizeSellerPhone / mobile-app/www/index.html's
@@ -730,7 +744,7 @@ function invByTypeHtml(data) {
           <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
           ${data.onHandAvailable ? `<td style="padding:8px 6px; color:var(--text-muted);">${g.shipped || 0} ${esc(data.unit)}</td>
           <td style="padding:8px 6px; font-weight:700; color:${g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${g.onHand} ${esc(data.unit)}${g.onHand < 0 ? ' ⚠' : ''}</td>` : ''}
-          <td style="padding:8px 6px;">${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</td>
+          <td style="padding:8px 6px;">${g.amount != null ? fmtAmount(g.amount) : '—'}</td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -760,7 +774,7 @@ function invBySellerHtml(data) {
     <details class="card" style="margin-bottom:8px; padding:0;">
       <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
         <span style="font-weight:600;">${esc(s.seller)}</span>
-        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + fmtAmount(s.amount) : '—'}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? fmtAmount(s.amount) : '—'}</span>
       </summary>
       <div style="padding:0 16px 14px;">
         ${s.byType.length ? `
@@ -773,7 +787,7 @@ function invBySellerHtml(data) {
                 <td style="padding:6px;">${esc(g.description)}</td>
                 <td style="padding:6px;">${g.count}</td>
                 <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
-                <td style="padding:6px;">${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</td>
+                <td style="padding:6px;">${g.amount != null ? fmtAmount(g.amount) : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -788,11 +802,11 @@ function invBySellerHtml(data) {
             ${s.loads.map(l => l.pdf_link
               ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; text-decoration:none; border-bottom:1px solid var(--border-subtle);">
                    <span style="color:var(--accent);">${esc(l.id)} →</span>
-                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''}</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''}</span>
                  </a>`
               : `<div style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; border-bottom:1px solid var(--border-subtle);">
                    <span style="color:var(--text-muted);">${esc(l.id)}</span>
-                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''} · no PDF yet</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''} · no PDF yet</span>
                  </div>`).join('')}
           </div>` : ''}
       </div>
@@ -3698,7 +3712,8 @@ function loadDeckSectionsHtml(loads, emptyMsg) {
 // ── Recording a payment ────────────────────────────────────────────────────
 let payingLoad = null;   // { id, kind, amount, seller, payment }
 
-const payMoney = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Same rule as fmtAmount — every amount on screen carries its $.
+const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // ── Advances ───────────────────────────────────────────────────────────────
 // Sellers currently holding unapplied advance money, with a way to add more.
@@ -3709,11 +3724,16 @@ async function loadAdvanceStrip() {
   if (!el) return;
   let credits = [];
   try { credits = asArray(await api('/api/advances')); } catch (e) { credits = []; }
-  const btn = `<button id="btnNewAdvance" class="btn" style="font-size:11.5px; padding:6px 12px;">Record advance</button>`;
+  // "Record advance" button removed 2026-08-29 per Apsara. The strip now only
+  // REPORTS who is holding credit; recording an advance is not something this
+  // screen offers. addAdvance and POST /api/advances are untouched, so
+  // existing advances still show, still apply to loads, and still print — only
+  // the entry point is gone.
+  const btn = '';
   if (!credits.length) {
-    // Still offer the button with nothing outstanding — an advance usually
-    // gets paid BEFORE there is anything on this screen to hang it off.
-    el.innerHTML = `<div style="margin-bottom:18px;">${btn}</div>`;
+    // Nothing held and nothing to offer: render nothing rather than an empty
+    // heading.
+    el.innerHTML = '';
   } else {
     el.innerHTML = `
       <div style="margin-bottom:20px;">
@@ -3729,11 +3749,8 @@ async function loadAdvanceStrip() {
             <span style="flex:1;"></span>
             <span style="color:var(--status-good, #4ade80); font-weight:700;">${payMoney(c.available)} unapplied</span>
           </div>`).join('')}
-        <div style="margin-top:9px;">${btn}</div>
       </div>`;
   }
-  const b = document.getElementById('btnNewAdvance');
-  if (b) b.addEventListener('click', () => openAdvanceModal(''));
 }
 
 function openAdvanceModal(seller) {

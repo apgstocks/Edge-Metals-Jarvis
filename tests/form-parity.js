@@ -204,5 +204,23 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
      && /appShell'\)\.classList\.(add|remove)\('hidden'\)/.test(app));
 }
 
+
+// ── amounts carry a $ , and only one ───────────────────────────────────────
+// Per Apsara 2026-08-29. The $ was at SOME call sites and not others, which is
+// how one screen ends up showing "8,822.00" beside "$8,822.00".
+{
+  for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
+    const src = fs.readFileSync(R+p,'utf8');
+    const grab = (n) => { const i=src.indexOf('function '+n+'('); let d=0,j=src.indexOf('{',i);
+      for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
+    const fmtAmount = new Function('return ' + grab('fmtAmount'))();
+    ck(`${p}: fmtAmount prefixes $`, fmtAmount(8822) === '$8,822.00');
+    ck(`${p}: zero still shows $0.00`, fmtAmount(0) === '$0.00');
+    ck(`${p}: a missing amount stays EMPTY, not a bare $`, fmtAmount(null) === '');
+    ck(`${p}: no call site prefixes $ by hand any more`, !/'\$' \+ fmtAmount\(/.test(src));
+    ck(`${p}: payment amounts carry $ too`, /payMoney = \(n\) => '\$'/.test(src));
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

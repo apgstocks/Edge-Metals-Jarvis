@@ -440,14 +440,18 @@ body { overflow-y:auto; }
     <input id="loginPw" type="password" placeholder="Password" autocomplete="current-password">
     <button id="btnLogin" class="btn btn-primary">Sign in</button>
     <div id="loginErr"></div>
-    <!-- Server address, collapsed by default. Needed because the tunnel
-         hostname rotates (see API_BASE above) — without this, a rotation
-         means a new build. Hidden rather than removed: it's a field nobody
-         should touch on a normal day, and a visible URL box on a sign-in
-         screen invites exactly the wrong kind of experimentation. -->
-    <div style="margin-top:14px; text-align:center;">
-      <button id="btnToggleServer" class="btn" style="background:transparent; border:none; color:var(--text-faint); font-size:11px; padding:4px;">Server settings</button>
-    </div>
+    <!-- Server settings are NOT offered here — per Apsara 2026-08-29, "server
+         settings should not come in sign in page. i dont want anyone to
+         access it." Anyone holding the phone could previously repoint the app
+         at a different server before signing in, which is a real exposure and
+         not just clutter.
+         Moved to Settings, behind the admin password (see #as_server_box).
+         The catch is that the tunnel hostname rotates, and a wrong address
+         means you cannot sign in AT ALL — so a post-login-only setting would
+         brick the app after a rotation with no way back except a rebuild.
+         The recovery path is therefore kept but made undiscoverable: press
+         and hold the title above for three seconds. Nothing is visible, so
+         nobody finds it by looking, and the app is still rescuable. -->
     <div id="serverBox" class="hidden" style="margin-top:8px;">
       <input id="serverUrl" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://your-tunnel.trycloudflare.com" style="font-size:12px;">
       <div style="font-size:11px; color:var(--text-faint); margin-top:6px; line-height:1.5;">
@@ -550,6 +554,20 @@ body { overflow-y:auto; }
       <button id="btnCloseAdminSettings" class="btn" style="padding:4px 10px;">✕</button>
     </div>
     <div class="modal-body">
+      <!-- Server address, moved here from the sign-in card 2026-08-29 per
+           Apsara. This modal is admin-only, so the field now sits behind the
+           admin password instead of in front of anyone holding the phone. -->
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Server address</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Only change this if the app cannot reach Jarvis — for example after the server restarted on a new address.</div>
+      <input id="as_server_url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://your-tunnel.trycloudflare.com" style="width:100%; font-size:12px;">
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button id="btnAsResetServer" class="btn" style="flex:1;">Use default</button>
+        <button id="btnAsSaveServer" class="btn btn-primary" style="flex:2;">Save address</button>
+      </div>
+      <div id="as_server_msg" style="margin-top:8px; font-family:var(--font-mono); font-size:11px;"></div>
+
+      <div style="height:1px; background:var(--border-subtle); margin:22px 0;"></div>
+
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Daily yard report</div>
       <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Master switch for the 8:00 PM Eastern report (email + WhatsApp) — same setting as the dashboard's Settings &gt; Yard page.</div>
       <label style="display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer;">
@@ -816,9 +834,23 @@ function fmtRate(n) {
   const d = s.includes('.') ? s.split('.')[1].length : 0;
   return d >= 2 ? s : Number(n).toFixed(2);
 }
+// Per Apsara 2026-08-29: "for amount in app/website, always use $ before."
+//
+// The $ lives HERE rather than at each call site, because it was already at
+// SOME call sites and not others — five places prefixed it by hand and the
+// rest did not, which is exactly how a screen ends up showing "8,822.00" next
+// to "$8,822.00" for the same kind of figure. One function owns it now and
+// the manual prefixes are gone.
+//
+// Still returns EMPTY for a null/blank amount, deliberately: a bare "$" in an
+// empty cell reads as zero dollars when it actually means "no price yet".
+//
+// Safe for the one place that reads a formatted amount back
+// (updateItemTotals) because that already strips non-numeric characters
+// before parsing — checked, not assumed.
 function fmtAmount(n) {
   if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Mirrors helpers/loads.js's normalizeSellerPhone — added 2026-08-17 after
@@ -1302,7 +1334,8 @@ function paymentBadgeHtml(l) {
 }
 
 let payingLoad = null;
-const payMoney = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Same rule as fmtAmount — every amount on screen carries its $.
+const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // ── Advances ───────────────────────────────────────────────────────────────
 // Sellers currently holding unapplied advance money, with a way to add more.
@@ -1313,11 +1346,16 @@ async function loadAdvanceStrip() {
   if (!el) return;
   let credits = [];
   try { credits = asArray(await api('/api/advances')); } catch (e) { credits = []; }
-  const btn = `<button id="btnNewAdvance" class="btn" style="font-size:11.5px; padding:6px 12px;">Record advance</button>`;
+  // "Record advance" button removed 2026-08-29 per Apsara. The strip now only
+  // REPORTS who is holding credit; recording an advance is not something this
+  // screen offers. addAdvance and POST /api/advances are untouched, so
+  // existing advances still show, still apply to loads, and still print — only
+  // the entry point is gone.
+  const btn = '';
   if (!credits.length) {
-    // Still offer the button with nothing outstanding — an advance usually
-    // gets paid BEFORE there is anything on this screen to hang it off.
-    el.innerHTML = `<div style="margin-bottom:18px;">${btn}</div>`;
+    // Nothing held and nothing to offer: render nothing rather than an empty
+    // heading.
+    el.innerHTML = '';
   } else {
     el.innerHTML = `
       <div style="margin-bottom:20px;">
@@ -1333,11 +1371,8 @@ async function loadAdvanceStrip() {
             <span style="flex:1;"></span>
             <span style="color:var(--status-good, #4ade80); font-weight:700;">${payMoney(c.available)} unapplied</span>
           </div>`).join('')}
-        <div style="margin-top:9px;">${btn}</div>
       </div>`;
   }
-  const b = document.getElementById('btnNewAdvance');
-  if (b) b.addEventListener('click', () => openAdvanceModal(''));
 }
 
 function openAdvanceModal(seller) {
@@ -3981,18 +4016,77 @@ let editingLoadDescription = '';
 // accepting anything typed — a wrong URL saved silently would leave the app
 // unable to reach anything AND unable to explain why, which is a worse state
 // than the rotation it exists to fix.
-function wireServerBox() {
-  const toggle = $('btnToggleServer');
-  if (!toggle || toggle.dataset.wired) return;
-  toggle.dataset.wired = '1';
-  toggle.addEventListener('click', () => {
-    const box = $('serverBox');
-    box.classList.toggle('hidden');
-    if (!box.classList.contains('hidden')) {
-      $('serverUrl').value = storedApiBase() || DEFAULT_API_BASE;
-      $('serverMsg').textContent = '';
-    }
+// Server address inside Admin settings. Same probe as the recovery copy — a
+// wrong address is only worth saving once something has actually answered on
+// it, otherwise the app is left pointing at nothing with no way to tell.
+function wireAdminServerBox() {
+  const save = $('btnAsSaveServer');
+  if (!save || save.dataset.wired) return;
+  save.dataset.wired = '1';
+  $('btnAsResetServer').addEventListener('click', () => {
+    setStoredApiBase('');
+    API_BASE = DEFAULT_API_BASE;
+    $('as_server_url').value = DEFAULT_API_BASE;
+    $('as_server_msg').style.color = 'var(--text-muted)';
+    $('as_server_msg').textContent = 'Back to the address this app shipped with.';
   });
+  save.addEventListener('click', async () => {
+    const url = String($('as_server_url').value || '').trim().replace(/\/+$/, '');
+    const msg = $('as_server_msg');
+    if (!/^https?:\/\//i.test(url)) {
+      msg.style.color = 'var(--status-danger)';
+      msg.textContent = 'Needs to start with https:// (or http:// on a local network).';
+      return;
+    }
+    save.disabled = true; save.textContent = 'Checking…';
+    msg.style.color = 'var(--text-muted)'; msg.textContent = 'Trying to reach it…';
+    try {
+      const r = await fetch(url + '/api/health', { method: 'GET' });
+      if (!r.ok) throw new Error(`server answered ${r.status}`);
+      setStoredApiBase(url);
+      API_BASE = url;
+      msg.style.color = 'var(--status-success, #3fae55)';
+      msg.textContent = '✓ Reached it. Saved.';
+    } catch (e) {
+      msg.style.color = 'var(--status-danger)';
+      msg.textContent = `Couldn't reach that address. ${e.message}`;
+    } finally { save.disabled = false; save.textContent = 'Save address'; }
+  });
+}
+
+function wireServerBox() {
+  // The visible "Server settings" button is gone from the sign-in card. What
+  // is left is a deliberately undiscoverable recovery gesture: press and hold
+  // the login title for three seconds.
+  //
+  // This is not pretending to be security — anyone who knows the gesture can
+  // use it, and it is documented right here. It is the honest resolution of a
+  // real conflict: the address must be changeable from the SIGNED-OUT screen
+  // (a wrong one means nobody can sign in to fix it, and the tunnel hostname
+  // rotates), but it must not be sitting in front of whoever picks up the
+  // phone. Invisible satisfies both. The genuine fix is a stable named tunnel,
+  // after which this can be deleted outright.
+  const card = document.querySelector('#loginScreen .eyebrow');
+  if (card && !card.dataset.wired) {
+    card.dataset.wired = '1';
+    let timer = null;
+    const start = () => {
+      timer = setTimeout(() => {
+        const box = $('serverBox');
+        if (!box) return;
+        box.classList.remove('hidden');
+        $('serverUrl').value = storedApiBase() || DEFAULT_API_BASE;
+        $('serverMsg').style.color = 'var(--text-muted)';
+        $('serverMsg').textContent = 'Recovery only — change this if the app cannot reach the server.';
+      }, 3000);
+    };
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    card.addEventListener('touchstart', start, { passive: true });
+    card.addEventListener('mousedown', start);
+    ['touchend', 'touchcancel', 'touchmove', 'mouseup', 'mouseleave'].forEach((e) => card.addEventListener(e, cancel));
+  }
+  if ($('btnResetServer') && $('btnResetServer').dataset.wired) return;
+  if ($('btnResetServer')) $('btnResetServer').dataset.wired = '1';
   $('btnResetServer').addEventListener('click', () => {
     setStoredApiBase('');
     API_BASE = DEFAULT_API_BASE;
@@ -4345,7 +4439,7 @@ function mobInvBySellerHtml(data) {
         ${s.byType.map(g => `
           <div style="display:flex; justify-content:space-between; padding:5px 0; font-size:12px;">
             <span style="color:var(--text-muted);">${esc(g.description)}</span>
-            <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? '$' + fmtAmount(g.amount) : '—'}</span>
+            <span style="color:var(--text-faint); font-family:var(--font-mono);">${g.count} · ${g.net} ${esc(data.unit)} · ${g.amount != null ? fmtAmount(g.amount) : '—'}</span>
           </div>`).join('')}
         <!-- The loads behind those totals, per Apsara 2026-08-24: "when i
              click it, it should open my load ticket". A seller row was a
@@ -4357,11 +4451,11 @@ function mobInvBySellerHtml(data) {
             ${s.loads.map(l => l.pdf_link
               ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="display:flex; justify-content:space-between; padding:6px 0; font-size:12px; text-decoration:none; border-bottom:1px solid var(--border-subtle);">
                    <span style="color:var(--accent);">${esc(l.id)} →</span>
-                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''}</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''}</span>
                  </a>`
               : `<div style="display:flex; justify-content:space-between; padding:6px 0; font-size:12px; border-bottom:1px solid var(--border-subtle);">
                    <span style="color:var(--text-muted);">${esc(l.id)}</span>
-                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · $' + fmtAmount(l.amount) : ''} · no PDF yet</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''} · no PDF yet</span>
                  </div>`).join('')}
           </div>` : ''}
       </div>
@@ -4684,6 +4778,11 @@ $('btnSignout').addEventListener('click', () => {
 $('btnAdminSettings').addEventListener('click', async () => {
   $('as_report_msg').textContent = '';
   $('adminSettingsModal').classList.remove('hidden');
+  // Server address: wired and filled on every open, same as the fields below,
+  // so it never shows a stale value if it was changed from the recovery path.
+  wireAdminServerBox();
+  $('as_server_url').value = storedApiBase() || DEFAULT_API_BASE;
+  $('as_server_msg').textContent = '';
   try {
     const settings = await api('/api/settings');
     $('as_report_enabled').checked = !!settings.yard_report_enabled;

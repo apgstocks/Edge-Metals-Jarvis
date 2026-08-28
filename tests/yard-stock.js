@@ -17,7 +17,34 @@
 // have agreed with the code.
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const assert = require('assert');
+
+// ⚠ DATA_DIR MUST BE SET BEFORE config.js IS REQUIRED. It reads the
+// environment once, at require time, and every FILE constant is derived from
+// it — set it afterwards and this suite silently goes back to writing the real
+// data directory.
+//
+// Added 2026-08-29. This was the ONLY suite in tests/ that did not isolate
+// itself; every other one already used a temp dir. It wrote the REAL
+// data/loads.json and data/outbound_loads.json, taking a backup first and
+// restoring on exit. Two problems with that:
+//
+//  1. FLAKY. Section D asserts on-hand figures read straight back out of those
+//     files, so anything else writing them mid-run — a live pm2 jarvis, a
+//     second test process — makes the assertions fail at random. Reproduced:
+//     the full suite passed one run and failed the next on identical code,
+//     while this file passed 40/40 in isolation.
+//
+//  2. DANGEROUS ON THE VM. `npm test` beside a running server had the test and
+//     the live app writing the same file, and the restore-on-exit would then
+//     overwrite whatever the server had written. A crash mid-run leaves real
+//     load records replaced by these fixtures.
+//
+// A temp dir removes both. The backup/restore below is now a no-op safety net
+// rather than the thing standing between a test run and the yard's records.
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yard-stock-'));
+
 const cfg = require('../config');
 
 let pass = 0, fail = 0;
