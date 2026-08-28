@@ -141,9 +141,31 @@ function findBookingInLoadingStage() {
 }
 
 // Extract a booking number from free text
+// Apsara pasted a Google Sheets link into WhatsApp on 2026-08-25 and got:
+//
+//     Apsara: https://docs.google.com/spreadsheets/d/1gwEOz.../edit?gid=2098848345
+//     Jarv:   No booking found for 2098848345.
+//
+// 2098848345 is the SHEET TAB ID. \d{7,} matched it happily, because this
+// function scans the whole string and a URL is full of long digit runs — gids,
+// timestamps, message ids, tracking codes. Every caller inherited that, so any
+// pasted link could be mistaken for a booking anywhere in the app.
+//
+// URLs are stripped before matching. A booking number written INSIDE a link is
+// not a reference she is making; it is part of somebody's address.
+const URL_RE = /\b(?:https?:\/\/|www\.)\S+/gi;
 function resolveBookingNumber(text) {
-    const match = String(text).trim().toUpperCase().match(/\b([A-Z]{2,6}\d{6,}|\d{7,})\b/);
+    const withoutUrls = String(text || '').replace(URL_RE, ' ');
+    const match = withoutUrls.trim().toUpperCase().match(/\b([A-Z]{2,6}\d{6,}|\d{7,})\b/);
     return match ? match[1] : null;
+}
+
+// Is the message nothing but a link? Used to stop a pasted URL being read as a
+// one-word command — see the "bare booking number" branch in workflow/brain.js.
+function isBareUrl(text) {
+    const t = String(text || '').trim();
+    if (!t) return false;
+    return /^(?:https?:\/\/|www\.)\S+$/i.test(t);
 }
 
 module.exports = {
@@ -151,5 +173,5 @@ module.exports = {
     formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
-    queryBookingsByLocation, hasSupplierAssigned,
+    queryBookingsByLocation, hasSupplierAssigned, isBareUrl,
 };

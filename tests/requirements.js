@@ -855,6 +855,38 @@ section('WIRING — a feature that nothing calls is a dead feature');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// A pasted link is not a booking number. Apsara, 2026-08-25:
+//   Apsara: https://docs.google.com/spreadsheets/d/1gwEOz.../edit?gid=2098848345
+//   Jarv:   No booking found for 2098848345.
+// 2098848345 is the sheet TAB id. resolveBookingNumber scanned the whole
+// string for \d{7,}, and every call site in the app inherited that.
+// ══════════════════════════════════════════════════════════════════════════
+{
+    console.log('\n=== a URL is never mined for a booking number ===');
+    const { resolveBookingNumber, isBareUrl } = require(R('helpers/booking.js'));
+    const SHEET = 'https://docs.google.com/spreadsheets/d/1gwEOzIWGPU7sXyE4gc30OmKqc3kGzcTIln8XKjYjlJQ/edit?gid=2098848345#gid=2098848345';
+
+    ck('THE LIVE BUG: a sheet gid is not a booking number', resolveBookingNumber(SHEET), null);
+    ck('nor is a drive file id', resolveBookingNumber('https://drive.google.com/file/d/1abc999999999/view'), null);
+    ck('nor a tracking number in a link', resolveBookingNumber('https://tracking.example.com/9876543210'), null);
+    ck('nor a bare www link', resolveBookingNumber('www.example.com/98765432100'), null);
+
+    // The half that matters more: do not break the thing that worked.
+    ck('a real booking number still resolves', resolveBookingNumber('DALA21235600'), 'DALA21235600');
+    ck('a bare numeric booking still resolves', resolveBookingNumber('21235600'), '21235600');
+    ck('one inside a sentence still resolves', resolveBookingNumber('status of DALA21235600'), 'DALA21235600');
+    ck('a booking BESIDE a link still resolves — the link is dropped, not the message',
+        resolveBookingNumber('DALA21235600 https://drive.google.com/file/d/1abc999999999/view'), 'DALA21235600');
+    ck('and the booking wins over digits inside the link',
+        resolveBookingNumber('see https://tracking.example.com/9876543210 for DALA21235600'), 'DALA21235600');
+
+    ckTrue('a bare link is recognised as a link', isBareUrl(SHEET));
+    ckTrue('text containing a link is not a bare link', !isBareUrl('check ' + SHEET));
+    ckTrue('a booking number is not a link', !isBareUrl('DALA21235600'));
+    ckTrue('empty input does not throw', !isBareUrl('') && resolveBookingNumber(null) === null);
+}
+
 console.log(`\n${'='.repeat(60)}`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) {

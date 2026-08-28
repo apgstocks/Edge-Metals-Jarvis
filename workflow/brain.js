@@ -9,7 +9,7 @@ const { appendAuditLog } = require('../helpers/auditlog');
 const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
-const { resolveBookingNumber, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
+const { resolveBookingNumber, isBareUrl, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
 const { callGeminiJSON }                           = require('../helpers/gemini');
 const { getLATime }                                = require('../helpers/time');
 
@@ -1189,8 +1189,15 @@ function policyDecide(ctx) {
             (m = t.match(/^send\s+prices?(?:\s+to\s+(.+))?$/)))
             return { intent: 'ask_pricelist_city', resolvedBy: 'policy', data: { target_name: m[1] ? m[1].trim() : null } };
 
-        // Bare booking number → status
-        const bkg = resolveBookingNumber(ctx.text);
+        // Bare booking number → status.
+        //
+        // The single-token check used to be the ONLY guard here, and a pasted
+        // URL is a single token — that is how a Google Sheets link became
+        // "No booking found for 2098848345" (the gid). resolveBookingNumber
+        // strips URLs now, so this is belt and braces: even if a link ever did
+        // contain something booking-shaped, a bare link is not her asking for
+        // a status.
+        const bkg = isBareUrl(ctx.text) ? null : resolveBookingNumber(ctx.text);
         if (bkg && t.split(/\s+/).length === 1)
             return { intent: 'show_booking_status', resolvedBy: 'policy', data: { bkg_no: bkg } };
     }
