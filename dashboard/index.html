@@ -2691,11 +2691,29 @@ function saveLoadDraft() {
       items: items.map(({ grossPhoto, tarePhoto, ...rest }) => rest),
     };
     localStorage.setItem(LOAD_DRAFT_KEY, JSON.stringify(draft));
-  } catch (e) { /* quota or private mode — a draft is a convenience, never a blocker */ }
+    // Read it straight back. Reporting "saved" because setItem did not throw
+    // is a promise the code has not actually checked — Safari private mode
+    // and a full quota can both accept the write and keep nothing.
+    const ok = localStorage.getItem(LOAD_DRAFT_KEY);
+    if (!ok) throw new Error('write did not stick');
+    setDraftStatus('saved', new Date(draft.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  } catch (e) {
+    // Never blocks the form — but never claims success either. If the draft
+    // cannot be kept, the operator needs to know their safety net is not
+    // there, not be told a comforting lie.
+    const el = $('draftStatus');
+    if (el) { el.className = 'idle'; el.innerHTML = '<span style="color:var(--status-danger);">Draft could not be saved — press Save when done</span>'; }
+  }
 }
 
 function queueLoadDraftSave() {
   if (draftTimer) clearTimeout(draftTimer);
+  // Only show "saving" once there is something to save, otherwise the status
+  // flickers on every keystroke of the first item and says nothing true.
+  if (!editingLoadId) {
+    const filled = (currentLoadItems || []).filter(itemHasContent).length;
+    if (filled >= 2) setDraftStatus('saving');
+  }
   draftTimer = setTimeout(saveLoadDraft, DRAFT_DEBOUNCE_MS);
 }
 
@@ -2703,6 +2721,7 @@ function clearLoadDraft() {
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
   try { localStorage.removeItem(LOAD_DRAFT_KEY); } catch (e) {}
   const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
+  setDraftStatus('none');
 }
 
 function readLoadDraft() {
@@ -3336,6 +3355,7 @@ function resetLoadModal(mode) {
   stopCamera();
   // A new blank form is exactly where an unfinished one is worth offering.
   offerLoadDraft();
+  setDraftStatus(editingLoadId ? 'none' : 'waiting');
   refreshAddressBookCache();
   // Re-render after the fetch lands so any description typed via "Others…"
   // on a previous load shows up as a real option, not just the base list —
