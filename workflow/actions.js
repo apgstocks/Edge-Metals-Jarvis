@@ -3110,6 +3110,23 @@ async function showPendingReplies(chatId) {
 }
 
 async function searchMail(chatId, targetName, note, bkgNo) {
+    // AN UNANCHORED SEARCH IS NOT A SEARCH (2026-08-29). Live:
+    //     Apsara: Any new mails?
+    //     Jarv:   No matching emails found re "new mails".
+    // The AI path picked search_mail with target_name NULL and note "new
+    // mails" — so Jarvis searched the inbox for the words she used to ask the
+    // question, found nothing, and reported that as a fact about her mail.
+    //
+    // search_mail exists to answer "did SOMEONE send something". With no
+    // sender and no booking there is nothing to search FOR, and the honest
+    // reading of such a message is always the inbox question — which is
+    // show_pending_replies, and is a real answer rather than a confusing
+    // no-result. The policy layer now catches the common phrasings outright;
+    // this is the backstop for every phrasing it does not.
+    if (!String(targetName || '').trim() && !String(bkgNo || '').trim()) {
+        console.log(`[ACTIONS] search_mail had no sender and no booking (note: "${String(note || '').slice(0, 40)}") — answering the inbox question instead`);
+        return showPendingReplies(chatId);
+    }
     const { getGmailRead, listMessages, getMessage, getEmailContent } = require('../helpers/gmail');
     const { callGeminiJSON } = require('../helpers/gemini');
 

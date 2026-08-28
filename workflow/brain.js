@@ -1120,6 +1120,22 @@ function policyDecide(ctx) {
         // zimex" cannot match it.
         if (/^(?:what|which|any|anything)?\s*(?:emails?|mails?)?\s*(?:do\s+i\s+|that\s+)?(?:needs?|requires?|waiting\s+(?:on|for))\s*(?:my\s+|a\s+)?(?:reply|response|answer|attention)\b/i.test(ctx.text.trim())
             || /^(?:check|show|list)\s+(?:my\s+)?(?:inbox|unreplied|pending\s+emails?)\b/i.test(ctx.text.trim())
+            // LIVE, 2026-08-29 01:16 — "Any new mails?" answered with
+            // "No matching emails found re \"new mails\"." The AI path chose
+            // search_mail with target_name NULL and note "new mails", i.e. it
+            // hunted the inbox for the phrase she used to ask the question.
+            //
+            // The closed phrasing set this branch was built for was simply too
+            // narrow: it covers "what needs my reply" and "check my inbox" but
+            // not the shortest, most natural way to ask — "any new mails?".
+            // Still requires NO sender anywhere, so "any mail from zimex"
+            // cannot reach it.
+            || /^(?:so\s+)?(?:any|anything|got|is\s+there|are\s+there|whats?|what'?s)\s*(?:new|any)?\s*(?:e?mails?|messages?|inbox)\s*(?:\?|today|new|come\s+in|arrived?|yet)?\s*\??$/i.test(ctx.text.trim())
+            || /^(?:any|anything)\s+new\b(?:\s+in\s+(?:the\s+)?(?:mail|inbox|email))?\s*\??$/i.test(ctx.text.trim())
+            // Bare "New mails?" and "whats new in mail" — the same question
+            // with the "any" dropped. Both still require no sender.
+            || /^(?:new|latest|unread)\s+(?:e?mails?|messages?)\s*\??$/i.test(ctx.text.trim())
+            || /^(?:what'?s|whats|anything)\s+new\s+(?:in|with|on)\s+(?:the\s+|my\s+)?(?:mail|inbox|e?mails?)\s*\??$/i.test(ctx.text.trim())
             || /^(?:what|anything)\s+(?:is\s+)?(?:waiting|pending)\s+on\s+me\b/i.test(ctx.text.trim())) {
             return { intent: 'show_pending_replies', resolvedBy: 'policy', data: {} };
         }

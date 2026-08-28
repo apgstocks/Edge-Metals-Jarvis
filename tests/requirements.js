@@ -1004,6 +1004,61 @@ section('WIRING — a feature that nothing calls is a dead feature');
 
     const b2 = readBrain(); delete b2.pending_actions[CHAT]; writeBrain(b2);
 }
+// ══════════════════════════════════════════════════════════════════════════
+// "Any new mails?" — LIVE, 2026-08-29 01:16:
+//     Apsara: Any new mails?
+//     Jarv:   No matching emails found re "new mails".
+// The AI path chose search_mail with target_name NULL and note "new mails",
+// so Jarvis searched the inbox for the words she asked the question with,
+// found nothing, and reported that as a fact about her mail.
+// ══════════════════════════════════════════════════════════════════════════
+{
+    console.log('\n=== "any new mails?" is the inbox question, not a search ===');
+    const brainQ = require(R('workflow/brain.js'));
+    const intent = (t) => {
+        const d = brainQ.policyDecide({ text: t, textLower: t.toLowerCase(), chatId: 'sim@c.us',
+            isManagerOrTeam: true, isManager: true, session: {}, pendingAction: null, role: 'manager' });
+        return (d && d.intent) || null;
+    };
+
+    for (const t of ['Any new mails?', 'any new mails', 'Any mails?', 'anything new?',
+                     'any new emails', 'whats new in mail', 'any messages?', 'New mails?',
+                     'latest emails', 'unread mails'])
+        ck(`"${t}" -> the inbox`, intent(t), 'show_pending_replies');
+
+    // The phrasings that were already handled must not regress.
+    ck('"what needs my reply" still works', intent('what needs my reply'), 'show_pending_replies');
+    ck('"check my inbox" still works', intent('check my inbox'), 'show_pending_replies');
+
+    // THE HALF THAT MATTERS MORE: a NAMED sender must never be swallowed by
+    // this branch — that would turn a real search into a generic inbox dump.
+    for (const t of ['any mail from Zimex', 'any new mails from jinho', 'anything new on DALA21235600'])
+        ckTrue(`"${t}" is NOT the inbox question`, intent(t) !== 'show_pending_replies', String(intent(t)));
+    ck('"did Zimex reply" still routes to search', intent('did Zimex reply'), 'search_mail');
+    ckTrue('"new booking from LA" is untouched', intent('new booking from LA') !== 'show_pending_replies');
+
+    // BACKSTOP, for every phrasing the policy layer does not catch. An
+    // unanchored search — no sender, no booking — is not a search: there is
+    // nothing to search FOR, and reporting "no matching emails" as though it
+    // were a fact about her mail is the failure she hit. Verified by outcome,
+    // not by reading the source: the two paths fail differently with no Gmail
+    // configured, so which one ran is observable.
+    const actionsQ = require(R('workflow/actions.js'));
+    actionsQ.init({ sendMessage: async () => true, sendToManager: async () => true,
+        sendToTeam: async () => true, pushAlert: () => {} });
+    const noAnchor = await actionsQ.searchMail('ttl@c.us', null, 'new mails', null);
+    ck('search_mail with no sender and no booking answers the INBOX question',
+        noAnchor.action_taken, 'pending_replies_failed');
+    const anchored = await actionsQ.searchMail('ttl@c.us', 'Zimex', 'cutoff', null);
+    ck('a named sender still performs a real search',
+        anchored.action_taken, 'search_mail_gmail_unavailable');
+    const byBooking = await actionsQ.searchMail('ttl@c.us', null, 'cutoff', 'DALA21235600');
+    ck('a booking number is also a valid anchor',
+        byBooking.action_taken, 'search_mail_gmail_unavailable');
+    ck('whitespace is not an anchor',
+        (await actionsQ.searchMail('ttl@c.us', '  ', 'x', ' ')).action_taken, 'pending_replies_failed');
+}
+
 
 
 
