@@ -203,16 +203,13 @@ function buildYardBrief(opts = {}) {
                         mode: p.mode,
                         amount: money(p.amount),
                         load_id: p.load_id || null,
-                        // Wording matters here. "advance (not yet applied to
-                        // a load)" read to the model as NOT PAID, and it
-                        // answered "Bell Scrap has not been paid anything"
-                        // in the same breath as describing their $3,000
-                        // advance. An advance IS money that left the bank;
-                        // what is outstanding is only which load it belongs
-                        // to. Said plainly so it cannot be misread.
+                        // Advances were removed 2026-08-29. A legacy
+                        // is_advance row may still exist in payments.json, so
+                        // it is described honestly rather than mislabelled as
+                        // a payment against a load it was never tied to.
                         kind: p.is_advance
-                            ? 'money already paid to this seller as an advance; not yet allocated to a specific load'
-                            : (p.applied_from ? 'advance money allocated to this load' : 'payment against this load'),
+                            ? 'money paid to this seller, never tied to a specific load (from the removed advances feature)'
+                            : 'payment against this load',
                     };
                 });
         })(),

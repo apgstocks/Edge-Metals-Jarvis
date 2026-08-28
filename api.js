@@ -1460,45 +1460,8 @@ function createApi() {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // Advances — money paid to a seller before there is a load for it.
-    // Recorded against the SELLER and held as unapplied credit; it never
-    // touches a load balance until she applies it, which is what she chose
-    // over auto-applying. See helpers/payments.js.
-    app.get('/api/advances', (req, res) => {
-        try {
-            const { advanceCredit, listAdvances } = require('./helpers/payments');
-            const seller = req.query && req.query.seller;
-            if (seller) return res.json(advanceCredit(String(seller)));
-            // No seller: every seller currently holding credit, so the Loads
-            // screen can show what is outstanding without asking per row.
-            const bySeller = new Map();
-            for (const a of listAdvances()) {
-                const k = String(a.seller || '').trim();
-                if (k && !bySeller.has(k)) bySeller.set(k, advanceCredit(k));
-            }
-            res.json([...bySeller.values()].filter((c) => c.available > 0));
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    app.post('/api/advances', async (req, res) => {
-        try {
-            const { addAdvance } = require('./helpers/payments');
-            const adv = await addAdvance({ ...(req.body || {}), created_by: (req.role || null) });
-            res.json({ ok: true, advance: adv });
-        } catch (e) { res.status(400).json({ error: e.message }); }
-    });
-
-    // Applying an advance CREATES an ordinary payment on the load, carrying
-    // applied_from. That is why it counts toward the balance and prints on the
-    // ticket like any other payment, with no special case anywhere downstream.
-    app.post('/api/advances/apply', async (req, res) => {
-        try {
-            const { applyAdvance, paymentSummary } = require('./helpers/payments');
-            const b = req.body || {};
-            const payment = await applyAdvance({ ...b, created_by: (req.role || null) });
-            res.json({ ok: true, payment, summary: paymentSummary(b.load_id, amountForLoad(b.load_id, b.load_kind)) });
-        } catch (e) { res.status(400).json({ error: e.message }); }
-    });
+    // The three /api/advances routes were removed 2026-08-29 per Apsara
+    // ("remove that advance concept"). Payments against a load are unchanged.
 
     app.delete('/api/payments/:id', async (req, res) => {
         try {

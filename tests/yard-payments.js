@@ -19,6 +19,7 @@ const section=(t)=>console.log('\n=== '+t+' ===');
 
 (async()=>{
   const P=require(R+'helpers/payments.js');
+  const cfg=require(R+'config.js');
   section('the ledger');
   const S=(id,amt)=>P.paymentSummary(id,amt);
   ck('a load with no payments is unpaid', S('L1',1000).status==='unpaid' && S('L1',1000).pending===1000);
@@ -74,53 +75,6 @@ const section=(t)=>console.log('\n=== '+t+' ===');
      P.paymentsForLoad('L1').length===0 && P.listPayments().length===before-2);
 
 
-  section('advances — money paid before there is a load');
-  {
-    const { addLoad } = require(R+'helpers/loads');
-  // advance paid BEFORE any load exists
-  const adv = await P.addAdvance({seller:'Acme Metals',mode:'Wire',amount:5000,paid_on:'2026-08-15'});
-  ck('an advance can be recorded with no load at all', !!adv.id && adv.load_id===null);
-  ck('it is marked as an advance', adv.is_advance===true);
-  ck('the seller holds the credit', P.advanceCredit('Acme Metals').available===5000);
-
-  // it must NOT make a later load look part-paid on its own
-  const l = await addLoad({date:'2026-08-20',seller:'Acme Metals',weight_unit:'lb',
-    items:[{description:'Auto Casting',gross_weight:4210,tare_weight:200,price:2.2}]});
-  let s = P.paymentSummary(l.id, l.amount);
-  ck('an UNAPPLIED advance leaves the load unpaid — no money moves by itself',
-     s.status==='unpaid' && s.paid===0 && s.pending===8822);
-
-  // apply part of it
-  await P.applyAdvance({load_id:l.id, advance_id:adv.id, amount:3000, paid_on:'2026-08-20'});
-  s = P.paymentSummary(l.id, l.amount);
-  ck('applying part of the advance part-pays the load', s.status==='partial' && s.paid===3000);
-  ck('it appears as a normal payment row on the load', s.payments.length===1);
-  ck('the row records which advance funded it', s.payments[0].applied_from===adv.id);
-  ck('the advance credit drops by what was applied', P.advanceCredit('Acme Metals').available===2000);
-
-  // split the SAME advance across a second load
-  const l2 = await addLoad({date:'2026-08-22',seller:'Acme Metals',weight_unit:'lb',
-    items:[{description:'Al Combo',gross_weight:2000,tare_weight:100,price:1}]});
-  await P.applyAdvance({load_id:l2.id, advance_id:adv.id, amount:1900});
-  ck('one advance can be split across several loads', P.paymentSummary(l2.id,l2.amount).status==='paid');
-  ck('and the credit tracks it', P.advanceCredit('Acme Metals').available===100);
-
-  // over-applying is refused, not silently capped
-  let threw=null; try{ await P.applyAdvance({load_id:l.id, advance_id:adv.id, amount:500}); }catch(e){threw=e.message;}
-  ck('applying more than the advance has left is REFUSED', /only has 100\.00 left/.test(threw||''));
-
-  // ordinary payments still work alongside
-  await P.addPayment({load_id:l.id,mode:'Cash',amount:5822});
-  s = P.paymentSummary(l.id,l.amount);
-  ck('an advance and a cash instalment settle a load together', s.status==='paid' && s.payments.length===2);
-  ck('both are kept as separate rows', s.payments.map(p=>p.amount).sort((a,b)=>a-b).join()==='3000,5822');
-
-  threw=null; try{ await P.addAdvance({mode:'Cash',amount:100}); }catch(e){threw=e.message;}
-  ck('an advance with no seller is refused', /needs a seller/.test(threw||''));
-  ck('a seller with no advances shows zero credit', P.advanceCredit('Nobody').available===0);
-
-  }
-
   section('the yard assistant can answer WHEN a seller was paid');
   {
     // Apsara asked the bot "when did we pay a seller" and it said it did not
@@ -133,7 +87,6 @@ const section=(t)=>console.log('\n=== '+t+' ===');
       items:[{ description:'Auto Casting', gross_weight:4210, tare_weight:200, price:2.2 }] });
     await P.addPayment({ load_id:l.id, mode:'Zelle', amount:4000, paid_on:'2026-08-22' });
     await P.addPayment({ load_id:l.id, mode:'Cash',  amount:2000, paid_on:'2026-08-26' });
-    await P.addAdvance({ seller:'Zeta Metals', mode:'Wire', amount:3000, paid_on:'2026-08-18' });
 
     const b = buildYardBrief({});
     const json = JSON.stringify(b);
@@ -151,14 +104,18 @@ const section=(t)=>console.log('\n=== '+t+' ===');
     ck('and how many payments they have had', z && z.payments === 2);
 
     // The wording that made the model contradict itself.
-    // Pinned to the row with no load_id — the only true advance. An earlier
-    // version matched /advance/, which also hits "advance money allocated to
-    // this load" and picked the wrong row.
-    const adv = b.recent_payments.find((r) => r.load_id === null);
-    ck('an advance is described as money ALREADY PAID, not as unpaid',
-       adv && /already paid/.test(adv.kind));
-    ck('...and still says it is not yet tied to a load',
-       adv && /not yet allocated/.test(adv.kind));
+    // Advances were removed 2026-08-29. A legacy is_advance row may still sit
+    // in a live payments.json, so assert it stays HARMLESS: never counted
+    // against a load's balance, and still visible rather than silently
+    // dropped — money that disappears from view is worse than money with an
+    // awkward label.
+    const legacy = [{ id:'ADV_x', is_advance:true, load_id:null, seller:'Old Co', mode:'Wire', amount:3000, paid_on:'2026-08-18' }];
+    fs.writeFileSync(cfg.PAYMENTS_FILE, JSON.stringify([...P.listPayments(), ...legacy]));
+    const b2 = buildYardBrief({});
+    ck('a legacy advance never counts toward a load balance',
+       P.paymentSummary(l.id, l.amount).paid === 6000);
+    ck('but it is still visible, not silently dropped',
+       !!b2.recent_payments.find((r) => r.load_id === null));
   }
 
   section('the ticket reflects it');

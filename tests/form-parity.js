@@ -116,29 +116,6 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 }
 
 
-// ── advances exist on BOTH ─────────────────────────────────────────────────
-{
-  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
-  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
-  for (const [label, src] of [['website', web], ['app', app]]) {
-    ck(`${label}: can record an advance`, /id="advModal"/.test(src) && /\/api\/advances/.test(src));
-    ck(`${label}: shows who is holding credit`, /id="advStrip"/.test(src) && /async function loadAdvanceStrip/.test(src));
-    ck(`${label}: offers to apply an advance from the Pay form`, /btn-apply-adv/.test(src));
-    ck(`${label}: applying is an explicit click, never automatic`,
-       /\/api\/advances\/apply/.test(src) && !/auto.?apply/i.test(src));
-  }
-  const grabFn = (src, name) => {
-    const i = src.indexOf('function '+name+'('); if (i<0) return null;
-    let d=0, j=src.indexOf('{', i);
-    for (let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} }
-  };
-  const strip = (t) => String(t).replace(/\s+/g,' ').trim();
-  for (const fn of ['renderPayAdvance','loadAdvanceStrip','openAdvanceModal']) {
-    ck(`${fn} is identical in both`, strip(grabFn(web,fn)) === strip(grabFn(app,fn)));
-  }
-}
-
-
 // ── the draft autosave exists on BOTH, and agrees ──────────────────────────
 {
   const web = fs.readFileSync(R+'dashboard/index.html','utf8');
