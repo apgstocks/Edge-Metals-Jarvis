@@ -2063,6 +2063,48 @@ function senderLabel(from) {
 //
 // Scoped to the lookback window rather than wiping the store, so it re-reads
 // the last few days and not the entire history.
+// ── WHERE THIS WATCHER TALKS ───────────────────────────────────────────────
+// Apsara, 2026-08-28: "I have saved internal team group to jarvis. I want
+// general email watcher and daily any loads to send today routine to be
+// directed to that group." Asked which parts, she chose the whole digest.
+//
+// Deadline nudges already went to the group (2026-08-22, "put a reminder in
+// internal group"); the digest and chase-ups did not, so this watcher spoke
+// out of two mouths. One resolver now, used by all three.
+//
+// Falls back to her own chat whenever no group is configured — that fallback
+// is the only reason this is safe to apply everywhere at once.
+//
+// ON AUTHORITY, since this widens who sees the ask: workflow/brain.js:339
+// treats every member of team_group_id as `isTeam`, so anyone in that group
+// can already answer "reply to 1" or "yes" and have Jarvis draft mail as Edge
+// Metals. Routing the digest there does not create that power, but it is the
+// first thing that puts it in front of them every hour. Flagged to her.
+function digestAudience() {
+    const settings = cfg.getSettings ? cfg.getSettings() : {};
+    const group = settings.team_group_id || null;
+    return { group, chatId: group || ((settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us') };
+}
+
+// Send to the group when there is one; otherwise the manager outbox, which is
+// what persists a message WhatsApp could not deliver. A group send that
+// returns false or throws falls back rather than being counted as delivered —
+// the 2026-08-22 hole this file already had once.
+async function deliverDigestMessage({ sendToManager, _sendMessage }, body, opts) {
+    const { group } = digestAudience();
+    if (group && _sendMessage) {
+        try {
+            if (await _sendMessage(group, body) !== false) return { delivered: true };
+            console.warn('[REPLYWATCH] team group send returned false — falling back to the manager outbox');
+        } catch (e) {
+            console.warn('[REPLYWATCH] team group send threw — falling back to the manager outbox:', e.message);
+        }
+    }
+    if (!sendToManager) return { delivered: false };
+    const res = await deliverToManager(sendToManager, body, opts);
+    return { delivered: !!res.delivered, queued: !!res.queued };
+}
+
 async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = false, rescan = false } = {}) {
     const gmail = await getGmailRead();
     if (!gmail) {
@@ -2586,7 +2628,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             const ready = digestMatters.find((f) => f.proforma && !(f.proforma.needs || []).length);
             if (ready) {
                 const actions = require('./actions');
-                const managerChat = (cfg.getSettings().manager_number || cfg.MANAGER_NUMBER) + '@c.us';
+                // The chat the digest is actually going to. Staged on her DM
+                // it would be a "yes" she is never offered, while the group
+                // reads an offer whose yes lands nowhere.
+                const managerChat = digestAudience().chatId;
                 // Same numbering and address resolution the asked-for path
                 // uses, so both produce an identical document — see
                 // actions.prepareProformaNumbers.
@@ -2610,7 +2655,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // was live in this file until 2026-08-22; the outbox closes it by
             // reporting delivery honestly and persisting anything it could
             // not send.
-            const res = await deliverToManager(sendToManager, body, {
+            const res = await deliverDigestMessage({ sendToManager, _sendMessage }, body, {
                 critical: hasUrgent,
                 subject: hasUrgent ? 'Urgent email needs your reply' : 'Emails waiting on you',
                 dedupeKey: 'reply-digest',
@@ -2674,7 +2719,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // asks, and merging them buries the second one under the first.
     if (chaseUps.length && sendToManager && inAlertWindow) {
         try {
-            const res = await deliverToManager(sendToManager, buildChaseMessage(chaseUps), {
+            const res = await deliverDigestMessage({ sendToManager, _sendMessage }, buildChaseMessage(chaseUps), {
                 critical: true, subject: 'Emails still unanswered', dedupeKey: 'reply-chaseups',
             });
             if (!res.delivered) throw new Error(res.queued ? 'queued for retry (WhatsApp unavailable)' : 'not delivered');
@@ -2700,7 +2745,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,

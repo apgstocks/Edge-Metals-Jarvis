@@ -1306,6 +1306,81 @@ section('N4 — a delivery is not an outstanding item');
     ck('an update owing nothing is not', !rw.isOwedItem({ ...owed, asked_for: null }));
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// P. Apsara, 2026-08-28: "I have saved internal team group to jarvis. I want
+//    general email watcher and daily any loads to send today routine to be
+//    directed to that group." She chose the FULL digest to the group.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('P1 — the audience follows the setting, and never disappears');
+{
+    const cfgm = require(R('config.js'));
+    const orig = cfgm.getSettings;
+    const withSettings = (o) => { cfgm.getSettings = () => o; };
+    try {
+        withSettings({ manager_number: '918056944193', team_group_id: '' });
+        const solo = rw.digestAudience();
+        ck('no group configured -> her own chat', solo.chatId === '918056944193@c.us', JSON.stringify(solo));
+        ck('and no group is reported', solo.group === null);
+
+        withSettings({ manager_number: '918056944193', team_group_id: '12345@g.us' });
+        const team = rw.digestAudience();
+        ck('a group configured -> the group', team.chatId === '12345@g.us' && team.group === '12345@g.us', JSON.stringify(team));
+
+        // Missing everything must not produce "undefined@c.us" as a chat id.
+        withSettings({});
+        ck('nothing configured degrades without inventing a chat id',
+            !/undefined/.test(rw.digestAudience().chatId), rw.digestAudience().chatId);
+    } finally { cfgm.getSettings = orig; }
+}
+
+section('P2 — a group send that fails still reaches her');
+{
+    const cfgm = require(R('config.js'));
+    const orig = cfgm.getSettings;
+    cfgm.getSettings = () => ({ manager_number: '918056944193', team_group_id: '12345@g.us' });
+    try {
+        let toGroup = [], toManager = [];
+        const send = async (chat, body) => { toGroup.push([chat, body]); return true; };
+        const mgr = async (body) => { toManager.push(body); return true; };
+
+        let r = await rw.deliverDigestMessage({ sendToManager: mgr, _sendMessage: send }, 'DIGEST', {});
+        ck('the digest goes to the group', r.delivered && toGroup.length === 1 && toGroup[0][0] === '12345@g.us', JSON.stringify(toGroup));
+        ck('and is not also sent to her — she is in the group', toManager.length === 0);
+
+        // sendMessage returns FALSE when WhatsApp is down; it does not throw.
+        // Counting that as delivered is the exact hole this file had in August.
+        toGroup = []; toManager = [];
+        r = await rw.deliverDigestMessage({ sendToManager: mgr, _sendMessage: async () => false }, 'DIGEST', {});
+        ck('a group send returning false falls back to her, not silence',
+            r.delivered === true && toManager.length === 1, JSON.stringify({ r, toManager }));
+
+        toGroup = []; toManager = [];
+        r = await rw.deliverDigestMessage({ sendToManager: mgr, _sendMessage: async () => { throw new Error('group gone'); } }, 'DIGEST', {});
+        ck('a throwing group send falls back too', r.delivered === true && toManager.length === 1);
+
+        // No sender at all is reported honestly rather than as success.
+        r = await rw.deliverDigestMessage({ sendToManager: null, _sendMessage: async () => false }, 'DIGEST', {});
+        ck('nothing available reports NOT delivered', r.delivered === false, JSON.stringify(r));
+    } finally { cfgm.getSettings = orig; }
+}
+
+section('P3 — with no group configured nothing changes for her');
+{
+    const cfgm = require(R('config.js'));
+    const orig = cfgm.getSettings;
+    cfgm.getSettings = () => ({ manager_number: '918056944193', team_group_id: '' });
+    try {
+        const toManager = [];
+        const r = await rw.deliverDigestMessage({
+            sendToManager: async (b) => { toManager.push(b); return true; },
+            _sendMessage: async () => { throw new Error('must not be called'); },
+        }, 'DIGEST', {});
+        ck('it goes straight to her', r.delivered && toManager.length === 1 && toManager[0] === 'DIGEST');
+    } finally { cfgm.getSettings = orig; }
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
