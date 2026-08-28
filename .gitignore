@@ -131,3 +131,6 @@ _to_delete/tmp_obj_KyQvwa
 _to_delete/tmp_obj_mwHudb
 _to_delete/tmp_obj_QJekFa
 _to_delete/tmp_obj_uLvNxO
+
+# Built APKs — 5-6 MB binaries, rebuildable from source. Never in git.
+builds/

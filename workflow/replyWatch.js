@@ -1480,6 +1480,25 @@ const DAY_MS = 86400000;
 // Instead: one query per run for mail sent since the last sweep (normally
 // zero or one message), folded into a map of {recipient -> last time she
 // wrote to them}. The first run sweeps 30 days to drain the existing backlog.
+// ── DEAD LETTER (2026-08-29) ───────────────────────────────────────────────
+// From a Kafka design article Apsara sent. Almost nothing in it applies to a
+// one-process, one-user system — but it names the three safeguards an
+// at-least-once pipeline needs, and Jarvis had two of them: idempotency
+// (`seen`, keyed by message id) and retries. There was no dead-letter path.
+//
+// The consequence, which is not theoretical: assess() failing left the message
+// deliberately UNMARKED so a Gemini outage would not silently drop mail. Right
+// intent, no bound. An email that fails EVERY time — malformed MIME, a body
+// that trips a model error, something 10MB — is retried every five minutes
+// forever, and each retry costs a Gemini call. Worse, it occupies one of the
+// 25 MAX_EMAILS_PER_RUN slots on every run, so on a busy day a single poison
+// message can permanently crowd out real mail.
+//
+// A dead-letter queue is NOT "give up and drop it". It is "stop retrying, and
+// make sure a human is told". That distinction is the whole value: the failure
+// stays visible instead of becoming an email she never hears about.
+const MAX_ASSESS_ATTEMPTS = 3;   // ~15 minutes of retries at the */5 cadence
+
 const SENT_INDEX_BOOTSTRAP_DAYS = 30;
 const SENT_INDEX_OVERLAP_MS = 10 * 60 * 1000;   // re-read a small overlap; Gmail's after: is day-granular
 const SENT_INDEX_MAX_FETCH = 300;               // bounds the bootstrap run
@@ -2269,6 +2288,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
         checked++;
         let a = null;
+        let lastAssessError = null;
         try {
             // bulkHint is only ever 'suggestive' here — the definitive tier
             // already skipped above without an assessment.
@@ -2284,12 +2304,33 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 attachments,
             });
         } catch (err) {
+            lastAssessError = err.message;
             console.error('[REPLYWATCH] assess failed:', err.message);
         }
         // Deliberately NOT marked seen when assessment failed — a Gemini
         // outage should mean "try again next run", not "silently drop this
-        // email forever".
-        if (!a) continue;
+        // email forever". Bounded now: see MAX_ASSESS_ATTEMPTS.
+        if (!a) {
+            store.failures = store.failures || {};
+            const rec = store.failures[ref.id] || { count: 0 };
+            rec.count += 1;
+            rec.lastAt = new Date().toISOString();
+            rec.lastError = String(lastAssessError || 'unknown').slice(0, 200);
+            rec.from = senderLabel(from);
+            rec.subject = subject;
+            store.failures[ref.id] = rec;
+            if (rec.count >= MAX_ASSESS_ATTEMPTS) {
+                // Dead-lettered: stop retrying, and SAY SO. Marked seen so it
+                // stops consuming a slot every run, recorded so it is not a
+                // silent loss.
+                seen[ref.id] = new Date().toISOString();
+                deadLettered.push({ id: ref.id, from: senderLabel(from), subject, error: rec.lastError });
+                console.error(`[REPLYWATCH] DEAD LETTER after ${rec.count} attempts — "${subject}" from ${senderLabel(from)}: ${rec.lastError}`);
+            }
+            continue;
+        }
+        // Recovered — a transient failure should not count against it forever.
+        if (store.failures && store.failures[ref.id]) delete store.failures[ref.id];
 
         seen[ref.id] = new Date().toISOString();
 
