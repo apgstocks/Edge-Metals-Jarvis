@@ -113,6 +113,17 @@ input::placeholder { color:var(--steel-500); }
    should get matched and show all possible matches"). */
 .ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
 .ac-dropdown.hidden { display:none; }
+/* Floating variant — per Apsara 2026-08-28 ("the item list is going down,
+   when i scroll down only i can see. i dont like this behaviour").
+   .modal-body is max-height:62vh with overflow-y:auto, so an absolutely
+   positioned dropdown inside it is CLIPPED by that scroll box: the
+   suggestions were being drawn below the fold of the modal's own scroll
+   area, and the only way to see them was to scroll the form. position:fixed
+   takes the menu out of that container entirely so it floats over the modal,
+   which is what a suggestion list is supposed to do. Coordinates are set in
+   JS from the input's own rect (see positionAcMenu) because fixed elements
+   cannot inherit them from a parent. */
+.ac-dropdown.ac-floating { position:fixed; top:auto; left:auto; right:auto; margin-top:0; z-index:120; }
 .ac-item { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border-subtle); white-space:pre-line; }
 .ac-item:last-child { border-bottom:none; }
 .ac-item:hover { background:var(--surface-sunken); }
@@ -511,6 +522,43 @@ function asArray(x) {
   if (Array.isArray(x)) return x;
   if (x && Array.isArray(x.loads)) return x.loads;
   return [];
+}
+
+// Pins an autocomplete menu directly under its input, in viewport
+// coordinates, so it floats ABOVE the modal instead of being clipped inside
+// the modal's scroll box. Flips above the input when there isn't room below,
+// so a row near the bottom of the form still shows its suggestions on screen
+// rather than off it — the whole complaint was having to scroll to see them.
+function positionAcMenu(input, menu) {
+  const r = input.getBoundingClientRect();
+  menu.classList.add('ac-floating');
+  menu.style.width = r.width + 'px';
+  menu.style.left = r.left + 'px';
+  // Measure only after width is applied, or the height is wrong for a list
+  // that wraps differently at its real width.
+  const spaceBelow = window.innerHeight - r.bottom - 8;
+  const spaceAbove = r.top - 8;
+  const h = Math.min(menu.scrollHeight, 260);
+  if (spaceBelow < h && spaceAbove > spaceBelow) {
+    menu.style.top = Math.max(8, r.top - Math.min(h, spaceAbove) - 4) + 'px';
+    menu.style.maxHeight = Math.min(260, spaceAbove) + 'px';
+  } else {
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.maxHeight = Math.min(260, Math.max(120, spaceBelow)) + 'px';
+  }
+}
+
+// A fixed menu does not travel with its input, so it has to be re-pinned
+// while the form scrolls behind it. Capture phase catches scrolling inside
+// .modal-body, which does not bubble.
+function trackAcMenu(input, menu) {
+  const reposition = () => {
+    if (menu.classList.contains('hidden')) return;
+    if (!document.body.contains(input)) return;
+    positionAcMenu(input, menu);
+  };
+  window.addEventListener('scroll', reposition, true);
+  window.addEventListener('resize', reposition);
 }
 
 async function api(path, opts = {}) {
@@ -2557,6 +2605,12 @@ let currentLoadItems = [];
 // editing an existing one (see openEditLoadModal) — Save then PUTs instead of
 // POSTing, and resetLoadModal() clears it back to null on close/new.
 let editingLoadId = null;
+// The load-level description input was removed from the form on 2026-08-28,
+// but the FIELD still exists on records saved before that. Held here so
+// editing an old load preserves its description instead of silently blanking
+// it on save — removing a box from a form must not delete data it can no
+// longer show.
+let editingLoadDescription = '';
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -2783,6 +2837,9 @@ function renderItemRows() {
       if (!matches.length || (matches.length === 1 && String(matches[0]).toLowerCase() === q)) return close();
       menu.innerHTML = matches.map(o => `<div class="ac-item" data-val="${esc(o)}">${esc(o)}</div>`).join('');
       menu.classList.remove('hidden');
+      // Float it over the modal rather than inside its scroll box, so the
+      // list is visible the moment it opens instead of below the fold.
+      positionAcMenu(input, menu);
       menu.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
         // mousedown, not click: blur fires first on a click and would close
         // the menu before the click ever landed. preventDefault keeps focus
@@ -2797,6 +2854,7 @@ function renderItemRows() {
 
     input.addEventListener('focus', openMatches);
     input.addEventListener('input', openMatches);
+    trackAcMenu(input, menu);
     input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') { close(); return; }
       // Enter accepts the only remaining match — the common case after
@@ -3134,6 +3192,7 @@ function resetLoadModal(mode) {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  editingLoadDescription = '';
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
@@ -3182,6 +3241,7 @@ function openEditLoadModal(load) {
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
+  editingLoadDescription = load.description || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
   $('loadModalErr').textContent = '';
   // Set AFTER editingLoadId is assigned — applyLoadModalMode runs before this
@@ -3535,7 +3595,7 @@ function renderLoads(loads) {
         </div>
         <div class="modal-body">
           <div class="ld-grid-2">
-            <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
+            <div class="field"><label>Date</label><input id="ld_date" type="date" style="max-width:170px;"></div>
             <div class="field"><label id="ld_fixed_label">Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
@@ -3550,7 +3610,12 @@ function renderLoads(loads) {
                WhatsApp chat id for the "Send to seller" button once a PDF
                exists; not required to save a load. -->
           <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
-          <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
+          <!-- "Load description" removed 2026-08-28 per Apsara. Every item row
+               already carries its own description, so this was a second,
+               vaguer name for the same load and one more box to tab through.
+               The stored field is NOT removed: loads saved before today keep
+               their description and still print it (helpers/pdf.js only draws
+               that row when it has a value). -->
 
           <div style="margin-top:18px;">
             <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
@@ -3638,6 +3703,10 @@ function wireLoadsEvents() {
     if (!matches.length) { closeAc(); return; }
     acBox.innerHTML = matches.map((e, i) => `<div class="ac-item" data-idx="${i}">${esc(e.aliases.join(' / '))}</div>`).join('');
     acBox.classList.remove('hidden');
+    // Same clipping problem as the item-description menu: .modal-body
+    // scrolls, so an absolutely positioned list is drawn inside that box and
+    // can land below the fold. Float it over the modal instead.
+    positionAcMenu($('ld_seller'), acBox);
     acBox.querySelectorAll('.ac-item').forEach((el, i) => {
       el.addEventListener('mousedown', (ev) => { // mousedown (not click) fires BEFORE the input's blur, so blur's setTimeout close below can't race this selection
         ev.preventDefault();
@@ -3658,6 +3727,7 @@ function wireLoadsEvents() {
       });
     });
   });
+  trackAcMenu($('ld_seller'), acBox);
   $('ld_seller').addEventListener('blur', () => {
     setTimeout(closeAc, 150);
     // Typing the name out in full never fired the tap-to-pick handler above,
@@ -3678,7 +3748,9 @@ function wireLoadsEvents() {
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
-    const desc = $('ld_desc').value.trim();
+    // The load-level description box is gone; an edit of an older load
+    // must not wipe the description it already has, so reuse it.
+    const desc = ($('ld_desc') ? $('ld_desc').value.trim() : (editingLoadDescription || ''));
     $('loadModalErr').textContent = '';
 
     const validationError = validateItemsBeforeSave(currentLoadItems);

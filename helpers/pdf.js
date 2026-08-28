@@ -623,7 +623,12 @@ function generateLoadPdf(load, opts = {}) {
                 { label: 'Address:',     value: load.seller_address },
                 // Full row: only field on its line, and full width keeps it
                 // to one line instead of wrapping in a half-width column.
-                { label: 'Description:', value: load.description, span: 2 },
+                // Only drawn when there IS one. The load-level description box was
+                // removed from the form on 2026-08-28, and drawFieldBox does not skip
+                // empty values — without this guard every new ticket would carry a bare
+                // "Description:" label with nothing after it. Loads saved before that
+                // change still have the field and still print it.
+                ...(load.description ? [{ label: 'Description:', value: load.description, span: 2 }] : []),
             ], []);
 
             const unit = load.weight_unit || 'lb';
@@ -789,7 +794,12 @@ function generateWeightsPdf(load, opts = {}) {
                 { label: 'Address:',     value: load.seller_address },
                 // Full row: only field on its line, and full width keeps it
                 // to one line instead of wrapping in a half-width column.
-                { label: 'Description:', value: load.description, span: 2 },
+                // Only drawn when there IS one. The load-level description box was
+                // removed from the form on 2026-08-28, and drawFieldBox does not skip
+                // empty values — without this guard every new ticket would carry a bare
+                // "Description:" label with nothing after it. Loads saved before that
+                // change still have the field and still print it.
+                ...(load.description ? [{ label: 'Description:', value: load.description, span: 2 }] : []),
             ], []);
 
             const unit = load.weight_unit || 'lb';
