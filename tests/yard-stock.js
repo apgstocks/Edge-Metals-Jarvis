@@ -197,6 +197,35 @@ section('D — a sale is saved, edited and deleted; inventory follows each time'
             ck('staff can work loads', allowed('/api/loads'));
             ck('staff can record sales — Apsara, asked directly: "no" to denying them', allowed('/api/outbound-loads'));
             ck('staff can generate a sale ticket', allowed('/api/outbound-loads/OUT_1/generate-pdf'));
+
+            // RESPONSE SHAPE. GET /api/outbound-loads must return a BARE ARRAY,
+            // matching GET /api/loads.
+            //
+            // It returned { loads: [...] } and that was a live crash, not a
+            // style question: both Loads tabs merge purchases and sales with
+            // `[...(inbound||[]).map(), ...(sales||[]).map()]`, and an object
+            // is truthy — so it passed the `|| []` guard and threw
+            // "sales.map is not a function", blanking the entire Loads list
+            // the moment a single sale existed. Asserted against the real
+            // handler because the bug was the CONTRACT, and a mock of the
+            // endpoint would have agreed with whatever it was told.
+            {
+                const api = fs.readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+                const handler = api.slice(api.indexOf("app.get('/api/outbound-loads'"));
+                const body = handler.slice(0, handler.indexOf('});'));
+                ck('GET /api/outbound-loads responds with a bare array, like /api/loads',
+                    /res\.json\(loads\)/.test(body) && !/res\.json\(\{\s*loads\s*\}\)/.test(body));
+            }
+            {
+                // And the clients must not re-introduce the `|| []` guard that
+                // cannot actually protect a .map call.
+                for (const p of ['dashboard/index.html', 'mobile-app/www/index.html']) {
+                    const s = fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+                    ck(`${p} merges sales through asArray, not a truthiness guard`,
+                        /asArray\(sales\)\.map/.test(s) && !/\(sales \|\| \[\]\)\.map/.test(s));
+                    ck(`${p} defines asArray`, /function asArray/.test(s));
+                }
+            }
             ck('staff can see stock', allowed('/api/loads/stock'));
             ck('staff CANNOT reach expenses', !allowed('/api/expenses'));
             ck('staff CANNOT raise a proforma', !allowed('/api/proforma/generate'));

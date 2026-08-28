@@ -500,6 +500,19 @@ const NAV_ITEMS = [
   { id: 'settings',  label: 'Settings', group: 'System', adminOnly: true },
 ];
 
+// Accepts whatever an endpoint hands back and guarantees an array.
+// Exists because `x || []` does NOT protect a .map call: an object is
+// truthy, so a { loads: [...] } response sailed past the guard and threw
+// "sales.map is not a function", blanking the entire Loads list the moment
+// a sale existed. Shape mismatches between a client and an endpoint are a
+// recurring class of bug here, and they should degrade to an empty list
+// rather than to a blank screen.
+function asArray(x) {
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.loads)) return x.loads;
+  return [];
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
@@ -592,8 +605,12 @@ async function loadTab(tab) {
         api('/api/outbound-loads').catch(() => []),
       ]);
       return renderLoads([
-        ...(inbound || []).map(l => ({ ...l, _kind: 'purchase' })),
-        ...(sales || []).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
+        ...asArray(inbound).map(l => ({ ...l, _kind: 'purchase' })),
+        // asArray: the endpoint returns a bare array, but a non-array here
+        // must never blank the whole Loads list again. `|| []` did not
+        // protect this — an OBJECT is truthy, so it passed the guard and
+        // then died on .map.
+        ...asArray(sales).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
       ].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))));
     }
     // Deliberately NOT fetched anywhere during boot/init — loadTab() only

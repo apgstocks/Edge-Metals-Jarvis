@@ -836,6 +836,19 @@ function askYesNo(message) {
 // token, not an automatic cookie; a 401 shows the login screen instead of
 // navigating to a server-rendered /login page (which expects a cookie
 // flow this app doesn't use).
+// Accepts whatever an endpoint hands back and guarantees an array.
+// Exists because `x || []` does NOT protect a .map call: an object is
+// truthy, so a { loads: [...] } response sailed past the guard and threw
+// "sales.map is not a function", blanking the entire Loads list the moment
+// a sale existed. Shape mismatches between a client and an endpoint are a
+// recurring class of bug here, and they should degrade to an empty list
+// rather than to a blank screen.
+function asArray(x) {
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.loads)) return x.loads;
+  return [];
+}
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const token = getToken();
@@ -3476,8 +3489,12 @@ async function renderCurrentMobileTab() {
         api('/api/outbound-loads').catch(() => []),
       ]);
       const merged = [
-        ...(inbound || []).map(l => ({ ...l, _kind: 'purchase' })),
-        ...(sales || []).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
+        ...asArray(inbound).map(l => ({ ...l, _kind: 'purchase' })),
+        // asArray: the endpoint returns a bare array, but a non-array here
+        // must never blank the whole Loads list again. `|| []` did not
+        // protect this — an OBJECT is truthy, so it passed the guard and
+        // then died on .map.
+        ...asArray(sales).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
       ].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
       renderLoads(merged);
       return;

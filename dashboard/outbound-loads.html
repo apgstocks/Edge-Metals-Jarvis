@@ -181,7 +181,11 @@ async function loadLoads() {
   const root = $('loadsList');
   root.innerHTML = '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Loading…</div>';
   try {
-    const { loads } = await api('/api/outbound-loads');
+    // GET /api/outbound-loads returns a bare array, matching /api/loads. It
+    // previously returned { loads: [...] }; accepting both keeps this page
+    // working if it is ever opened against an older server.
+    const res = await api('/api/outbound-loads');
+    const loads = Array.isArray(res) ? res : ((res && res.loads) || []);
     root.innerHTML = loads.length ? loads.map(loadCard).join('') : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No outbound loads yet.</div>';
     root.querySelectorAll('.btn-del-load').forEach((btn) => btn.addEventListener('click', async () => {
       if (!confirm('Delete this outbound load?')) return;

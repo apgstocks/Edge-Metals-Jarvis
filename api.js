@@ -1383,7 +1383,24 @@ function createApi() {
         try {
             const { loadOutboundLoads, getLoadMargin } = require('./helpers/outboundLoads');
             const loads = loadOutboundLoads().map((l) => ({ ...l, ...getLoadMargin(l) }));
-            res.json({ loads });
+            // Returns a BARE ARRAY, matching GET /api/loads.
+            //
+            // It used to return { loads: [...] } while its sibling returned an
+            // array, and that inconsistency was a live crash: both the mobile
+            // Loads tab and the dashboard Loads tab merge purchases and sales
+            // with `[...(inbound||[]).map(...), ...(sales||[]).map(...)]`, so
+            // an object sailed through the `|| []` guard and died on .map with
+            // "sales.map is not a function" — the whole Loads list blank the
+            // moment a sale existed. Two clients had it wrong and one had it
+            // right, which is the giveaway that the endpoint was the odd one
+            // out, not the callers.
+            //
+            // Changed here rather than in the callers on purpose: this way the
+            // APK already installed on the phone starts working immediately,
+            // with no rebuild and no reinstall. dashboard/outbound-loads.html
+            // was the one correct caller and is updated alongside; it is
+            // served by this same process, so the two can never be out of step.
+            res.json(loads);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
