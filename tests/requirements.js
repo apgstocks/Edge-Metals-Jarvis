@@ -1077,6 +1077,76 @@ section('WIRING — a feature that nothing calls is a dead feature');
     ck('whitespace is not an anchor',
         (await actionsQ.searchMail('ttl@c.us', '  ', 'x', ' ')).action_taken, 'pending_replies_failed');
 }
+// ══════════════════════════════════════════════════════════════════════════
+// "new" is a FACT ABOUT A DATE, not an adjective the model may choose.
+// LIVE, 2026-08-29 01:18:
+//     Apsara: Check my mailbox for any new mail
+//     Jarv:   Yes, there is new mail. On August 27, 2026, RadMetals debited
+//             your account for USD 55,941.90. Additionally, on August 25 ...
+// She asked on the 29th. Nothing was new. She read it as money arriving.
+// ══════════════════════════════════════════════════════════════════════════
+{
+    console.log('\n=== a mail search cannot call old mail new ===');
+    const Module = require('module');
+    const origReq = Module.prototype.require;
+    let QUERY = null, PROMPT = null, MSGS = [{ id: 'm1' }], AGE_DAYS = 4;
+    Module.prototype.require = function (n) {
+        if (n === '../helpers/gmail') return {
+            getGmailRead: () => ({}),
+            listMessages: async (g, q) => { QUERY = q; return MSGS; },
+            getMessage: async (g, id) => ({ id, payload: { headers: [
+                { name: 'From', value: 'RadMetals <ap@radmetals.com>' },
+                { name: 'Date', value: new Date(Date.now() - AGE_DAYS * 86400000).toUTCString() },
+                { name: 'Subject', value: 'Debit advice USD 55,941.90' }] } }),
+            getEmailContent: () => ({ body: 'Your account was debited USD 55,941.90.' }),
+        };
+        if (n === '../helpers/gemini') return { callGeminiJSON: async (p) => { PROMPT = p; return { answer: 'stub' }; } };
+        return origReq.apply(this, arguments);
+    };
+    try {
+        delete require.cache[require.resolve(R('workflow/actions.js'))];
+        const A = require(R('workflow/actions.js'));
+        A.init({ sendMessage: async () => true, sendToManager: async () => true,
+            sendToTeam: async () => true, pushAlert: () => {} });
+
+        // A recency question BOUNDS THE SEARCH, so an old email cannot be
+        // returned to be mischaracterised in the first place.
+        await A.searchMail('c@c.us', 'RadMetals', 'any new mail', null);
+        ckTrue('"new" bounds the Gmail search', /newer_than:3d/.test(QUERY), QUERY);
+        await A.searchMail('c@c.us', 'RadMetals', 'anything today', null);
+        ckTrue('"today" bounds it tighter', /newer_than:1d/.test(QUERY), QUERY);
+        await A.searchMail('c@c.us', 'RadMetals', 'mail this week', null);
+        ckTrue('"this week" bounds it to 7 days', /newer_than:7d/.test(QUERY), QUERY);
+        await A.searchMail('c@c.us', 'RadMetals', 'the cutoff date', null);
+        ckTrue('a NON-recency question is not date-bounded', !/newer_than/.test(QUERY), QUERY);
+
+        // And the model is given what it needs to not say it anyway.
+        await A.searchMail('c@c.us', 'RadMetals', 'any new mail', null);
+        ckTrue('the prompt states what today is', /TODAY IS \w+day/.test(PROMPT));
+        ckTrue('each email carries its age, computed in code', /4 DAYS OLD/.test(PROMPT));
+        ckTrue('and calling old mail new is forbidden outright',
+            /NEVER CALL AN EMAIL NEW, RECENT, OR JUST-ARRIVED UNLESS IT IS 0 OR 1 DAYS OLD/.test(PROMPT));
+        ckTrue('the real incident is in the prompt so it is not re-argued',
+            /A REAL INCIDENT \(2026-08-29\)/.test(PROMPT));
+
+        AGE_DAYS = 0;
+        await A.searchMail('c@c.us', 'RadMetals', 'any new mail', null);
+        ckTrue('a genuinely new email is labelled TODAY', /\(TODAY\)/.test(PROMPT), PROMPT.slice(0, 400));
+
+        // An empty recency search must say what window it looked in.
+        MSGS = [];
+        const sent = [];
+        A.init({ sendMessage: async (c, t) => { sent.push(t); return true; }, sendToManager: async () => true,
+            sendToTeam: async () => true, pushAlert: () => {} });
+        await A.searchMail('c@c.us', 'RadMetals', 'any new mail', null);
+        ckTrue('nothing found in the window says so, with the window',
+            /Nothing in the last 3 day\(s\) from RadMetals/.test(sent[sent.length - 1] || ''), sent[sent.length - 1]);
+    } finally {
+        Module.prototype.require = origReq;
+        delete require.cache[require.resolve(R('workflow/actions.js'))];
+    }
+}
+
 
 
 

@@ -3150,6 +3150,25 @@ async function searchMail(chatId, targetName, note, bkgNo) {
     if (targetName) terms.push(`(from:${targetName} OR ${targetName})`);
     if (bkgNo) terms.push(bkgNo);
     if (note) terms.push(note);
+    // RECENCY IS A FILTER, NOT AN ADJECTIVE (2026-08-29). Live:
+    //     Apsara: Check my mailbox for any new mail
+    //     Jarv:   Yes, there is new mail. On August 27 RadMetals debited
+    //             USD 55,941.90. Additionally on August 25 ...
+    // She asked on the 29th. Those were four and two days old, and neither
+    // was new. The search had NO date bound at all, so Gmail returned
+    // whatever matched from any time, and the answer called it new because
+    // nothing said otherwise.
+    //
+    // When she asks in recency terms, bound the SEARCH. An old email then
+    // cannot be returned to be mischaracterised in the first place.
+    const askedText = [note, targetName].filter(Boolean).join(' ');
+    let recencyWindow = null;
+    if (/\btoday\b|\bthis morning\b|\btonight\b/i.test(askedText)) recencyWindow = '1d';
+    else if (/\byesterday\b/i.test(askedText)) recencyWindow = '2d';
+    else if (/\bthis week\b|\bpast few days\b/i.test(askedText)) recencyWindow = '7d';
+    else if (/\bnew\b|\brecent(ly)?\b|\blatest\b|\bjust (came|arrived|in)\b|\blately\b/i.test(askedText)) recencyWindow = '3d';
+    if (recencyWindow) terms.push(`newer_than:${recencyWindow}`);
+
     const q = terms.join(' ').trim();
     if (!q) {
         await _send(chatId, 'Search for what — a name, booking number, or keyword?');
@@ -3164,7 +3183,9 @@ async function searchMail(chatId, targetName, note, bkgNo) {
         return { action_taken: 'search_mail_failed' };
     }
     if (!messages.length) {
-        await _send(chatId, `No matching emails found${targetName ? ` from ${targetName}` : ''}${bkgNo ? ` about ${bkgNo}` : ''}${note && !bkgNo ? ` re "${note}"` : ''}.`);
+        await _send(chatId, recencyWindow
+            ? `Nothing in the last ${recencyWindow.replace('d', ' day(s)')}${targetName ? ` from ${targetName}` : ''}${bkgNo ? ` about ${bkgNo}` : ''}.`
+            : `No matching emails found${targetName ? ` from ${targetName}` : ''}${bkgNo ? ` about ${bkgNo}` : ''}${note && !bkgNo ? ` re "${note}"` : ''}.`);
         return { action_taken: 'search_mail_no_results' };
     }
 
@@ -3177,7 +3198,13 @@ async function searchMail(chatId, targetName, note, bkgNo) {
             const full = await getMessage(gmail, m.id);
             const hdrs = Object.fromEntries((full.payload.headers || []).map((h) => [h.name, h.value]));
             const { body } = getEmailContent(full.payload);
-            found.push({ from: hdrs.From, date: hdrs.Date, subject: hdrs.Subject, body: (body || '').slice(0, 1500) });
+            // Age computed HERE, not left to the model. It had the Date
+            // header and still called a four-day-old email "new", because a
+            // date with no reference point is not information.
+            const t = Date.parse(hdrs.Date || '');
+            const ageDays = Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null;
+            found.push({ from: hdrs.From, date: hdrs.Date, subject: hdrs.Subject,
+                ageDays, body: (body || '').slice(0, 1500) });
         } catch (err) {
             console.error('[ACTIONS] searchMail: failed to read a matched message:', err.message);
         }
@@ -3188,13 +3215,23 @@ async function searchMail(chatId, targetName, note, bkgNo) {
     }
 
     const askedAbout = [targetName ? `whether ${targetName} replied` : null, note, bkgNo].filter(Boolean).join(' — ');
+    const todayLA = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    }).format(new Date());
     const prompt = `The manager asked about their mailbox: "${askedAbout || q}"
+
+TODAY IS ${todayLA}. Every email below carries how many days old it is, computed for you — do not re-derive it from the date and do not guess.
+
 Below are up to 3 matching emails (Gmail search results, not necessarily in relevance order). Answer the manager's question directly in 2-3 sentences, citing date and the relevant detail if you find it. If none of these actually answer the question, say so plainly instead of guessing.
+
+NEVER CALL AN EMAIL NEW, RECENT, OR JUST-ARRIVED UNLESS IT IS 0 OR 1 DAYS OLD. This is not a style rule. A REAL INCIDENT (2026-08-29): asked "any new mail", the answer opened "Yes, there is new mail" and then described emails from four and two days earlier. She read that as new money arriving. If the only matches are older than that, say plainly that nothing new arrived and that the closest matches are N days old — that is a useful answer; calling old mail new is a false one.
+
+State the age in the answer whenever recency is any part of what she asked ("from 27 Aug, 2 days ago"). Do not summarise a payment, an amount or a document as though it just happened when it did not.${recencyWindow ? `\n\nThe search was already limited to the last ${recencyWindow.replace('d', ' day(s)')}, so anything below is within that window.` : ''}
 
 EMAILS:
 ${found.map((d, i) => `--- Email ${i + 1} ---
 From: ${d.from}
-Date: ${d.date}
+Date: ${d.date}${d.ageDays === null ? '' : ` (${d.ageDays === 0 ? 'TODAY' : d.ageDays === 1 ? '1 day old' : `${d.ageDays} DAYS OLD`})`}
 Subject: ${d.subject}
 Body: ${d.body}`).join('\n\n')}
 
