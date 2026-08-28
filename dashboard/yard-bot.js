@@ -239,7 +239,14 @@
     el('yardBotSend').disabled = true;
     var thinking = add('bot', 'Looking…');
 
-    callApi('/api/yard/ask', { question: q, history: history.slice(-6) })
+    // source: recorded in the daily transcript so a problem seen only on a
+    // phone is separable from the website without guessing. The app is the
+    // host with #appShell in its markup; the website has none.
+    callApi('/api/yard/ask', {
+      question: q,
+      history: history.slice(-6),
+      source: document.getElementById('appShell') ? 'app' : 'website',
+    })
       .then(function (r) {
         var answer = (r && r.answer) || "I couldn't answer that.";
         thinking.textContent = answer;

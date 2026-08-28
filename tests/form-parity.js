@@ -166,8 +166,18 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   ck('bot: shown once signed in', isSignedIn() === true);
   els = { loginScreen: mkEl(false), appShell: mkEl(true) };
   ck('bot: hidden again when the session expires', isSignedIn() === false);
+  // INVERTED 2026-08-29, deliberately. This used to assert the bubble stayed
+  // hidden when neither element was visible — "don't guess". That default cost
+  // the feature: Apsara reported "yard assistant not there", and a gate that
+  // defaults to OFF turns every state I failed to anticipate into a silently
+  // missing feature with no way to diagnose it.
+  //
+  // It now fails SAFE: hidden only when the login screen is definitively up.
+  // The requirement was only ever "not on the sign-in page", and this meets it
+  // while failing in the harmless direction — at worst a bubble on a screen it
+  // need not be on, rather than no assistant at all.
   els = { loginScreen: mkEl(true), appShell: mkEl(true) };
-  ck('bot: stays hidden in a transient state rather than guessing', isSignedIn() === false);
+  ck('bot: an unrecognised state SHOWS the bubble rather than losing it', isSignedIn() === true);
   els = {};
   ck('bot: shown on the website, where the server already gated it', isSignedIn() === true);
 

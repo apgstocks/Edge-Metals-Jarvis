@@ -1414,11 +1414,34 @@ function createApi() {
             const { askYard } = require('./helpers/yardAsk');
             const b = req.body || {};
             const out = await askYard(b.question, { history: b.history, days: b.days });
+            // Transcript, one file per day — per Apsara 2026-08-29. Written
+            // AFTER the answer is in hand and deliberately not awaited into the
+            // response path: a log that cannot be written must never turn a
+            // working question into an error. helpers/yardChatLog.js swallows
+            // its own failures for the same reason.
+            try {
+                require('./helpers/yardChatLog').logExchange({
+                    question: b.question, answer: out && out.answer,
+                    have_data: out && out.have_data, ok: out && out.ok,
+                    role: req.role || null, source: b.source || null,
+                });
+            } catch (e) { /* never let logging break answering */ }
             res.json(out);
         } catch (e) {
             console.error('[API] yard/ask failed:', e.message);
             res.status(500).json({ ok: false, answer: "Something went wrong answering that." });
         }
+    });
+
+    // The transcripts. Admin-only like the rest of this file's routes, since a
+    // day's conversation quotes the yard's balances back verbatim.
+    app.get('/api/yard/chat-log', (req, res) => {
+        try {
+            const log = require('./helpers/yardChatLog');
+            const day = req.query && req.query.day;
+            if (day) return res.json({ day, entries: log.readDay(day) });
+            res.json({ days: log.listDays() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // The raw brief, for debugging what the bot can actually see. Useful when

@@ -132,6 +132,15 @@ const FILES = {
     // Keeping payments outside that write path means editing a weight cannot
     // touch what was paid.
     PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
+    // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
+    // conversations of yard assistant somewhere. so per day one log."
+    //
+    // A DIRECTORY of one file per day rather than a single growing file. A
+    // conversation log only grows, and one file that never stops growing
+    // eventually has to be rewritten in full on every append, or read in full
+    // to inspect one afternoon. A day per file keeps both cheap and makes
+    // "what did it say on the 27th" a matter of opening one small file.
+    YARD_CHAT_DIR: path.join(DATA_DIR, 'yard-chat'),
     // Yard expenses — per Apsara 2026-08-19 ("for admin access in mobile
     // app, i want expense tracker"). Its own flat store for the same reason
     // OUTBOUND_LOADS_FILE is separate from LOADS_FILE: an expense shares
