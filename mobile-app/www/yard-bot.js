@@ -1,0 +1,182 @@
+/* ── dashboard/yard-bot.js — the floating Edge Yard helper ───────────────────
+ *
+ * Per Apsara 2026-08-28: "design that like a floating icon in app and website."
+ *
+ * ONE FILE, used by BOTH the dashboard and the mobile app. The load form is
+ * already duplicated across those two and it took a parity test to stop the
+ * copies drifting; there was no reason to start a third copy on purpose. The
+ * app bundles this file at build time (npx cap sync copies www/), the
+ * dashboard serves it — same source either way.
+ *
+ * Self-contained: injects its own markup and styles on load, needs no HTML
+ * changes in either host, and reads its API base from whatever the host
+ * already uses. That is what makes "add it to both" a one-line include rather
+ * than two parallel edits.
+ *
+ * READ-ONLY, and it says so. It talks to /api/yard/ask, which has no route
+ * into the action-taking brain. It cannot create, edit, delete, send or pay.
+ */
+(function () {
+  if (window.__yardBotLoaded) return;      // a double include must not stack two widgets
+  window.__yardBotLoaded = true;
+
+  var history = [];                        // {role:'you'|'bot', text}
+  var open = false;
+  var busy = false;
+
+  // The host decides how to reach the API. The dashboard is same-origin; the
+  // app has a configurable server address. Reusing the host's own helper means
+  // this file never needs to know which it is in.
+  function callApi(path, body) {
+    if (typeof window.api === 'function') return window.api(path, { method: 'POST', body: JSON.stringify(body) });
+    var base = window.API_BASE || '';
+    return fetch(base + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); });
+  }
+
+  var CSS = [
+    '#yardBotFab{position:fixed;right:18px;bottom:18px;z-index:900;width:54px;height:54px;border-radius:50%;',
+    'border:none;cursor:pointer;background:#B4703A;color:#fff;font-size:22px;line-height:54px;text-align:center;',
+    'box-shadow:0 6px 20px rgba(0,0,0,.35);transition:transform .12s ease;}',
+    '#yardBotFab:hover{transform:scale(1.06);}',
+    '#yardBotFab.hidden{display:none;}',
+    '#yardBotPanel{position:fixed;right:18px;bottom:18px;z-index:901;width:min(380px,calc(100vw - 28px));',
+    'height:min(560px,calc(100vh - 36px));display:none;flex-direction:column;border-radius:14px;overflow:hidden;',
+    'background:#15181B;border:1px solid rgba(255,255,255,.14);box-shadow:0 18px 48px rgba(0,0,0,.5);}',
+    '#yardBotPanel.open{display:flex;}',
+    '#yardBotHead{display:flex;align-items:center;gap:10px;padding:13px 15px;background:#1B1F23;border-bottom:1px solid rgba(255,255,255,.1);}',
+    '#yardBotHead b{color:#fff;font-size:13.5px;letter-spacing:.02em;}',
+    '#yardBotHead small{color:rgba(255,255,255,.45);font-size:10.5px;display:block;margin-top:1px;}',
+    '#yardBotClose{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.6);font-size:17px;cursor:pointer;padding:2px 6px;}',
+    '#yardBotLog{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;}',
+    '.yb-msg{max-width:88%;padding:9px 12px;border-radius:12px;font-size:13px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;}',
+    '.yb-you{align-self:flex-end;background:#B4703A;color:#fff;border-bottom-right-radius:3px;}',
+    '.yb-bot{align-self:flex-start;background:#22272B;color:#E6E8EA;border-bottom-left-radius:3px;}',
+    '.yb-note{align-self:flex-start;color:rgba(255,255,255,.4);font-size:11px;font-style:italic;}',
+    '.yb-tips{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;}',
+    '.yb-tip{background:#22272B;border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.72);',
+    'border-radius:999px;padding:5px 10px;font-size:11.5px;cursor:pointer;}',
+    '.yb-tip:hover{border-color:#B4703A;color:#fff;}',
+    '#yardBotFoot{display:flex;gap:8px;padding:11px;border-top:1px solid rgba(255,255,255,.1);background:#1B1F23;}',
+    '#yardBotInput{flex:1;min-width:0;background:#0F1214;border:1px solid rgba(255,255,255,.16);border-radius:9px;',
+    'color:#fff;padding:11px 12px;font-size:13.5px;outline:none;font-family:inherit;}',
+    '#yardBotInput:focus{border-color:#B4703A;}',
+    '#yardBotSend{background:#B4703A;border:none;color:#fff;border-radius:9px;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;}',
+    '#yardBotSend:disabled{opacity:.5;cursor:default;}',
+    /* On a phone the panel takes the screen — a 380px card floating on a
+       small display wastes most of it and puts the input under the thumb of
+       whatever is behind it. */
+    '@media(max-width:520px){#yardBotPanel{right:0;bottom:0;width:100vw;height:100vh;border-radius:0;border:none;}}',
+  ].join('');
+
+  var TIPS = [
+    'What do we still owe?',
+    'Which seller have we bought most from?',
+    'What did we buy this month?',
+    'What stock is on hand?',
+  ];
+
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+  }
+
+  function mount() {
+    var style = document.createElement('style');
+    style.textContent = CSS;
+    document.head.appendChild(style);
+
+    var wrap = document.createElement('div');
+    wrap.innerHTML = [
+      '<button id="yardBotFab" title="Ask about the yard">&#128172;</button>',
+      '<div id="yardBotPanel">',
+      '  <div id="yardBotHead">',
+      '    <div><b>Yard assistant</b><small>Answers questions &middot; cannot change anything</small></div>',
+      '    <button id="yardBotClose" title="Close">&times;</button>',
+      '  </div>',
+      '  <div id="yardBotLog"></div>',
+      '  <div id="yardBotFoot">',
+      '    <input id="yardBotInput" placeholder="Ask about loads, sellers, stock…" autocomplete="off">',
+      '    <button id="yardBotSend">Ask</button>',
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(wrap);
+
+    el('yardBotFab').addEventListener('click', toggle);
+    el('yardBotClose').addEventListener('click', toggle);
+    el('yardBotSend').addEventListener('click', send);
+    el('yardBotInput').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); send(); }
+    });
+    greet();
+  }
+
+  function greet() {
+    var log = el('yardBotLog');
+    log.innerHTML = '<div class="yb-msg yb-bot">Ask me anything about the yard — loads, sellers, stock, or what is still owed.\n\nI read the data, but I can’t change anything.</div>'
+      + '<div class="yb-tips">' + TIPS.map(function (t) {
+        return '<button class="yb-tip" data-q="' + esc(t) + '">' + esc(t) + '</button>';
+      }).join('') + '</div>';
+    log.querySelectorAll('.yb-tip').forEach(function (b) {
+      b.addEventListener('click', function () { el('yardBotInput').value = b.dataset.q; send(); });
+    });
+  }
+
+  function toggle() {
+    open = !open;
+    el('yardBotPanel').classList.toggle('open', open);
+    el('yardBotFab').classList.toggle('hidden', open);
+    if (open) setTimeout(function () { el('yardBotInput').focus(); }, 60);
+  }
+
+  function add(role, text) {
+    var log = el('yardBotLog');
+    var d = document.createElement('div');
+    d.className = 'yb-msg ' + (role === 'you' ? 'yb-you' : 'yb-bot');
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+
+  function send() {
+    if (busy) return;
+    var input = el('yardBotInput');
+    var q = String(input.value || '').trim();
+    if (!q) return;
+    input.value = '';
+    add('you', q);
+    history.push({ role: 'you', text: q });
+
+    busy = true;
+    el('yardBotSend').disabled = true;
+    var thinking = add('bot', 'Looking…');
+
+    callApi('/api/yard/ask', { question: q, history: history.slice(-6) })
+      .then(function (r) {
+        var answer = (r && r.answer) || "I couldn't answer that.";
+        thinking.textContent = answer;
+        history.push({ role: 'bot', text: answer });
+      })
+      .catch(function () {
+        // Distinguishes "can't reach the server" from "don't know", because
+        // they need completely different reactions from the person asking.
+        thinking.textContent = "I can't reach the server right now.";
+      })
+      .finally(function () {
+        busy = false;
+        el('yardBotSend').disabled = false;
+        el('yardBotLog').scrollTop = el('yardBotLog').scrollHeight;
+      });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
+})();

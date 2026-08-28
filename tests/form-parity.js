@@ -70,5 +70,21 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+
+// ── the yard bot widget is ONE file, not two ───────────────────────────────
+{
+  const a = fs.readFileSync(R+'dashboard/yard-bot.js','utf8');
+  const b = fs.readFileSync(R+'mobile-app/www/yard-bot.js','utf8');
+  ck('the yard-bot widget is byte-identical in both hosts', a === b);
+  ck('both hosts include it', /yard-bot\.js/.test(fs.readFileSync(R+'dashboard/index.html','utf8'))
+     && /yard-bot\.js/.test(fs.readFileSync(R+'mobile-app/www/index.html','utf8')));
+  // The bot must stay read-only. If it ever learns to POST somewhere that
+  // acts, that is a different feature and needs a different conversation.
+  const posts = (a.match(/\/api\/[a-z0-9\/-]+/g) || []);
+  ck('the widget only ever calls the read-only ask endpoint',
+     posts.every(u => u === '/api/yard/ask'));
+  ck('the widget never touches the action-taking bot route', !/bot\/command/.test(a));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

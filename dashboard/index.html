@@ -4831,5 +4831,10 @@ async function boot() {
 }
 boot();
 </script>
+  <!-- Floating Edge Yard assistant. Same file in both hosts (see
+       dashboard/yard-bot.js) so the two cannot drift the way the load
+       form did. Self-contained: injects its own markup and styles, and
+       reuses whatever api() the host already defines. -->
+  <script src="yard-bot.js"></script>
 </body>
 </html>

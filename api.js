@@ -1395,6 +1395,42 @@ function createApi() {
     // buyer pricing — a business-data exposure call Apsara didn't ask for,
     // so this defaults to normal authenticated (manager/team) access only.
     // No photo/Drive/PDF integration (not asked for) — a plain CRUD store.
+    // ── Edge Yard helper bot — READ ONLY ──────────────────────────────────
+    // Per Apsara 2026-08-28: a bot that knows the yard and answers questions
+    // about the data.
+    //
+    // Kept firmly separate from /api/bot/command, which routes into
+    // workflow/brain.js and can message truckers, book loads and send WhatsApp
+    // for real. Asking "how much do we owe Acme?" must not be one keystroke
+    // away from messaging Acme, so this endpoint has no route into the brain
+    // and nothing it can write. It reads, summarises, and answers.
+    //
+    // Every figure the bot quotes is computed in helpers/yardBrief.js by the
+    // same code the screens use — the model is explicitly forbidden from doing
+    // arithmetic, because a fluent, confident, slightly-wrong number about
+    // money is the worst failure this could have.
+    app.post('/api/yard/ask', async (req, res) => {
+        try {
+            const { askYard } = require('./helpers/yardAsk');
+            const b = req.body || {};
+            const out = await askYard(b.question, { history: b.history, days: b.days });
+            res.json(out);
+        } catch (e) {
+            console.error('[API] yard/ask failed:', e.message);
+            res.status(500).json({ ok: false, answer: "Something went wrong answering that." });
+        }
+    });
+
+    // The raw brief, for debugging what the bot can actually see. Useful when
+    // an answer looks wrong: the first question is always whether the fact was
+    // in the data at all.
+    app.get('/api/yard/brief', (req, res) => {
+        try {
+            const { buildYardBrief } = require('./helpers/yardBrief');
+            res.json(buildYardBrief({ days: Number(req.query && req.query.days) || 30 }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── Payments against a load ───────────────────────────────────────────
     // Per Apsara 2026-08-28: Pay beside Edit/Delete, mode + amount, anything
     // short of the load total is partial with a pending balance.
