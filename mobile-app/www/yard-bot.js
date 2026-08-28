@@ -13,8 +13,16 @@
  * already uses. That is what makes "add it to both" a one-line include rather
  * than two parallel edits.
  *
- * READ-ONLY, and it says so. It talks to /api/yard/ask, which has no route
- * into the action-taking brain. It cannot create, edit, delete, send or pay.
+ * It talks to /api/yard/ask, which has no route into the action-taking brain
+ * in workflow/brain.js — so it can never message a trucker or send a WhatsApp.
+ *
+ * It CAN record a payment, start a draft load and edit a load (Apsara,
+ * 2026-08-29: "it can do anything but within scope of edge yard"), but never
+ * on its own: /api/yard/ask returns a PROPOSAL, this file renders it as a card
+ * with the server's own figures, and only a tap on Confirm sends the opaque
+ * proposal id to /api/yard/act. No amount, load id or mode is ever sent from
+ * here, so nothing on the card can be tampered with in transit. It cannot
+ * delete anything, at all.
  */
 (function () {
   if (window.__yardBotLoaded) return;      // a double include must not stack two widgets
@@ -60,6 +68,23 @@
     '.yb-tip{background:#22272B;border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.72);',
     'border-radius:999px;padding:5px 10px;font-size:11.5px;cursor:pointer;}',
     '.yb-tip:hover{border-color:#B4703A;color:#fff;}',
+    // The confirmation card. Deliberately does NOT look like a chat bubble:
+    // it is the one thing in this panel that changes the books, and it should
+    // not be possible to skim past it as if it were another sentence.
+    '.yb-prop{max-width:100%;width:100%;white-space:normal;border:1px solid #B4703A;background:#1B1F23;padding:11px 12px;}',
+    '.yb-prop-h{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#B4703A;margin-bottom:5px;}',
+    '.yb-prop-s{font-size:13px;line-height:1.5;color:#E6E8EA;}',
+    '.yb-prop-r{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:4px 0;border-top:1px solid rgba(255,255,255,.07);margin-top:4px;}',
+    '.yb-prop-r span{color:rgba(255,255,255,.55);}',
+    '.yb-prop-r b{color:#fff;text-align:right;font-weight:600;}',
+    '.yb-prop-w{margin-top:7px;background:rgba(214,110,60,.14);border-left:2px solid #D66E3C;color:#F0C4A8;',
+    'font-size:11.5px;line-height:1.45;padding:6px 8px;border-radius:0 6px 6px 0;}',
+    '.yb-prop-b{display:flex;gap:8px;margin-top:10px;}',
+    '.yb-prop-b button{flex:1;border-radius:8px;padding:9px 0;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;}',
+    '.yb-no{background:transparent;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.7);}',
+    '.yb-yes{background:#B4703A;border:1px solid #B4703A;color:#fff;}',
+    '.yb-yes:disabled{opacity:.6;cursor:default;}',
+    '.yb-prop.done{border-color:rgba(255,255,255,.12);}',
     '#yardBotFoot{display:flex;gap:8px;padding:11px;border-top:1px solid rgba(255,255,255,.1);background:#1B1F23;}',
     '#yardBotInput{flex:1;min-width:0;background:#0F1214;border:1px solid rgba(255,255,255,.16);border-radius:9px;',
     'color:#fff;padding:11px 12px;font-size:13.5px;outline:none;font-family:inherit;}',
@@ -197,7 +222,10 @@
 
   function greet() {
     var log = el('yardBotLog');
-    log.innerHTML = '<div class="yb-msg yb-bot">Ask me anything about the yard — loads, sellers, stock, or what is still owed.\n\nI read the data, but I can’t change anything.</div>'
+    // Says what it can do, and — just as importantly — what it will never do.
+    // Someone who knows a bot cannot delete will not try, and will not be
+    // surprised later.
+    log.innerHTML = '<div class="yb-msg yb-bot">Ask me anything about the yard — loads, sellers, stock, or what is still owed.\n\nI can also record a payment, start a draft load, or edit a load. I’ll always show you the exact change and wait for you to confirm it. I can’t delete anything.</div>'
       + '<div class="yb-tips">' + TIPS.map(function (t) {
         return '<button class="yb-tip" data-q="' + esc(t) + '">' + esc(t) + '</button>';
       }).join('') + '</div>';
@@ -221,6 +249,72 @@
     log.appendChild(d);
     log.scrollTop = log.scrollHeight;
     return d;
+  }
+
+  // ── the confirmation card ───────────────────────────────────────────────
+  // Per Apsara 2026-08-29, the assistant can act — by proposing, with a person
+  // confirming. This is that person's only view of what is about to happen, so
+  // it shows the REAL figures the server computed, not the model's sentence.
+  //
+  // Only the opaque id goes back on Confirm. Nothing on this card is editable
+  // and no amount travels with the request, so what is confirmed is exactly
+  // what was validated server-side.
+  function renderProposal(p) {
+    var log = el('yardBotLog');
+    var card = document.createElement('div');
+    card.className = 'yb-msg yb-bot yb-prop';
+
+    var html = '<div class="yb-prop-h">Confirm this?</div>';
+    html += '<div class="yb-prop-s">' + esc(p.summary || '') + '</div>';
+    (p.details || []).forEach(function (d) {
+      html += '<div class="yb-prop-r"><span>' + esc(String(d[0])) + '</span><b>' + esc(String(d[1])) + '</b></div>';
+    });
+    // Warnings are the whole point of the card in the cases that matter most —
+    // an overpayment, or an edit that voids a seller's signature. Shown loud,
+    // never collapsed.
+    (p.warnings || []).forEach(function (w) {
+      html += '<div class="yb-prop-w">' + esc(w) + '</div>';
+    });
+    html += '<div class="yb-prop-b"><button class="yb-no">Cancel</button><button class="yb-yes">Confirm</button></div>';
+    card.innerHTML = html;
+    log.appendChild(card);
+    log.scrollTop = log.scrollHeight;
+
+    function settle(msg) {
+      card.classList.add('done');
+      card.innerHTML = '<div class="yb-prop-s">' + esc(msg) + '</div>';
+      history.push({ role: 'bot', text: msg });
+      log.scrollTop = log.scrollHeight;
+    }
+
+    card.querySelector('.yb-no').addEventListener('click', function () {
+      callApi('/api/yard/cancel-action', { id: p.id }).catch(function () {});
+      settle('Cancelled — nothing was changed.');
+    });
+
+    card.querySelector('.yb-yes').addEventListener('click', function () {
+      var yes = card.querySelector('.yb-yes');
+      // Disabled immediately: the server treats a proposal as single-use, but
+      // a second tap should read as "working", not as a failed confirmation.
+      yes.disabled = true; yes.textContent = 'Working…';
+      callApi('/api/yard/act', { id: p.id, source: document.getElementById('appShell') ? 'app' : 'website' })
+        .then(function (r) {
+          if (r && r.ok) {
+            settle('Done. ' + (r.summary || ''));
+            // The rest of the page is now stale — a payment just landed that
+            // the loads list and the pending badges do not know about. Ask the
+            // host page to repaint if it has told us how.
+            if (typeof window.refreshAfterYardAction === 'function') {
+              try { window.refreshAfterYardAction(); } catch (e) {}
+            }
+          } else {
+            settle((r && r.error) || "That didn't go through.");
+          }
+        })
+        .catch(function (e) {
+          settle('That did not go through: ' + ((e && e.message) || 'the server could not be reached') + '. Nothing was changed.');
+        });
+    });
   }
 
   function send() {
@@ -251,6 +345,7 @@
         var answer = (r && r.answer) || "I couldn't answer that.";
         thinking.textContent = answer;
         history.push({ role: 'bot', text: answer });
+        if (r && r.proposal) renderProposal(r.proposal);
       })
       .catch(function () {
         // Distinguishes "can't reach the server" from "don't know", because

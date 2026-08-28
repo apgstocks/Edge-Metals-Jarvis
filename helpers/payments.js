@@ -98,7 +98,10 @@ async function addPayment(input = {}) {
         load_kind: input.load_kind === 'sale' ? 'sale' : 'purchase',
         mode,
         amount,
-        paid_on: input.paid_on || new Date().toISOString().slice(0, 10),
+        // Local day, not UTC. toISOString() rolls over at UTC midnight, which is
+        // early evening at the yard — an evening payment was being stamped with
+        // tomorrow's date. See todayLocal() in helpers/time.js.
+        paid_on: input.paid_on || require('./time').todayLocal(),
         reference: String(input.reference || '').trim() || null,
         note: String(input.note || '').trim() || null,
         created_at: new Date().toISOString(),

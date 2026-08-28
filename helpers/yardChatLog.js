@@ -24,13 +24,17 @@ const fs = require('fs');
 const path = require('path');
 const cfg = require('../config');
 
-// Local date, not UTC. new Date().toISOString() rolls over at midnight UTC,
-// which is early evening in Texas — an afternoon's conversation would be split
-// across two files and "today's log" would be the wrong one for several hours
-// of every working day.
+// The yard's date, not UTC and not the server's. new Date().toISOString()
+// rolls over at midnight UTC, which is late afternoon in Brea — an afternoon's
+// conversation would be split across two files and "today's log" would be the
+// wrong one for several hours of every working day.
+//
+// Delegates to helpers/time.js so the transcript's idea of "today" is the same
+// one the payment dates use (America/Los_Angeles, per Apsara 2026-08-29: "it
+// should be in Brea, LA time"). Two different definitions of today in one app
+// is how a payment ends up filed under a day its own conversation is not in.
 function localDay(d = new Date()) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    return require('./time').todayLocal(d);
 }
 
 function logPathFor(day) {

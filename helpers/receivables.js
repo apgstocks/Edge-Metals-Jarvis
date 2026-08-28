@@ -82,7 +82,7 @@ async function addPayment({ inv_no, amount, paid_on, method, note, recorded_by }
         id: newPaymentId(),
         inv_no: String(inv_no).trim(),
         amount: round2(amt),
-        paid_on: paid_on || new Date().toISOString().slice(0, 10),
+        paid_on: paid_on || require('./time').todayLocal(),   // local day, not UTC — see helpers/time.js
         method: method || null,
         note: note || null,
         recorded_by: recorded_by || null,

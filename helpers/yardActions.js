@@ -87,7 +87,7 @@ const ACTIONS = {
         const before = paymentSummary(loadId, load.amount);
         const after = Math.round((before.pending - amount) * 100) / 100;
 
-        const paidOn = /^\d{4}-\d{2}-\d{2}$/.test(String(p.paid_on || '')) ? p.paid_on : new Date().toISOString().slice(0, 10);
+        const paidOn = /^\d{4}-\d{2}-\d{2}$/.test(String(p.paid_on || '')) ? p.paid_on : require('./time').todayLocal();
 
         const warnings = [];
         // Overpayment is allowed but never silent — it is usually a typo, and
@@ -131,7 +131,7 @@ const ACTIONS = {
             unit: String(it.unit || '').trim(),
         })).filter((it) => it.description || it.gross_weight != null);
 
-        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? p.date : new Date().toISOString().slice(0, 10);
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? p.date : require('./time').todayLocal();
 
         return {
             summary: `Start a draft load for ${seller} dated ${date}${items.length ? ` with ${items.length} item${items.length > 1 ? 's' : ''}` : ''}.`,

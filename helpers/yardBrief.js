@@ -43,10 +43,10 @@ const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 
 function ymd(d) { return String(d || '').slice(0, 10); }
 
+// Local day, not UTC — otherwise 'the last 30 days' silently shifts by one
+// for several hours of every working evening. See helpers/time.js.
 function daysAgo(n) {
-    const d = new Date();
-    d.setDate(d.getDate() - n);
-    return d.toISOString().slice(0, 10);
+    return require('./time').daysAgoLocal(n);
 }
 
 // Per-counterparty rollup. This is what most real questions are actually
@@ -114,7 +114,7 @@ function summarise(loads) {
 function buildYardBrief(opts = {}) {
     const days = Number(opts.days) || 30;
     const since = daysAgo(days);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = require('./time').todayLocal();
 
     const loads = loadLoads();
     const sales = loadOutboundLoads();

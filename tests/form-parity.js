@@ -78,12 +78,35 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   ck('the yard-bot widget is byte-identical in both hosts', a === b);
   ck('both hosts include it', /yard-bot\.js/.test(fs.readFileSync(R+'dashboard/index.html','utf8'))
      && /yard-bot\.js/.test(fs.readFileSync(R+'mobile-app/www/index.html','utf8')));
-  // The bot must stay read-only. If it ever learns to POST somewhere that
-  // acts, that is a different feature and needs a different conversation.
+  // This used to assert the widget was read-only. That WAS the boundary, and
+  // the comment here said any change to it "needs a different conversation" —
+  // which is exactly what happened: Apsara, 2026-08-29, "it can do anything
+  // but within scope of edge yard". So the assertion is not deleted, it is
+  // moved to the boundary that replaced it.
+  //
+  // The new invariant is narrower and stronger than "read-only": the widget
+  // may ask, and may confirm a proposal the SERVER made, and nothing else.
   const posts = (a.match(/\/api\/[a-z0-9\/-]+/g) || []);
-  ck('the widget only ever calls the read-only ask endpoint',
-     posts.every(u => u === '/api/yard/ask'));
+  const ALLOWED = ['/api/yard/ask', '/api/yard/act', '/api/yard/cancel-action'];
+  ck('the widget calls only the three yard endpoints',
+     posts.every(u => ALLOWED.includes(u)));
   ck('the widget never touches the action-taking bot route', !/bot\/command/.test(a));
+  // The heart of it. If the confirm call ever carries an amount, a load id or
+  // a payment mode, then what gets written is whatever the page sent — and the
+  // server-side validation of the proposal becomes decorative.
+  const act = /callApi\('\/api\/yard\/act',\s*\{([^}]*)\}/.exec(a);
+  ck('the confirm call exists', !!act);
+  if (act) {
+    const body = act[1];
+    ck('confirming sends only the opaque proposal id (plus source)',
+       /\bid:\s*p\.id\b/.test(body) && !/amount|load_id|mode|seller|items/.test(body));
+  }
+  ck('the widget cannot delete anything', !/delete/i.test(a) || !/\/api\/(loads|payments)/.test(a));
+  // A proposal must never be auto-confirmed. The whole design is one human tap.
+  ck('confirming is bound to a click, not fired automatically',
+     /\.yb-yes'\)\.addEventListener\('click'/.test(a));
+  ck('the greeting no longer claims it cannot change anything',
+     !/I read the data, but I can.t change anything/.test(a));
 }
 
 
