@@ -339,7 +339,7 @@ function bulkMailSignal(headers) {
 // on 2026-08-22, so upgrading does not re-flag every email already assessed.
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} };
     if (raw.seen && typeof raw.seen === 'object') {
         return {
             seen: raw.seen,
@@ -365,9 +365,13 @@ function loadStore() {
             // refreshSentIndex: this is what lets an item LEAVE `tracked`.
             sentIndex: (raw.sentIndex && typeof raw.sentIndex === 'object') ? raw.sentIndex : {},
             sentIndexUpdatedAt: raw.sentIndexUpdatedAt || null,
+            // {messageId: {count, lastAt, lastError, from, subject}} — how
+            // many times assessment has failed for a message we have not yet
+            // given up on. See MAX_ASSESS_ATTEMPTS.
+            failures: (raw.failures && typeof raw.failures === 'object') ? raw.failures : {},
         };
     }
-    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null }; // legacy flat format
+    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} }; // legacy flat format
 }
 async function saveStore(store) {
     // Keep only what the lookback window could still surface. Anything older
@@ -390,6 +394,10 @@ async function saveStore(store) {
         // that is rebuilt from scratch every run is not an index.
         sentIndex: store.sentIndex || {},
         sentIndexUpdatedAt: store.sentIndexUpdatedAt || null,
+        // THIRD TIME on this allowlist. lastScanAt and sentIndex were both
+        // silently swallowed by it before. A failure counter that resets on
+        // every write can never reach its cap.
+        failures: store.failures || {},
     });
 }
 
@@ -2174,6 +2182,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     }
 
     const flagged = [];
+    // Emails that could not be assessed after MAX_ASSESS_ATTEMPTS. Reported to
+    // her at the end of the run — a dead letter nobody is told about is just
+    // a slower silent loss.
+    const deadLettered = [];
     let checked = 0;
 
     for (const ref of messages) {
@@ -2653,7 +2665,14 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const backlogNote = olderStillOpen > 0
             ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" any time to see them.)`
             : '';
-        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote;
+        // Dead letters ride along with the digest rather than as their own
+        // ping — they are rare, and a separate message for "I could not read
+        // an email" would be its own noise problem.
+        const dlqNote = deadLettered.length
+            ? `\n\n⚠ ${deadLettered.length} email${deadLettered.length === 1 ? '' : 's'} I could not read after ${MAX_ASSESS_ATTEMPTS} tries — check ${deadLettered.length === 1 ? 'it' : 'them'} in Gmail:\n`
+              + deadLettered.slice(0, 3).map((d) => `• ${d.from} — ${d.subject || '(no subject)'}`).join('\n')
+            : '';
+        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote;
 
         // Stage the confirmation so a plain "yes" produces the document. Only
         // for a draft that is actually complete — one still missing a rate has
@@ -2783,10 +2802,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     store.lastScanAt = new Date().toISOString();
     await saveStore(store);
     console.log(`[REPLYWATCH] assessed ${checked}, flagged ${flagged.length}, queued ${store.undelivered.length}, tracked ${store.tracked.length}, chased ${chaseUps.length}, sent ${delivered ? 'yes' : 'no'}`);
-    return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
+    return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,

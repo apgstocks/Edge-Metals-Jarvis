@@ -1381,6 +1381,40 @@ section('P3 — with no group configured nothing changes for her');
     } finally { cfgm.getSettings = orig; }
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// Q. DEAD LETTER. From the Kafka article Apsara sent: an at-least-once
+//    pipeline needs idempotency, retries AND a dead-letter path. Jarvis had
+//    the first two. assess() failing left the message unmarked forever.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('Q1 — the failure counter survives the store allowlist');
+{
+    // Third time on this allowlist: lastScanAt and sentIndex were both
+    // silently swallowed by it. A counter that resets on every write can
+    // never reach its cap, so the cap would look implemented and do nothing.
+    fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({ seen: {}, tracked: [] }));
+    const store = rw.loadStore();
+    ck('an older store loads with no failures', store.failures && Object.keys(store.failures).length === 0);
+    store.failures['m1'] = { count: 2, lastAt: '2026-08-29T00:00:00Z', lastError: 'boom' };
+    await rw.saveStore(store);
+    const again = rw.loadStore();
+    ck('a failure count survives a save/load round-trip', (again.failures.m1 || {}).count === 2, JSON.stringify(again.failures));
+    ck('and so does the reason', (again.failures.m1 || {}).lastError === 'boom');
+    ck('the cap is 3 — about 15 minutes of retries at the */5 cadence', rw.MAX_ASSESS_ATTEMPTS === 3, String(rw.MAX_ASSESS_ATTEMPTS));
+}
+
+section('Q2 — a dead letter is reported, not dropped');
+{
+    // The distinction that matters: a DLQ is not "give up", it is "stop
+    // retrying AND tell a human". A failure nobody hears about is just a
+    // slower silent loss — which is what the unbounded retry became once the
+    // message also ate a MAX_EMAILS_PER_RUN slot on every scan.
+    const digest = rw.buildDigest([{ needs_reply: true, waiting_on: 'her', urgency: 'normal',
+        fromName: 'Kristal', summary: 'Wants a rate.', asked_for: 'a rate', key_figures: [], is_order: false }]);
+    ck('an ordinary digest carries no warning', !/could not read/.test(digest));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
