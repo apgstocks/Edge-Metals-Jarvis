@@ -10,6 +10,8 @@ const { loadBrain, saveBrain } = require('../helpers/json');
 const { loadSettings, saveTranscript }            = require('../helpers/json');
 const { buildContext, formatForAI, updateSession } = require('../helpers/context');
 const { resolveBookingNumber, isBareUrl, queryBookingsByLocation, formatBookingLine } = require('../helpers/booking');
+// A pasted link is only "the thing we are talking about" for a few minutes.
+const LINK_PENDING_TTL_MS = 10 * 60 * 1000;
 const { callGeminiJSON }                           = require('../helpers/gemini');
 const { getLATime }                                = require('../helpers/time');
 
@@ -1947,7 +1949,22 @@ async function route(decision, ctx, sendMessage) {
             return actions.relayQuestionToContact(chatId, target_name, note, bkg_no);
         }
         case 'ask_link_purpose': {
-            await actions.setPending(chatId, { type: 'await_link_purpose', url: d.url });
+            // SHORT TTL, and this is the real reason the question is safe to
+            // ask at all. The pending stores the url and staples it to her
+            // NEXT message (see the await_link_purpose branch in
+            // policyDecide). On the default 2-hour window that meant pasting a
+            // link, getting distracted, and then asking "how many bookings
+            // from LA" an hour later — with the sheet link silently attached
+            // to that unrelated question.
+            //
+            // Ten minutes: long enough to say what she wants, short enough
+            // that a forgotten link cannot contaminate a later message.
+            // loadBrain() drops an expired pending on every read, with a log
+            // line and nothing sent — so if she never answers, it just goes
+            // away. That is why there is no "say cancel" in the message.
+            await actions.setPending(chatId, {
+                type: 'await_link_purpose', url: d.url, expires_in_ms: LINK_PENDING_TTL_MS,
+            });
             return send(chatId, actions.describeLink(d.url));
         }
         case 'ask_pricelist_city': {
@@ -2408,4 +2425,4 @@ async function handleManagerLLMFallback(text, chatId, sendMessage) {
     return { intent: 'awaiting_confirmation', resolvedBy: 'llm', data: {}, confidence: decision.confidence };
 }
 
-module.exports = { process, normalize, policyDecide, pendingFullReminder };
+module.exports = { process, normalize, policyDecide, pendingFullReminder, route };

@@ -125,7 +125,12 @@ function describeLink(url) {
     else if (/drive\.google\.com/.test(u)) what = 'a Google Drive file';
     else if (/\.pdf(\?|$)/i.test(u)) what = 'a PDF';
     else if ((m = u.match(/^https?:\/\/([^/]+)/i))) { what = 'a link'; detail = ` to ${m[1].replace(/^www\./, '')}`; }
-    return `That's ${what}${detail}. What should I do with it?\n(Or say "cancel" and I'll drop it.)`;
+    // NO "or say cancel". Apsara, 2026-08-27: "why should i say cancel?" —
+    // she pasted the link on purpose. Offering an escape hatch was Jarvis
+    // asking her to manage ITS pending queue, which is not her job and reads
+    // as though it suspects she made a mistake. If she never answers, the
+    // pending expires on its own (LINK_PENDING_TTL_MS) and nothing is said.
+    return `That's ${what}${detail}. What should I do with it?`;
 }
 
 async function setPending(chatId, action) {

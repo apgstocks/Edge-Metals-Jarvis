@@ -900,7 +900,10 @@ section('WIRING — a feature that nothing calls is a dead feature');
     ckTrue('it says the link is a Google Sheet', /Google Sheet/.test(d), d);
     ckTrue('and identifies the tab, proving the link arrived intact', /tab 2098848345/.test(d), d);
     ckTrue('it asks rather than assuming', /What should I do with it\?/.test(d), d);
-    ckTrue('and offers a way out', /cancel/i.test(d), d);
+    // Apsara: "why should i say cancel?" — she pasted it on purpose. Offering
+    // an escape hatch was Jarvis asking her to manage its own pending queue.
+    // An unanswered link pending expires silently instead.
+    ckTrue('it does NOT ask her to cancel anything', !/cancel/i.test(d), d);
     // Deliberately no invented menu — that would be a second guess wearing a
     // question mark, which is the thing being fixed.
     ckTrue('it does NOT invent a menu of options', !/\n\s*1\./.test(d), d);
@@ -942,6 +945,66 @@ section('WIRING — a feature that nothing calls is a dead feature');
         cancelled && cancelled.intent === 'resolve_pending' && (cancelled.data || {}).answer === 'no',
         JSON.stringify(cancelled));
 }
+// ══════════════════════════════════════════════════════════════════════════
+// An unanswered link pending must EXPIRE, not sit there stapling itself to
+// whatever she says next. Apsara: "make it as a short expiry" / "if
+// unattended..". This is the bug that made the cancel prompt look necessary.
+// ══════════════════════════════════════════════════════════════════════════
+{
+    console.log('\n=== a forgotten link expires instead of contaminating the next message ===');
+    const fs2 = require('fs');
+    const cfg2 = require(R('config.js'));
+    const actions2 = require(R('workflow/actions.js'));
+    const rw_brain = require(R('workflow/brain.js'));
+    const SHEET2 = 'https://docs.google.com/spreadsheets/d/1x/edit?gid=2098848345';
+    const CHAT = 'ttl-test@c.us';
+
+    const readBrain = () => JSON.parse(fs2.readFileSync(cfg2.BRAIN_FILE, 'utf8'));
+    const writeBrain = (b) => fs2.writeFileSync(cfg2.BRAIN_FILE, JSON.stringify(b, null, 2));
+
+    // Drive the REAL route, not a hand-made pending. An earlier version of
+    // this test called setPending itself with expires_in_ms and so proved
+    // nothing: removing the TTL from brain.js left it passing.
+    await rw_brain.route(
+        { intent: 'ask_link_purpose', data: { url: SHEET2 } },
+        { chatId: CHAT, text: SHEET2, isManagerOrTeam: true, isManager: true, session: {} },
+        async () => {},
+    );
+    const stored = actions2.getPending(CHAT);
+    ckTrue('routing a pasted link sets the pending', stored && stored.type === 'await_link_purpose', JSON.stringify(stored));
+    ckTrue('and stores the url', stored && stored.url === SHEET2, JSON.stringify(stored));
+    const windowMin = (new Date(stored.expires_at) - new Date(stored.created_at)) / 60000;
+    ckTrue('THE ROUTE applies a ~10 minute expiry, not the 2-hour default',
+        windowMin > 9 && windowMin < 11, `${windowMin} minutes`);
+
+    // Wind the clock past it: loadBrain drops it on read, silently.
+    const b = readBrain();
+    b.pending_actions[CHAT].expires_at = new Date(Date.now() - 1000).toISOString();
+    writeBrain(b);
+    ck('an expired link pending is gone on the next read', actions2.getPending(CHAT), null);
+
+    // Which means a later, unrelated message cannot pick up the stale link.
+    const later = rw_brain.policyDecide({
+        text: 'how many bookings from LA', textLower: 'how many bookings from la',
+        chatId: CHAT, isManagerOrTeam: true, isManager: true, session: {},
+        pendingAction: actions2.getPending(CHAT), role: 'manager',
+    });
+    ckTrue('an unrelated question an hour later carries no link',
+        !later || !later.pastedLink, JSON.stringify(later));
+
+    // And within the window it still works.
+    await actions2.setPending(CHAT, { type: 'await_link_purpose', url: SHEET2, expires_in_ms: 10 * 60 * 1000 });
+    const inWindow = rw_brain.policyDecide({
+        text: 'check the totals', textLower: 'check the totals', chatId: CHAT,
+        isManagerOrTeam: true, isManager: true, session: {},
+        pendingAction: actions2.getPending(CHAT), role: 'manager',
+    });
+    ckTrue('answering inside the window is not swallowed as a booking lookup',
+        !inWindow || inWindow.intent !== 'show_booking_status', JSON.stringify(inWindow));
+
+    const b2 = readBrain(); delete b2.pending_actions[CHAT]; writeBrain(b2);
+}
+
 
 
 console.log(`\n${'='.repeat(60)}`);
