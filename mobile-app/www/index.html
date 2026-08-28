@@ -147,6 +147,19 @@ input::placeholder { color:var(--steel-500); }
 #scanFoot { padding:16px 20px calc(16px + env(safe-area-inset-bottom, 0px)); background:#0C0E10; display:flex; align-items:center; gap:12px; }
 #scanShutter { flex:1; padding:15px; font-size:14px; font-weight:700; }
 #scanErr { color:var(--status-danger); font-family:var(--font-mono); font-size:11.5px; padding:0 20px 10px; text-align:center; }
+/* "Can't read it yet" panel — hidden until the scanner has genuinely been
+   struggling. Deliberately NOT an error colour: nothing has gone wrong, the
+   display is just hard to read from here, and shouting at a worker who is
+   holding a phone in one hand is not useful. */
+#scanStuck { display:none; padding:14px 20px 4px; }
+#scanStuck.show { display:block; }
+#scanStuckMsg { color:#fff; font-family:var(--font-sans); font-size:14px; font-weight:700; text-align:center; }
+#scanStuckHint { color:rgba(255,255,255,.66); font-family:var(--font-sans); font-size:12px; line-height:1.4; text-align:center; margin-top:4px; }
+#scanStuckRow { display:flex; gap:8px; margin-top:12px; }
+#scanManual { flex:1; min-width:0; padding:14px 12px; font-size:17px; font-family:var(--font-mono);
+  background:#15181B; border:1px solid rgba(255,255,255,.22); border-radius:var(--radius-sm); color:#fff; outline:none; }
+#scanManual:focus { border-color:var(--leaf-400); }
+#scanManualUse { padding:14px 20px; font-size:14px; font-weight:700; }
 
 /* ── Weight-read progress + result banner — per Apsara 2026-08-19
    ("show to user if processing, then working on it" / "if flagged, show
@@ -623,6 +636,20 @@ body { overflow-y:auto; }
     <div id="scanHint">Just <b>point at the display</b> — it reads on its own and locks when sure.<br>Line the first weight digit against the green bar; the dim <b>8.8.</b> cells stay outside.</div>
   </div>
   <div id="scanErr"></div>
+  <!-- Shown when the scanner has been looking for a while without a confident
+       read. Scanning does NOT stop underneath — if a good frame arrives the
+       weight still fills in and this disappears. This exists so the worker is
+       never left watching a spinner with no idea what to do: a scanner that
+       says "no read, type it" is usable, one that silently keeps trying is
+       not. -->
+  <div id="scanStuck">
+    <div id="scanStuckMsg">Can't read this display yet.</div>
+    <div id="scanStuckHint">Move a little closer, or straighten up so the digits fill the box. Still scanning.</div>
+    <div id="scanStuckRow">
+      <input id="scanManual" type="number" inputmode="numeric" placeholder="Type the weight" autocomplete="off">
+      <button id="scanManualUse" class="btn btn-primary">Use</button>
+    </div>
+  </div>
   <div id="scanFoot">
     <button id="scanCancel" class="btn" style="padding:15px 18px;">Cancel</button>
     <button id="scanShutter" class="btn btn-primary">Capture weight</button>
@@ -1688,7 +1715,7 @@ function layoutScanBox() {
 // and only frames that actually contain a bright red display in the box are
 // ever uploaded, so pointing the phone at the ground costs nothing.
 let scanLive = { on: false, timer: null, tally: new Map(), shots: new Map(), sent: 0, inFlight: 0, locked: false,
-                 blanks: 0, pace: null, verifySent: false, verifyDone: false, verify: null };
+                 blanks: 0, pace: null, verifySent: false, verifyDone: false, verify: null, startedAt: 0 };
 const SCAN_LIVE = {
     // NO CEILING AND NO GIVE-UP, per Apsara 2026-08-27 ("time is something i
     // can't compromise. i don't want hard cut"). An earlier version stopped
@@ -1727,6 +1754,13 @@ const SCAN_LIVE = {
     // give-up — reaching it is a result, and it is handed over with its
     // warning intact.
     NEEDED_FLAGGED: 3,
+    // How long the scanner may look at a display it cannot read before it
+    // SAYS SO. Not a give-up — scanning continues underneath and a good frame
+    // still wins — but a worker at a scale must never be left watching a
+    // spinner wondering whether the app is broken or they are holding it
+    // wrong. Two and a half seconds is about the point where a person stops
+    // assuming it is about to work.
+    STUCK_AFTER_MS: 2500,
 };
 
 // Fraction of pixels in the crop that look like a lit red LED segment.
@@ -1751,6 +1785,33 @@ function litRedFraction(canvas) {
     } catch (e) { return 0; }
 }
 
+// Shows or hides the "can't read it yet" panel. Scanning is unaffected either
+// way — this is purely what the worker is told.
+function setScanStuck(on) {
+    const el = $('scanStuck');
+    if (!el) return;
+    if (on === el.classList.contains('show')) return;
+    el.classList.toggle('show', on);
+    if (!on) { const i = $('scanManual'); if (i) i.value = ''; }
+}
+
+// Takes a weight the worker typed in themselves. Recorded as a manual entry,
+// with no photo attached, precisely because there is no read behind it — a
+// typed number must never be mistaken later for one the scanner confirmed.
+function useManualWeight() {
+    const input = $('scanManual');
+    if (!input || !scanTarget) return;
+    const v = parseFloat(input.value);
+    if (!Number.isFinite(v) || v <= 0) { input.focus(); return; }
+    const { row, roleKey } = scanTarget;
+    const statusEl = row.querySelector('.ld-item-status');
+    const field = row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare');
+    if (field) { field.value = v; recomputeRowTotals(row); syncItemsFromDom(); }
+    if (statusEl) { statusEl.style.color = ''; statusEl.textContent = `${v} lb — entered by hand.`; }
+    stopScanLive();
+    closeScanner();
+}
+
 function scanLiveStatus(text, tone) {
     const el = $('scanErr');
     if (!el) return;
@@ -1769,6 +1830,7 @@ function setScanPace(ms) {
 
 function stopScanLive() {
     scanLive.on = false;
+    setScanStuck(false);
     if (scanLive.timer) { clearInterval(scanLive.timer); scanLive.timer = null; }
     scanLive.tally = new Map();
     scanLive.shots = new Map();
@@ -1909,6 +1971,7 @@ async function doScanLiveTick() {
                 scanLive.verifySent = false;
                 scanLive.verifyDone = false;
                 scanLive.verify = null;
+                if (Date.now() - scanLive.startedAt > SCAN_LIVE.STUCK_AFTER_MS) setScanStuck(true);
                 scanLiveStatus('Checking again — hold steady…', 'work');
                 return;
             }
@@ -1951,6 +2014,9 @@ async function doScanLiveTick() {
             }
             scanLive.blanks = 0;
             setScanPace(SCAN_LIVE.INTERVAL_MS);
+            // Reading something, even if not yet confirmed - so this is not
+            // the stuck case. Clear the panel rather than nag.
+            setScanStuck(false);
             scanLiveStatus(`Reading… ${w}?`, 'work');
         } else {
             // Nothing readable this time. Keep going — the next frame has a
@@ -1958,6 +2024,7 @@ async function doScanLiveTick() {
             // ease the pace so an awkwardly-aimed phone is not uploading at
             // full rate. Guidance changes; the scanner does not stop.
             scanLive.blanks += 1;
+            if (Date.now() - scanLive.startedAt > SCAN_LIVE.STUCK_AFTER_MS) setScanStuck(true);
             if (scanLive.blanks >= SCAN_LIVE.BACKOFF_AFTER) {
                 setScanPace(SCAN_LIVE.IDLE_INTERVAL_MS);
                 scanLiveStatus('Still looking — try moving a little closer.', 'work');
@@ -1976,6 +2043,8 @@ function startScanLive() {
     stopScanLive();
     scanLive.on = true;
     scanLive.pace = SCAN_LIVE.INTERVAL_MS;
+    scanLive.startedAt = Date.now();
+    setScanStuck(false);
     scanLiveStatus('Point at the scale display…', 'work');
     scanLive.timer = setInterval(doScanLiveTick, SCAN_LIVE.INTERVAL_MS);
     // Look IMMEDIATELY rather than after one interval. The operator has
@@ -3786,6 +3855,10 @@ function loadTab(tab) {
 // boot rather than being re-bound per item row.
 $('scanShutter').addEventListener('click', doScanCapture);
 $('scanCancel').addEventListener('click', closeScanner);
+$('scanManualUse').addEventListener('click', useManualWeight);
+// Enter on the keypad accepts it too — one-handed at a scale, reaching for a
+// button after typing is an extra motion for no reason.
+$('scanManual').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); useManualWeight(); } });
 wireSignPad();
 wireExpenseModal();
 
