@@ -222,5 +222,24 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+
+// ── an autosaved draft must actually SHOW ──────────────────────────────────
+// Per Apsara 2026-08-29: "it is showing that autosaved but nowhere the draft
+// is showing in app." The draft was written and the footer said so, but the
+// Loads screen behind the modal was painted before it existed and nothing
+// repainted it. Invisible is nearly as bad as lost, for a safety net.
+{
+  for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
+    const src = fs.readFileSync(R+p,'utf8');
+    ck(`${p}: has a strip refresher`, /async function refreshDraftStrip/.test(src));
+    ck(`${p}: repaints the strip when the load form closes`,
+       /closeLoadModal = \(\) => \{[\s\S]{0,400}?refreshDraftStrip\(\)/.test(src));
+    ck(`${p}: refreshes from the SERVER, not a local cache`,
+       /refreshDraftStrip[\s\S]{0,300}?fetchLoadDrafts\(\)/.test(src));
+    ck(`${p}: repaints only the strip, not the whole tab`,
+       !/refreshDraftStrip[\s\S]{0,300}?loadTab\('loads'\)/.test(src));
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

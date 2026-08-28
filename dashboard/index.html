@@ -2764,6 +2764,26 @@ async function clearLoadDraft() {
   try { await api(`/api/load-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
 }
 
+// Repaints the Unfinished strip from the server.
+//
+// THE BUG THIS FIXES (Apsara 2026-08-29: "it is showing that autosaved but
+// nowhere the draft is showing in app"): autosaving writes the draft and the
+// footer correctly says so, but nothing told the Loads screen behind the
+// modal. The strip was rendered when the tab loaded — before the draft
+// existed — so it stayed empty until you navigated away and back. The draft
+// was never lost; it was just invisible, which for a safety net is nearly as
+// bad.
+//
+// Repaints ONLY the strip rather than reloading the whole tab: a full reload
+// would refetch every load and throw away scroll position for a change that
+// affects one row of the page.
+async function refreshDraftStrip() {
+  const el = document.getElementById('draftStrip');
+  if (!el) return;
+  pendingDrafts = await fetchLoadDrafts();
+  el.innerHTML = draftStripHtml();
+}
+
 async function fetchLoadDrafts() {
   try { return asArray(await api('/api/load-drafts')); } catch (e) { return []; }
 }
@@ -4329,7 +4349,13 @@ function wireLoadsEvents() {
     resetLoadModal('sale');
     $('loadModal').classList.remove('hidden');
   });
-  const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+  const closeLoadModal = () => {
+    stopCamera();
+    $('loadModal').classList.add('hidden');
+    // Show what was just autosaved. Without this the draft exists but
+    // nothing on screen says so until the tab is reloaded.
+    refreshDraftStrip();
+  };
 
   // Autosave the draft on any edit inside the load form. One delegated
   // listener rather than per-field wiring, because item rows are re-rendered
