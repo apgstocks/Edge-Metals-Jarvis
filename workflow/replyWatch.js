@@ -742,7 +742,7 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
 key_figures: every figure a person deciding what to do about this email would need, as objects {"label","value"}. "value" is the figure copied VERBATIM. "label" says in 1-4 words WHAT THAT NUMBER IS, so the list is readable without opening the email — "current price", "their counter", "tonnage", "container", "invoice total", "balance due". A list like 21.428 / $990 / $995 / $1015 with no labels is useless: she cannot tell tonnage from price, or the old price from the proposed one. If you genuinely cannot tell what a number is, leave it out rather than labelling it vaguely. Up to 4, most important first, [] if the email contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
 
 deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
-is_order: true if the sender is asking to buy material, asking for a proforma/PI, or confirming an order with quantities and/or prices. false for anything else, including a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
+is_order: true ONLY if the sender is BUYING MATERIAL FROM US — asking to buy, asking for a proforma/PI, or confirming a purchase with quantities and/or prices. false for everything else. Specifically false for a REQUEST TO BOOK FREIGHT: asking a carrier, forwarder or line for container space, a sailing, a booking number or an ERD is logistics we are buying, not material someone is buying from us, and a proforma has no meaning there. Also false for a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
 order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
 
 confidence: 0.0 to 1.0, how sure you are about needs_reply.
@@ -1047,6 +1047,22 @@ function degenericiseSummary(summary, fromLabel) {
     return who ? t.replace(CATEGORY_OPENER, `${who} `) : t;
 }
 
+// The two gates that decide whether a NON-reply item earns a numbered slot.
+// Extracted 2026-08-28 so they can be tested directly: a test that restates
+// the condition inline proves only that I can retype it — the reverse-verify
+// caught exactly that, passing while the real gate was disabled.
+//
+// She is waiting on THEM, and there is a named thing outstanding.
+const isOwedItem = (a) => !!a && a.waiting_on === 'them'
+    && a.confidence >= MIN_CONFIDENCE && !!a.asked_for;
+
+// A third party was asked something. Needs BOTH a named party and a named
+// thing. Live case that forced the second half: "Yurim Cha attached
+// surrendered HBL GLTOEH27580" — a DELIVERY, nothing asked of anyone, which
+// took a numbered slot purely by being off the To line.
+const isBystanderItem = (a) => !!a && a.waiting_on === 'someone_else'
+    && a.confidence >= MIN_CONFIDENCE && !!a.asked_of && !!a.asked_for;
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -1059,6 +1075,7 @@ async function assess(email) {
     // something never asks for it in their own words, so checking their quote
     // against REQUEST_SIGNAL would null out every honest progress report.
     let waiting_on = ['her', 'them', 'someone_else', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
+    let fromInternal = false;
     let asked_of = res.asked_of ? String(res.asked_of).trim() : null;
 
     // HEADERS BEAT THE MODEL. If no company address is in To, nobody here was
@@ -1082,6 +1099,7 @@ async function assess(email) {
         } catch (e) {
             console.error('[REPLYWATCH] addressing failed, treating direction as unknown (non-fatal):', e.message);
         }
+        if (!addr.unknown && addr.fromInternal) fromInternal = true;
         if (!addr.unknown && addr.fromInternal && !addr.inTo) {
             // OUR OWN TEAM wrote this to an outsider. Not inbound work. Either
             // they owe us a reply, or we were delivering - and the owedItem
@@ -1161,7 +1179,23 @@ async function assess(email) {
         summary: degenericiseSummary(res.summary, senderLabel(email.from)),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
         deadline: res.deadline ? String(res.deadline).trim() : null,
-        is_order: res.is_order === true || res.is_order === 'true',
+        // Apsara, 2026-08-28, on a live digest: "This is not proforma stupid."
+        //
+        //   2. . Accounting needs a booking for 2 *40 HC containers from LA to
+        //        Busan, earliest requested date September 3rd.
+        //        [doc] Looks like an order for Zimex Team — say "proforma from
+        //        Accounting Edge" and I'll build it from this email.
+        //
+        // That is EDGE METALS asking a freight forwarder to book container
+        // space. A proforma invoice is a document we issue to a BUYER of our
+        // material — the opposite direction entirely, and offering to raise
+        // one off a booking request is nonsense.
+        //
+        // Decided in code, not left to the prompt: an order is someone buying
+        // FROM us, so a message our own team SENT can never be one. We do not
+        // sell to ourselves. (The prompt is tightened too, but the structural
+        // rule is the one that has to hold.)
+        is_order: !fromInternal && (res.is_order === true || res.is_order === 'true'),
         order_buyer: res.order_buyer ? String(res.order_buyer).trim() : null,
     };
 }
@@ -1766,7 +1800,37 @@ function buildDigest(matters, emailCount) {
     // Numbered so she can answer one without retyping the sender's name.
     matters.forEach((f, i) => {
         const overdue = typeof f.daysToDeadline === 'number' && f.daysToDeadline < 0;
-        const due = f.deadline
+        // LIVE, 2026-08-28:
+        //   "Kristal needs to know if you will use the booking or need it
+        //    rolled BY MONDAY 8/31 AT 1600. — BY MONDAY 8/31 @1600"
+        // The summary instruction now (correctly) requires dates to be IN the
+        // sentence, so the suffix repeats what she has just read. Drop it when
+        // the summary already carries the same date — keep it otherwise,
+        // because the suffix is also what carries "(today)"/"(tomorrow)".
+        // Compared on DIGITS ONLY. Words between the numbers differ freely —
+        // the live case was "by Monday 8/31 at 1600" in the summary against a
+        // deadline of "Monday 8/31 @1600", where a letters-and-digits compare
+        // misses on the "at" and prints the date twice anyway. What has to
+        // match is the date itself, and that is the digits.
+        // Matched as a TOKEN SEQUENCE, which is the only form that survives
+        // both live cases. A digits-only compare needed 3+ digits and so
+        // rejected "9/3"; a letters-and-digits compare missed "8/31 at 1600"
+        // against "8/31 @1600" on the word "at". So: take the deadline's own
+        // alphanumeric tokens and require them in order in the summary, with
+        // punctuation or one short filler word allowed between.
+        const deadlineInSummary = (() => {
+            const toks = String(f.deadline || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+            if (!toks.length) return false;
+            const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Boundaries on both ends, or "$993 per MT" satisfies a deadline
+            // of "9/3" by matching the "93" inside the price — and the date
+            // then silently vanishes from the line.
+            const re = new RegExp('(?<![a-z0-9])' + toks.map(esc).join('[^a-z0-9]*(?:[a-z]{1,3}[^a-z0-9]*)?') + '(?![a-z0-9])', 'i');
+            return re.test(String(f.summary || ''));
+        })();
+        const due = (f.deadline && deadlineInSummary && !(typeof f.daysToDeadline === 'number' && f.daysToDeadline <= 1))
+            ? ''
+            : f.deadline
             ? ` — ${overdue ? 'OVERDUE, was' : 'by'} ${f.deadline}${typeof f.daysToDeadline === 'number' && f.daysToDeadline >= 0 && f.daysToDeadline <= 2 ? (f.daysToDeadline === 0 ? ' (today)' : f.daysToDeadline === 1 ? ' (tomorrow)' : ' (2 days)') : ''}`
             : '';
         // Apsara, 2026-08-24: "description should not go next line .side by
@@ -1782,11 +1846,11 @@ function buildDigest(matters, emailCount) {
         // Three readings of the same slot, chosen by direction. "wants" was
         // the only one that existed and it was wrong two ways out of three.
         const verb = f.waiting_on === 'them' ? 'owes you'
-            : f.waiting_on === 'someone_else' ? `asked ${f.asked_of || 'someone else'} for`
+            : f.waiting_on === 'someone_else' ? `asked ${cleanLabel(f.asked_of) || 'someone else'} for`
             : 'wants';
         // On our OWN outbound, the sender is us — so name the counterparty who
         // actually owes the answer rather than crediting it to our own team.
-        const who = (f.waiting_on === 'them' && f.asked_of) ? f.asked_of : f.fromName;
+        const who = cleanLabel((f.waiting_on === 'them' && f.asked_of) ? f.asked_of : f.fromName);
         const tail = f.waiting_on === 'someone_else' ? '   (you are only copied in)' : '';
         // WHAT SHE HAS TO DO comes before who said it. Apsara: "tell in few
         // lines what was needed." The old second line was "Kristal — wants: a
@@ -1805,7 +1869,7 @@ function buildDigest(matters, emailCount) {
             lines.push(`   → ${f.action_needed}`);
             lines.push(`   ${who}${tail}`);
         } else {
-            lines.push(`   ${who}${f.asked_for ? ` — ${verb}: ${f.asked_for}` : (f.waiting_on === 'someone_else' ? ` — asked ${f.asked_of || 'someone else'}` : '')}${tail}`);
+            lines.push(`   ${who}${f.asked_for ? ` — ${verb}: ${f.asked_for}` : (f.waiting_on === 'someone_else' ? ` — asked ${cleanLabel(f.asked_of) || 'someone else'}` : '')}${tail}`);
         }
         // The recap — the thing she actually asked for. Sits under the ask so
         // the action stays the first thing her eye reaches, and the history is
@@ -1895,21 +1959,33 @@ function buildDigest(matters, emailCount) {
 // carrying the name AND the address is neither - it is a name with debris
 // stapled to it. Applied to whatever reaches asked_of regardless of whether it
 // came from the header or from the model, because both produced it.
+// Strip quotes and any embedded address from a display name. Both live cases
+// (2026-08-28) failed the first version because the mess is INSIDE the name,
+// not around it:
+//     'Accounting Edge' <acct@...>              -> "Accounting Edge'"
+//     Zimex Team export@zimexglt.com <export@..> -> "Zimex Team export@zimexglt.com"
+const tidyName = (n) => String(n || '')
+    .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, ' ')   // an address inside the name
+    .replace(/["'\u2018\u2019\u201c\u201d]/g, ' ')  // quotes anywhere, not just the ends
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,;:<]+|[\s,;:<]+$/g, '')
+    .trim();
+
 function cleanLabel(raw) {
-    let t = String(raw || '').trim().replace(/^["']|["']$/g, '');
-    const named = t.match(/^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/);
-    if (named && named[1].trim()) return named[1].trim();
+    let t = String(raw || '').trim();
+    const named = t.match(/^\s*"?([^<]+?)"?\s*<[^>]+>\s*$/);
+    if (named && tidyName(named[1])) return tidyName(named[1]);
     // Name and bare address side by side, no brackets: keep the name.
     const both = t.match(/^(.*?)\s*[\w.+-]+@[\w.-]+\.[a-z]{2,}\s*$/i);
-    if (both && both[1].trim() && !/@/.test(both[1])) return both[1].trim().replace(/[,;:<]\s*$/, '');
+    if (both && tidyName(both[1])) return tidyName(both[1]);
     const addr = t.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);
     if (addr) return addr[0];
     return t.slice(0, 60) || 'someone else';
 }
 
 function senderLabel(from) {
-    const m = String(from || '').match(/^\s*"?([^"<]+?)"?\s*</);
-    if (m && m[1].trim()) return m[1].trim();
+    const m = String(from || '').match(/^\s*"?([^<]+?)"?\s*</);
+    if (m && tidyName(m[1])) return tidyName(m[1]);
     const addr = String(from || '').match(/[\w.+-]+@[\w.-]+/);
     return addr ? addr[0] : String(from || 'unknown');
 }
@@ -2140,13 +2216,23 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // Gated on the same confidence bar as needs_reply, and on there being
         // something concrete to name: "someone sent an update" with no asked_for
         // is noise, and this list has to stay short to stay read.
-        const owedItem = a.waiting_on === 'them' && a.confidence >= MIN_CONFIDENCE && !!a.asked_for;
+        const owedItem = isOwedItem(a);
         // A question put to a third party is still worth her seeing - she runs
         // this business and "Aisha was asked three days ago and hasn't
         // answered" is real information. It is simply not hers to answer, and
         // must never be counted as such. Requires a NAME: "someone somewhere
         // was asked something" is noise.
-        const bystander = a.waiting_on === 'someone_else' && a.confidence >= MIN_CONFIDENCE && !!a.asked_of;
+        // LIVE, 2026-08-28:
+        //   3. . Yurim Cha attached surrendered HBL GLTOEH27580.
+        //        Yurim Cha — asked 'Accounting Edge'   (you are only copied in)
+        // Yurim DELIVERED a document. Nobody was asked anything, nothing is
+        // owed, and "asked Accounting Edge" is simply false. It earned a
+        // numbered slot because being off the To line was enough to qualify.
+        //
+        // A bystander item now has to carry something OUTSTANDING — a named
+        // thing someone is waiting for. A delivery has no asked_for, so it
+        // drops out instead of padding the list she is trying to get through.
+        const bystander = isBystanderItem(a);
         if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander) {
             recordSenderEvent(store, from, 'flagged');
             flagged.push({
@@ -2551,7 +2637,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, isOwedItem, isBystanderItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,

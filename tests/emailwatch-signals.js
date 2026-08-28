@@ -1154,6 +1154,117 @@ section('M3 — the action leads the item, the sender drops to attribution');
     ck('and credits it to the counterparty, not our own team', /Zimex Team/.test(chase) && !/Accounting Edge/.test(chase), chase);
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// N. FROM THE LIVE DIGEST OF 2026-08-28. Apsara: "This is not proforma
+//    stupid. summary is not working prperly". Four defects, all copied
+//    verbatim from that message.
+// ══════════════════════════════════════════════════════════════════════════
+
+section('N1 — a booking request is not an order, and never a proforma');
+{
+    // LIVE: "Accounting needs a booking for 2 *40 HC containers from LA to
+    // Busan" carried "Looks like an order for Zimex Team — say 'proforma from
+    // Accounting Edge'". That is EDGE asking a forwarder for container space.
+    // A proforma is a document we issue to a BUYER of our material.
+    const MGR3 = 'apsara@edgemetals.com';
+    const base = { waiting_on: 'her', needs_reply: true, confidence: 0.9, urgency: 'normal',
+        summary: 'Need a booking for 2x40HC LA to Busan.', asked_for: 'a container booking',
+        asked_for_quote: 'please book 2x40HC from LA to Busan', deadline: null,
+        order_buyer: 'Zimex', key_figures: [], action_needed: null, is_order: true };
+
+    AI = { ...base };
+    const ours = await rw.assess({ from: 'Accounting Edge <accounting@edgemetals.com>', subject: 'Booking',
+        date: 'd', body: 'Please book 2x40HC from LA to Busan, earliest 9/3.',
+        to: 'Zimex Team <export@zimexglt.com>', cc: MGR3, myAddress: BOSE, managerAddress: MGR3 });
+    ck('our own team asking a forwarder is NOT an order', ours.is_order === false, JSON.stringify(ours.is_order));
+
+    const digest = rw.buildDigest([{ ...ours, fromName: 'Accounting Edge' }]);
+    ck('so no proforma is offered', !/proforma/i.test(digest), digest);
+
+    // A genuine inbound order from a customer must still fire.
+    AI = { ...base, waiting_on: 'her', order_buyer: 'Daekwang' };
+    const real = await rw.assess({ from: 'jinho@hynos.co.kr', subject: 'Order', date: 'd',
+        body: 'We confirm 2 containers of auto casting at $995/MT.',
+        to: BOSE, cc: '', myAddress: BOSE, managerAddress: MGR3 });
+    ck('a real customer order is untouched', real.is_order === true, JSON.stringify(real.is_order));
+    ck('and still offers the proforma', /proforma/i.test(rw.buildDigest([{ ...real, fromName: 'jinho' }])));
+
+    ck('the prompt says a freight booking is not an order',
+        /REQUEST TO BOOK FREIGHT/.test(rw.buildPrompt({ from: 'a', subject: 's', date: 'd', body: 'b' })));
+}
+
+section('N2 — a name is a name, not a name with an address stapled to it');
+{
+    // Both live failures. The mess is INSIDE the display name, not around it.
+    ck("'Accounting Edge' <acct@...> keeps only the name",
+        rw.cleanLabel("'Accounting Edge' <acct@edgemetals.com>") === 'Accounting Edge');
+    ck('a name that repeats its own address drops the address',
+        rw.cleanLabel('Zimex Team export@zimexglt.com <export@zimexglt.com>') === 'Zimex Team');
+    ck('senderLabel has the same fix — it is what prints fromName',
+        rw.senderLabel("'Accounting Edge' <acct@edgemetals.com>") === 'Accounting Edge');
+    ck('a plain quoted name still works', rw.cleanLabel('"Zimex Team" <e@z.com>') === 'Zimex Team');
+    ck('an unquoted name still works', rw.cleanLabel('Kristal Sosethan <k@z.com>') === 'Kristal Sosethan');
+    ck('a bare address is left as the address', rw.cleanLabel('jinho@hynos.co.kr') === 'jinho@hynos.co.kr');
+    // Records written before cleanLabel existed are still in `tracked`, so the
+    // digest cleans at render time too.
+    const d = rw.buildDigest([{ needs_reply: false, waiting_on: 'them', urgency: 'normal',
+        fromName: 'Accounting Edge', asked_of: 'Zimex Team export@zimexglt.com <export@zimexglt.com>',
+        summary: 's', asked_for: 'a booking', key_figures: [], is_order: false }]);
+    ck('a dirty stored label is cleaned when rendered', /Zimex Team — owes you/.test(d), d);
+}
+
+section('N3 — the deadline is not printed twice');
+{
+    const mk = (summary, deadline, days) => ({ needs_reply: true, waiting_on: 'her', urgency: 'normal',
+        fromName: 'X', summary, deadline, daysToDeadline: days, key_figures: [], is_order: false });
+    const suffix = (i) => /— (by|OVERDUE)/.test(rw.buildDigest([i]).split('\n')[2]);
+
+    // LIVE: "...rolled by Monday 8/31 at 1600. — by Monday 8/31 @1600"
+    ck('a date already in the summary is not repeated',
+        !suffix(mk('Kristal needs a decision by Monday 8/31 at 1600.', 'Monday 8/31 @1600', 3)));
+    ck('short dates too — "9/3" was rejected by the first digit-count guard',
+        !suffix(mk('Accounting needs 2x40HC LA to Busan, earliest 9/3.', '9/3', 6)));
+    ck('a date NOT in the summary is still shown',
+        suffix(mk('Wants the signed BOL back.', '9/3', 6)));
+    // Imminent or overdue keeps the nudge even when it duplicates — that
+    // suffix is what carries "(today)"/"(tomorrow)"/"OVERDUE".
+    ck('due tomorrow keeps the nudge', suffix(mk('Wants the BOL by 9/3.', '9/3', 1)));
+    ck('overdue keeps it', suffix(mk('Wants the BOL by 9/3.', '9/3', -2)));
+    // The false positive this guard has to survive.
+    ck('"$993 per MT" does not satisfy a deadline of 9/3', suffix(mk('Price is $993 per MT.', '9/3', 6)));
+    ck('nor does "39 units"', suffix(mk('Ship 39 units.', '9/3', 6)));
+}
+
+section('N4 — a delivery is not an outstanding item');
+{
+    // LIVE: "Yurim Cha attached surrendered HBL GLTOEH27580. / Yurim Cha —
+    // asked 'Accounting Edge'". Nobody was asked anything. It earned a
+    // numbered slot purely by being off the To line.
+    AI = { waiting_on: 'someone_else', needs_reply: false, confidence: 0.9, urgency: 'normal',
+        summary: 'Yurim Cha attached surrendered HBL GLTOEH27580.',
+        asked_for: null, asked_for_quote: null, asked_of: 'Accounting Edge',
+        deadline: null, is_order: false, order_buyer: null, key_figures: [], action_needed: null };
+    const a = await rw.assess({ from: 'Yurim Cha <y@glt.com>', subject: 'HBL', date: 'd',
+        body: 'Please find attached the surrendered HBL GLTOEH27580.' });
+    ck('a delivery carries no outstanding ask', a.asked_for === null, JSON.stringify(a.asked_for));
+    // Calls the REAL gate. An earlier version restated the condition inline
+    // here and passed even with the gate disabled — it proved only that I
+    // could retype it. The reverse-verify caught that.
+    ck('and so it is not a bystander item worth a numbered slot', !rw.isBystanderItem(a));
+
+    const asked = { waiting_on: 'someone_else', confidence: 0.9, asked_of: 'Aisha', asked_for: 'the EDO number' };
+    ck('a third party genuinely asked for something IS surfaced', rw.isBystanderItem(asked));
+    ck('no named thing -> not surfaced', !rw.isBystanderItem({ ...asked, asked_for: null }));
+    ck('no named party -> not surfaced', !rw.isBystanderItem({ ...asked, asked_of: null }));
+    ck('low confidence -> not surfaced', !rw.isBystanderItem({ ...asked, confidence: 0.2 }));
+    ck('junk does not throw', !rw.isBystanderItem(null) && !rw.isBystanderItem({}));
+
+    const owed = { waiting_on: 'them', confidence: 0.9, asked_for: 'shipping instructions' };
+    ck('something they owe her IS surfaced', rw.isOwedItem(owed));
+    ck('an update owing nothing is not', !rw.isOwedItem({ ...owed, asked_for: null }));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
