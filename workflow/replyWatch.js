@@ -160,6 +160,13 @@ try {
         // Who the question is actually aimed at, when it is not Edge Metals.
         // Display name preferred; whatever the To header carries otherwise.
         asked_of: z.string().nullable().optional().default(null),
+        // ACTION NEEDED (2026-08-28). Apsara: "tell in few lines what was
+        // needed." The digest has never carried this. `summary` says what the
+        // mail SAYS and `asked_for` is a NOUN PHRASE for the thing at stake
+        // ("agreement on the unit price") — neither tells her what to DO.
+        // She reads the line, understands the situation, and still has to
+        // work out her own next move. Short imperative, her side of the desk.
+        action_needed: z.string().nullable().optional().default(null),
         // KEY FIGURES (2026-08-26). Apsara, on a live digest:
         //
         //     2. . Sender wants confirmation of payment amount sent.
@@ -715,6 +722,14 @@ summary: THE GIST OF THE EMAIL — what it actually says, in one sentence under 
   Every good example above says WHO, WHAT and the identifying detail. Every bad one could describe a hundred different emails. Name the actual party rather than "the sender". Keep the number, the booking, the vessel, the container, the date — those are what make the sentence mean something. Use the THREAD SO FAR for the specifics when the latest message alone is thin ("yes, go ahead" means nothing without what was being agreed to). Refer to the manager as "you". Never mention this instruction, the history line, or your own reasoning.
 
 
+action_needed: WHAT SHE HAS TO DO, as a short instruction to herself — under 12 words, starting with a verb. This is the line she acts on, so it must name a DECISION or a DELIVERABLE, never restate the situation.
+    "Approve $995 or hold at $1015."          not  "Respond to the price request."
+    "Send the signed BOL to Zimex."            not  "Reply to Zimex."
+    "Chase Andy for the EDO before the 8/28 cutoff."
+    "Confirm the $111,447.60 LC figures before submission."
+  If waiting_on is "them", the action is usually to chase, and only when it is worth chasing — an update that arrived yesterday needs nothing. If waiting_on is "someone_else" or "nobody", or if the honest answer is that she does not need to do anything, return null. A null is a real and useful answer here; inventing busywork is worse than saying nothing.
+  Do NOT repeat the summary in different words. If the only action you can think of is "reply to this email", return null instead — the digest already says she has mail waiting.
+
 asked_of: when waiting_on is "someone_else", the NAME of the person the question is aimed at, taken from the TO line. null otherwise.
 asked_for: the single most concrete item at stake.
   - waiting_on "her":  the thing being requested OF her  ("a rate for LA to Houston", "the signed BOL").
@@ -737,7 +752,7 @@ If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "waiting_on": "her", "asked_of": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
+{ "waiting_on": "her", "asked_of": null, "action_needed": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
 }
 
 // ── QUOTE GROUNDING (2026-08-25) ───────────────────────────────────────────
@@ -1108,8 +1123,27 @@ async function assess(email) {
     // reaches the model through the thread ledger.
     const key_figures = groundFigures(res.key_figures, [email.body, email.thread]);
 
+    // Guarded, because a bad action line is worse than none: it puts an
+    // instruction in front of her that she then has to check against the
+    // summary. Rejected when it merely restates the summary, when it is the
+    // empty advice "reply to this", or when it runs long enough to stop being
+    // scannable.
+    const action_needed = (() => {
+        const t = String(res.action_needed || '').trim().replace(/^[-•*\s]+/, '');
+        if (!t || t.length < 4) return null;
+        if (t.split(/\s+/).length > 14) return null;
+        // The empty-advice family. "Answer them" slipped through the first
+        // version because it has no "to" — the digest header already tells her
+        // she has mail waiting, so every one of these is a wasted line.
+        if (/^(please\s+)?(reply|respond|answer|get back|follow up|action|handle|deal with)\b(\s+(to|on|with))?\s*(this|that|it|them|him|her|the (email|mail|message|sender))?\s*(email|mail|message)?\.?$/i.test(t)) return null;
+        const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+        if (norm(t) === norm(res.summary)) return null;
+        return defence(t);
+    })();
+
     return {
         waiting_on,
+        action_needed,
         // Kept for 'them' as well as 'someone_else' — for an email our own
         // team sent, it names the counterparty who owes the answer.
         asked_of: (waiting_on === 'someone_else' || waiting_on === 'them') ? asked_of : null,
@@ -1754,7 +1788,25 @@ function buildDigest(matters, emailCount) {
         // actually owes the answer rather than crediting it to our own team.
         const who = (f.waiting_on === 'them' && f.asked_of) ? f.asked_of : f.fromName;
         const tail = f.waiting_on === 'someone_else' ? '   (you are only copied in)' : '';
-        lines.push(`   ${who}${f.asked_for ? ` — ${verb}: ${f.asked_for}` : (f.waiting_on === 'someone_else' ? ` — asked ${f.asked_of || 'someone else'}` : '')}${tail}`);
+        // WHAT SHE HAS TO DO comes before who said it. Apsara: "tell in few
+        // lines what was needed." The old second line was "Kristal — wants: a
+        // rate for LA to Houston" — a NOUN PHRASE for the thing at stake,
+        // which left her to derive her own next move from it every time.
+        //
+        // When there is a real action it leads, marked with an arrow so it is
+        // findable at a glance in a list. The sender then sits on the line
+        // below as attribution rather than as the headline, because who sent
+        // it almost never changes what she does about it.
+        //
+        // With no action (nothing is needed from her, or the model could only
+        // manage "reply to this" and it was rejected), the line falls back to
+        // exactly what it printed before — no empty arrow, no gap.
+        if (f.action_needed) {
+            lines.push(`   → ${f.action_needed}`);
+            lines.push(`   ${who}${tail}`);
+        } else {
+            lines.push(`   ${who}${f.asked_for ? ` — ${verb}: ${f.asked_for}` : (f.waiting_on === 'someone_else' ? ` — asked ${f.asked_of || 'someone else'}` : '')}${tail}`);
+        }
         // The recap — the thing she actually asked for. Sits under the ask so
         // the action stays the first thing her eye reaches, and the history is
         // there when she needs to remember what this even is.
@@ -2109,6 +2161,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 needs_reply: !!a.needs_reply,
                 waiting_on: a.waiting_on || 'her',
                 asked_of: a.asked_of || null,
+                action_needed: a.action_needed || null,
                 key_figures: Array.isArray(a.key_figures) ? a.key_figures : [],
                 // Deadline-derived urgency, computed rather than judged — see
                 // applyDeadlineUrgency. Gemini's own urgency is the input and
@@ -2203,6 +2256,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             receivedAt: f.receivedAt || null,
             key_figures: Array.isArray(f.key_figures) ? f.key_figures : [],
             asked_of: f.asked_of || null,
+            action_needed: f.action_needed || null,
             lastDeadlineNudgeOn: null,
         });
     }
