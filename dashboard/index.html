@@ -3700,6 +3700,53 @@ let payingLoad = null;   // { id, kind, amount, seller, payment }
 
 const payMoney = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ── Advances ───────────────────────────────────────────────────────────────
+// Sellers currently holding unapplied advance money, with a way to add more.
+// Loaded after the deck renders rather than blocking it: this is useful
+// context, not something worth delaying the loads list for.
+async function loadAdvanceStrip() {
+  const el = document.getElementById('advStrip');
+  if (!el) return;
+  let credits = [];
+  try { credits = asArray(await api('/api/advances')); } catch (e) { credits = []; }
+  const btn = `<button id="btnNewAdvance" class="btn" style="font-size:11.5px; padding:6px 12px;">Record advance</button>`;
+  if (!credits.length) {
+    // Still offer the button with nothing outstanding — an advance usually
+    // gets paid BEFORE there is anything on this screen to hang it off.
+    el.innerHTML = `<div style="margin-bottom:18px;">${btn}</div>`;
+  } else {
+    el.innerHTML = `
+      <div style="margin-bottom:20px;">
+        <div style="font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:9px;">
+          Advances held (${credits.length})
+        </div>
+        ${credits.map(c => `
+          <div style="display:flex; align-items:center; gap:10px; padding:9px 13px; margin-bottom:7px;
+                      background:var(--surface-sunken); border:1px solid var(--border-default);
+                      border-left:3px solid var(--status-good, #4ade80); border-radius:var(--radius-sm);
+                      font-family:var(--font-mono); font-size:12px;">
+            <span style="color:var(--text-strong); font-weight:600;">${esc(c.seller)}</span>
+            <span style="flex:1;"></span>
+            <span style="color:var(--status-good, #4ade80); font-weight:700;">${payMoney(c.available)} unapplied</span>
+          </div>`).join('')}
+        <div style="margin-top:9px;">${btn}</div>
+      </div>`;
+  }
+  const b = document.getElementById('btnNewAdvance');
+  if (b) b.addEventListener('click', () => openAdvanceModal(''));
+}
+
+function openAdvanceModal(seller) {
+  $('adv_seller').value = seller || '';
+  $('adv_mode').value = 'Zelle';
+  $('adv_date').value = todayLocalDateStr();
+  $('adv_amount').value = '';
+  $('adv_ref').value = '';
+  $('advErr').textContent = '';
+  $('advModal').classList.remove('hidden');
+}
+function closeAdvanceModal() { $('advModal').classList.add('hidden'); }
+
 function openPayModal(loadId, kind) {
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
@@ -3720,6 +3767,7 @@ function openPayModal(loadId, kind) {
   $('pay_ref').value = '';
   $('payErr').textContent = '';
   renderPayHistory();
+  renderPayAdvance();
   updatePayPreview();
   $('payModal').classList.remove('hidden');
 }
@@ -3745,6 +3793,58 @@ function updatePayPreview() {
   } else {
     el.innerHTML = `<span style="color:#d95a2b;">This is ${payMoney(-after)} MORE than the load total.</span>`;
   }
+}
+
+// Shows any unapplied advance the seller is holding, with a button to put it
+// against this load. Rendered only when there is credit, so the common case
+// stays a plain two-field form.
+async function renderPayAdvance() {
+  const el = $('payAdvance');
+  if (!el || !payingLoad) return;
+  el.innerHTML = '';
+  if (!payingLoad.seller) return;
+  let credit = null;
+  try { credit = await api('/api/advances?seller=' + encodeURIComponent(payingLoad.seller)); } catch (e) { return; }
+  if (!credit || !credit.available) return;
+  const outstanding = (payingLoad.payment && payingLoad.payment.pending != null)
+    ? payingLoad.payment.pending : payingLoad.amount;
+  el.innerHTML = `
+    <div style="padding:11px 13px; border-radius:var(--radius-sm); background:rgba(74,222,128,.09); border:1px solid rgba(74,222,128,.3);">
+      <div style="font-family:var(--font-mono); font-size:12px; color:var(--status-good, #4ade80); font-weight:700;">
+        ${esc(payingLoad.seller)} is holding ${payMoney(credit.available)} in advance
+      </div>
+      ${credit.advances.map(a => `
+        <div style="display:flex; align-items:center; gap:8px; margin-top:8px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted);">
+          <span>${esc(a.paid_on || '')} · ${esc(a.mode)}</span>
+          <span style="flex:1;"></span>
+          <span>${payMoney(a.remaining)} left</span>
+          <button class="btn btn-apply-adv" data-id="${esc(a.id)}" data-max="${a.remaining}"
+                  style="font-size:10.5px; padding:4px 9px;">Apply</button>
+        </div>`).join('')}
+      <div style="margin-top:7px; font-size:11px; color:var(--text-faint);">
+        Applies the smaller of the advance and what is still owed${outstanding != null ? ` (${payMoney(outstanding)})` : ''}.
+      </div>
+    </div>`;
+  el.querySelectorAll('.btn-apply-adv').forEach(btn => btn.addEventListener('click', async () => {
+    // Never applies more than the load still owes, and never more than the
+    // advance has left — whichever binds first. Over-applying would turn a
+    // settled load into an overpayment out of money meant for another load.
+    const max = parseFloat(btn.dataset.max);
+    const owed = (outstanding == null) ? max : Math.min(max, outstanding);
+    if (!(owed > 0)) { $('payErr').textContent = 'That load has nothing outstanding.'; return; }
+    btn.disabled = true; btn.textContent = 'Applying…';
+    try {
+      await api('/api/advances/apply', { method: 'POST', body: JSON.stringify({
+        load_id: payingLoad.id, load_kind: payingLoad.kind, advance_id: btn.dataset.id,
+        amount: Math.round(owed * 100) / 100,
+      }) });
+      closePayModal();
+      loadTab('loads');
+    } catch (e) {
+      $('payErr').textContent = e.message || 'Could not apply that advance.';
+      btn.disabled = false; btn.textContent = 'Apply';
+    }
+  }));
 }
 
 function renderPayHistory() {
@@ -4005,6 +4105,10 @@ function renderLoads(loads) {
         </div>
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <!-- Sellers holding unapplied advance money. Above the deck because
+           "who are we in credit with" is a question about the list, not about
+           any one load. Filled after render — see loadAdvanceStrip. -->
+      <div id="advStrip"></div>
       <div id="draftStrip">${draftStripHtml()}</div>
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
@@ -4013,6 +4117,46 @@ function renderLoads(loads) {
          a small, separate modal rather than a section of the load form: a
          payment is recorded against a load that already exists, and mixing it
          into the edit form would mean saving a load to record money. -->
+    <!-- Record an advance: money paid to a seller before there is a load for
+         it. Separate from the Pay modal because there is no load to open that
+         from — which is the whole point of an advance. -->
+    <div id="advModal" class="hidden modal-overlay">
+      <div class="modal-shell" style="max-width:440px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Record advance</div>
+          <button id="btnCloseAdv" class="btn" style="padding:4px 10px;">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted); margin-bottom:14px;">
+            Money paid to a seller before the load exists. It is held as credit against their name and stays there until you apply it to a load.
+          </div>
+          <div class="field"><label>Seller</label><input id="adv_seller" placeholder="Seller name" autocomplete="off"></div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field">
+              <label>Payment mode</label>
+              <select id="adv_mode">
+                <option value="Zelle">Zelle</option>
+                <option value="Wire">Wire</option>
+                <option value="Cash">Cash</option>
+                <option value="Cheque">Cheque</option>
+              </select>
+            </div>
+            <div class="field"><label>Date</label><input id="adv_date" type="date"></div>
+          </div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Amount</label><input id="adv_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+            <div class="field"><label>Reference (optional)</label><input id="adv_ref" placeholder="txn id / cheque no." autocomplete="off"></div>
+          </div>
+          <div style="margin-top:10px;"><span id="advErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
+        </div>
+        <div class="modal-foot">
+          <button id="btnCancelAdv" class="btn">Cancel</button>
+          <button id="btnSaveAdv" class="btn btn-primary">Record advance</button>
+        </div>
+      </div>
+    </div>
+
     <div id="payModal" class="hidden modal-overlay">
       <div class="modal-shell" style="max-width:460px;">
         <div class="modal-stripe"></div>
@@ -4042,6 +4186,11 @@ function renderLoads(loads) {
                what it leaves outstanding. The whole point of the feature is
                the pending figure, so it should be visible while deciding what
                to pay, not only afterwards. -->
+          <!-- Advance credit this seller is holding. Only rendered when there
+               IS some, so the ordinary case stays a two-field form. Applying
+               is an explicit click — per Apsara, money must not move onto a
+               load without her deciding. -->
+          <div id="payAdvance" style="margin-top:14px;"></div>
           <div id="payPreview" style="margin-top:14px; font-family:var(--font-mono); font-size:12px;"></div>
           <div id="payHistory" style="margin-top:16px;"></div>
           <div style="margin-top:10px;"><span id="payErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
@@ -4172,6 +4321,27 @@ function wireLoadsEvents() {
   // one per keystroke.
   $('loadModal').addEventListener('input', queueLoadDraftSave);
   $('loadModal').addEventListener('change', queueLoadDraftSave);
+  $('btnCloseAdv').addEventListener('click', closeAdvanceModal);
+  $('btnCancelAdv').addEventListener('click', closeAdvanceModal);
+  $('btnSaveAdv').addEventListener('click', async () => {
+    const seller = $('adv_seller').value.trim();
+    const amount = parseFloat($('adv_amount').value);
+    $('advErr').textContent = '';
+    if (!seller) { $('advErr').textContent = 'Which seller was this paid to?'; return; }
+    if (!isFinite(amount) || amount <= 0) { $('advErr').textContent = 'Enter an amount greater than zero.'; return; }
+    const btn = $('btnSaveAdv');
+    btn.disabled = true; btn.textContent = 'Recording…';
+    try {
+      await api('/api/advances', { method: 'POST', body: JSON.stringify({
+        seller, mode: $('adv_mode').value, amount,
+        paid_on: $('adv_date').value || null, reference: $('adv_ref').value.trim() || null,
+      }) });
+      closeAdvanceModal();
+      loadTab('loads');
+    } catch (e) {
+      $('advErr').textContent = e.message || 'Could not record that advance.';
+    } finally { btn.disabled = false; btn.textContent = 'Record advance'; }
+  });
   $('btnClosePay').addEventListener('click', closePayModal);
   $('btnCancelPay').addEventListener('click', closePayModal);
   $('pay_amount').addEventListener('input', updatePayPreview);
@@ -4452,6 +4622,8 @@ function wireLoadsEvents() {
   // server round trip and without losing focus on the search box itself.
   // Draft strip actions. Delegated on the strip itself so a re-render (which
   // happens after every resume or delete) does not leave dead handlers behind.
+  loadAdvanceStrip();
+
   const strip = $('draftStrip');
   if (strip) {
     strip.addEventListener('click', async (ev) => {
