@@ -239,6 +239,14 @@ body { overflow-y:auto; }
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
+      /* Payment badge. Shown only once something has been paid — an "UNPAID"
+         tag on every load is noise. Amber carries the pending figure, which
+         is the number anyone looking at a part-paid load actually wants. */
+      .pay-badge { display:inline-block; margin-top:10px; padding:4px 10px; border-radius:999px;
+        font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.04em; }
+      .pay-full { background:rgba(74,222,128,.13); color:var(--status-good, #4ade80); border:1px solid rgba(74,222,128,.35); }
+      .pay-part { background:rgba(217,154,43,.13); color:var(--status-warning, #d99a2b); border:1px solid rgba(217,154,43,.4); }
+      .pay-over { background:rgba(217,90,43,.13); color:#d95a2b; border:1px solid rgba(217,90,43,.4); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
@@ -1027,6 +1035,97 @@ function updateItemTotals() {
     <span></span>
     <span class="tl-num tl-strong" data-label="Amount">${amt ? fmtAmount(r2(amt)) : ''}</span>
     <span></span>`;
+}
+
+
+// ── Payments (mirrors dashboard/index.html) ────────────────────────────────
+// Same helper, same wording, same rules. The website copy is the reference;
+// if these two ever disagree about what "part paid" means, the number on a
+// phone and the number on a laptop stop matching for the same load.
+function paymentBadgeHtml(l) {
+  const p = l && l.payment;
+  if (!p || !p.paid) return '';
+  const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (p.status === 'paid') {
+    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}</span>`;
+  }
+  if (p.status === 'overpaid') {
+    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}</span>`;
+  }
+  if (p.status === 'paid_amount_unknown') {
+    return `<span class="pay-badge pay-part">PAID ${money(p.paid)} · load has no price yet</span>`;
+  }
+  return `<span class="pay-badge pay-part">PART PAID ${money(p.paid)} · ${money(p.pending)} pending</span>`;
+}
+
+let payingLoad = null;
+const payMoney = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function openPayModal(loadId, kind) {
+  const l = loadsCache.find(x => x.id === loadId);
+  if (!l) return;
+  payingLoad = { id: l.id, kind: kind || l._kind || 'purchase', amount: l.amount, seller: l.seller, payment: l.payment };
+  const p = l.payment || { paid: 0, pending: l.amount, status: 'unpaid' };
+  const who = l.seller ? ` · ${l.seller}` : '';
+  $('payLoadSummary').innerHTML = l.amount == null
+    // A load with no priced items has nothing to settle against. Say so
+    // plainly rather than showing "0.00 pending", which reads as "nothing
+    // owed" when it actually means "we don't know yet".
+    ? `Load ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This load has no price yet, so there is no balance to work against.</span>`
+    : `Load ${esc(l.id)}${esc(who)}<br>Load total ${payMoney(l.amount)} · already paid ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
+  $('pay_mode').value = 'Zelle';
+  $('pay_date').value = todayLocalDateStr();
+  // Pre-filled with what is actually outstanding, since settling the balance
+  // is the common case — still fully editable for a part payment.
+  $('pay_amount').value = (p.pending != null && p.pending > 0) ? p.pending : '';
+  $('pay_ref').value = '';
+  $('payErr').textContent = '';
+  renderPayHistory();
+  updatePayPreview();
+  $('payModal').classList.remove('hidden');
+}
+
+function closePayModal() { $('payModal').classList.add('hidden'); payingLoad = null; }
+
+// Says what this payment leaves outstanding, before it is recorded — the
+// pending figure is the point of the feature, so it belongs where the decision
+// is made rather than only afterwards.
+function updatePayPreview() {
+  const el = $('payPreview');
+  if (!el || !payingLoad) return;
+  const amt = parseFloat($('pay_amount').value);
+  if (!isFinite(amt) || amt <= 0) { el.innerHTML = ''; return; }
+  if (payingLoad.amount == null) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Will record ${payMoney(amt)}. No load total, so no balance can be shown.</span>`;
+    return;
+  }
+  const alreadyPaid = (payingLoad.payment && payingLoad.payment.paid) || 0;
+  const after = Math.round((payingLoad.amount - alreadyPaid - amt) * 100) / 100;
+  if (Math.abs(after) < 0.005) {
+    el.innerHTML = `<span style="color:var(--status-good, #4ade80);">This settles the load in full.</span>`;
+  } else if (after > 0) {
+    el.innerHTML = `<span style="color:var(--status-warning, #d99a2b);">PARTIAL — ${payMoney(after)} will still be pending.</span>`;
+  } else {
+    el.innerHTML = `<span style="color:#d95a2b;">This is ${payMoney(-after)} MORE than the load total.</span>`;
+  }
+}
+
+function renderPayHistory() {
+  const el = $('payHistory');
+  if (!el || !payingLoad) return;
+  const rows = (payingLoad.payment && payingLoad.payment.payments) || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div style="font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Already recorded</div>
+    ${rows.map(r => `
+      <div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:12px;">
+        <span style="color:var(--text-muted);">${esc(r.paid_on || '')}</span>
+        <span>${esc(r.mode)}</span>
+        ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
+        <span style="flex:1;"></span>
+        <span style="font-weight:700;">${payMoney(r.amount)}</span>
+        <button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>
+      </div>`).join('')}`;
 }
 
 function renderItemRows() {
@@ -2488,6 +2587,7 @@ function loadCardHtml(l) {
         <span>Tare weight: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
       </div>
+      ${paymentBadgeHtml(l)}
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
@@ -2553,6 +2653,9 @@ function loadCardHtml(l) {
              than deleted, since removing a route is a breaking API
              change and nothing in this app calls it anymore anyway. -->
         <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+        <!-- Pay, mirroring the website (2026-08-28). Sits with Edit/Delete
+             because it is something done TO an existing load. -->
+        <button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Pay</button>
       </div>
     </div>`;
 }
@@ -2658,6 +2761,14 @@ function renderLoads(loads) {
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
+      /* Payment badge. Shown only once something has been paid — an "UNPAID"
+         tag on every load is noise. Amber carries the pending figure, which
+         is the number anyone looking at a part-paid load actually wants. */
+      .pay-badge { display:inline-block; margin-top:10px; padding:4px 10px; border-radius:999px;
+        font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.04em; }
+      .pay-full { background:rgba(74,222,128,.13); color:var(--status-good, #4ade80); border:1px solid rgba(74,222,128,.35); }
+      .pay-part { background:rgba(217,154,43,.13); color:var(--status-warning, #d99a2b); border:1px solid rgba(217,154,43,.4); }
+      .pay-over { background:rgba(217,90,43,.13); color:#d95a2b; border:1px solid rgba(217,90,43,.4); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
@@ -2839,6 +2950,47 @@ function renderLoads(loads) {
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
 
+    <!-- Record a payment against a load. Mirrors the website's modal exactly,
+         per Apsara 2026-08-28 ("pay option not there in app"). Separate from
+         the load form on purpose: a payment is recorded against a load that
+         already exists, and folding it into the edit form would mean saving a
+         load in order to record money. -->
+    <div id="payModal" class="hidden modal-overlay">
+      <div class="modal-shell" style="max-width:460px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>
+          <button id="btnClosePay" class="btn" style="padding:4px 10px;">✕</button>
+        </div>
+        <div class="modal-body">
+          <div id="payLoadSummary" style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); margin-bottom:16px;"></div>
+          <div class="ld-grid-2">
+            <div class="field">
+              <label>Payment mode</label>
+              <select id="pay_mode">
+                <option value="Zelle">Zelle</option>
+                <option value="Wire">Wire</option>
+                <option value="Cash">Cash</option>
+                <option value="Cheque">Cheque</option>
+              </select>
+            </div>
+            <div class="field"><label>Date</label><input id="pay_date" type="date"></div>
+          </div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+            <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
+          </div>
+          <div id="payPreview" style="margin-top:14px; font-family:var(--font-mono); font-size:12px;"></div>
+          <div id="payHistory" style="margin-top:16px;"></div>
+          <div style="margin-top:10px;"><span id="payErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
+        </div>
+        <div class="modal-foot">
+          <button id="btnCancelPay" class="btn">Cancel</button>
+          <button id="btnSavePay" class="btn btn-primary">Record payment</button>
+        </div>
+      </div>
+    </div>
+
     <div id="loadModal" class="hidden modal-overlay">
       <div class="modal-shell">
         <div class="modal-stripe"></div>
@@ -2931,6 +3083,44 @@ function wireLoadsEvents() {
     $('loadModal').classList.remove('hidden');
   });
   const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+  $('btnClosePay').addEventListener('click', closePayModal);
+  $('btnCancelPay').addEventListener('click', closePayModal);
+  $('pay_amount').addEventListener('input', updatePayPreview);
+  // Delegated: the history list re-renders after every change, so per-button
+  // handlers would be lost.
+  $('payHistory').addEventListener('click', async (ev) => {
+    const del = ev.target.closest('.btn-del-pay');
+    if (!del) return;
+    if (!confirm('Delete this payment?\n\nThe load balance will go back up by that amount.')) return;
+    try {
+      await api(`/api/payments/${encodeURIComponent(del.dataset.id)}`, { method: 'DELETE' });
+      closePayModal();
+      loadTab('loads');
+    } catch (e) { $('payErr').textContent = e.message || 'Could not delete that payment.'; }
+  });
+  $('btnSavePay').addEventListener('click', async () => {
+    if (!payingLoad) return;
+    const amount = parseFloat($('pay_amount').value);
+    $('payErr').textContent = '';
+    if (!isFinite(amount) || amount <= 0) { $('payErr').textContent = 'Enter an amount greater than zero.'; return; }
+    const btn = $('btnSavePay');
+    btn.disabled = true; btn.textContent = 'Recording…';
+    try {
+      await api('/api/payments', { method: 'POST', body: JSON.stringify({
+        load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
+        amount, paid_on: $('pay_date').value || null, reference: $('pay_ref').value.trim() || null,
+      }) });
+      closePayModal();
+      // Reloads rather than patching the card: the badge and the pending
+      // figure come from the server's arithmetic, and recomputing either here
+      // would be a second implementation waiting to disagree with the first.
+      loadTab('loads');
+    } catch (e) {
+      $('payErr').textContent = e.message || 'Could not record that payment.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Record payment';
+    }
+  });
   $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
   $('btnCancelLoad').addEventListener('click', closeLoadModal);
 
@@ -3198,6 +3388,11 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = originalLabel;
     }
   }));
+  document.querySelectorAll('.btn-pay-load').forEach(btn => btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openPayModal(btn.dataset.id, btn.dataset.kind);
+  }));
+
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);

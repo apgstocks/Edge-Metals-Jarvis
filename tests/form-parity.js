@@ -86,5 +86,34 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   ck('the widget never touches the action-taking bot route', !/bot\/command/.test(a));
 }
 
+
+// ── payments exist on BOTH, and agree ──────────────────────────────────────
+{
+  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  for (const [label, src] of [['website', web], ['app', app]]) {
+    ck(`${label}: has a Pay button on the load card`, /btn-pay-load/.test(src));
+    ck(`${label}: has the payment modal`, /id="payModal"/.test(src));
+    ck(`${label}: offers all four modes`,
+       ['Zelle','Wire','Cash','Cheque'].every(m => new RegExp(`value="${m}"`).test(src)));
+    ck(`${label}: shows a payment badge on the card`, /paymentBadgeHtml\(l\)/.test(src));
+    ck(`${label}: previews the pending amount before saving`, /function updatePayPreview/.test(src));
+    ck(`${label}: reloads after saving rather than recomputing the balance locally`,
+       /loadTab\('loads'\)/.test(src));
+  }
+  // The badge wording decides what a number MEANS. If the two drift, the same
+  // load reads differently on a phone and a laptop.
+  const grabFn = (src, name) => {
+    const i = src.indexOf('function '+name+'('); if (i<0) return null;
+    let d=0, j=src.indexOf('{', i);
+    for (let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} }
+  };
+  const a = grabFn(web,'paymentBadgeHtml'), b = grabFn(app,'paymentBadgeHtml');
+  const strip = (t) => String(t).replace(/\s+/g,' ').trim();
+  ck('the payment badge logic is identical in both', !!a && strip(a)===strip(b));
+  const pa = grabFn(web,'updatePayPreview'), pb = grabFn(app,'updatePayPreview');
+  ck('the pending preview logic is identical in both', !!pa && strip(pa)===strip(pb));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
