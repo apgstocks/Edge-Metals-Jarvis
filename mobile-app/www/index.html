@@ -1687,7 +1687,8 @@ function layoutScanBox() {
 // Deliberately conservative about spend: a cheap on-device check runs first
 // and only frames that actually contain a bright red display in the box are
 // ever uploaded, so pointing the phone at the ground costs nothing.
-let scanLive = { on: false, timer: null, tally: new Map(), sent: 0, inFlight: 0, locked: false, blanks: 0, pace: null };
+let scanLive = { on: false, timer: null, tally: new Map(), shots: new Map(), sent: 0, inFlight: 0, locked: false,
+                 blanks: 0, pace: null, verifySent: false, verifyDone: false, verify: null };
 const SCAN_LIVE = {
     // NO CEILING AND NO GIVE-UP, per Apsara 2026-08-27 ("time is something i
     // can't compromise. i don't want hard cut"). An earlier version stopped
@@ -1770,6 +1771,10 @@ function stopScanLive() {
     scanLive.on = false;
     if (scanLive.timer) { clearInterval(scanLive.timer); scanLive.timer = null; }
     scanLive.tally = new Map();
+    scanLive.shots = new Map();
+    scanLive.verifySent = false;
+    scanLive.verifyDone = false;
+    scanLive.verify = null;
     scanLive.sent = 0;
     scanLive.inFlight = 0;
     scanLive.locked = false;
@@ -1806,6 +1811,40 @@ async function doScanLiveTick() {
         });
         const w = result && result.weight != null ? result.weight : null;
         if (w != null) {
+            // Keep this frame's pixels. Two reasons, both mattering in a yard:
+            // the winning frame gets attached to the load as evidence (see the
+            // lock below), and the verification pass re-reads THIS exact image
+            // rather than a later one, so it is checking the frame the number
+            // actually came from.
+            if (!scanLive.shots.has(w)) scanLive.shots.set(w, shot.base64);
+            // SECOND-ENGINE VERIFICATION.
+            //
+            // Live frames are read on the fast path, which is Cloud Vision
+            // plus a rendering cross-check. Fast, but ONE engine. Frames
+            // agreeing with each other does not protect against a misread
+            // that is systematic — a bloomed 0 that reads as 8 reads as 8 in
+            // every frame, and two of those agreeing is two wrong answers, not
+            // corroboration. Measured proof that this is not theoretical: the
+            // known-bad capture returned the same wrong 4896 on two separate
+            // frames.
+            //
+            // So before any number is published, it must ALSO survive a full
+            // read that includes Gemini — a genuinely independent engine that
+            // fails in different ways. Started as soon as there is a candidate
+            // and run in PARALLEL with continued scanning, so it costs the
+            // operator almost nothing: by the time two frames agree the
+            // verification is usually already back.
+            if (!scanLive.verifySent) {
+                scanLive.verifySent = true;
+                api('/api/vision/read-weight', {
+                    method: 'POST',
+                    body: JSON.stringify({ image_base64: shot.base64, mime_type: 'image/jpeg', pre_cropped: true }),
+                }).then((v) => {
+                    scanLive.verify = (v && v.weight != null && !v.ambiguous) ? v.weight : null;
+                    scanLive.verifyDone = true;
+                    console.log(`[scanner] second-engine verification: ${scanLive.verify}`);
+                }).catch(() => { scanLive.verifyDone = true; scanLive.verify = null; });
+            }
             // Clean and flagged agreement are counted SEPARATELY, and only
             // clean agreement can lock.
             //
@@ -1830,6 +1869,15 @@ async function doScanLiveTick() {
                 const { row, roleKey } = scanTarget;
                 const statusEl = row.querySelector('.ld-item-status');
                 const field = row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare');
+                // Same evidence rule as the clean lock — a flagged number
+                // needs its photo MORE, not less, since someone will have to
+                // check it.
+                const fIdx = parseInt(row.dataset.idx, 10);
+                const fShot = scanLive.shots.get(w);
+                syncItemsFromDom();
+                if (fShot && currentLoadItems[fIdx]) {
+                    currentLoadItems[fIdx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64: fShot, mime: 'image/jpeg' };
+                }
                 if (field) { field.value = w; recomputeRowTotals(row); syncItemsFromDom(); }
                 if (statusEl) {
                     statusEl.style.color = 'var(--status-warn, #d9a441)';
@@ -1841,6 +1889,29 @@ async function doScanLiveTick() {
                 setTimeout(() => { stopScanLive(); closeScanner(); }, 900);
                 return;
             }
+            // Frames agree, but nothing is published until the independent
+            // engine has confirmed the SAME number. If verification is still
+            // in flight, keep scanning and say so — this is a fraction of a
+            // second, and it is the difference between "two looks agreed" and
+            // "two different methods agreed".
+            if (n >= SCAN_LIVE.NEEDED && !scanLive.verifyDone) {
+                scanLiveStatus(`${w} — confirming…`, 'work');
+                return;
+            }
+            if (n >= SCAN_LIVE.NEEDED && scanLive.verify !== w) {
+                // The second engine read something else, or could not read it
+                // confidently. Two frames agreeing is NOT enough on its own.
+                // Throw away the tally and start over rather than publish a
+                // number that only one method believes.
+                console.warn(`[scanner] ${n} frames read ${w} but verification said ${scanLive.verify} — discarding and rescanning`);
+                scanLive.tally = new Map();
+                scanLive.shots = new Map();
+                scanLive.verifySent = false;
+                scanLive.verifyDone = false;
+                scanLive.verify = null;
+                scanLiveStatus('Checking again — hold steady…', 'work');
+                return;
+            }
             if (n >= SCAN_LIVE.NEEDED) {
                 // Locked. Two independent frames of a static display agreeing
                 // is stronger evidence than anything obtainable from one.
@@ -1849,6 +1920,21 @@ async function doScanLiveTick() {
                 const { row, roleKey } = scanTarget;
                 const statusEl = row.querySelector('.ld-item-status');
                 const field = row.querySelector(roleKey === 'gross' ? '.ld-item-gross' : '.ld-item-tare');
+                // ATTACH THE PHOTO THE NUMBER CAME FROM.
+                //
+                // This was missing and it was a genuine hole: the shutter path
+                // attaches its capture to the item, but the live path set the
+                // field directly and kept nothing. A weight with no photo
+                // behind it cannot be checked afterwards, and in a yard nobody
+                // is checking at the time — the photo IS the record. Now the
+                // winning frame is stored the same way a shutter capture is,
+                // so every weight on every ticket has its display image.
+                const idx = parseInt(row.dataset.idx, 10);
+                const winningShot = scanLive.shots.get(w);
+                syncItemsFromDom();
+                if (winningShot && currentLoadItems[idx]) {
+                    currentLoadItems[idx][roleKey === 'gross' ? 'grossPhoto' : 'tarePhoto'] = { base64: winningShot, mime: 'image/jpeg' };
+                }
                 if (field) { field.value = w; recomputeRowTotals(row); syncItemsFromDom(); }
                 if (statusEl) {
                     statusEl.style.color = '';
