@@ -259,11 +259,26 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
-        const pdf = await page.pdf({
+        // One page, per Apsara 2026-08-29 ("pdf should be one page only
+        // always") after an invoice put its entire body on page 1 and only
+        // the declaration and signature on page 2.
+        //
+        // The height is measured in the browser and the scale derived from
+        // it, rather than a fixed factor: every extra item adds a row to the
+        // item table AND to the packing list, so the right scale is different
+        // for a 4-line invoice and a 12-line one. See helpers/pdfFit.js for
+        // why this scales rather than tightening the layout — the fixed mm
+        // heights in this template ARE the layout she asked to be reproduced
+        // exactly.
+        //
+        // @page here is 210mm x 297mm and preferCSSPageSize honours it, so
+        // A4 is the height to fit to.
+        const { pdfFittedToOnePage } = require('./pdfFit');
+        const pdf = await pdfFittedToOnePage(page, {
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        });
+        }, { pageHeightMm: 297, label: `invoice ${data && data.inv_no ? data.inv_no : ''}`.trim() });
         // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
         // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
         return Buffer.from(pdf);

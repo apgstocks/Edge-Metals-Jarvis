@@ -256,11 +256,17 @@ async function generateProformaDc2Pdf(data, opts = {}) {
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
-        const pdf = await page.pdf({
+        // One page, same rule as the invoice (Apsara 2026-08-29). This
+        // template's @page is 816x1500px rather than A4, and 1500px is
+        // generous, so in practice this never scales — it is here so a
+        // proforma with an unusually long container list cannot start
+        // spilling a near-empty second page the way the invoice did.
+        const { pdfFittedToOnePage } = require('./pdfFit');
+        const pdf = await pdfFittedToOnePage(page, {
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        });
+        }, { pageHeightPx: 1500, label: `proforma ${data && data.inv_no ? data.inv_no : ''}`.trim() });
         // puppeteer resolves page.pdf() with a Uint8Array, not a Node
         // Buffer — Buffer.isBuffer(Uint8Array) is false, so passing it
         // straight to Express's res.send() gets JSON-stringified byte-by-
