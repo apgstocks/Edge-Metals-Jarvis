@@ -3458,13 +3458,17 @@ function applyLoadModalMode(mode) {
   // working on the same element ids.
   if ($('ld_party_label')) $('ld_party_label').textContent = sale ? 'Buyer' : 'Seller';
   if ($('ld_party_addr_label')) $('ld_party_addr_label').textContent = sale ? 'Buyer address' : 'Seller address';
-  if ($('ld_fixed_label')) $('ld_fixed_label').textContent = sale ? 'Seller' : 'Buyer';
   if ($('ld_seller')) $('ld_seller').placeholder = sale ? 'Buyer name' : 'Seller name';
   // Phone is a purchase-side convenience (the "send ticket to seller" button)
   // and has no meaning on a sale — hidden rather than left to collect a
   // number nothing will ever use.
   const phoneWrap = $('ld_seller_phone') && $('ld_seller_phone').closest('.field');
   if (phoneWrap) phoneWrap.style.display = sale ? 'none' : '';
+  // Phone now shares a row with the address, so hiding it on a sale would
+  // leave the address in a half-width column with a gap beside it. Collapse
+  // the row to one column so the address simply takes the space.
+  const row2 = $('ld_party_row2');
+  if (row2) row2.style.gridTemplateColumns = sale ? '1fr' : '';
 }
 
 function resetLoadModal(mode) {
@@ -3476,7 +3480,6 @@ function resetLoadModal(mode) {
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
-  if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
   applyLoadModalMode(mode);
   renderItemRows();
@@ -3519,7 +3522,6 @@ function openEditLoadModal(load) {
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
   if ($('ld_date'))            $('ld_date').value            = load.date || '';
-  if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
@@ -3920,22 +3922,33 @@ function renderLoads(loads) {
             <button id="btnRestoreDraft" class="btn" style="padding:6px 12px; font-size:12px;">Restore</button>
             <button id="btnDiscardDraft" class="btn" style="padding:6px 12px; font-size:12px;">Discard</button>
           </div>
+          <!-- Buyer field removed 2026-08-28 per Apsara: "by default buyer is
+               Edge Trading, hence remove that from form". It was disabled and
+               always showed the same constant, so it occupied half a row to
+               tell her something she already knew. Nothing downstream is
+               affected — the save payload has always sent BUYER_FIXED_NAME
+               directly rather than reading this input, so the field was
+               decorative. On a SALE it was showing "Edge Trading" as the
+               seller, which is equally implied.
+
+               Layout is now Date | Seller, then Address | Phone, so the
+               counterparty leads instead of sitting on the second row. -->
           <div class="ld-grid-2">
             <div class="field"><label>Date</label><input id="ld_date" type="date" style="max-width:170px;"></div>
-            <div class="field"><label id="ld_fixed_label">Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
-          </div>
-          <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field" style="position:relative;">
               <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
-          <!-- Optional — per Apsara 2026-08-17. Only used to build the
-               WhatsApp chat id for the "Send to seller" button once a PDF
-               exists; not required to save a load. -->
-          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
+          <div class="ld-grid-2" id="ld_party_row2" style="margin-top:14px;">
+            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <div class="field"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
+          </div>
+          <!-- Phone moved up beside the address (2026-08-28). Optional, per
+               Apsara 2026-08-17: only used to build the WhatsApp chat id for
+               the "Send to seller" button once a PDF exists; never required
+               to save a load. -->
           <!-- "Load description" removed 2026-08-28 per Apsara. Every item row
                already carries its own description, so this was a second,
                vaguer name for the same load and one more box to tab through.
