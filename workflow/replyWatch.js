@@ -156,7 +156,7 @@ try {
         // edgemetals". Octavio's question was addressed to AISHA. Nobody at
         // Edge Metals was asked anything - Apsara is a bystander on the thread
         // - and the digest still filed it under "emails waiting on you".
-        waiting_on: z.enum(['her', 'them', 'someone_else', 'nobody']).optional().default('her'),
+        waiting_on: z.enum(['her', 'them', 'colleague', 'someone_else', 'nobody']).optional().default('her'),
         // Who the question is actually aimed at, when it is not Edge Metals.
         // Display name preferred; whatever the To header carries otherwise.
         asked_of: z.string().nullable().optional().default(null),
@@ -1024,9 +1024,38 @@ function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHe
     // Sender at the company domain = this is our own outbound mail.
     const fromAddrs = fromHeader ? parseAddressList(String(fromHeader)) : [];
     const fromInternal = fromAddrs.length > 0 && fromAddrs.every(atCompany);
+
+    // ── THE DISTINCTION THIS FUNCTION WAS MISSING (2026-08-28) ─────────────
+    // Apsara, on an item reading "Rajkumar sends a draft Bill of Lading ... for
+    // your review / -> Review and approve ... / (you are only copied in)":
+    //
+    //     "If its not pointing to any of edgemetals worker, why is it showing?"
+    //
+    // The item contradicted itself, and the cause is that this function asked
+    // ONE question — is APSARA on the To line — and answered "no" for two
+    // situations that are nothing alike:
+    //
+    //   A COLLEAGUE was asked (bose@, accounting@ — anyone at edgemetals.com).
+    //       The company IS on the hook. She owns the company. Telling her she
+    //       is "only copied in" on her own firm's obligation is wrong, and
+    //       this watcher reads BOSE'S mailbox, so it is the COMMON case.
+    //
+    //   AN OUTSIDER was asked, with NOBODY from Edge Metals on the To line.
+    //       She is a spectator on somebody else's conversation. That is the
+    //       one she is asking about, and the honest answer to "why is it
+    //       showing" is that it should not be.
+    const colleagueTo = to.find((a) => atCompany(a) && !isMine(a)) || null;
+    const label = (addr) => addr
+        ? cleanLabel(String(toHeader).split(',').find((p) => p.includes(addr)) || addr)
+        : null;
     return {
         inTo, inCc, fromInternal,
-        toLabel: other ? cleanLabel(String(toHeader).split(',').find((p) => p.includes(other)) || other) : null,
+        // Somebody at the company, but not her.
+        colleagueInTo: !inTo && !!colleagueTo,
+        colleagueLabel: label(colleagueTo),
+        // Nobody at the company is on the To line at all.
+        outsiderOnly: !inTo && !colleagueTo,
+        toLabel: label(other),
     };
 }
 
@@ -1060,8 +1089,20 @@ const isOwedItem = (a) => !!a && a.waiting_on === 'them'
 // thing. Live case that forced the second half: "Yurim Cha attached
 // surrendered HBL GLTOEH27580" — a DELIVERY, nothing asked of anyone, which
 // took a numbered slot purely by being off the To line.
-const isBystanderItem = (a) => !!a && a.waiting_on === 'someone_else'
-    && a.confidence >= MIN_CONFIDENCE && !!a.asked_of && !!a.asked_for;
+// A COLLEAGUE was asked. Surfaced: it is the company's obligation and she
+// runs the company. Needs a named thing, so a colleague receiving a delivery
+// is not an item.
+const isColleagueItem = (a) => !!a && a.waiting_on === 'colleague'
+    && a.confidence >= MIN_CONFIDENCE && !!a.asked_for;
+
+// An OUTSIDER was asked, with nobody from Edge Metals on the To line. NOT
+// surfaced — this is the case Apsara asked about directly. She is a spectator
+// on somebody else's conversation, and a queue she cannot act on is the same
+// noise problem in a different costume.
+//
+// Kept as a function rather than deleted so the decision is visible and one
+// edit away, and so the log can say how much it is suppressing.
+const isBystanderItem = () => false;
 
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
@@ -1074,7 +1115,7 @@ async function assess(email) {
     // Direction decides which grounding signal applies. A sender who OWES her
     // something never asks for it in their own words, so checking their quote
     // against REQUEST_SIGNAL would null out every honest progress report.
-    let waiting_on = ['her', 'them', 'someone_else', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
+    let waiting_on = ['her', 'them', 'colleague', 'someone_else', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
     let fromInternal = false;
     let asked_of = res.asked_of ? String(res.asked_of).trim() : null;
 
@@ -1112,6 +1153,11 @@ async function assess(email) {
             // it is ZIMEX who owes the shipping instructions. asked_of carries
             // the party on the To line so the digest can name them.
             asked_of = addr.toLabel || null;
+        } else if (!addr.unknown && addr.colleagueInTo) {
+            // Her company was asked; a colleague owns it. Shown, and NEVER
+            // with "you are only copied in" — it is her firm's obligation.
+            waiting_on = 'colleague';
+            asked_of = addr.colleagueLabel || cleanLabel(asked_of);
         } else if (!addr.unknown && !addr.inTo) {
             waiting_on = 'someone_else';
             // The model's name only if the header could not give one: a
@@ -1161,10 +1207,16 @@ async function assess(email) {
 
     return {
         waiting_on,
-        action_needed,
+        // LIVE CONTRADICTION, 2026-08-28: "-> Review and approve Bill of Lading
+        // MEDUADA20500" printed directly above "(you are only copied in)". The
+        // prompt says to return null when it is not hers; the model returned an
+        // action anyway. An instruction is only ever hers to act on when SHE is
+        // the one blocked, or when the move is to chase someone. For anything
+        // owned by a colleague or an outsider, the action line is a lie.
+        action_needed: (waiting_on === 'her' || waiting_on === 'them') ? action_needed : null,
         // Kept for 'them' as well as 'someone_else' — for an email our own
         // team sent, it names the counterparty who owes the answer.
-        asked_of: (waiting_on === 'someone_else' || waiting_on === 'them') ? asked_of : null,
+        asked_of: (waiting_on === 'someone_else' || waiting_on === 'them' || waiting_on === 'colleague') ? asked_of : null,
         key_figures,
         // Coupled in CODE, not left to the model. Same principle as
         // applyDeadlineUrgency below: the judgement ("who is blocked here")
@@ -1773,8 +1825,9 @@ function buildDigest(matters, emailCount) {
     const owed = matters.filter((f) => !f.needs_reply && f.waiting_on === 'them');
     // Questions aimed at a third party. Shown, never counted as hers.
     const elsewhere = matters.filter((f) => !f.needs_reply && f.waiting_on === 'someone_else');
-    const orders = matters.filter((f) => !f.needs_reply && !owed.includes(f) && !elsewhere.includes(f) && f.is_order);
-    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !orders.includes(f));
+    const colleague = matters.filter((f) => !f.needs_reply && f.waiting_on === 'colleague');
+    const orders = matters.filter((f) => !f.needs_reply && !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && f.is_order);
+    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f));
     const orderPhrase = `${orders.length} order${orders.length === 1 ? '' : 's'} came in`;
     const replyPhrase = `${replies.length} email${replies.length === 1 ? '' : 's'} waiting on you`;
     const owedPhrase = `you're waiting on ${owed.length}`;
@@ -1786,6 +1839,7 @@ function buildDigest(matters, emailCount) {
     if (orders.length) phrases.push(orderPhrase);
     if (owed.length) phrases.push(owedPhrase);
     if (elsewhere.length) phrases.push(elsewherePhrase);
+    if (colleague.length) phrases.push(`${colleague.length} your team is handling`);
     let head;
     if (phrases.length === 1 && replies.length && matters.length !== n) {
         head = `${n} emails waiting on you — ${matters.length} thing${matters.length === 1 ? '' : 's'} to deal with:`;
@@ -1846,12 +1900,17 @@ function buildDigest(matters, emailCount) {
         // Three readings of the same slot, chosen by direction. "wants" was
         // the only one that existed and it was wrong two ways out of three.
         const verb = f.waiting_on === 'them' ? 'owes you'
+            : f.waiting_on === 'colleague' ? `asked ${cleanLabel(f.asked_of) || 'the team'} for`
             : f.waiting_on === 'someone_else' ? `asked ${cleanLabel(f.asked_of) || 'someone else'} for`
             : 'wants';
         // On our OWN outbound, the sender is us — so name the counterparty who
         // actually owes the answer rather than crediting it to our own team.
         const who = cleanLabel((f.waiting_on === 'them' && f.asked_of) ? f.asked_of : f.fromName);
-        const tail = f.waiting_on === 'someone_else' ? '   (you are only copied in)' : '';
+        // "(you are only copied in)" is TRUE for an outsider thread and FALSE
+        // for her own company's obligation — which is the contradiction she
+        // read: "for your review / Review and approve / you are only copied in".
+        const tail = f.waiting_on === 'someone_else' ? '   (you are only copied in)'
+            : f.waiting_on === 'colleague' ? '   (your team, not you)' : '';
         // WHAT SHE HAS TO DO comes before who said it. Apsara: "tell in few
         // lines what was needed." The old second line was "Kristal — wants: a
         // rate for LA to Houston" — a NOUN PHRASE for the thing at stake,
@@ -2233,7 +2292,11 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // thing someone is waiting for. A delivery has no asked_for, so it
         // drops out instead of padding the list she is trying to get through.
         const bystander = isBystanderItem(a);
-        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander) {
+        const colleagueItem = isColleagueItem(a);
+        if (a.waiting_on === 'someone_else') {
+            console.log(`[REPLYWATCH] not listing "${String(a.summary || '').slice(0, 60)}" — nobody at Edge Metals is on the To line`);
+        }
+        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem) {
             recordSenderEvent(store, from, 'flagged');
             flagged.push({
                 // replyTo honours the Reply-To header when present — see
@@ -2637,7 +2700,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, isOwedItem, isBystanderItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
