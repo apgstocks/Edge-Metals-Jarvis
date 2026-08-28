@@ -1395,25 +1395,30 @@ function createApi() {
     // buyer pricing — a business-data exposure call Apsara didn't ask for,
     // so this defaults to normal authenticated (manager/team) access only.
     // No photo/Drive/PDF integration (not asked for) — a plain CRUD store.
-    // ── Edge Yard helper bot — READ ONLY ──────────────────────────────────
+    // ── Edge Yard helper bot ──────────────────────────────────────────────
     // Per Apsara 2026-08-28: a bot that knows the yard and answers questions
-    // about the data.
+    // about the data. Extended 2026-08-29 — "it can do anything but within
+    // scope of edge yard" — so it can now also PROPOSE an action.
     //
-    // Kept firmly separate from /api/bot/command, which routes into
+    // Still kept firmly separate from /api/bot/command, which routes into
     // workflow/brain.js and can message truckers, book loads and send WhatsApp
     // for real. Asking "how much do we owe Acme?" must not be one keystroke
-    // away from messaging Acme, so this endpoint has no route into the brain
-    // and nothing it can write. It reads, summarises, and answers.
+    // away from messaging Acme. This endpoint has no route into the brain, and
+    // this route itself still writes NOTHING: the most it returns is a
+    // validated proposal that /api/yard/act below can execute after a human
+    // confirms it. Answering and acting stay two separate requests with a
+    // person in between.
     //
-    // Every figure the bot quotes is computed in helpers/yardBrief.js by the
-    // same code the screens use — the model is explicitly forbidden from doing
-    // arithmetic, because a fluent, confident, slightly-wrong number about
-    // money is the worst failure this could have.
+    // Figures come from helpers/yardBrief.js, computed by the same code the
+    // screens use. The model may reason over them and do its own arithmetic
+    // (her call, 2026-08-29) but is told to prefer the pre-computed exact
+    // figures wherever one fits — a fluent, confident, slightly-wrong number
+    // about money is still the worst failure this could have.
     app.post('/api/yard/ask', async (req, res) => {
         try {
             const { askYard } = require('./helpers/yardAsk');
             const b = req.body || {};
-            const out = await askYard(b.question, { history: b.history, days: b.days });
+            const out = await askYard(b.question, { history: b.history, days: b.days, role: req.role });
             // Transcript, one file per day — per Apsara 2026-08-29. Written
             // AFTER the answer is in hand and deliberately not awaited into the
             // response path: a log that cannot be written must never turn a
@@ -1431,6 +1436,54 @@ function createApi() {
             console.error('[API] yard/ask failed:', e.message);
             res.status(500).json({ ok: false, answer: "Something went wrong answering that." });
         }
+    });
+
+    // ── Confirming an action the assistant proposed ───────────────────────
+    // Per Apsara 2026-08-29: the assistant may act, within the yard, but she
+    // chose propose-then-confirm over direct writes.
+    //
+    // The request carries ONLY an opaque id. No load id, no amount, no mode —
+    // those live server-side in the validated proposal and cannot be edited
+    // between the card being shown and this call. So a tampered page, a replayed
+    // request or a malicious script cannot turn a proposed $12,000 into
+    // $120,000, and cannot invent a write that was never proposed at all.
+    //
+    // Single use and five-minute TTL are enforced in helpers/yardActions.js:
+    // a double-tap must not record the same payment twice.
+    //
+    // NOT wrapped in requireAdmin, on purpose. The staff prefix gate above
+    // already blocks staff from /api/yard/*, so the callers here are exactly
+    // the roles that can already press Pay and Edit in the UI. The invariant
+    // worth holding is that the assistant can never do MORE than the person
+    // asking could do by hand — and an admin-only gate here would instead make
+    // it do LESS, giving a signed-in user a Pay button that works and an
+    // assistant that refuses, which reads as broken rather than as secure.
+    app.post('/api/yard/act', async (req, res) => {
+        try {
+            const { confirmAction } = require('./helpers/yardActions');
+            const out = await confirmAction((req.body || {}).id, { role: req.role });
+            // Logged into the same daily transcript as the conversation, so the
+            // record of "what the assistant did" sits next to the words that
+            // led to it. Auditing a payment means seeing both.
+            try {
+                require('./helpers/yardChatLog').logExchange({
+                    question: `[CONFIRMED ACTION] ${out.kind}`, answer: out.summary,
+                    role: req.role || null, source: (req.body || {}).source || null,
+                });
+            } catch (e) { /* never let logging break the action */ }
+            res.json(out);
+        } catch (e) {
+            // 400, not 500: an expired or reused confirmation is a normal
+            // outcome the person needs to read, not a server fault.
+            res.status(400).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/yard/cancel-action', (req, res) => {
+        try {
+            const { cancelAction } = require('./helpers/yardActions');
+            res.json({ ok: cancelAction((req.body || {}).id) });
+        } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
     });
 
     // The transcripts. Admin-only like the rest of this file's routes, since a

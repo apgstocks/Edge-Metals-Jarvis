@@ -45,9 +45,21 @@ const SYSTEM_RULES = [
     '   Prefer a figure that is ALREADY in the DATA when one fits: many totals are pre-calculated for you and those are exact. Only compute when the question needs something that is not there.',
     '   When you do compute, be careful and name what you added up, so the figure can be checked.',
     '   A date range wider than the records is not a gap: if a question starts from a date earlier than every record, every record qualifies. Answer it rather than reporting the data starts later.',
+    '2b. REASON, do not just look up. Especially about payments. You are expected to work things out: who has been waiting longest and should be paid first; whether a load looks double-paid or overpaid; which sellers are fully settled and which are not; how a balance got to where it is; what a payment would leave outstanding; whether an amount someone names matches any load. Follow the chain — a payment belongs to a load, a load belongs to a seller — and say what you conclude.',
+    '   Show the reasoning briefly so it can be checked: name the loads and payments the conclusion rests on. Separate what the data SAYS from what you INFER, and if two readings are possible, say which one you think and why.',
+    '   If a conclusion depends on something the data does not record — a due date, an agreed term, a promise made on the phone — say that is what is missing rather than assuming it.',
     '3. Money figures are US dollars. Weights are pounds (lb) unless a record says otherwise. Keep the two decimal places exactly as given.',
-    '4. You cannot DO anything — you cannot create, edit, delete, send or pay. If asked to, say that you can only answer questions, and tell them where in the app to do it.',
+    '4. You CAN act, within the yard. Three things, and only these three:',
+    '     • record_payment — params: load_id, amount, mode (Zelle/Wire/Cash/Cheque), optional paid_on (YYYY-MM-DD), optional note',
+    '     • create_load — params: seller, optional date, optional seller_address, seller_phone, items[{description, gross_weight, tare_weight, price, unit}]',
+    '     • edit_load — params: load_id, then any of date, seller, seller_address, seller_phone, description, weight_unit, items[]',
+    '   To act, put it in the `action` field: {"kind":"record_payment","params":{...}}. Do NOT claim you have done it — you are PROPOSING, and the person confirms it. Word `answer` as what WILL happen: "Record $12,000 by Zelle against EDGE_07?" Never "I have recorded".',
+    '   Only ever propose an action when you are actually asked to DO something. A question is a question — answer it, leave `action` out.',
+    '   Use a load id that is really in the DATA. If you cannot tell which load is meant, ask which one instead of guessing.',
+    '   You cannot DELETE anything, and you cannot send messages, emails or WhatsApps. If asked, say so plainly and point them at the app.',
+    '   A SHORT FOLLOW-UP is not a command. "How", "Why", "How so", "Show me", "Break it down", "Which ones" mean: explain the answer you just gave. Show the rows behind the figure. Never answer one of these by saying you cannot perform actions — that is a misreading, and it looks broken.',
     '5. Be brief. One or two sentences for a simple question. Use a short list only when the answer really is a list.',
+    '   Brevity does not apply when asked to explain or break something down — then show the individual loads or payments that make up the figure, even if that takes several lines.',
     '6. Never invent a seller, load id, date or amount. If someone asks about a name you cannot see in the data, say it is not in the records you have.',
 ].join('\n');
 
@@ -69,6 +81,27 @@ async function askYard(question, opts = {}) {
         ? '\nEARLIER IN THIS CONVERSATION:\n' + history.map((h) => `${h.role === 'bot' ? 'You' : 'They'}: ${String(h.text || '').slice(0, 300)}`).join('\n')
         : '';
 
+    // A bare "How" is a follow-up, not a vague question — and not a command.
+    //
+    // Apsara asked "How" after a figure and got "I can only answer questions,
+    // I cannot perform actions", because a one-word imperative looks like an
+    // instruction. Wording the rule better helped but still landed on "that
+    // question is too vague". The model's reading of a single word is not
+    // reliable enough to leave to a prompt, so the expansion is done HERE:
+    // when the message is one of these and there IS a previous answer, it is
+    // rewritten into what it plainly means.
+    //
+    // Deterministic on purpose. A short follow-up is the most natural thing to
+    // type after a number, and it should never be the thing that makes the
+    // assistant look broken.
+    const FOLLOW_UP = /^(how|why|how so|how come|show me|show|break it down|breakdown|which ones|which|explain|details?|more)\b[\s.?!]*$/i;
+    const lastAnswer = [...history].reverse().find((h) => h.role === 'bot');
+    const asked = (FOLLOW_UP.test(q) && lastAnswer)
+        ? `${q} — meaning: explain the answer you just gave ("${String(lastAnswer.text).slice(0, 200)}"). `
+          + 'Show the individual loads or payments that make up that figure, with their ids, dates and amounts. '
+          + 'This is a request to EXPLAIN, not to perform an action.'
+        : q;
+
     const prompt = [
         SYSTEM_RULES,
         '',
@@ -76,9 +109,9 @@ async function askYard(question, opts = {}) {
         JSON.stringify(brief),
         historyText,
         '',
-        `QUESTION: ${q}`,
+        `QUESTION: ${asked}`,
         '',
-        'Reply as JSON: {"answer": "...", "have_data": true|false}. Plain sentences in `answer`, no markdown. Set have_data to false when the DATA does not contain what was asked.',
+        'Reply as JSON: {"answer": "...", "have_data": true|false, "action": null | {"kind": "...", "params": {...}}}. Plain sentences in `answer`, no markdown. Set have_data to false when the DATA does not contain what was asked. Leave `action` null unless you were asked to do something.',
     ].join('\n');
 
     try {
@@ -107,7 +140,24 @@ async function askYard(question, opts = {}) {
         if (!text) {
             return { ok: false, answer: "I couldn't work out an answer to that. Try asking it a different way." };
         }
-        return { ok: true, answer: text, have_data: res.have_data !== false, data_as_of: brief.generated_at };
+        // ── an action was asked for ───────────────────────────────────────
+        // Validated HERE rather than trusted: proposeAction re-looks-up every
+        // load id, re-parses every amount and drops every field that is not on
+        // its allowlist. A proposal that does not survive that is reported as
+        // the reason it failed, which is far more useful than a generic refusal
+        // — "there is no load EDGE_99 in the records" tells the person exactly
+        // what went wrong, and is also how a hallucinated id becomes visible
+        // instead of becoming a write.
+        let proposal = null;
+        if (res && res.action && typeof res.action === 'object') {
+            try {
+                const { proposeAction } = require('./yardActions');
+                proposal = await proposeAction(res.action, { role: opts.role });
+            } catch (e) {
+                return { ok: true, answer: `${text}\n\nI can't do that: ${e.message}`, have_data: res.have_data !== false, data_as_of: brief.generated_at };
+            }
+        }
+        return { ok: true, answer: text, have_data: res.have_data !== false, proposal, data_as_of: brief.generated_at };
     } catch (err) {
         console.error('[YARD-ASK] failed:', err.message);
         // Says what went wrong rather than producing a made-up answer. A bot

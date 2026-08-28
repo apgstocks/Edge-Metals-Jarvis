@@ -17,6 +17,23 @@ const cfg = require('../config');
 let driveClient = null;
 
 function getDrive() {
+    // ── Tests must never touch the real Drive ──────────────────────────────
+    // Added 2026-08-29 after a test in tests/yard-chat-log.js uploaded a
+    // FIXTURE transcript into the live Yard folder — a fake record saying
+    // "we owe Acme Metals $8,822.00" landed in Apsara's actual business Drive.
+    //
+    // The cause is structural, not a one-off: GDRIVE_KEYFILE is a
+    // repo-relative path (./data/gdrive-sa.json), so it resolves to the REAL
+    // service-account key no matter what DATA_DIR a test sets. Isolating
+    // DATA_DIR — which the suites do — isolates the files but not the network.
+    // Fifteen entry points can reach this function transitively.
+    //
+    // So the guard lives HERE, at the single door to Drive, rather than being
+    // repeated as a stub in each suite where it could be forgotten. Production
+    // never sets JARVIS_TEST, so this is inert outside the runner.
+    if (process.env.JARVIS_TEST === '1') {
+        throw new Error('Drive is disabled under JARVIS_TEST — a test must not write to the live yard folder');
+    }
     if (driveClient) return driveClient;
     if (!fs.existsSync(cfg.GDRIVE_KEYFILE)) {
         throw new Error(`Drive keyfile missing: ${cfg.GDRIVE_KEYFILE}`);
@@ -572,7 +589,53 @@ async function uploadDailyInventoryPdf(dateKey, buffer) {
     return created.data;
 }
 
-module.exports = { upsertReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf };
+// ── Yard assistant transcripts -> Drive ───────────────────────────────────
+// Per Apsara 2026-08-29: "create a folder inside yard folder as log. put the
+// logs over there" — then "yard folder is in drive", i.e. the Shared Drive
+// yard folder these load subfolders already live in, not a local directory.
+//
+// Uploads one file per day into <yard folder>/log/, replacing the day's file
+// each time rather than appending a second copy — the local JSONL is the
+// source of truth and this is a mirror of it, so the newest upload should
+// simply win.
+//
+// The local file remains the thing that is APPENDED to. Appending over the
+// network on every message would make answering wait on Drive, and a yard on
+// bad signal would lose lines; writing locally and mirroring means the
+// transcript survives regardless and Drive catches up.
+async function uploadYardChatLog(day, buffer) {
+    const drive = getDrive();
+    const parentId = loadSubfolderParentId();
+    if (!parentId) throw new Error('no yard folder configured (GDRIVE_SCALE_TICKETS_FOLDER_ID / GDRIVE_UPLOAD_FOLDER_ID)');
+    // Reuses the load-subfolder helper: same "find by name inside the yard
+    // folder, create if absent" behaviour, just with 'log' as the name.
+    const logFolderId = await getOrCreateLoadSubfolder(drive, parentId, 'log');
+    const name = `${day}.jsonl`;
+    const escaped = name.replace(/'/g, "\\'");
+    const existing = await drive.files.list({
+        q: `'${logFolderId}' in parents and name = '${escaped}' and trashed = false`,
+        fields: 'files(id, name)',
+        pageSize: 1,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+    });
+    const media = { mimeType: 'text/plain', body: require('stream').Readable.from(buffer) };
+    if (existing.data.files && existing.data.files.length) {
+        const id = existing.data.files[0].id;
+        const up = await drive.files.update({ fileId: id, media, fields: 'id, webViewLink', supportsAllDrives: true });
+        return { fileId: id, name, webViewLink: up.data.webViewLink, replaced: true };
+    }
+    const created = await drive.files.create({
+        requestBody: { name, parents: [logFolderId], mimeType: 'text/plain' },
+        media,
+        fields: 'id, webViewLink',
+        supportsAllDrives: true,
+    });
+    return { fileId: created.data.id, name, webViewLink: created.data.webViewLink, replaced: false };
+}
+
+module.exports = { upsertReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

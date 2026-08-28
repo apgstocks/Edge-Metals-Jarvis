@@ -37,10 +37,41 @@ function logPathFor(day) {
     return path.join(cfg.YARD_CHAT_DIR, `${day}.jsonl`);
 }
 
+// One-time move of anything written before the folder changed to
+// data/yard/log/ on 2026-08-29. Runs at most once per process and only if the
+// old directory is actually there, so it costs nothing on a fresh install.
+//
+// MOVES rather than copies, and never overwrites a file that already exists at
+// the destination — a transcript is a record, and a migration that can silently
+// replace one is worse than one that leaves a stray file behind.
+let migrated = false;
+function migrateLegacyDir() {
+    if (migrated) return;
+    migrated = true;
+    try {
+        const legacy = path.join(path.dirname(cfg.YARD_DIR), 'yard-chat');
+        if (!fs.existsSync(legacy) || legacy === cfg.YARD_CHAT_DIR) return;
+        fs.mkdirSync(cfg.YARD_CHAT_DIR, { recursive: true });
+        let moved = 0;
+        for (const f of fs.readdirSync(legacy)) {
+            if (!/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)) continue;
+            const to = path.join(cfg.YARD_CHAT_DIR, f);
+            if (fs.existsSync(to)) continue;
+            fs.renameSync(path.join(legacy, f), to);
+            moved += 1;
+        }
+        if (moved) console.log(`[YARD-CHAT] moved ${moved} transcript(s) into ${cfg.YARD_CHAT_DIR}`);
+        if (!fs.readdirSync(legacy).length) fs.rmdirSync(legacy);
+    } catch (err) {
+        console.warn('[YARD-CHAT] could not move the old transcripts:', err.message);
+    }
+}
+
 // Appends one exchange. Returns the file it went to, or null if it could not
 // be written — callers ignore it; it exists for the tests.
 function logExchange(entry = {}) {
     try {
+        migrateLegacyDir();
         if (!fs.existsSync(cfg.YARD_CHAT_DIR)) fs.mkdirSync(cfg.YARD_CHAT_DIR, { recursive: true });
         const now = new Date();
         const row = {
@@ -59,6 +90,7 @@ function logExchange(entry = {}) {
             source: entry.source || null,
         };
         fs.appendFileSync(logPathFor(localDay(now)), JSON.stringify(row) + '\n', 'utf8');
+        queueDriveSync(localDay(now));
         return logPathFor(localDay(now));
     } catch (err) {
         console.warn('[YARD-CHAT] could not write the transcript:', err.message);
@@ -69,6 +101,7 @@ function logExchange(entry = {}) {
 // Which days have a transcript, newest first.
 function listDays() {
     try {
+        migrateLegacyDir();
         return fs.readdirSync(cfg.YARD_CHAT_DIR)
             .filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
             .map((f) => f.replace(/\.jsonl$/, ''))
@@ -94,4 +127,48 @@ function readDay(day) {
     } catch (err) { return []; }
 }
 
-module.exports = { logExchange, listDays, readDay, localDay, logPathFor };
+// ── Mirror to the Drive yard folder ────────────────────────────────────────
+// Per Apsara 2026-08-29: the log folder belongs inside the yard folder in
+// Drive. The LOCAL jsonl stays the thing that is appended to — appending over
+// the network on every message would make answering wait on Drive, and a bad
+// signal at the yard would lose lines. This mirrors the day's file up
+// afterwards, replacing it, so the newest upload simply wins.
+//
+// DEBOUNCED. A conversation is a burst of messages; uploading the whole file
+// after each one would be a dozen uploads of nearly identical content. One
+// upload a minute after the talking stops covers it.
+//
+// FAIL SOFT, like everything else here. No Drive, no credentials, no signal —
+// the local transcript is still written and the question is still answered.
+const SYNC_DEBOUNCE_MS = 60 * 1000;
+let syncTimer = null;
+let syncing = false;
+
+async function syncDayToDrive(day) {
+    const target = day || localDay();
+    const file = logPathFor(target);
+    if (!fs.existsSync(file)) return null;
+    if (syncing) return null;                 // never overlap two uploads
+    syncing = true;
+    try {
+        const { uploadYardChatLog } = require('./drive');
+        const out = await uploadYardChatLog(target, fs.readFileSync(file));
+        console.log(`[YARD-CHAT] mirrored ${target}.jsonl to the Drive yard folder/log`);
+        return out;
+    } catch (err) {
+        console.warn(`[YARD-CHAT] could not mirror ${target}.jsonl to Drive:`, err.message);
+        return null;
+    } finally {
+        syncing = false;
+    }
+}
+
+function queueDriveSync(day) {
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => { syncDayToDrive(day).catch(() => {}); }, SYNC_DEBOUNCE_MS);
+    // unref so a pending mirror can never hold the process open — it matters
+    // for the test suite and for a clean shutdown.
+    if (syncTimer.unref) syncTimer.unref();
+}
+
+module.exports = { logExchange, listDays, readDay, localDay, logPathFor, syncDayToDrive };

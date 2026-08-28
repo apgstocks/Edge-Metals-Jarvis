@@ -223,6 +223,72 @@
     return d;
   }
 
+  // ── the confirmation card ───────────────────────────────────────────────
+  // Per Apsara 2026-08-29, the assistant can act — by proposing, with a person
+  // confirming. This is that person's only view of what is about to happen, so
+  // it shows the REAL figures the server computed, not the model's sentence.
+  //
+  // Only the opaque id goes back on Confirm. Nothing on this card is editable
+  // and no amount travels with the request, so what is confirmed is exactly
+  // what was validated server-side.
+  function renderProposal(p) {
+    var log = el('yardBotLog');
+    var card = document.createElement('div');
+    card.className = 'yb-msg yb-bot yb-prop';
+
+    var html = '<div class="yb-prop-h">Confirm this?</div>';
+    html += '<div class="yb-prop-s">' + esc(p.summary || '') + '</div>';
+    (p.details || []).forEach(function (d) {
+      html += '<div class="yb-prop-r"><span>' + esc(String(d[0])) + '</span><b>' + esc(String(d[1])) + '</b></div>';
+    });
+    // Warnings are the whole point of the card in the cases that matter most —
+    // an overpayment, or an edit that voids a seller's signature. Shown loud,
+    // never collapsed.
+    (p.warnings || []).forEach(function (w) {
+      html += '<div class="yb-prop-w">' + esc(w) + '</div>';
+    });
+    html += '<div class="yb-prop-b"><button class="yb-no">Cancel</button><button class="yb-yes">Confirm</button></div>';
+    card.innerHTML = html;
+    log.appendChild(card);
+    log.scrollTop = log.scrollHeight;
+
+    function settle(msg) {
+      card.classList.add('done');
+      card.innerHTML = '<div class="yb-prop-s">' + esc(msg) + '</div>';
+      history.push({ role: 'bot', text: msg });
+      log.scrollTop = log.scrollHeight;
+    }
+
+    card.querySelector('.yb-no').addEventListener('click', function () {
+      callApi('/api/yard/cancel-action', { id: p.id }).catch(function () {});
+      settle('Cancelled — nothing was changed.');
+    });
+
+    card.querySelector('.yb-yes').addEventListener('click', function () {
+      var yes = card.querySelector('.yb-yes');
+      // Disabled immediately: the server treats a proposal as single-use, but
+      // a second tap should read as "working", not as a failed confirmation.
+      yes.disabled = true; yes.textContent = 'Working…';
+      callApi('/api/yard/act', { id: p.id, source: document.getElementById('appShell') ? 'app' : 'website' })
+        .then(function (r) {
+          if (r && r.ok) {
+            settle('Done. ' + (r.summary || ''));
+            // The rest of the page is now stale — a payment just landed that
+            // the loads list and the pending badges do not know about. Ask the
+            // host page to repaint if it has told us how.
+            if (typeof window.refreshAfterYardAction === 'function') {
+              try { window.refreshAfterYardAction(); } catch (e) {}
+            }
+          } else {
+            settle((r && r.error) || "That didn't go through.");
+          }
+        })
+        .catch(function (e) {
+          settle('That did not go through: ' + ((e && e.message) || 'the server could not be reached') + '. Nothing was changed.');
+        });
+    });
+  }
+
   function send() {
     if (busy) return;
     // Belt and braces: the gate hides the button, but a stale open panel must
@@ -251,6 +317,7 @@
         var answer = (r && r.answer) || "I couldn't answer that.";
         thinking.textContent = answer;
         history.push({ role: 'bot', text: answer });
+        if (r && r.proposal) renderProposal(r.proposal);
       })
       .catch(function () {
         // Distinguishes "can't reach the server" from "don't know", because

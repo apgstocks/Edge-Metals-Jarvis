@@ -133,14 +133,20 @@ const FILES = {
     // touch what was paid.
     PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
-    // conversations of yard assistant somewhere. so per day one log."
+    // conversations of yard assistant somewhere. so per day one log", then
+    // "create a folder inside yard folder as log. put the logs over there."
+    //
+    // So: data/yard/log/. The yard/ folder is new and deliberately general —
+    // anything else the yard feature needs to keep on disk belongs beside it
+    // rather than as another loose entry in data/, which already has twenty.
     //
     // A DIRECTORY of one file per day rather than a single growing file. A
     // conversation log only grows, and one file that never stops growing
     // eventually has to be rewritten in full on every append, or read in full
     // to inspect one afternoon. A day per file keeps both cheap and makes
     // "what did it say on the 27th" a matter of opening one small file.
-    YARD_CHAT_DIR: path.join(DATA_DIR, 'yard-chat'),
+    YARD_DIR: path.join(DATA_DIR, 'yard'),
+    YARD_CHAT_DIR: path.join(DATA_DIR, 'yard', 'log'),
     // Yard expenses — per Apsara 2026-08-19 ("for admin access in mobile
     // app, i want expense tracker"). Its own flat store for the same reason
     // OUTBOUND_LOADS_FILE is separate from LOADS_FILE: an expense shares
