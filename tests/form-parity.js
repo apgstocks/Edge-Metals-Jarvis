@@ -171,5 +171,38 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+
+// ── the yard bot must not appear before sign-in ────────────────────────────
+// Per Apsara 2026-08-29: the chat bubble was showing on the app's login
+// screen. Driven against the two hosts' real sign-in shapes.
+{
+  const src = fs.readFileSync(R+'dashboard/yard-bot.js','utf8');
+  const grab = (n) => { const i=src.indexOf('function '+n+'('); let d=0,j=src.indexOf('{',i);
+    for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
+  const mkEl = (hidden) => ({ classList: { contains: (c) => c==='hidden' && hidden } });
+  let els = {};
+  const isSignedIn = new Function('document', 'return (' + grab('isSignedIn') + ')')({ getElementById: (id) => els[id] || null });
+
+  els = { loginScreen: mkEl(false), appShell: mkEl(true) };
+  ck('bot: hidden on the app login screen', isSignedIn() === false);
+  els = { loginScreen: mkEl(true), appShell: mkEl(false) };
+  ck('bot: shown once signed in', isSignedIn() === true);
+  els = { loginScreen: mkEl(false), appShell: mkEl(true) };
+  ck('bot: hidden again when the session expires', isSignedIn() === false);
+  els = { loginScreen: mkEl(true), appShell: mkEl(true) };
+  ck('bot: stays hidden in a transient state rather than guessing', isSignedIn() === false);
+  els = {};
+  ck('bot: shown on the website, where the server already gated it', isSignedIn() === true);
+
+  ck('bot: clears the transcript on sign-out', /history = \[\];[\s\S]{0,40}greet\(\)/.test(src));
+  ck('bot: refuses to send while signed out', /if \(!isSignedIn\(\)\)/.test(src));
+  // The app's sign-in really does toggle .hidden on those two ids — if that
+  // ever changes, the gate silently stops working, so assert it.
+  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  ck('bot: the app still toggles .hidden on loginScreen/appShell',
+     /loginScreen'\)\.classList\.(add|remove)\('hidden'\)/.test(app)
+     && /appShell'\)\.classList\.(add|remove)\('hidden'\)/.test(app));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

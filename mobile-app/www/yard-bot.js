@@ -81,6 +81,57 @@
 
   function el(id) { return document.getElementById(id); }
 
+  // ── Signed-in gate ────────────────────────────────────────────────────────
+  // Per Apsara 2026-08-29: the chat bubble was showing on the app's login
+  // screen.
+  //
+  // The two hosts sign in differently and this has to be right in both:
+  //
+  //  • The APP has an in-page #loginScreen / #appShell pair and swaps them by
+  //    toggling .hidden. Nothing server-side stops the bundled HTML from
+  //    rendering, so a widget that mounts on DOMContentLoaded appears over the
+  //    password box. That is the reported bug.
+  //
+  //  • The WEBSITE has no in-page login. api.js redirects a signed-out browser
+  //    to /login before index.html is ever served, so being on this page at
+  //    all already means signed in.
+  //
+  // Hence: if the app's shell markup exists, follow it; otherwise assume the
+  // server already made the decision. Nothing here is a security control — the
+  // API rejects unauthenticated calls regardless — it is about not offering a
+  // yard assistant to someone who has not proved who they are.
+  function isSignedIn() {
+    var login = document.getElementById('loginScreen');
+    var shell = document.getElementById('appShell');
+    if (login || shell) {
+      var loginUp = login && !login.classList.contains('hidden');
+      var shellUp = shell && !shell.classList.contains('hidden');
+      return !loginUp && !!shellUp;
+    }
+    return true;
+  }
+
+  // Applies the gate. Also CLOSES an open panel on sign-out — a session that
+  // expires mid-conversation must not leave the yard's figures sitting on
+  // screen above the login card. helpers in the app hide #appShell on expiry,
+  // which this observes.
+  function applySignedInGate() {
+    var ok = isSignedIn();
+    var fab = el('yardBotFab');
+    var panel = el('yardBotPanel');
+    if (!fab || !panel) return;
+    fab.style.display = ok ? '' : 'none';
+    if (!ok && open) {
+      open = false;
+      panel.classList.remove('open');
+      // Drop the transcript too. It is the yard's data, and it should not
+      // still be there for whoever signs in next.
+      history = [];
+      greet();
+    }
+  }
+
+
   function esc(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -116,6 +167,16 @@
       if (e.key === 'Enter') { e.preventDefault(); send(); }
     });
     greet();
+
+    applySignedInGate();
+    // Watch the class attribute on the app's shell/login elements rather than
+    // polling: signing in is a single class swap, and an observer reacts to it
+    // immediately without burning a timer for the whole session.
+    var watched = ['loginScreen', 'appShell'].map(el).filter(Boolean);
+    if (watched.length && typeof MutationObserver === 'function') {
+      var mo = new MutationObserver(applySignedInGate);
+      watched.forEach(function (n) { mo.observe(n, { attributes: true, attributeFilter: ['class'] }); });
+    }
   }
 
   function greet() {
@@ -148,6 +209,9 @@
 
   function send() {
     if (busy) return;
+    // Belt and braces: the gate hides the button, but a stale open panel must
+    // not be able to ask for yard figures after a sign-out.
+    if (!isSignedIn()) { applySignedInGate(); return; }
     var input = el('yardBotInput');
     var q = String(input.value || '').trim();
     if (!q) return;
