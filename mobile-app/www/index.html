@@ -265,6 +265,16 @@ body { overflow-y:auto; }
          standard fix: it lets grid/flex items shrink to fit their assigned
          track instead of expanding it. */
       .ld-item-header > *, .item-row > * { min-width:0; }
+      /* Totals line — same grid as .item-row so each figure sits under the
+         column it sums. A total laid out differently from the numbers it adds
+         up is a total nobody checks. */
+      .ld-item-totals:empty { display:none; }
+      .ld-item-totals { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px;
+        align-items:center; min-width:620px; margin-top:8px; padding-top:9px;
+        border-top:1px solid var(--border-default); font-family:var(--font-mono); font-size:12px; }
+      .ld-item-totals .tl-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+      .ld-item-totals .tl-num { text-align:right; padding-right:10px; color:var(--text-muted); }
+      .ld-item-totals .tl-strong { color:var(--text-strong); font-weight:700; }
       /* "Others" free-text box is a direct grid child now (moved out of
          .ld-item-desc-wrap — see renderItemRows), spanning the full row
          width instead of being squeezed into just the 0.9fr description
@@ -348,6 +358,16 @@ body { overflow-y:auto; }
            768px+ has room for the normal grid row (min-width:620px), so
            it no longer gets funneled into this cramped layout. */
         .ld-item-header { display:none; }
+        /* Rows are stacked cards at this width, so the totals wrap as
+           labelled pairs rather than a mostly-empty 7-column grid. This is
+           the layout that actually gets used at the yard. */
+        .ld-item-totals { display:flex; flex-wrap:wrap; gap:6px 18px; min-width:0;
+          padding:12px; margin-top:0; background:var(--surface-sunken, rgba(255,255,255,.03));
+          border:1px solid var(--border-default); border-radius:var(--radius-sm); }
+        .ld-item-totals .tl-label { width:100%; }
+        .ld-item-totals .tl-num { text-align:left; padding-right:0; }
+        .ld-item-totals > span:empty { display:none; }
+        .ld-item-totals .tl-num::before { content:attr(data-label) ' '; color:var(--text-faint); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
         #ld_items { overflow-x:visible; }
         .item-row {
           grid-template-columns:1fr 1fr;
@@ -965,6 +985,48 @@ function recomputeRowTotals(row) {
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);
+  // Refreshed here rather than at each call site. recomputeRowTotals is called
+  // from typing AND from the scale scanner filling a weight in, so putting it
+  // at the source means a scanner read updates the totals for free and a new
+  // caller cannot forget it.
+  updateItemTotals();
+}
+
+// Sums the item rows and paints the totals line. Identical to the website's,
+// on purpose — the same numbers must add up the same way whichever screen the
+// load is typed on.
+//
+// Reads the DOM rather than currentLoadItems: the inputs are the live truth
+// while someone is typing, and the model only catches up on the next
+// syncItemsFromDom(), so summing the model would show a figure one keystroke
+// behind. On a weight that is worse than showing nothing.
+function updateItemTotals() {
+  const el = document.getElementById('ld_item_totals');
+  if (!el) return;
+  const rows = document.querySelectorAll('#ld_items .item-row');
+  let g = 0, t = 0, n = 0, amt = 0, any = false;
+  rows.forEach((row) => {
+    const gv = parseFloat(row.querySelector('.ld-item-gross')?.value);
+    const tv = parseFloat(row.querySelector('.ld-item-tare')?.value);
+    const nv = parseFloat(row.querySelector('.ld-item-net')?.value);
+    // Amount is a formatted string (fmtAmount adds thousands separators), so
+    // strip anything that is not part of a number before adding it.
+    const av = parseFloat(String(row.querySelector('.ld-item-amount')?.value || '').replace(/[^0-9.\-]/g, ''));
+    if (isFinite(gv)) { g += gv; any = true; }
+    if (isFinite(tv)) { t += tv; any = true; }
+    if (isFinite(nv)) { n += nv; any = true; }
+    if (isFinite(av)) { amt += av; }
+  });
+  if (!any) { el.innerHTML = ''; return; }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  el.innerHTML = `
+    <span class="tl-label">Total (${rows.length} item${rows.length === 1 ? '' : 's'})</span>
+    <span class="tl-num" data-label="Gross">${r2(g).toLocaleString()}</span>
+    <span class="tl-num" data-label="Tare">${r2(t).toLocaleString()}</span>
+    <span class="tl-num tl-strong" data-label="Net">${r2(n).toLocaleString()}</span>
+    <span></span>
+    <span class="tl-num tl-strong" data-label="Amount">${amt ? fmtAmount(r2(amt)) : ''}</span>
+    <span></span>`;
 }
 
 function renderItemRows() {
@@ -1043,7 +1105,12 @@ function renderItemRows() {
     <div class="ld-item-header">
       <span>Description</span><span>Gross</span><span>Tare</span><span>Net</span><span>Price</span><span>Amount</span><span></span>
     </div>
-    ${rowsHtml}`;
+    ${rowsHtml}
+    <!-- Running totals, mirroring the website. Rendered here rather than as a
+         fake item row so syncItemsFromDom() can never pick it up as a
+         phantom item. -->
+    <div class="ld-item-totals" id="ld_item_totals"></div>`;
+  updateItemTotals();
 
   box.querySelectorAll('.item-row').forEach(row => {
     row.querySelectorAll('input:not([type=file])').forEach(inp => inp.addEventListener('input', () => {
@@ -2305,24 +2372,28 @@ function applyLoadModalMode(mode) {
   // working on the same element ids.
   if ($('ld_party_label')) $('ld_party_label').textContent = sale ? 'Buyer' : 'Seller';
   if ($('ld_party_addr_label')) $('ld_party_addr_label').textContent = sale ? 'Buyer address' : 'Seller address';
-  if ($('ld_fixed_label')) $('ld_fixed_label').textContent = sale ? 'Seller' : 'Buyer';
   if ($('ld_seller')) $('ld_seller').placeholder = sale ? 'Buyer name' : 'Seller name';
   // Phone is a purchase-side convenience (the "send ticket to seller" button)
   // and has no meaning on a sale — hidden rather than left to collect a
   // number nothing will ever use.
   const phoneWrap = $('ld_seller_phone') && $('ld_seller_phone').closest('.field');
   if (phoneWrap) phoneWrap.style.display = sale ? 'none' : '';
+  // Phone shares a row with the address now, and is hidden on a sale (it only
+  // feeds the "send ticket to seller" button, meaningless outbound). Collapse
+  // the row so the address takes the space instead of leaving a gap.
+  const row2 = $('ld_party_row2');
+  if (row2) row2.style.gridTemplateColumns = sale ? '1fr' : '';
 }
 
 function resetLoadModal(mode) {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  editingLoadDescription = '';
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
   if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
-  if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME; // Edge Trading, whichever side it sits on
   $('loadModalErr').textContent = '';
   applyLoadModalMode(mode);
   renderItemRows();
@@ -2357,13 +2428,13 @@ function openEditLoadModal(load) {
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
   if ($('ld_date'))            $('ld_date').value            = load.date || '';
-  if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
   // On a sale the deck already mapped buyer -> seller when tagging the record
   // (see renderCurrentMobileTab), so these two lines serve both modes without
   // a branch — the fields are the same inputs, only relabelled.
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
+  editingLoadDescription = load.description || '';
   if ($('ld_desc'))           $('ld_desc').value           = load.description || '';
   $('loadModalErr').textContent = '';
   // Mode-aware: the edit handler calls applyLoadModalMode BEFORE this, but
@@ -2613,6 +2684,16 @@ function renderLoads(loads) {
          standard fix: it lets grid/flex items shrink to fit their assigned
          track instead of expanding it. */
       .ld-item-header > *, .item-row > * { min-width:0; }
+      /* Totals line — same grid as .item-row so each figure sits under the
+         column it sums. A total laid out differently from the numbers it adds
+         up is a total nobody checks. */
+      .ld-item-totals:empty { display:none; }
+      .ld-item-totals { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px;
+        align-items:center; min-width:620px; margin-top:8px; padding-top:9px;
+        border-top:1px solid var(--border-default); font-family:var(--font-mono); font-size:12px; }
+      .ld-item-totals .tl-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+      .ld-item-totals .tl-num { text-align:right; padding-right:10px; color:var(--text-muted); }
+      .ld-item-totals .tl-strong { color:var(--text-strong); font-weight:700; }
       /* "Others" free-text box is a direct grid child now (moved out of
          .ld-item-desc-wrap — see renderItemRows), spanning the full row
          width instead of being squeezed into just the 0.9fr description
@@ -2696,6 +2777,16 @@ function renderLoads(loads) {
            768px+ has room for the normal grid row (min-width:620px), so
            it no longer gets funneled into this cramped layout. */
         .ld-item-header { display:none; }
+        /* Rows are stacked cards at this width, so the totals wrap as
+           labelled pairs rather than a mostly-empty 7-column grid. This is
+           the layout that actually gets used at the yard. */
+        .ld-item-totals { display:flex; flex-wrap:wrap; gap:6px 18px; min-width:0;
+          padding:12px; margin-top:0; background:var(--surface-sunken, rgba(255,255,255,.03));
+          border:1px solid var(--border-default); border-radius:var(--radius-sm); }
+        .ld-item-totals .tl-label { width:100%; }
+        .ld-item-totals .tl-num { text-align:left; padding-right:0; }
+        .ld-item-totals > span:empty { display:none; }
+        .ld-item-totals .tl-num::before { content:attr(data-label) ' '; color:var(--text-faint); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
         #ld_items { overflow-x:visible; }
         .item-row {
           grid-template-columns:1fr 1fr;
@@ -2756,24 +2847,32 @@ function renderLoads(loads) {
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
+          <!-- Mirrors the website form exactly, per Apsara 2026-08-28 ("this
+               change should be there in mobile as well"):
+                 - Buyer box removed. It was disabled and always showed the
+                   same constant; the save payload has always sent
+                   BUYER_FIXED_NAME directly rather than reading it, so it was
+                   decorative.
+                 - Date | Seller, then Address | Phone, so the counterparty
+                   leads instead of sitting on the second row.
+                 - Load description removed; every item row already carries
+                   its own. The stored field is untouched, so older loads keep
+                   theirs and still print it. -->
           <div class="ld-grid-2">
-            <div class="field"><label>Date</label><input id="ld_date" type="date"></div>
-            <div class="field"><label id="ld_fixed_label">Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
-          </div>
-          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Date</label><input id="ld_date" type="date" style="max-width:170px;"></div>
             <div class="field" style="position:relative;">
               <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
-          <!-- Optional — per Apsara 2026-08-17 ("add phone number option in
-               application for seller"). Only used server-side to build the
-               WhatsApp chat id for the "Send to seller" button once a PDF
-               exists; not required to save a load. -->
-          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
-          <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
+          <div class="ld-grid-2" id="ld_party_row2" style="margin-top:14px;">
+            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <!-- Optional, per Apsara 2026-08-17. Only used server-side to
+                 build the WhatsApp chat id for the "Send to seller" button
+                 once a PDF exists; never required to save a load. -->
+            <div class="field"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
+          </div>
 
           <div style="margin-top:18px;">
             <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
@@ -2897,7 +2996,9 @@ function wireLoadsEvents() {
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
-    const desc = $('ld_desc').value.trim();
+    // The load-level description box is gone; an edit of an older load must
+    // not wipe the description it already has, so reuse it.
+    const desc = ($('ld_desc') ? $('ld_desc').value.trim() : (editingLoadDescription || ''));
     $('loadModalErr').textContent = '';
 
     const validationError = validateItemsBeforeSave(currentLoadItems);
@@ -3195,6 +3296,11 @@ function wireDeckEvents() {
 let loadsCache = [];
 let currentLoadItems = [];
 let editingLoadId = null;
+// The load-level description input is gone from the form (2026-08-28), but the
+// FIELD still exists on records saved before that. Held here so editing an old
+// load preserves its description rather than silently blanking it on save —
+// removing a box from a form must not delete data it can no longer show.
+let editingLoadDescription = '';
 
 // ── App shell (new — replaces the dashboard's sidebar/tab system, which
 // doesn't exist here since this app has exactly one screen) ─────────────
