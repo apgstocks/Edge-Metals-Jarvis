@@ -1415,6 +1415,115 @@ section('Q2 — a dead letter is reported, not dropped');
     ck('an ordinary digest carries no warning', !/could not read/.test(digest));
 }
 
+// ══ R. confidence is capped by evidence ════════════════════════════════════
+// MEASURED, 2026-08-29: a live 16-email sweep returned confidence 1.0 on
+// every single decision — so every `confidence >= MIN_CONFIDENCE` test in
+// replyWatch.js had been passing unconditionally since it was written. The
+// field carried no information and the gate gated nothing.
+//
+// Driven through assess() with the model stubbed to claim 1.0, because that
+// is exactly what the real model does. A test that asserted the cap
+// arithmetic directly would pass while assess() ignored it.
+const FULL = {
+    from: 'Yurim Cha <yurim@zimex.com>', subject: 'Booking DALA86534300',
+    to: 'apsara@edgemetals.com', cc: '', myAddress: 'bose@edgemetals.com',
+    managerAddress: 'apsara@edgemetals.com',
+    body: 'Please confirm the ERD for DALA86534300 before we release the container. '.repeat(6),
+    thread: '- Apsara: asked for the booking\n- Yurim: sending it now\n',
+    attachments: [],
+};
+const CONFIDENT = {
+    waiting_on: 'her', needs_reply: true, confidence: 1, urgency: 'normal',
+    summary: 'Yurim asks you to confirm the ERD for DALA86534300.',
+    asked_for: null, asked_for_quote: null, key_figures: [], deadline: null,
+};
+
+section('R1 — a fully-evidenced email keeps the confidence the model gave it');
+{
+    AI = { ...CONFIDENT };
+    const a = await rw.assess({ ...FULL });
+    ck('nothing caps a complete input', a.confidence === 1, String(a.confidence));
+    ck('and nothing is listed as a cap reason', (a.confidence_capped_by || []).length === 0,
+        JSON.stringify(a.confidence_capped_by));
+    ck('the raw model value is kept alongside it', a.confidence_raw === 1, String(a.confidence_raw));
+}
+
+section('R2 — a reply judged with NO thread cannot be certain');
+{
+    // The "Andy Park — wants: EDO #" condition: direction read backwards off
+    // one message of a twelve-message rolling-booking thread.
+    AI = { ...CONFIDENT };
+    const a = await rw.assess({ ...FULL, subject: 'Re: Booking DALA86534300', thread: '' });
+    ck('a threadless reply is capped below 1.0', a.confidence < 1, String(a.confidence));
+    ck('and the reason says so', (a.confidence_capped_by || []).includes('no thread for a reply'),
+        JSON.stringify(a.confidence_capped_by));
+    ck('a FIRST message with no thread is NOT capped for that reason —',
+        !((await rw.assess({ ...FULL, thread: '' })).confidence_capped_by || []).includes('no thread for a reply'));
+}
+
+section('R3 — "see attached" with the attachment unread');
+{
+    // Structurally the LC-calculations failure: two lines of body, the total
+    // sitting in a PDF nothing in this pipeline opens.
+    AI = { ...CONFIDENT };
+    const a = await rw.assess({ ...FULL, body: 'Please see attached.', attachments: ['LC-calc.pdf'] });
+    ck('a short body with attachments is capped', a.confidence < 1, String(a.confidence));
+    ck('and names the reason', (a.confidence_capped_by || []).includes('short body, attachments unread'),
+        JSON.stringify(a.confidence_capped_by));
+    ck('a short body with NO attachment is not capped for that reason',
+        !((await rw.assess({ ...FULL, body: 'Confirmed, thanks.' })).confidence_capped_by || [])
+            .includes('short body, attachments unread'));
+}
+
+section('R4 — an ungrounded asked_for takes the confidence down with it');
+{
+    // quoteAppearsIn already drops the claim. Leaving the confidence at 1.0
+    // meant the digest said "I am certain" about a judgement whose one
+    // concrete detail had just been deleted for being unverifiable.
+    AI = { ...CONFIDENT, asked_for: 'a signed contract', asked_for_quote: 'send me the signed contract' };
+    const a = await rw.assess({ ...FULL });
+    ck('the ungrounded ask is dropped, as before', a.asked_for === null, String(a.asked_for));
+    ck('and the confidence no longer survives it intact', a.confidence < 1, String(a.confidence));
+    ck('with the reason recorded', (a.confidence_capped_by || []).includes('asked_for was ungrounded'),
+        JSON.stringify(a.confidence_capped_by));
+}
+
+section('R5 — THE FLOOR: capping must never hide an item that shows today');
+{
+    // Deliberate. Making the number honest is one decision; raising the bar
+    // is a different one that needs the measured distribution first. If this
+    // assertion ever fails, this change started silently dropping mail.
+    AI = { ...CONFIDENT };
+    const worst = await rw.assess({
+        ...FULL, subject: 'Re: everything', thread: '', body: 'See attached.',
+        attachments: ['a.pdf'], to: undefined, cc: undefined,
+        asked_for: null,
+    });
+    ck('even every cap at once stays at or above MIN_CONFIDENCE',
+        worst.confidence >= 0.6, String(worst.confidence));
+    ck('so it still passes the surfacing gate unchanged',
+        worst.needs_reply && worst.confidence >= 0.6, JSON.stringify({ n: worst.needs_reply, c: worst.confidence }));
+}
+
+section('R6 — a low self-report is never inflated by the cap');
+{
+    // The cap is a ceiling, not a target. A model that honestly says 0.3 must
+    // stay at 0.3 — otherwise the rubric added to the prompt is pointless.
+    AI = { ...CONFIDENT, confidence: 0.3 };
+    const a = await rw.assess({ ...FULL });
+    ck('an honest 0.3 survives untouched', a.confidence === 0.3, String(a.confidence));
+}
+
+section('R7 — the prompt actually asks for a calibrated number');
+{
+    AI = { ...CONFIDENT };
+    await rw.assess({ ...FULL });
+    ck('the rubric carries numeric anchors, not just "how sure are you"',
+        /0\.8[\s\S]{0,400}0\.4/.test(LAST_PROMPT || ''), 'anchors missing from the prompt');
+    ck('and warns that a reflexive 1.0 is worthless',
+        /1\.0 on every email/i.test(LAST_PROMPT || ''));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

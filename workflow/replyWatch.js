@@ -757,7 +757,13 @@ deadline: any date or time limit the sender actually states, verbatim. Do NOT in
 is_order: true ONLY if the sender is BUYING MATERIAL FROM US — asking to buy, asking for a proforma/PI, or confirming a purchase with quantities and/or prices. false for everything else. Specifically false for a REQUEST TO BOOK FREIGHT: asking a carrier, forwarder or line for container space, a sailing, a booking number or an ERD is logistics we are buying, not material someone is buying from us, and a proforma has no meaning there. Also false for a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
 order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
 
-confidence: 0.0 to 1.0, how sure you are about needs_reply.
+confidence: 0.0 to 1.0, how sure you are about needs_reply AND about the direction you chose. NOT how confident you feel in general — this number decides whether Apsara can trust the line without opening the email, so an honest 0.5 is far more useful than a reflexive 1.0. MEASURED AGAINST THESE ANCHORS:
+  1.0  the email states the ask outright, in this message, in plain words, and you quoted it.
+  0.8  clear, but you inferred one link — who is being asked, or that the thing is still outstanding.
+  0.6  the gist is clear and a specific matters — which figure, whose move, what exactly is wanted — is not.
+  0.4  you are reading a fragment: a one-line reply, "see attached", or a thread you were given no history for.
+  0.2  you are guessing. The message could reasonably mean two different things.
+A CALIBRATION CHECK before you answer: if ten emails looked exactly like this one, how many would you be right about? That fraction IS the number. Returning 1.0 on every email makes this field worthless and it will be overruled.
 
 If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is Jarvis's own record of what she has done before, not part of the email. It should tip a genuinely borderline call, and it must never override the content: a sender she has ignored ten times can still send the one message that matters, and a sender she always answers can still send a pure FYI. Never mention it in the summary.
 
@@ -1131,6 +1137,12 @@ async function assess(email) {
     let fromInternal = false;
     let asked_of = res.asked_of ? String(res.asked_of).trim() : null;
 
+    // True whenever waiting_on did NOT come from the To line — either the
+    // caller supplied no headers, or addressing() failed open. Read by the
+    // confidence cap below: a direction inferred from prose is a weaker claim
+    // than one read off a header, and the number should say so.
+    let addressingUnknown = true;
+
     // HEADERS BEAT THE MODEL. If no company address is in To, nobody here was
     // asked, whatever the prose sounds like. Applied only when the caller
     // actually supplied headers - assess() is called from tests without them,
@@ -1152,6 +1164,7 @@ async function assess(email) {
         } catch (e) {
             console.error('[REPLYWATCH] addressing failed, treating direction as unknown (non-fatal):', e.message);
         }
+        addressingUnknown = !!addr.unknown;
         if (!addr.unknown && addr.fromInternal) fromInternal = true;
         if (!addr.unknown && addr.fromInternal && !addr.inTo) {
             // OUR OWN TEAM wrote this to an outsider. Not inbound work. Either
@@ -1187,11 +1200,71 @@ async function assess(email) {
         // is more likely a confused model than a real bystander thread.
         waiting_on = 'her';
     }
+    let askedForWasDropped = false;
     if (res.asked_for && !quoteAppearsIn(res.asked_for_quote, email.body, waiting_on === 'them' ? 'progress' : 'request')) {
         console.warn(`[REPLYWATCH] asked_for "${String(res.asked_for).slice(0, 60)}" had no verifiable quote in the email — dropping it as ungrounded`);
         res.asked_for = null;
         res.asked_for_quote = null;
+        askedForWasDropped = true;
     }
+    // ── CONFIDENCE IS CAPPED BY EVIDENCE (2026-08-29) ────────────────────
+    // MEASURED, not suspected: a live 16-email sweep came back with
+    // confidence 1.0 on every single decision — including "Rabiya confirms no
+    // problem with the previous email and provides further instructions",
+    // which says nothing, and a Bill of Lading judged from a 51-character
+    // body with six unread attachments and no thread at all. A field that is
+    // always 1.0 carries no information, and MIN_CONFIDENCE was therefore
+    // gating nothing: every `confidence >= 0.6` test in this file has been
+    // passing unconditionally since the day it was written.
+    //
+    // The prompt now has real anchors, which helps. It is not enough on its
+    // own — self-reported confidence is the one thing a model cannot check,
+    // because it cannot see what it was NOT given.
+    //
+    // The harness can. Same principle as HEADERS BEAT THE MODEL above and as
+    // the money gap: the judgement is the model's, the evidence test is
+    // arithmetic the code does. Each condition below is something the model
+    // provably could not have known about its own input.
+    //
+    // FLOOR, deliberate: the cap never goes below MIN_CONFIDENCE. This change
+    // makes the number honest and orderable; it must not silently drop an
+    // item that surfaces today. Choosing a higher bar is a separate decision
+    // and needs the measured distribution first.
+    const confidenceCaps = [];
+    {
+        const threadChars = String(email.thread || '').length;
+        const bodyChars = String(email.body || '').length;
+        const attachmentCount = (email.attachments || []).length;
+        const looksLikeReply = /^\s*(re|fw|fwd)\s*:/i.test(String(email.subject || ''));
+
+        // A reply judged with no thread is one turn of a conversation. This is
+        // the exact condition behind "Andy Park — wants: EDO #", where the
+        // direction was read backwards off a single message.
+        if (!threadChars && looksLikeReply) confidenceCaps.push([0.7, 'no thread for a reply']);
+
+        // "See attached" with the attachment unread. The substance is in a
+        // file nothing in this pipeline opens — only the filenames reach the
+        // prompt. This is the LC-calculations failure, structurally.
+        if (bodyChars < 200 && attachmentCount > 0) confidenceCaps.push([0.6, 'short body, attachments unread']);
+
+        // The model asserted a request and could not point at words that say
+        // it. quoteAppearsIn already dropped the claim; the confidence should
+        // not survive it intact either.
+        if (askedForWasDropped) confidenceCaps.push([0.7, 'asked_for was ungrounded']);
+
+        // addressing() failed open, so waiting_on came from the prose rather
+        // than from the To line — a guess wearing the same field name.
+        if (addressingUnknown) confidenceCaps.push([0.75, 'addressing not header-derived']);
+    }
+    const confidenceCap = confidenceCaps.length
+        ? Math.max(MIN_CONFIDENCE, Math.min(...confidenceCaps.map((c) => c[0])))
+        : 1;
+    const rawConfidence = typeof res.confidence === 'number' ? res.confidence : 0;
+    const confidence = Math.min(rawConfidence, confidenceCap);
+    const confidence_capped_by = confidence < rawConfidence
+        ? confidenceCaps.filter((c) => c[0] <= confidenceCap).map((c) => c[1])
+        : [];
+
     // Without zod these fields are unvalidated, so normalize defensively —
     // the shape must not depend on whether an optional package installed.
     // Grounded against the thread as well as the body: the figure that made
@@ -1238,7 +1311,11 @@ async function assess(email) {
         // reply to, so it must never enter the "waiting on you" list.
         needs_reply: waiting_on === 'her' && (res.needs_reply === true || res.needs_reply === 'true'),
         asked_for_quote: typeof res.asked_for_quote === 'string' ? res.asked_for_quote : null,
-        confidence: typeof res.confidence === 'number' ? res.confidence : 0,
+        confidence,
+        // Kept so a digest line can be traced back to what the model was NOT
+        // given, without re-deriving it. [] when nothing capped it.
+        confidence_capped_by,
+        confidence_raw: rawConfidence,
         urgency: ['high', 'normal', 'low'].includes(res.urgency) ? res.urgency : 'normal',
         summary: degenericiseSummary(res.summary, senderLabel(email.from)),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
@@ -2459,6 +2536,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                     : a.waiting_on === 'someone_else' ? 'not_ours'
                     : 'no_reply_needed',
                 resolvedBy: 'ai', confidence: a.confidence,
+                // The cap and its reasons, so "why was it only 0.6" is
+                // answerable from the log rather than by re-deriving it.
+                confidenceRaw: a.confidence_raw,
+                confidenceCappedBy: a.confidence_capped_by || [],
                 actionTaken: a.needs_reply ? 'flagged' : 'ignored',
                 decision: {
                     waiting_on: a.waiting_on, needs_reply: a.needs_reply,

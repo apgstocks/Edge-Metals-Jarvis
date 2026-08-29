@@ -59,6 +59,8 @@ const scored = mail.map((r) => {
         subject: r.text,
         waiting_on: r.decision.waiting_on,
         confidence: r.confidence,
+        confidenceRaw: r.confidenceRaw,
+        cappedBy: r.confidenceCappedBy || [],
         summary: s.text,
         shape: s,
         inputs: r.inputs || null,
@@ -99,6 +101,31 @@ if (lens.length) {
     console.log('\nLENGTH  median ' + lens[Math.floor(lens.length / 2)] + ' words, range '
         + lens[0] + '-' + lens[lens.length - 1]);
     console.log('        (her own Gmail summaries, the target, run 15-22 words)');
+}
+
+// ── CONFIDENCE, the field that was 1.0 on everything ──────────────────────
+const confs = scored.map((s) => s.confidence).filter((c) => typeof c === 'number');
+if (confs.length) {
+    const uniq = [...new Set(confs)].sort((a, b) => a - b);
+    console.log('\nCONFIDENCE  ' + uniq.length + ' distinct value(s) across ' + confs.length + ' decisions');
+    if (uniq.length === 1) {
+        console.log('            ALL AT ' + uniq[0] + ' — this field carries no information,');
+        console.log('            and every MIN_CONFIDENCE gate is passing unconditionally.');
+    } else {
+        console.log('            range ' + uniq[0] + '-' + uniq[uniq.length - 1]
+            + ', median ' + confs.slice().sort((a, b) => a - b)[Math.floor(confs.length / 2)]);
+        const below = scored.filter((s) => s.confidence < 0.8);
+        console.log('            ' + below.length + ' below 0.8 — the ones to open before acting on.');
+    }
+    const capped = scored.filter((s) => (s.cappedBy || []).length);
+    if (capped.length) {
+        console.log('            ' + capped.length + ' capped by missing evidence:');
+        const why = {};
+        for (const s of capped) for (const r of s.cappedBy) why[r] = (why[r] || 0) + 1;
+        for (const [r, n] of Object.entries(why).sort((a, b) => b[1] - a[1])) {
+            console.log('              ' + String(n).padStart(3) + '  ' + r);
+        }
+    }
 }
 
 const thin = scored.filter((s) => s.thin);
@@ -151,6 +178,7 @@ if (has('list')) {
         console.log('     ' + (s.thin ? 'THIN ' : 'full ') + 'body ' + (i.bodyChars ?? '?') + 'c, thread '
             + (i.threadChars ?? '?') + 'c (' + (i.threadShown ?? '?') + ' msgs), att ' + (i.attachments ?? '?')
             + '  ·  ' + s.waiting_on + '  ·  conf ' + (s.confidence ?? '?')
+            + ((s.cappedBy || []).length ? ' (model said ' + s.confidenceRaw + '; capped: ' + s.cappedBy.join(', ') + ')' : '')
             + (marks.length ? '  ·  ' + marks.join(' ') : ''));
     }
 }
