@@ -1524,6 +1524,54 @@ section('R7 — the prompt actually asks for a calibrated number');
         /1\.0 on every email/i.test(LAST_PROMPT || ''));
 }
 
+// ══ S. relative dates resolve against the MESSAGE date ═════════════════════
+// Three live runs out of three produced "...before submission tomorrow" where
+// her Gmail summary said "August 28, 2026". The sender wrote the word
+// "tomorrow", so the model is copying faithfully — the conversion belongs in
+// the harness, which knows the message date.
+section('S1 — a relative word becomes the date the sender meant');
+{
+    const at = 'Wed, 26 Aug 2026 19:36:00 -0700';
+    ck('"tomorrow" resolves against the message, not against now',
+        rw.resolveRelativeDates('confirmation before submission tomorrow.', at)
+            === 'confirmation before submission August 27.',
+        rw.resolveRelativeDates('confirmation before submission tomorrow.', at));
+    ck('"yesterday" and "today" resolve too',
+        rw.resolveRelativeDates('sent yesterday, answer today.', at) === 'sent August 25, answer August 26.',
+        rw.resolveRelativeDates('sent yesterday, answer today.', at));
+    ck('it rolls the month',
+        rw.resolveRelativeDates('ships tomorrow', 'Sun, 31 Aug 2026 10:00:00 -0700') === 'ships September 1',
+        rw.resolveRelativeDates('ships tomorrow', 'Sun, 31 Aug 2026 10:00:00 -0700'));
+}
+
+section('S2 — it never guesses');
+{
+    // NO ANCHOR MEANS NO CONVERSION. Resolving against "now" would put a
+    // different date in the summary every time the message was rescanned,
+    // which is a worse failure than leaving the word alone.
+    ck('with no message date the word is left untouched',
+        rw.resolveRelativeDates('due tomorrow', null) === 'due tomorrow');
+    ck('an unparseable date is treated the same way',
+        rw.resolveRelativeDates('due tomorrow', 'not a date') === 'due tomorrow');
+    ck('a word merely CONTAINING one is not rewritten',
+        rw.resolveRelativeDates('the Todays Special report', 'Wed, 26 Aug 2026 19:36:00 -0700')
+            === 'the Todays Special report');
+    ck('an empty summary survives', rw.resolveRelativeDates('', 'Wed, 26 Aug 2026 19:36:00 -0700') === '');
+}
+
+section('S3 — assess() applies it, not just the helper');
+{
+    // The trap this pins: a helper that works perfectly and is never wired in.
+    // The relative-date detector in helpers/summaryScore.js is what the ruler
+    // scores on, so a summary that still says "tomorrow" is a scored failure.
+    AI = { ...CONFIDENT, summary: 'Accounting wants the LC confirmed before submission tomorrow.' };
+    const a = await rw.assess({ ...FULL, date: 'Wed, 26 Aug 2026 19:36:00 -0700' });
+    ck('the summary that reaches the digest carries a real date',
+        /August 27/.test(a.summary) && !/tomorrow/i.test(a.summary), a.summary);
+    ck('and it therefore stops tripping the ruler',
+        !require(R('helpers/summaryScore.js')).scoreShape(a.summary).relativeDate, a.summary);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

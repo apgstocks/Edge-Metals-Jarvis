@@ -1087,6 +1087,46 @@ function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHe
 //      bad digest and telling me, which is how the last five rounds went.
 const CATEGORY_OPENER = /^(the\s+)?sender\b\s*/i;
 let categoryOpeners = 0;
+// ── RELATIVE DATES BECOME REAL ONES (2026-08-29) ───────────────────────────
+// Measured against her own Gmail summary, three runs out of three: the LC
+// email came back as "...before submission tomorrow" where Gmail said
+// "August 28, 2026". The prompt already says to write the date as the sender
+// wrote it rather than "tomorrow" — and the sender LITERALLY WROTE "I am
+// going to submit the LC tomorrow", so on this email the rule contradicts
+// itself and the model is right to copy it.
+//
+// The model cannot fix this. It is told the sender and the thread, and the
+// word in front of it is "tomorrow". The HARNESS knows the message date, so
+// the conversion is arithmetic — the same division of labour as the money gap
+// and the addressing check: judgement to the model, deterministic facts to
+// the code.
+//
+// Why it matters more than it looks: the digest is written once and read
+// hours later, then kept for days. "Tomorrow" in a stored line is a fact with
+// an expiry date and it silently becomes a lie overnight. This is the single
+// most reproducible gap between a Jarvis summary and a Gmail one.
+//
+// Anchored in Los Angeles, like every other date decision in this file.
+const REL_DAY_OFFSET = { yesterday: -1, today: 0, tonight: 0, tomorrow: 1 };
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+function resolveRelativeDates(summary, anchorDate) {
+    const t = String(summary || '');
+    if (!t) return t;
+    const at = anchorDate instanceof Date ? anchorDate : new Date(anchorDate || NaN);
+    // No usable anchor means no honest conversion. Leave the word alone
+    // rather than resolving it against "now", which would land on a different
+    // day every time the message is rescanned.
+    if (isNaN(at.getTime())) return t;
+    const base = laMidnightUTC(at);
+    return t.replace(/\b(yesterday|today|tonight|tomorrow)\b/gi, (word) => {
+        const off = REL_DAY_OFFSET[word.toLowerCase()];
+        if (off === undefined) return word;
+        const d = new Date(base + off * DAY_MS);
+        return `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}`;
+    });
+}
+
 function degenericiseSummary(summary, fromLabel) {
     const t = String(summary || '').trim();
     if (!CATEGORY_OPENER.test(t)) return t;
@@ -1360,7 +1400,7 @@ async function assess(email) {
         confidence_capped_by,
         confidence_raw: rawConfidence,
         urgency: ['high', 'normal', 'low'].includes(res.urgency) ? res.urgency : 'normal',
-        summary: degenericiseSummary(res.summary, senderLabel(email.from)),
+        summary: resolveRelativeDates(degenericiseSummary(res.summary, senderLabel(email.from)), email.date),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
         deadline: res.deadline ? String(res.deadline).trim() : null,
         // Apsara, 2026-08-28, on a live digest: "This is not proforma stupid."
@@ -2975,7 +3015,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
