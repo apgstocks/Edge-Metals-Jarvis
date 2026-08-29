@@ -547,7 +547,12 @@ body { overflow-y:auto; }
            whole chain — plugin, permission, server, audio fetch, playback —
            and prints what each step actually did. One tap beats another
            round of speculation. -->
-      <button id="btnVoiceDiag" class="btn" style="width:100%; margin-top:11px; font-size:12px; opacity:.8;">Why isn't it talking?</button>
+      <div style="display:flex; gap:8px; margin-top:11px;">
+        <button id="btnVoiceDiag" class="btn" style="flex:1; font-size:12px; opacity:.85;">Why isn't it talking?</button>
+        <button id="btnVoiceLog" class="btn" style="flex:1; font-size:12px; opacity:.85;">Show log</button>
+      </div>
+      <button id="btnVoiceLogCopy" class="btn hidden" style="width:100%; margin-top:7px; font-size:12px;">Copy log</button>
+      <div id="voiceLog" class="hidden" style="margin-top:9px; max-height:280px; overflow:auto; font-size:10.5px; line-height:1.5; white-space:pre-wrap; font-family:ui-monospace,monospace; color:var(--text-muted); background:var(--surface-sunken); padding:9px; border-radius:var(--radius-sm);"></div>
       <div id="voiceDiag" style="margin-top:9px; font-size:11.5px; line-height:1.65; white-space:pre-wrap; font-family:ui-monospace,monospace; color:var(--text-muted);"></div>
     </div>
   </div>
@@ -6304,6 +6309,38 @@ let speaking = false;
 let voiceMuted = false;             // her switch, not a state
 try { voiceMuted = localStorage.getItem('jarvis_voice_muted') === '1'; } catch (e) {}
 
+// ── the voice log ─────────────────────────────────────────────────────────
+// Apsara, after five silent builds: "still no talkback. add logs".
+//
+// Right. Five rounds of me reasoning from the outside about a device I cannot
+// see is five rounds too many. This records what ACTUALLY happens, in order,
+// with timings — most importantly the raw text the recogniser returns, which
+// is the one thing none of my reasoning could reach.
+//
+// That matters because of a hypothesis I have not been able to test: the
+// microphone cycling with no reply is EXACTLY what it looks like when the wake
+// phrase never matches. Android's recogniser renders "Jarvis" as "service",
+// "java's", "jarvous" and worse in a noisy yard. If it is hearing her fine and
+// simply not matching, no amount of fixing the speech pipeline would ever have
+// helped — and only the raw text can tell us that.
+//
+// A ring buffer, so it cannot grow without bound on a phone left running.
+const VLOG_MAX = 300;
+const vlogLines = [];
+function vlog(msg, detail) {
+  const t = new Date();
+  const stamp = String(t.getMinutes()).padStart(2, '0') + ':'
+    + String(t.getSeconds()).padStart(2, '0') + '.'
+    + String(t.getMilliseconds()).padStart(3, '0');
+  const line = stamp + '  ' + msg + (detail === undefined ? '' : '  ' + (typeof detail === 'string' ? detail : JSON.stringify(detail)));
+  vlogLines.push(line);
+  if (vlogLines.length > VLOG_MAX) vlogLines.shift();
+  // Also to the Android log, so `adb logcat` shows it without opening the app.
+  try { console.log('[VOICE] ' + line); } catch (e) {}
+  const el = document.getElementById('voiceLog');
+  if (el && !el.classList.contains('hidden')) el.textContent = vlogLines.join('\n');
+}
+
 // ── the microphone rule lives in voice-machine.js ─────────────────────────
 // Everything about WHEN the mic may be open is decided there and tested
 // exhaustively in tests/voice-machine.js. This file only carries out the
@@ -6338,9 +6375,10 @@ let vmState = VM ? VM.initial({
 }) : null;
 
 function vmSend(event) {
-  if (!VM) return [];
+  if (!VM) { vlog('vmSend IGNORED — VoiceMachine not loaded', event); return []; }
   const r = VM.reduce(vmState, event);
   vmState = r.state;
+  vlog('machine ' + event, { effects: r.effects, state: r.state });
   try { localStorage.setItem('jarvis_wake_on', vmState.enabled ? '1' : '0'); } catch (e) {}
   // Effects come back in a deliberate order — silence the speaker, close the
   // mic, then open it. Performing them in any other order reintroduces the
@@ -6503,7 +6541,9 @@ async function speakWithMicClosed(text) {
   speaking = true;
   vmSend('SPEAK_START');
   try {
-    return await speakOnDevice(text);
+    const ok = await speakOnDevice(text);
+    vlog('  phone voice ' + (ok ? 'spoke' : 'FAILED'), text.slice(0, 60));
+    return ok;
   } finally {
     speaking = false;
     setTimeout(() => { if (!voiceMuted) vmSend('SPEAK_END'); }, 400);
@@ -6560,7 +6600,8 @@ function reportVoiceUnavailable() {
 }
 
 async function speak(what) {
-  if (voiceMuted) return false;
+  vlog('speak()', what);
+  if (voiceMuted) { vlog('  muted — nothing said'); return false; }
   try {
     // ── AUDIO FIRST, MIC SECOND ─────────────────────────────────────────
     // Apsara: "listening is switching on and off at recurrent interval. also
@@ -6593,10 +6634,12 @@ async function speak(what) {
         const blob = await api('/api/voice/phrase/' + encodeURIComponent(what.phrase), { raw: true })
           .catch(() => null);
         if (!blob) {
+          vlog('  phrase fetch FAILED — falling back to the phone voice');
           reportVoiceUnavailable();
           // Say it with the phone instead of saying nothing.
           return speakWithMicClosed(LOCAL_PHRASES[what.phrase] || '');
         }
+        vlog('  phrase fetched', Math.round(blob.size / 1024) + ' KB');
         phraseCache[what.phrase] = URL.createObjectURL(blob);
       }
       voiceServerOk = true;
@@ -6608,9 +6651,11 @@ async function speak(what) {
         raw: true,
       }).catch(() => null);
       if (!blob) {
+        vlog('  say fetch FAILED — falling back to the phone voice');
         reportVoiceUnavailable();
         return speakWithMicClosed(what.text);
       }
+      vlog('  audio fetched', Math.round(blob.size / 1024) + ' KB');
       voiceServerOk = true;
       url = URL.createObjectURL(blob);
       temporary = true;
@@ -6620,7 +6665,9 @@ async function speak(what) {
     speaking = true;
     vmSend('SPEAK_START');
     try {
-      return await playAudio(url);
+      const ok = await playAudio(url);
+      vlog('  playback ' + (ok ? 'OK' : 'FAILED'));
+      return ok;
     } finally {
       if (temporary) { try { URL.revokeObjectURL(url); } catch (e) {} }
       speaking = false;
@@ -6631,25 +6678,37 @@ async function speak(what) {
   } catch (e) {
     // Never leaves the mic shut: SPEAK_START is only reached once audio
     // exists, so an exception before that point has changed nothing.
+    vlog('  speak() threw', (e && e.message) || String(e));
     speaking = false;
     return false;
   }
 }
 
 const WAKE_PATTERNS = [
-  // Deliberately loose. "Jarvis" is not a word Android's recogniser knows
-  // well, and in a yard it comes back as "service", "jervis", "java's" and
-  // worse. Matching only the exact phrase would mean the wake word almost
-  // never works; these are the mishearings seen in practice plus the obvious
-  // near-homophones. A false wake costs one tap on Cancel — a missed wake
-  // costs the whole feature.
-  /\bhey\s+(jarvis|jervis|jarvi|jervis|java'?s|service|jarvas|charvis|harvis)\b/i,
-  /\bhi\s+(jarvis|jervis|jarvi)\b/i,
-  /\bok\s+(jarvis|jervis)\b/i,
-  // Scout, per Apsara 2026-08-29 — the yard agent has its own name now, and
-  // saying it should reach it directly. Same looseness as the Jarvis
-  // patterns and for the same reason: Android's recogniser mangles names.
-  /\b(hey|hi|ok|okay)\s+(scout|scott|scoot|skout)\b/i,
+  // Rewritten 2026-08-29 after five silent builds and Apsara's "add logs".
+  //
+  // THE NAME ON ITS OWN NOW COUNTS. Every previous pattern required a greeting
+  // in front — "hey jarvis", "ok jarvis" — and a bare "jarvis" matched
+  // nothing. That is very likely why the microphone cycled and nothing ever
+  // answered: these are PARTIAL results, and Android emits partials word by
+  // word as it recognises them, so the very common first partial for "Hey
+  // Jarvis" is simply "jarvis". It was thrown away every time.
+  //
+  // Two tiers, because they carry different false-trigger risk:
+  //
+  //   STRONG — names nobody says by accident in a scrap yard. Matched alone,
+  //   anywhere in the utterance.
+  /\bjarvis\b/i,
+  /\bjervis\b/i,
+  /\bjarvi\b/i,
+  /\bjarvix\b/i,
+  /\bscout\b/i,
+  /\bskout\b/i,
+
+  //   WEAK — real mishearings seen in practice that ARE ordinary words.
+  //   "service" and "scott" would fire constantly on their own around a yard,
+  //   so they only count with a greeting in front of them.
+  /\b(hey|hi|ok|okay|a|yo)\s+(service|services|java'?s|jarvous|harvest|scott|scot)\b/i,
 ];
 
 function voicePlugin() {
@@ -6665,9 +6724,22 @@ function isWakePhrase(text) {
 // Strips the wake phrase off the front so "hey jarvis check mail from Joey"
 // reaches the brain as "check mail from Joey" — the brain has never seen a
 // wake word and shouldn't have to learn one.
+// STRIPPING NEEDS ITS OWN PATTERNS, not the matching ones.
+//
+// Caught by tests/yard-clients.js the moment the bare name was allowed to
+// wake: reusing WAKE_PATTERNS to strip left the greeting behind, because the
+// pattern that matches is now just \bjarvis\b. "Hey Jarvis check mail from
+// Joey" came out as "Hey check mail from Joey" and went to the brain like
+// that. Matching and removing are different jobs — the matcher should be as
+// permissive as possible, the stripper as thorough as possible.
+const WAKE_STRIP = [
+  /\b(hey|hi|ok|okay|yo|a)?\s*(jarvis|jervis|jarvi|jarvix|scout|skout)\b[\s,:.!-]*/ig,
+  /\b(hey|hi|ok|okay|yo|a)\s+(services?|java'?s|jarvous|harvest|scott|scot)\b[\s,:.!-]*/ig,
+];
+
 function stripWake(text) {
   let t = String(text || '');
-  for (const re of WAKE_PATTERNS) t = t.replace(re, ' ');
+  for (const re of WAKE_STRIP) t = t.replace(re, ' ');
   return t.replace(/\s+/g, ' ').trim();
 }
 
@@ -6712,6 +6784,7 @@ async function startWakeLoop() {
     return;
   }
   voiceOn = true;
+  vlog('wake loop STARTED');
   renderVoiceButton();
   // ONCE per app session. Android's recogniser is not continuous — it stops on
   // silence and is restarted, constantly — so a toast here fired on every
@@ -6825,7 +6898,13 @@ function wireVoiceListeners() {
   SR.__jarvisWired = true;
 
   SR.addListener('partialResults', (data) => {
-    const heard = ((data && data.matches) || [])[0] || '';
+    const all = (data && data.matches) || [];
+    const heard = all[0] || '';
+    // EVERY alternative, not just the best one. Android returns several
+    // guesses and the wake phrase is often in the second or third — if
+    // "Hey Jarvis" is arriving as "hey service" this is the line that proves
+    // it, and no amount of reasoning from outside the phone could.
+    vlog('heard [' + voiceMode + ']', all.length ? all : '(nothing)');
     if (!heard) return;
     // Belt and braces on top of stopping the mic in speak(): if any audio is
     // playing, whatever the mic reports is very likely the phone hearing
@@ -6833,12 +6912,19 @@ function wireVoiceListeners() {
     // the wake word and loop the app against its own voice.
     if (speaking) return;
     if (voiceMode === 'wake') {
-      if (!isWakePhrase(heard)) return;
-      // Heard it. Anything AFTER the wake phrase in the same breath is
-      // already the command — "hey jarvis check mail from Joey" is one
-      // utterance, and making her pause and repeat herself would be worse
-      // than useless.
-      const rest = stripWake(heard);
+      // EVERY alternative is checked, not just the best one. Android returns
+      // several guesses ranked by confidence and the wake phrase is very often
+      // in the second or third — "hey jarvis" comes back as "hey service",
+      // "hey java's", "a jarvis". Matching only matches[0] threw away the
+      // alternatives that would have matched, which on a noisy yard phone is
+      // most of them.
+      const matched = all.find((m) => isWakePhrase(m));
+      if (!matched) { vlog('  no wake match in any alternative'); return; }
+      vlog('  WAKE MATCHED on', matched);
+      // Anything AFTER the wake phrase in the same breath is already the
+      // command — "hey jarvis check mail from Joey" is one utterance, and
+      // making her pause and repeat herself would be worse than useless.
+      const rest = stripWake(matched);
       // Say something back IMMEDIATELY. This is the whole of what she asked
       // for — "if i call hey jarvis..make it talk back". The phrase is
       // pre-synthesised and cached server-side so it plays at once; waiting
@@ -7049,6 +7135,31 @@ function wireVoiceUI() {
   $('btnVoiceSend').addEventListener('click', sendVoiceCommand);
   $('btnVoiceRetry').addEventListener('click', () => captureCommand(''));
   $('btnVoiceDiag').addEventListener('click', runVoiceDiagnostic);
+  $('btnVoiceLog').addEventListener('click', () => {
+    const el = $('voiceLog'); const copy = $('btnVoiceLogCopy');
+    const showing = !el.classList.contains('hidden');
+    el.classList.toggle('hidden', showing);
+    copy.classList.toggle('hidden', showing);
+    $('btnVoiceLog').textContent = showing ? 'Show log' : 'Hide log';
+    if (!showing) {
+      el.textContent = vlogLines.length ? vlogLines.join('\n') : '(nothing logged yet — say "Hey Jarvis" with this open)';
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+  $('btnVoiceLogCopy').addEventListener('click', async () => {
+    const text = vlogLines.join('\n');
+    try {
+      // Clipboard first; a <textarea> + execCommand fallback for the older
+      // WebViews where navigator.clipboard is not available over http.
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      voiceToast('Log copied — paste it to me.');
+    } catch (e) { voiceToast('Could not copy: ' + ((e && e.message) || 'unknown')); }
+  });
   $('voiceText').addEventListener('input', () => { $('voiceText').dataset.edited = '1'; });
   $('voiceText').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendVoiceCommand(); }

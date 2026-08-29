@@ -171,5 +171,70 @@ console.log('\n─ voice: routing and speech ───────────�
        /'\/api\/voice\/ask'/.test(html));
 }
 
+// ── the wake phrase, against real mishearings ─────────────────────────────
+// Apsara, after five builds: "still no talkback. add logs. find out why."
+//
+// Found by instrumenting rather than reasoning: EVERY pattern required a
+// greeting in front of the name, so a bare "jarvis" matched nothing. These are
+// PARTIAL results — Android emits them word by word as it recognises — so the
+// most common first partial for "Hey Jarvis" is just "jarvis", and it was
+// discarded every single time. The microphone cycled, nothing ever answered,
+// and no amount of fixing the speech pipeline downstream could have helped.
+{
+    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    const m = /const WAKE_PATTERNS = \[([\s\S]*?)\n\];/.exec(html);
+    ck('the wake patterns are findable', !!m);
+    const pats = m ? [...m[1].matchAll(/\/(.+?)\/i,/g)].map((x) => new RegExp(x[1], 'i')) : [];
+    const isWake = (t) => pats.some((r) => r.test(t));
+
+    // MUST wake. The bare names are the important ones — they are what a
+    // partial result actually looks like.
+    for (const t of ['jarvis', 'Jarvis', 'JARVIS', 'scout', 'hey jarvis', 'hey scout',
+                     'hi jarvis', 'ok jarvi', 'okay jarvis', 'a jarvis',
+                     'hey jarvis how much do we owe', 'hey service', 'hey jervis',
+                     "hey java's", 'hey scott']) {
+        ck(`wakes on ${JSON.stringify(t)}`, isWake(t));
+    }
+
+    // MUST NOT wake. A yard is full of talking, and a wake word that fires on
+    // ordinary speech is worse than one that never fires — it would open the
+    // microphone and send whatever followed to something that messages
+    // truckers.
+    for (const t of ['hey drivers', 'they charge us', 'the truck is here',
+                     'pay ramesh', 'how much do we owe', 'harvest',
+                     'service', 'scott', 'call the service centre']) {
+        ck(`  does NOT wake on ${JSON.stringify(t)}`, !isWake(t));
+    }
+
+    // The ordinary-word mishearings are only allowed WITH a greeting, which is
+    // the whole reason for the two tiers.
+    ck('"service" alone is ignored but "hey service" wakes',
+       !isWake('service') && isWake('hey service'));
+    ck('"scott" alone is ignored but "hey scott" wakes',
+       !isWake('scott') && isWake('hey scott'));
+}
+
+// ── the log exists, and records the one thing reasoning could not reach ───
+{
+    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    ck('there is a voice log', /function vlog\(/.test(html));
+    ck('  it is bounded, so it cannot grow forever', /VLOG_MAX/.test(html));
+    ck('  it records the RAW recogniser output', /vlog\('heard \[/.test(html));
+    ck('  including every alternative, not just the best guess',
+       /vlog\('heard \[' \+ voiceMode \+ '\]', all/.test(html));
+    ck('  it says when nothing matched', /no wake match in any alternative/.test(html));
+    ck('  and when something did', /WAKE MATCHED on/.test(html));
+    ck('  it records every machine transition', /vlog\('machine ' \+ event/.test(html));
+    ck('  it records whether the audio was fetched', /audio fetched|phrase fetched/.test(html));
+    ck('  and whether it actually played', /playback ' \+ \(ok \? 'OK'/.test(html));
+    ck('  it also goes to logcat', /console\.log\('\[VOICE\] '/.test(html));
+    ck('she can read it in the app', /btnVoiceLog/.test(html));
+    ck('  and copy it out', /btnVoiceLogCopy/.test(html));
+
+    // The alternatives are checked, not just matches[0]. This is the fix.
+    ck('EVERY alternative is checked for the wake phrase',
+       /const matched = all\.find\(\(m\) => isWakePhrase\(m\)\)/.test(html));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

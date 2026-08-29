@@ -21,6 +21,8 @@ const mobileJs = MOBILE.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 section('A — "Hey Jarvis"');
 {
+    // Includes WAKE_STRIP, which lives between the two — matching and
+    // stripping are separate pattern sets now, and both are exercised here.
     const seg = mobileJs.slice(mobileJs.indexOf('const WAKE_PATTERNS'), mobileJs.indexOf('// ── Wake-word loop'));
     const [isWake, strip] = new Function(seg + '; return [isWakePhrase, stripWake];')();
 
@@ -29,7 +31,17 @@ section('A — "Hey Jarvis"');
     ['hey jarvis', 'Hey Jarvis check mail from Joey', 'hey service send the price list',
      'hey jervis', 'OK Jarvis show loads', 'hi jarvis'].forEach((t) =>
         ck(`wakes on ${JSON.stringify(t)}`, isWake(t)));
-    ['jarvis', 'hey there', 'check mail from Joey', 'heyward services'].forEach((t) =>
+    // "jarvis" alone WAKES as of 2026-08-29, reversing the original rule.
+    // These are PARTIAL results — Android emits them word by word — so the
+    // most common first partial for "Hey Jarvis" is simply "jarvis". Requiring
+    // a greeting meant it was discarded every time, the mic cycled, and
+    // nothing ever answered. Apsara: five builds of "no talkback".
+    ['jarvis', 'scout', 'Jarvis'].forEach((t) =>
+        ck(`wakes on the bare name ${JSON.stringify(t)}`, isWake(t)));
+    // The ordinary words still must not fire on their own — a yard is full of
+    // talking, and a false wake opens the mic and sends what follows to
+    // something that messages truckers.
+    ['hey there', 'check mail from Joey', 'heyward services', 'service', 'scott'].forEach((t) =>
         ck(`ignores ${JSON.stringify(t)}`, !isWake(t)));
 
     ck('the wake phrase is stripped before the brain sees it',
