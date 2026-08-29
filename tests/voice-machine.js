@@ -267,12 +267,76 @@ function violations(state) {
 // A perfect state machine nothing calls is worth nothing. The reason this is
 // asserted: the machine was extracted FROM index.html, and the failure mode is
 // that the old inline logic is left behind and quietly keeps running.
+// ── 4. THE APP ACTUALLY USES THIS ─────────────────────────────────────────
+// REWRITTEN after Apsara reported "after opening app, when i say hey jarvis,
+// it is not doing anything". The previous version of this section asserted
+// only that index.html MENTIONED voice-machine.js — and it passed, green,
+// while the feature was completely dead. Three separate bugs hid behind that
+// weak assertion:
+//
+//   1. the <script src="voice-machine.js"> tag sat at the END of <body>,
+//      AFTER the inline app script that reads window.VoiceMachine at parse
+//      time. VoiceMachine was undefined, VM was null, and every call into the
+//      machine silently did nothing. Nothing threw.
+//   2. nothing ever dispatched an event, so the START_MIC effect never fired
+//      and the recogniser was never started.
+//   3. the wake word defaulted to OFF, so even once wired it needed a
+//      long-press before "Hey Jarvis" would do anything.
+//
+// A test that cannot fail is worse than no test, because it is believed. Each
+// assertion below fails against the broken arrangement.
 {
     const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
-    ck('the app loads the state machine', /voice-machine\.js/.test(html));
-    ck('the app asks the machine before opening the mic', /micShouldBeOpen|VoiceMachine/.test(html));
+
     ck('the machine ships inside the app bundle',
        fs.existsSync(path.join(R, 'mobile-app/www/voice-machine.js')));
+
+    // BUG 1 — load order. The tag must come before the inline script that
+    // consumes it, or the whole feature is inert.
+    const tagAt = html.indexOf('<script src="voice-machine.js">');
+    const inlineAt = html.search(/<script(?![^>]*src=)[^>]*>/);
+    ck('the machine is loaded by the app', tagAt !== -1);
+    ck('  and BEFORE the inline script that reads it', tagAt !== -1 && inlineAt !== -1 && tagAt < inlineAt);
+
+    // BUG 2 — something must actually dispatch, or the mic never opens.
+    ck('the app dispatches a foreground event once it is up', /vmSend\('APP_FOREGROUND'\)/.test(html));
+    ck('  and it does so after the listeners are wired',
+       html.indexOf('wireVoiceListeners();') !== -1
+       && html.indexOf("vmSend('APP_FOREGROUND')") > html.lastIndexOf('wireVoiceListeners();'));
+    ck('the app stops listening when it goes to the background', /APP_BACKGROUND/.test(html));
+    ck('  from the Android lifecycle', /appStateChange/.test(html));
+    ck('  and from the WebView being hidden', /visibilitychange/.test(html));
+
+    // BUG 3 — opening the app IS the switch. Her words: "after opening the
+    // app, if i call hey jarvis..make it talk back".
+    ck('the wake word is ON by default', /saved === null \? true/.test(html));
+    ck('  but an explicit choice to turn it off is respected', /saved === '1'/.test(html));
+
+    // And the machine is genuinely what decides — not a second copy of the
+    // rule left behind in the app.
+    ck('the app carries out the machine\'s effects', /START_MIC|STOP_MIC/.test(html));
+
+    // BUG 4 — the one no amount of string-matching would have caught. With
+    // foreground initialised to TRUE, the boot dispatch of APP_FOREGROUND
+    // changed nothing, so no effect fired, so the recogniser never started.
+    // Every assertion above passed and the mic stayed shut. So this asserts
+    // the BEHAVIOUR: replay the app's real boot sequence through the real
+    // machine and require that the microphone is actually asked to start.
+    ck('the app starts the machine with foreground FALSE', /foreground: false/.test(html));
+    {
+        const bootState = VM.initial({ foreground: false, enabled: true });
+        const r = VM.reduce(bootState, 'APP_FOREGROUND');
+        ck('BOOT: opening the app really does start the microphone',
+           r.effects.includes('START_MIC'));
+        ck('  and the machine agrees the mic should be open', VM.micShouldBeOpen(r.state));
+
+        // The same sequence with the wake word explicitly switched off must
+        // NOT start it. Default-on must not become always-on.
+        const off = VM.reduce(VM.initial({ foreground: false, enabled: false }), 'APP_FOREGROUND');
+        ck('  but not when she has switched it off', !off.effects.includes('START_MIC'));
+    }
+    ck('speaking goes through the machine', /vmSend\('SPEAK_START'\)/.test(html));
+    ck('  and so does the end of speaking', /vmSend\('SPEAK_END'\)/.test(html));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

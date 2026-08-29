@@ -751,6 +751,13 @@ body { overflow-y:auto; }
   </div>
 </div>
 
+<!-- The microphone rule (mobile-app/www/voice-machine.js). MUST load before
+     the inline script below, which reads window.VoiceMachine at parse time.
+     It was originally placed at the end of <body> with the other includes,
+     which meant VoiceMachine was undefined when the app looked for it and
+     every call into the machine silently did nothing — the wake word simply
+     never started. Nothing threw; it was just quietly inert. -->
+<script src="voice-machine.js"></script>
 <script>
 // ══════════════════════════════════════════════════════════════════════
 // Edge Yard — standalone mobile app (Capacitor shell)
@@ -6301,9 +6308,27 @@ try { voiceMuted = localStorage.getItem('jarvis_voice_muted') === '1'; } catch (
 // exactly that. The microphone itself still stops while the app is not in the
 // foreground, which is an Android constraint rather than a preference.
 let VM = (typeof VoiceMachine !== 'undefined') ? VoiceMachine : null;
-let vmState = VM ? VM.initial({ enabled: (function () {
-  try { return localStorage.getItem('jarvis_wake_on') === '1'; } catch (e) { return false; }
-})() }) : null;
+let vmState = VM ? VM.initial({
+  // foreground STARTS FALSE, deliberately. The app declares itself foreground
+  // once it is up, and that transition is what produces the START_MIC effect.
+  // Initialising it to true made the boot dispatch a no-op — the state was
+  // already correct, so nothing changed, so no effect fired, so the recogniser
+  // never started. Everything looked right and the mic stayed shut.
+  foreground: false,
+  enabled: (function () {
+  // DEFAULT ON. Apsara's words were "after opening the app, if i call hey
+  // jarvis..make it talk back" — opening the app IS the switch. Requiring a
+  // long-press first meant she opened it, said Hey Jarvis, and nothing
+  // happened, which is exactly what she reported.
+  //
+  // An explicit OFF is still respected; only the absence of a choice defaults
+  // to listening.
+  try {
+    const saved = localStorage.getItem('jarvis_wake_on');
+    return saved === null ? true : saved === '1';
+  } catch (e) { return true; }
+})(),
+}) : null;
 
 function vmSend(event) {
   if (!VM) return [];
@@ -6761,6 +6786,27 @@ function wireVoiceUI() {
 
   wireVoiceListeners();
   renderVoiceButton();
+
+  // START LISTENING. The machine knowing it should be listening is not the
+  // same as the microphone being open: something has to dispatch an event so
+  // the START_MIC effect fires. Nothing did, so the wake word never began —
+  // the second half of why "hey jarvis" did nothing.
+  //
+  // Sent after wireVoiceListeners() so the partialResults handler exists
+  // before the recogniser can deliver anything to it.
+  vmSend('APP_FOREGROUND');
+
+  // ── the app must not listen while it is off screen ─────────────────────
+  // The SETTING survives backgrounding; the MICROPHONE does not. Two sources
+  // because neither is reliable alone: Capacitor's appStateChange follows
+  // Android's real lifecycle, visibilitychange covers the WebView being
+  // hidden without the activity stopping.
+  const sendFg = (fg) => { try { vmSend(fg ? 'APP_FOREGROUND' : 'APP_BACKGROUND'); } catch (e) {} };
+  try {
+    const AppPlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (AppPlugin && AppPlugin.addListener) AppPlugin.addListener('appStateChange', (st) => sendFg(!!(st && st.isActive)));
+  } catch (e) {}
+  document.addEventListener('visibilitychange', () => sendFg(document.visibilityState === 'visible'));
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────
@@ -6780,11 +6826,6 @@ function wireVoiceUI() {
        dashboard/yard-bot.js) so the two cannot drift the way the load
        form did. Self-contained: injects its own markup and styles, and
        reuses whatever api() the host already defines. -->
-  <!-- The microphone rule. Extracted from this file so it can be tested
-       exhaustively (tests/voice-machine.js) — it decides when the mic may be
-       open, which is the one piece of this app that can loop the phone
-       against its own voice. Loaded before the app code that consults it. -->
-  <script src="voice-machine.js"></script>
   <script src="yard-bot.js"></script>
 </body>
 </html>
