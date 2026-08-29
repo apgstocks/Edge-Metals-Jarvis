@@ -550,6 +550,54 @@ function hear(phone, matches) {
         }
     }
 
+    // ── 3k. HER PHONE NEVER FIRES listeningState ──────────────────────────
+    // Log, 2026-08-29:
+    //
+    //   18:17.396  heard [command]  ["hey"]
+    //   18:17.399  heard [command]  ["hey","he","hey scout","hey SCO"]
+    //   ...and nothing.
+    //
+    // It heard her perfectly. What never came was the listeningState 'stopped'
+    // event that the whole command path hung off — and her logs have never once
+    // shown that event on this device. Completion now falls out of the partials
+    // themselves. The fake below emits partials and NOTHING else, which is what
+    // her phone does.
+    {
+        const { win, phone, logs } = await bootApp();
+        // Tap the mic, then speak. No listeningState is ever fired.
+        win.document.getElementById('btnVoice').dispatchEvent(new win.Event('click'));
+        await new Promise((r) => setTimeout(r, 150));
+        hear(phone, ['hey']);
+        hear(phone, ['hey scout how much do we owe', 'he scout how much do we owe']);
+        // Longer than the 1.2s debounce.
+        await new Promise((r) => setTimeout(r, 1800));
+        ck('a command completes with NO listeningState event',
+           phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'never sent: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice')))
+             + '\n        ' + logs());
+        ck('  and the answer is spoken', phone.spoken.length > 0);
+        win.close();
+    }
+
+    // ── 3l. it does not fire twice ────────────────────────────────────────
+    // The debounce and the listeningState event both complete a command. Only
+    // the first may act, or a question is asked — and an instruction sent —
+    // twice.
+    {
+        const { win, phone } = await bootApp();
+        win.document.getElementById('btnVoice').dispatchEvent(new win.Event('click'));
+        await new Promise((r) => setTimeout(r, 150));
+        hear(phone, ['how much do we owe']);
+        await new Promise((r) => setTimeout(r, 1500));
+        // Now the event arrives late, as it might on another device.
+        (phone.events.listeningState || []).forEach((f) => f({ status: 'stopped' }));
+        await new Promise((r) => setTimeout(r, 400));
+        const asks = phone.fetched.filter((u) => u.includes('/api/voice/ask')).length;
+        ck('a command is sent exactly once, not twice', asks === 1,
+           'sent ' + asks + ' times');
+        win.close();
+    }
+
     // ── 4. ordinary yard talk must NOT wake it ────────────────────────────
     {
         const { win, phone } = await bootApp();

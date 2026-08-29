@@ -7076,8 +7076,29 @@ function wireVoiceListeners() {
       const box = $('voiceText');
       // Don't fight the user: once they start correcting the transcript by
       // hand, stop overwriting it from the mic.
-      if (box && !box.dataset.edited) box.value = stripWake(heard);
+      if (box && !box.dataset.edited) box.value = stripWake(all[0] || heard);
       setVoiceSheetState('listening', 'Listening…');
+      // ── FINISH FROM THE PARTIALS ────────────────────────────────────────
+      // Her log, 2026-08-29:
+      //
+      //   18:17.396  heard [command]  ["hey"]
+      //   18:17.399  heard [command]  ["hey","he","hey scout","hey SCO"]
+      //   ...and nothing. No send, no speech, no confirmation.
+      //
+      // It heard her perfectly. What never arrived was the listeningState
+      // 'stopped' event that the ENTIRE command path hung off — and her logs
+      // have never once shown that event firing on this device.
+      //
+      // So completion is now decided from the partials themselves: when the
+      // transcript stops changing for a moment, the utterance is over. The
+      // listeningState handler still calls the same function when it does
+      // fire, and finishCommand() is idempotent, so whichever arrives first
+      // wins and the other is a no-op.
+      //
+      // This is the third time an assumption about a plugin event has cost a
+      // build. Nothing load-bearing may depend on an event this plugin has not
+      // been OBSERVED to emit.
+      scheduleCommandFinish();
     }
   });
 
@@ -7087,43 +7108,8 @@ function wireVoiceListeners() {
     voiceListening = false;
     if (voiceMode === 'wake' && voiceOn) { wakeCycle(); return; }
     if (voiceMode === 'command') {
-      const box = $('voiceText');
-      const text = (box && box.value.trim()) || '';
-      if (!text) {
-        setVoiceSheetState('empty', "Didn't catch that — tap the mic to try again, or type it.");
-        return;
-      }
-      // ── ASK IT, DON'T WAIT TO BE TOLD TWICE ─────────────────────────────
-      // Apsara: '44:53.992 heard [command] ["hey scout",...] --> when i said
-      // hey scout, why didnt it talk back?'
-      //
-      // Because it was waiting for her to tap Send. That was right when every
-      // spoken command went to workflow/brain.js, which messages truckers and
-      // suppliers for real — a mistranscription there sends a real message, so
-      // a human confirmation was the whole point.
-      //
-      // It stopped being right when Scout arrived. A question about the yard
-      // reaches something that can only READ, so the worst a mishearing costs
-      // is a wrong sentence on screen. Making her tap Send to hear an answer
-      // she asked for out loud defeats the feature.
-      //
-      // ── is this the answer to a "Shall I?" ────────────────────────────
-      if (pendingConfirm) { answerConfirmation(text); return; }
-
-      // ── a question goes straight through ──────────────────────────────
-      if (looksLikeSafeQuestion(text)) {
-        vlog('auto-sending a question', text);
-        setVoiceSheetState('working', 'Asking…');
-        sendVoiceCommand();
-        return;
-      }
-
-      // ── anything that can ACT is read back first ──────────────────────
-      vlog('asking for spoken confirmation', text);
-      pendingConfirm = text;
-      setVoiceSheetState('working', 'Say yes to confirm.');
-      speak({ text: confirmationLine(text), agent: 'jarvis' })
-        .then(() => captureCommand(''), () => captureCommand(''));
+      // Same completion path as the debounce above, whichever arrives first.
+      finishCommand('recogniser stopped');
     }
   });
 }
@@ -7246,6 +7232,52 @@ let pendingConfirm = null;      // the instruction awaiting a yes
 // "yes" sends a real message, a misheard "no" costs her saying it again.
 const SAID_YES = /^\s*(yes|yeah|yep|yup|ya|sure|ok|okay|do it|go ahead|send it|confirm|confirmed|correct|right|please do|affirmative)\b/i;
 const SAID_NO = /^\s*(no|nope|nah|cancel|stop|don'?t|do not|wait|forget it|never mind|nevermind|negative)\b/i;
+
+// ── completing a spoken command ───────────────────────────────────────────
+// Debounced off the partials. 1.2s of no new words means she has stopped
+// talking — long enough not to cut her off mid-sentence, short enough not to
+// feel like a wait.
+let commandFinishTimer = null;
+let commandFinished = false;
+
+function scheduleCommandFinish() {
+  commandFinished = false;
+  if (commandFinishTimer) clearTimeout(commandFinishTimer);
+  commandFinishTimer = setTimeout(() => finishCommand('silence'), 1200);
+}
+
+function cancelCommandFinish() {
+  if (commandFinishTimer) { clearTimeout(commandFinishTimer); commandFinishTimer = null; }
+}
+
+// Idempotent on purpose: the debounce and the listeningState event both call
+// it, and only the first should act.
+function finishCommand(why) {
+  if (commandFinished) return;
+  if (voiceMode !== 'command') return;
+  commandFinished = true;
+  cancelCommandFinish();
+
+  const box = $('voiceText');
+  const text = (box && box.value.trim()) || '';
+  vlog('command finished (' + why + ')', text || '(nothing)');
+  if (!text) {
+    setVoiceSheetState('empty', "Didn't catch that — tap the mic to try again, or type it.");
+    return;
+  }
+  if (pendingConfirm) { answerConfirmation(text); return; }
+  if (looksLikeSafeQuestion(text)) {
+    vlog('auto-sending a question', text);
+    setVoiceSheetState('working', 'Asking…');
+    sendVoiceCommand();
+    return;
+  }
+  vlog('asking for spoken confirmation', text);
+  pendingConfirm = text;
+  setVoiceSheetState('working', 'Say yes to confirm.');
+  speak({ text: confirmationLine(text), agent: 'jarvis' })
+    .then(() => captureCommand(''), () => captureCommand(''));
+}
 
 // Resolves a pending "Shall I?". One function, called from the partial
 // listener and from the end of a capture, so a yes means the same thing
