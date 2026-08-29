@@ -725,6 +725,8 @@ summary: THE GIST OF THE EMAIL — what it actually says, in one sentence under 
     BAD  "Sender wants confirmation on container approval."
     GOOD "Zimex needs container HMMU6298470 approved before the 8/27 cutoff."
 
+  WHO IS SPEAKING IS THE SENDER ON THE FROM LINE, AND NOBODY ELSE. The summary describes what THIS message, from THAT sender, says. The thread above is there to tell you what the words MEAN — which booking, whose move, what was already agreed — and it is never a source of who is talking now. A REAL FAILURE, 2026-08-29, measured against her own Gmail summaries: an email FROM Accounting Edge was summarised "Hynos confirms JY70 at $995..." — Hynos is the counterparty EARLIER in the same thread. On the next message it went further and reported Accounting as advising AGAINST combining the JY71 combos when Accounting had just agreed TO combine them: the model reproduced the other party's position and pinned it on this sender. Attributing a party's words to their counterparty is worse than leaving a detail out, because she reads it as settled and acts on it. If the sender is agreeing to, refusing, or answering something said earlier, name BOTH sides — "Accounting accepts Hynos's $995 and will combine the JY71 combos" — never collapse it onto the wrong one. And note that the worked examples below name Hynos and Jinho because those particular emails came FROM them; they are not a licence to open any summary on this thread with "Hynos".
+
   COVER THE WHOLE EMAIL. If it makes two points, say BOTH — join them with "and". Reporting only the first is the most damaging thing you can do here, because she cannot tell that anything is missing. A real example that was got wrong: an email asking to move JY70 to $995 AND advising against combining the JY71 combos was reported as "wants confirmation of unit price adjustment for JY70" — half the message, silently. Correct: "Jinho wants JY70 at $995 and advises against combining the JY71 combos."
 
   EVERY AMOUNT AND EVERY DATE STATED IN THE EMAIL GOES IN. Another real miss: "Accounting requested confirmation of LC calculations totaling $111,447.60 before submission scheduled for August 28, 2026" came out as "confirmation of calculations" — no total, no date. Write the date as the sender wrote it (August 28) rather than "tomorrow", which stops being true the day after.
@@ -1230,6 +1232,37 @@ async function assess(email) {
     // makes the number honest and orderable; it must not silently drop an
     // item that surfaces today. Choosing a higher bar is a separate decision
     // and needs the measured distribution first.
+    // Does the summary open by naming somebody OTHER than this sender, while
+    // never naming this sender at all? Speakers come from the thread ledger's
+    // own "- [MM-DD] Name:" rows, so this only ever fires on a name the model
+    // could have lifted from the context it was given.
+    const summaryNamesWrongSpeaker = (() => {
+        const summary = String(res.summary || '');
+        if (!summary || !email.thread) return false;
+        const senderName = String(senderLabel(email.from) || '').trim();
+        if (!senderName) return false;
+        const nameToken = (v) => String(v || '').trim().split(/[\s,<]/)[0].toLowerCase();
+        const mine = nameToken(senderName);
+        if (!mine || mine.length < 3) return false;
+        // The sender IS named somewhere — no misattribution to report.
+        if (new RegExp('\\b' + mine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(summary)) return false;
+        const others = new Set();
+        for (const line of String(email.thread).split('\n')) {
+            const m = line.match(/^-\s*(?:\[[^\]]*\]\s*)?([^:]{2,40}):/);
+            if (!m) continue;
+            const tok = nameToken(m[1]);
+            if (tok && tok.length >= 3 && tok !== mine) others.add(tok);
+        }
+        // Only the OPENING clause counts — a later mention of the other party
+        // is normal and often correct ("Accounting accepts Hynos's $995").
+        const opener = summary.split(/\s+/).slice(0, 4).join(' ').toLowerCase();
+        for (const o of others) if (opener.includes(o)) return true;
+        return false;
+    })();
+    if (summaryNamesWrongSpeaker) {
+        console.warn(`[REPLYWATCH] summary opens on a party from the thread, not the sender (${senderLabel(email.from)}): "${String(res.summary || '').slice(0, 80)}"`);
+    }
+
     const confidenceCaps = [];
     {
         const threadChars = String(email.thread || '').length;
@@ -1255,6 +1288,16 @@ async function assess(email) {
         // addressing() failed open, so waiting_on came from the prose rather
         // than from the To line — a guess wearing the same field name.
         if (addressingUnknown) confidenceCaps.push([0.75, 'addressing not header-derived']);
+
+        // SPEAKER MISATTRIBUTION (2026-08-29). Both remaining failures in the
+        // fact-carrying eval were this: the summary opened by naming a party
+        // from EARLIER in the thread instead of the sender of this message.
+        // The sender is a header, so the harness can check it and the model
+        // cannot. Not rewritten — "Hynos confirms X" can be a true thing this
+        // sender is reporting, and silently renaming the subject of a
+        // sentence would be inventing content. Flagged and capped instead, so
+        // the number says "open this one" and the log says why.
+        if (summaryNamesWrongSpeaker) confidenceCaps.push([0.6, 'summary attributed to the wrong sender']);
     }
     const confidenceCap = confidenceCaps.length
         ? Math.max(MIN_CONFIDENCE, Math.min(...confidenceCaps.map((c) => c[0])))

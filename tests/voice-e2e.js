@@ -397,6 +397,39 @@ function hear(phone, matches) {
         win.close();
     }
 
+    // ── 3h. IT ANSWERS WITHOUT BEING TOLD TWICE ───────────────────────────
+    // Apsara: '44:53.992 heard [command] ["hey scout",...] --> when i said hey
+    // scout, why didnt it talk back?'
+    //
+    // Because it was waiting for a tap on Send. Correct when every spoken
+    // command reached workflow/brain.js, which messages real people. Wrong now
+    // that questions reach Scout, which can only read.
+    {
+        const { win, phone } = await bootApp();
+        hear(phone, ['hey scout how much do we owe']);
+        await new Promise((r) => setTimeout(r, 500));
+        ck('a spoken QUESTION is asked without tapping Send',
+           phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'never asked. fetched=' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        ck('  and the answer is spoken back',
+           phone.spoken.length > 0,
+           'nothing spoken: ' + JSON.stringify(phone.spoken));
+        win.close();
+    }
+
+    // ── 3i. but an INSTRUCTION still waits for her tap ────────────────────
+    // The asymmetry that makes the above safe: a needless tap costs a second,
+    // an auto-sent instruction can WhatsApp a supplier.
+    {
+        const { win, phone } = await bootApp();
+        hear(phone, ['hey jarvis message the trucker we are running late']);
+        await new Promise((r) => setTimeout(r, 500));
+        ck('a spoken INSTRUCTION is NOT sent automatically',
+           !phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'it auto-sent an instruction: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        win.close();
+    }
+
     // ── 4. ordinary yard talk must NOT wake it ────────────────────────────
     {
         const { win, phone } = await bootApp();

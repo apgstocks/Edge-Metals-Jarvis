@@ -6803,7 +6803,18 @@ function handleWakeCandidates(all) {
   // A SCRAP LEFT OVER IS NOT A COMMAND — "hey service is" leaves "is", which
   // is recogniser noise, not an instruction. Found by the end-to-end
   // simulation in tests/voice-e2e.js.
-  if (rest && rest.length >= 3) { captureCommand(rest); return; }
+  if (rest && rest.length >= 3) {
+    captureCommand(rest);
+    // "Hey Scout, how much do we owe" is one breath and one question. Opening
+    // the sheet and then waiting for a second recognition session — or for her
+    // to tap Send — is the difference between an assistant and a form.
+    // Anything that could ACT still waits; see looksLikeSafeQuestion().
+    if (looksLikeSafeQuestion(rest)) {
+      vlog('wake carried a question — asking it straight away', rest);
+      setTimeout(() => sendVoiceCommand(), 60);
+    }
+    return;
+  }
   speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
 }
 
@@ -7038,8 +7049,37 @@ function wireVoiceListeners() {
     if (voiceMode === 'wake' && voiceOn) { wakeCycle(); return; }
     if (voiceMode === 'command') {
       const box = $('voiceText');
-      setVoiceSheetState(box && box.value.trim() ? 'ready' : 'empty',
-        box && box.value.trim() ? 'Check it, then send.' : "Didn't catch that — tap the mic to try again, or type it.");
+      const text = (box && box.value.trim()) || '';
+      if (!text) {
+        setVoiceSheetState('empty', "Didn't catch that — tap the mic to try again, or type it.");
+        return;
+      }
+      // ── ASK IT, DON'T WAIT TO BE TOLD TWICE ─────────────────────────────
+      // Apsara: '44:53.992 heard [command] ["hey scout",...] --> when i said
+      // hey scout, why didnt it talk back?'
+      //
+      // Because it was waiting for her to tap Send. That was right when every
+      // spoken command went to workflow/brain.js, which messages truckers and
+      // suppliers for real — a mistranscription there sends a real message, so
+      // a human confirmation was the whole point.
+      //
+      // It stopped being right when Scout arrived. A question about the yard
+      // reaches something that can only READ, so the worst a mishearing costs
+      // is a wrong sentence on screen. Making her tap Send to hear an answer
+      // she asked for out loud defeats the feature.
+      //
+      // So: obvious questions go straight through. Anything that might ACT
+      // still waits for the tap. The check below is deliberately CONSERVATIVE
+      // and mirrors helpers/voiceRouter.js — when it is unsure it does not
+      // auto-send, because the cost of being wrong is asymmetric: a needless
+      // tap versus a WhatsApp nobody meant to send.
+      if (looksLikeSafeQuestion(text)) {
+        vlog('auto-sending a question', text);
+        setVoiceSheetState('working', 'Asking…');
+        sendVoiceCommand();
+        return;
+      }
+      setVoiceSheetState('ready', 'Check it, then send.');
     }
   });
 }
@@ -7117,6 +7157,25 @@ async function sendVoiceCommand() {
   } finally {
     btn.disabled = false; btn.textContent = 'Send to Jarvis';
   }
+}
+
+// Is this safe to send without her tapping Send?
+//
+// Mirrors the FREIGHT_ACTIONS / YARD_WORDS split in helpers/voiceRouter.js,
+// which is the thing that actually decides who answers. This is the cautious
+// client-side half: it only has to be sure enough to skip a tap, and the
+// server still routes properly. When in doubt it returns false and she taps.
+//
+// The asymmetry is the whole design: a needless tap costs a second; an
+// auto-sent instruction to the brain can message a supplier.
+const ACTS_ON_THE_WORLD = /\b(message|text|whatsapp|whats app|email|e-?mail|mail|call|ping|reply|respond|forward|send|book|booking|dispatch|schedule|arrange|chase|delete|remove|cancel|pay now|transfer)\b/i;
+const IS_A_QUESTION = /(^|\s)(how|what|which|who|whose|when|where|why|is|are|was|were|do|does|did|can|could|should|has|have|any|show|tell|list)\b|\?\s*$/i;
+
+function looksLikeSafeQuestion(text) {
+  const t = String(text || '').trim();
+  if (t.length < 3) return false;
+  if (ACTS_ON_THE_WORLD.test(t)) return false;   // might DO something — she taps
+  return IS_A_QUESTION.test(t);
 }
 
 function voiceToast(msg) { showWeighToast('flagged', msg, '', 4000); }
