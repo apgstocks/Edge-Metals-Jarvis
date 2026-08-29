@@ -2428,10 +2428,52 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         }
 
         try {
+            // ── WHY DID IT SAY THAT (2026-08-29) ──────────────────────────
+            // From the Tau teardown Apsara sent: the harness — not the model —
+            // decides what reaches the model, so the record has to capture
+            // what reached it, not just what came back.
+            //
+            // helpers/auditlog.js already is the append-only per-day JSONL log
+            // that article describes. It was barely populated: message id,
+            // sender, subject, intent, confidence. That cannot answer the one
+            // question worth asking, which is the question we have actually
+            // been asking all week — she pastes a bad digest line and I
+            // reverse-engineer the cause from source.
+            //
+            // `decision` is what it concluded. `inputs` is the half that
+            // matters: when a summary is thin the FIRST thing to check is
+            // whether the thread ledger was empty or the body was two lines,
+            // and that was unanswerable after the fact. Sizes, not contents —
+            // the log must not become a second copy of the mailbox.
             await appendAuditLog({
-                source: 'reply_watch', messageId: ref.id, senderName: senderLabel(from),
-                text: subject, intent: a.needs_reply ? 'needs_reply' : (a.waiting_on === 'them' ? 'awaiting_them' : 'no_reply_needed'),
-                resolvedBy: 'ai', confidence: a.confidence, actionTaken: a.needs_reply ? 'flagged' : 'ignored',
+                source: 'reply_watch', messageId: ref.id, threadId: msg.threadId || null,
+                senderName: senderLabel(from), from,
+                text: subject,
+                intent: a.needs_reply ? 'needs_reply'
+                    : a.waiting_on === 'them' ? 'awaiting_them'
+                    : a.waiting_on === 'colleague' ? 'colleague_handling'
+                    : a.waiting_on === 'someone_else' ? 'not_ours'
+                    : 'no_reply_needed',
+                resolvedBy: 'ai', confidence: a.confidence,
+                actionTaken: a.needs_reply ? 'flagged' : 'ignored',
+                decision: {
+                    waiting_on: a.waiting_on, needs_reply: a.needs_reply,
+                    asked_of: a.asked_of, asked_for: a.asked_for,
+                    action_needed: a.action_needed, summary: a.summary,
+                    deadline: a.deadline, urgency: a.urgency,
+                    is_order: a.is_order, order_buyer: a.order_buyer,
+                    key_figures: a.key_figures,
+                },
+                inputs: {
+                    bodyChars: (visible || '').length,
+                    threadChars: (threadLedger || '').length,
+                    threadShown: (threadLedger || '').split('\n').filter((l) => l.startsWith('- ')).length,
+                    attachments: (attachments || []).length,
+                    historyPrior: !!senderHistoryLine(store, from),
+                    to: header(msg, 'To') || null,
+                    cc: header(msg, 'Cc') || null,
+                    managerAddress: managerAddress || null,
+                },
             });
         } catch (e) { /* audit logging must never break the scan */ }
     }

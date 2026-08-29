@@ -522,16 +522,18 @@ section('Inbox triage — notification gating (urgent / batching / overnight)');
     const orig = Module._load;
     let ASSESS = { needs_reply: true, confidence: 0.9, urgency: 'normal', summary: 'wants a rate' };
     let MSGS = [{ id: 'e1' }], LA_HOUR = 10;
+    let AUDIT = [];
+    let TO = 'apsara@edgemetals.com';
     Module._load = function (r) {
         if (r.endsWith('helpers/gemini')) return { callGeminiJSON: async () => ASSESS };
         if (r.endsWith('helpers/time')) return { getLADate: () => { const d = new Date(); d.setHours(LA_HOUR, 0, 0, 0); return d; } };
-        if (r.endsWith('helpers/auditlog')) return { appendAuditLog: async () => {} };
+        if (r.endsWith('helpers/auditlog')) return { appendAuditLog: async (e) => { AUDIT.push(e); } };
         if (r.endsWith('helpers/gmail')) return {
             getGmailRead: async () => ({ users: { threads: { get: async () => ({ data: { messages: [{}] } }) } } }),
             getMyEmailAddress: async () => 'apsara@edgemetals.com',
             listMessages: async () => MSGS,
             getMessage: async (g, id) => ({ id, threadId: 't' + id, snippet: 'need a rate',
-                payload: { headers: [{ name: 'From', value: '"Raj" <raj@x.com>' }, { name: 'Subject', value: 'Rate' }, { name: 'Date', value: new Date().toUTCString() }] } }),
+                payload: { headers: [{ name: 'From', value: '"Raj" <raj@x.com>' }, { name: 'To', value: TO }, { name: 'Subject', value: 'Rate' }, { name: 'Date', value: new Date().toUTCString() }] } }),
             getEmailContent: () => ({ body: 'Can you send a rate for LA to Houston?', wasHtmlOnly: false }),
             parseEmailDate: (d) => d,
             // Added when the email-surface audit introduced these — a mock
@@ -609,6 +611,67 @@ section('Inbox triage — notification gating (urgent / batching / overnight)');
     ck('on-demand returns items', r.items.length, 1);
     ck('on-demand sends nothing', sent.length, 0);
     ck('on-demand leaves the queue untouched', rw.loadStore().undelivered.length, 0);
+
+    // ── "why did it say that" (2026-08-29) ───────────────────────────────
+    // The audit entry is the only after-the-fact record of a decision, and
+    // for a week every "the summary is wrong" report has been diagnosed by
+    // re-reading source instead of reading a log. What makes it diagnosable
+    // is not the verdict but the INPUTS: a thin summary is usually a thread
+    // that never reached the prompt, and that was unanswerable afterwards.
+    //
+    // Driven through rw.run(), not by restating the object literal — a test
+    // that rebuilds the entry it is checking proves nothing.
+    clean(); AUDIT = []; sent = []; LA_HOUR = 10; MSGS = [{ id: 'a1' }];
+    ASSESS = { needs_reply: true, confidence: 0.9, urgency: 'normal',
+               summary: 'wants a rate', waiting_on: 'her', asked_of: 'you',
+               asked_for: 'a rate', action_needed: 'send the rate',
+               // asked_for is dropped unless a verbatim span from the body
+               // backs it (the ungrounded-request guard). The fixture has to
+               // honour the real contract, not bypass it.
+               asked_for_quote: 'send a rate for LA to Houston',
+               key_figures: ['$500'] };
+    await rw.run({ sendToManager: send });
+    const entry = AUDIT.find((e) => e && e.messageId === 'a1');
+    ckTrue('the scan writes an audit entry', !!entry);
+    ckTrue('it records what was decided', !!entry && !!entry.decision);
+    ck('and the decision carries the direction', entry && entry.decision && entry.decision.waiting_on, 'her');
+    ck('and what was asked for', entry && entry.decision && entry.decision.asked_for, 'a rate');
+    ck('and the summary that reached her', entry && entry.decision && entry.decision.summary, 'wants a rate');
+    ckTrue('it records what the MODEL was given', !!entry && !!entry.inputs);
+    ckTrue('body size is recorded, so a two-line email is visible after the fact',
+        !!(entry && entry.inputs) && typeof entry.inputs.bodyChars === 'number' && entry.inputs.bodyChars > 0);
+    ckTrue('thread size is recorded, so "no thread reached the prompt" is provable',
+        !!(entry && entry.inputs) && typeof entry.inputs.threadChars === 'number');
+    ckTrue('the addressing headers are recorded — the input behind every waiting_on call',
+        !!(entry && entry.inputs) && 'to' in entry.inputs && 'cc' in entry.inputs);
+    ckTrue('and whose mailbox it was judged against',
+        !!(entry && entry.inputs) && 'managerAddress' in entry.inputs);
+    // Sizes, not contents. The log must not become a second copy of the
+    // mailbox — that is a privacy and a disk-growth problem at once.
+    ckTrue('the body TEXT is never copied into the log',
+        !!(entry && entry.inputs) && !JSON.stringify(entry.inputs).includes('Can you send a rate'));
+
+    // waiting_on is a four-way distinction and the log has to preserve it,
+    // otherwise "why was this shown to me" collapses into one bucket.
+    clean(); AUDIT = []; MSGS = [{ id: 'a2' }];
+    ASSESS = { ...ASSESS, needs_reply: false, waiting_on: 'colleague' };
+    await rw.run({ sendToManager: send });
+    const e2 = AUDIT.find((x) => x && x.messageId === 'a2');
+    ck('a colleague item is not filed as "no reply needed"', e2 && e2.intent, 'colleague_handling');
+    clean(); AUDIT = []; MSGS = [{ id: 'a3' }];
+    // A 'someone_else' with nobody named is downgraded to 'her' by design —
+    // an unnamed bystander is more likely a confused model than a real one.
+    // So the fixture has to name the third party, as production would.
+    // HEADERS BEAT THE MODEL: someone_else only survives when nobody at
+    // Edge Metals is on the To line. Asserting it without moving the To line
+    // would be asserting a state production cannot reach.
+    TO = '"Rajkumar" <raj.kumar@otherco.com>';
+    ASSESS = { ...ASSESS, waiting_on: 'someone_else', asked_of: 'Rajkumar' };
+    await rw.run({ sendToManager: send });
+    const e3 = AUDIT.find((x) => x && x.messageId === 'a3');
+    ck('nor is an outsider item', e3 && e3.intent, 'not_ours');
+
+    TO = 'apsara@edgemetals.com';
 
     clean();
     Module._load = orig;
