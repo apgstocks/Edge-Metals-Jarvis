@@ -134,6 +134,22 @@ section('F — one tap on the mic is one capture');
         const startWakeLoop = () => state.toggles++;
         const voiceToast = () => {};
         let voiceOn = false;
+        // The wake-word toggle now goes through the state machine in
+        // mobile-app/www/voice-machine.js (Apsara 2026-08-29 — the mic rule was
+        // extracted so it could be tested exhaustively). This sandbox stands in
+        // for it, and uses the REAL machine so the toggle is exercised against
+        // the same rule the app obeys, not a mock that always agrees.
+        const VM = require('../mobile-app/www/voice-machine.js');
+        let vmState = VM.initial();
+        const vmSend = (event) => {
+            const r = VM.reduce(vmState, event);
+            vmState = r.state;
+            // Only the wake loop counts as a "toggle" for this test's purposes.
+            for (const eff of r.effects) {
+                if (eff === 'START_MIC' || eff === 'STOP_MIC') state.toggles++;
+            }
+            return r.effects;
+        };
         eval(seg);
         return { state, fire: (ev) => (handlers[ev] || []).forEach((f) => f({ preventDefault() {} })) };
     };

@@ -936,6 +936,17 @@ async function api(path, opts = {}) {
     showLoginScreen('Session expired — sign in again.');
     throw new Error('unauthorized');
   }
+  // opts.raw — for endpoints that return something other than JSON. Added for
+  // /api/voice/say, which returns WAV audio; running that through res.json()
+  // silently produced an empty object and the app played nothing at all, with
+  // no error to explain it.
+  if (opts.raw) {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `request failed (${res.status})`);
+    }
+    return res.blob();
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
   return data;
@@ -6259,6 +6270,148 @@ let voiceOn = false;          // wake-word loop running
 let voiceListening = false;   // a capture is currently open
 let voiceMode = null;         // 'wake' | 'command'
 let voiceWatchdog = null;
+
+// ── Jarvis and Scout speak ────────────────────────────────────────────────
+// Per Apsara 2026-08-29: "give voice to the app... make it talk back", a
+// human voice, and two agents — Jarvis (Charon) for freight, Scout (Leda) for
+// the yard — so she can hear which one answered.
+//
+// THE MIC IS STOPPED WHILE EITHER OF THEM TALKS. This is the whole reason
+// this is a function and not two lines inline. The wake loop listens
+// continuously; if the speaker is live while the mic is open, the phone hears
+// its own reply, finds "Jarvis" inside it, treats that as the wake word and
+// triggers itself — forever, on an open mic, until the battery dies. Any
+// answer that mentions either agent by name would do it.
+//
+// So: remember whether the loop was running, stop it, speak, restart it. The
+// remembering matters — restarting a loop she had switched OFF would be its
+// own bug.
+let speaking = false;
+let voiceMuted = false;             // her switch, not a state
+try { voiceMuted = localStorage.getItem('jarvis_voice_muted') === '1'; } catch (e) {}
+
+// ── the microphone rule lives in voice-machine.js ─────────────────────────
+// Everything about WHEN the mic may be open is decided there and tested
+// exhaustively in tests/voice-machine.js. This file only carries out the
+// decision. Keeping the rule anywhere else is what made it untestable.
+//
+// The wake-word setting is persisted, so it survives backgrounding, closing
+// the app and restarting the phone — per Apsara: "App backgrounds is also
+// fine. unless i clear the cache, it should listen right?" The SETTING does
+// exactly that. The microphone itself still stops while the app is not in the
+// foreground, which is an Android constraint rather than a preference.
+let VM = (typeof VoiceMachine !== 'undefined') ? VoiceMachine : null;
+let vmState = VM ? VM.initial({ enabled: (function () {
+  try { return localStorage.getItem('jarvis_wake_on') === '1'; } catch (e) { return false; }
+})() }) : null;
+
+function vmSend(event) {
+  if (!VM) return [];
+  const r = VM.reduce(vmState, event);
+  vmState = r.state;
+  try { localStorage.setItem('jarvis_wake_on', vmState.enabled ? '1' : '0'); } catch (e) {}
+  // Effects come back in a deliberate order — silence the speaker, close the
+  // mic, then open it. Performing them in any other order reintroduces the
+  // window where both are live at once.
+  for (const eff of r.effects) {
+    if (eff === 'STOP_SPEAKING') stopSpeaking();
+    else if (eff === 'STOP_MIC') { voiceOn = false; const SR = voicePlugin(); try { SR && SR.stop(); } catch (e) {} if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; } renderVoiceButton(); }
+    else if (eff === 'START_MIC') { startWakeLoop(); }
+    else if (eff === 'OPEN_CAPTURE') { /* captureCommand is called by the caller that knows the seed text */ }
+  }
+  return r.effects;
+}
+
+function setVoiceMuted(on) {
+  voiceMuted = !!on;
+  try { localStorage.setItem('jarvis_voice_muted', voiceMuted ? '1' : '0'); } catch (e) {}
+  if (voiceMuted) stopSpeaking();
+}
+
+let currentAudio = null;
+const phraseCache = {};   // phrase name -> object URL, kept for the life of the app
+function stopSpeaking() {
+  if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
+  speaking = false;
+}
+
+// Plays a WAV the server synthesised. Resolves when it finishes or fails —
+// never rejects, because the caller's next job is to turn the mic back on and
+// that must happen whatever the audio did.
+function playAudio(url) {
+  return new Promise((resolve) => {
+    let a;
+    try { a = new Audio(url); } catch (e) { return resolve(false); }
+    currentAudio = a;
+    let done = false;
+    const finish = (ok) => { if (done) return; done = true; currentAudio = null; resolve(ok); };
+    a.onended = () => finish(true);
+    a.onerror = () => finish(false);
+    // A stuck audio element must not strand the mic in the off position. 30s
+    // is longer than any reply this speaks.
+    setTimeout(() => finish(false), 30000);
+    const p = a.play();
+    if (p && p.catch) p.catch(() => finish(false));
+  });
+}
+
+// The one entry point. `what` is either {phrase:'wake'} for an instant cached
+// line, or {text, agent} for a real answer.
+async function speak(what) {
+  if (voiceMuted) return false;
+  try {
+    // The machine closes the mic. It is asked FIRST and its STOP_MIC effect is
+    // carried out before a byte of audio plays — the ordering that stops the
+    // phone hearing itself. It also remembers the wake setting, so the resume
+    // below restores exactly what she had.
+    speaking = true;
+    vmSend('SPEAK_START');
+
+    let url = null, temporary = false;
+    if (what.phrase) {
+      // A fixed line — "Yes?" and friends. Kept in memory after the first
+      // fetch, so from the second wake word onwards there is no network at
+      // all and the acknowledgement is instant. That is the entire point: a
+      // pause before "Yes?" reads as "it didn't hear me" and she says it
+      // again.
+      //
+      // Fetched through api() rather than pointed at directly with an <audio>
+      // src, because an audio element sends no Authorization header and the
+      // request would come back 401 — silently, as a play() failure with no
+      // clue why.
+      if (!phraseCache[what.phrase]) {
+        const blob = await api('/api/voice/phrase/' + encodeURIComponent(what.phrase), { raw: true })
+          .catch(() => null);
+        if (!blob) return false;
+        phraseCache[what.phrase] = URL.createObjectURL(blob);
+      }
+      url = phraseCache[what.phrase];
+    } else {
+      const blob = await api('/api/voice/say', {
+        method: 'POST',
+        body: JSON.stringify({ text: what.text, agent: what.agent || 'jarvis' }),
+        raw: true,
+      }).catch(() => null);
+      if (!blob) return false;
+      url = URL.createObjectURL(blob);
+      temporary = true;
+    }
+
+    const ok = await playAudio(url);
+    // Only the one-off answers are released. The cached phrases are kept on
+    // purpose — revoking them would throw away the reason they are cached.
+    if (temporary) { try { URL.revokeObjectURL(url); } catch (e) {} }
+    return ok;
+  } catch (e) {
+    return false;
+  } finally {
+    speaking = false;
+    // A short settle before the mic reopens, so the tail of the speaker does
+    // not land in it. The machine decides whether it reopens at all.
+    setTimeout(() => { if (!voiceMuted) vmSend('SPEAK_END'); }, 400);
+  }
+}
+
 const WAKE_PATTERNS = [
   // Deliberately loose. "Jarvis" is not a word Android's recogniser knows
   // well, and in a yard it comes back as "service", "jervis", "java's" and
@@ -6269,6 +6422,10 @@ const WAKE_PATTERNS = [
   /\bhey\s+(jarvis|jervis|jarvi|jervis|java'?s|service|jarvas|charvis|harvis)\b/i,
   /\bhi\s+(jarvis|jervis|jarvi)\b/i,
   /\bok\s+(jarvis|jervis)\b/i,
+  // Scout, per Apsara 2026-08-29 — the yard agent has its own name now, and
+  // saying it should reach it directly. Same looseness as the Jarvis
+  // patterns and for the same reason: Android's recogniser mangles names.
+  /\b(hey|hi|ok|okay)\s+(scout|scott|scoot|skout)\b/i,
 ];
 
 function voicePlugin() {
@@ -6409,6 +6566,11 @@ function wireVoiceListeners() {
   SR.addListener('partialResults', (data) => {
     const heard = ((data && data.matches) || [])[0] || '';
     if (!heard) return;
+    // Belt and braces on top of stopping the mic in speak(): if any audio is
+    // playing, whatever the mic reports is very likely the phone hearing
+    // itself. An answer containing the word "Jarvis" would otherwise re-fire
+    // the wake word and loop the app against its own voice.
+    if (speaking) return;
     if (voiceMode === 'wake') {
       if (!isWakePhrase(heard)) return;
       // Heard it. Anything AFTER the wake phrase in the same breath is
@@ -6416,6 +6578,15 @@ function wireVoiceListeners() {
       // utterance, and making her pause and repeat herself would be worse
       // than useless.
       const rest = stripWake(heard);
+      // Say something back IMMEDIATELY. This is the whole of what she asked
+      // for — "if i call hey jarvis..make it talk back". The phrase is
+      // pre-synthesised and cached server-side so it plays at once; waiting
+      // three seconds to acknowledge reads as not having heard her.
+      //
+      // Only when the wake word arrived ALONE. "Hey Jarvis how much do we owe"
+      // is one breath with a question in it; answering "Yes?" to that would
+      // be talking over her.
+      if (!rest) speak({ phrase: 'wake' });
       captureCommand(rest);
       return;
     }
@@ -6488,12 +6659,24 @@ async function sendVoiceCommand() {
   btn.disabled = true; btn.textContent = 'Working…';
   setVoiceSheetState('working', 'Jarvis is working on it…');
   try {
-    const r = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
-    const replies = (r && r.replies) || [];
+    // /api/voice/ask, not /api/bot/command — per Apsara 2026-08-29, a yard
+    // question goes to Scout rather than to the brain that books loads and
+    // sends WhatsApp. The server decides which; see helpers/voiceRouter.js.
+    const r = await api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text }) });
+    const who = (r && r.agent_name) || 'Jarvis';
+    const replies = (r && r.replies) || (r && r.answer ? [r.answer] : []);
+
+    // TEXT FIRST, ALWAYS. Synthesis is 3-10 seconds (measured, not guessed),
+    // and the answer must be readable the instant it arrives. The voice
+    // catches up; it is never the thing being waited on.
     $('voiceReplies').innerHTML = replies.length
-      ? replies.map(t => `<div style="margin-top:10px; padding:11px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm); font-size:13px; color:var(--text-strong); white-space:pre-wrap; line-height:1.5;">${esc(t)}</div>`).join('')
-      : '<div style="margin-top:10px; font-size:12.5px; color:var(--text-muted);">Jarvis did that, but had nothing to say back.</div>';
+      ? `<div style="margin-top:10px; font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted);">${esc(who)}</div>`
+        + replies.map(t => `<div style="margin-top:6px; padding:11px 13px; background:var(--surface-sunken); border-radius:var(--radius-sm); font-size:13px; color:var(--text-strong); white-space:pre-wrap; line-height:1.5;">${esc(t)}</div>`).join('')
+      : `<div style="margin-top:10px; font-size:12.5px; color:var(--text-muted);">${esc(who)} did that, but had nothing to say back.</div>`;
     setVoiceSheetState('done', 'Done.');
+
+    // Then speak it, in that agent's own voice.
+    if (r && r.answer) speak({ text: r.answer, agent: r.agent || 'jarvis' });
   } catch (err) {
     setVoiceSheetState('error', err.message);
   } finally {
@@ -6536,8 +6719,11 @@ function wireVoiceUI() {
     timer = setTimeout(() => {
       held = true;
       timer = null;
-      if (voiceOn) { stopWakeLoop(); voiceToast('Stopped listening for "Hey Jarvis".'); }
-      else { startWakeLoop(); voiceToast('Listening for "Hey Jarvis" while the app is open.'); }
+      // Through the machine, so the setting is persisted and the same rule
+      // decides the mic here as everywhere else.
+      vmSend('USER_TOGGLE');
+      if (vmState && vmState.enabled) voiceToast('Listening for "Hey Jarvis" or "Hey Scout" while the app is open.');
+      else voiceToast('Stopped listening.');
     }, 550);
   };
   const endHold = (ev) => {
@@ -6594,6 +6780,11 @@ function wireVoiceUI() {
        dashboard/yard-bot.js) so the two cannot drift the way the load
        form did. Self-contained: injects its own markup and styles, and
        reuses whatever api() the host already defines. -->
+  <!-- The microphone rule. Extracted from this file so it can be tested
+       exhaustively (tests/voice-machine.js) — it decides when the mic may be
+       open, which is the one piece of this app that can loop the phone
+       against its own voice. Loaded before the app code that consults it. -->
+  <script src="voice-machine.js"></script>
   <script src="yard-bot.js"></script>
 </body>
 </html>

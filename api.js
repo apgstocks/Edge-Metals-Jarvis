@@ -1438,6 +1438,130 @@ function createApi() {
         }
     });
 
+    // ── Jarvis's voice ────────────────────────────────────────────────────
+    // Per Apsara 2026-08-29: "give voice to the app... make it talk back",
+    // "i want to give human voice to jarvis", "voice charon".
+    //
+    // Returns WAV audio. See helpers/voice.js for why this is Gemini's TTS
+    // rather than the phone's own engine, and why the fixed phrases are
+    // cached — measured, synthesis is ~3s at best and ~10s for a sentence,
+    // which is fine for an answer and hopeless for the "Yes?" that comes back
+    // when she says Hey Jarvis.
+    //
+    // Not admin-gated: the staff prefix list already blocks staff from
+    // /api/voice, and speaking a sentence the caller can already read on
+    // their own screen grants nothing new.
+    app.get('/api/voice/phrase/:name', async (req, res) => {
+        try {
+            const { phrase } = require('./helpers/voice');
+            const wav = await phrase(String(req.params.name || ''));
+            res.set('Content-Type', 'audio/wav');
+            // Immutable: a fixed phrase in a fixed voice never changes, so the
+            // WebView can keep it and the wake acknowledgement costs nothing
+            // after the first play.
+            res.set('Cache-Control', 'public, max-age=31536000, immutable');
+            res.send(wav);
+        } catch (e) {
+            // 404 rather than 500 for an unknown name; the app treats any
+            // failure the same way — it just stays silent and shows the text.
+            res.status(/unknown phrase/.test(e.message) ? 404 : 503).json({ error: e.message });
+        }
+    });
+
+    // ── One spoken question, routed to whoever should answer it ───────────
+    // Per Apsara 2026-08-29: "When user asks any question to Jarvis which is
+    // related to Yard... Direct those question to that yard agent."
+    //
+    // The app used to send every spoken command straight to /api/bot/command.
+    // That is the brain, which books loads and sends WhatsApp for real. A yard
+    // question does not belong there — Scout already exists, already knows the
+    // yard data, and cannot message anyone. See helpers/voiceRouter.js for why
+    // the routing leans towards Scout when it is unsure.
+    //
+    // Returns TEXT only. The audio is fetched separately by the app so the
+    // answer can appear on screen immediately rather than waiting ~3-10s on
+    // speech synthesis — measured, not assumed.
+    app.post('/api/voice/ask', largeJson, async (req, res) => {
+        try {
+            const { routeVoice, stripAgentName, AGENTS } = require('./helpers/voiceRouter');
+            const text = String((req.body || {}).text || '').trim();
+            if (!text) return res.status(400).json({ error: 'nothing was said' });
+
+            const route = routeVoice(text);
+            const asked = stripAgentName(text);
+            const agent = AGENTS[route.agent];
+
+            if (route.agent === 'scout') {
+                const { askYard } = require('./helpers/yardAsk');
+                const out = await askYard(asked, { history: (req.body || {}).history, role: req.role });
+                try {
+                    require('./helpers/yardChatLog').logExchange({
+                        question: asked, answer: out && out.answer,
+                        have_data: out && out.have_data, ok: out && out.ok,
+                        role: req.role || null, source: 'voice',
+                    });
+                } catch (e) { /* never let logging break answering */ }
+                return res.json({
+                    agent: 'scout', agent_name: agent.name, voice: agent.voice,
+                    routed_because: route.why,
+                    answer: out.answer, proposal: out.proposal || null, ok: out.ok !== false,
+                });
+            }
+
+            // Jarvis. The SAME path /api/bot/command has always used —
+            // brain.process inside sendCapture, with the real sendMessage
+            // bridge — rather than a second, subtly different way of calling
+            // the brain. The brain sends WhatsApp for real; there should be
+            // exactly one way in, not two that can drift apart.
+            const brain = require('./workflow/brain');
+            const { sendCapture } = require('./helpers/wa-state');
+            const settings = cfg.getSettings();
+            const managerNum = settings.manager_number || cfg.MANAGER_NUMBER;
+            if (!managerNum) return res.status(400).json({ error: 'MANAGER_NUMBER not configured' });
+            const realSendMessage = global.__jarvisSendMessage;
+            if (!realSendMessage) return res.status(500).json({ error: 'sendMessage bridge not initialised' });
+            const chatId = `${managerNum}@c.us`;
+            const capture = { replies: [] };
+            await sendCapture.run(capture, async () => {
+                await brain.process({
+                    chatId, senderNumber: chatId, senderName: 'Voice',
+                    text, hasMedia: false, _source: 'voice',
+                }, realSendMessage);
+            });
+            const replies = capture.replies || [];
+            return res.json({
+                agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
+                routed_because: route.why,
+                answer: replies.join('\n\n') || 'Done.', replies, ok: true,
+            });
+        } catch (e) {
+            console.error('[API] voice/ask failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/voice/say', largeJson, async (req, res) => {
+        try {
+            const { say } = require('./helpers/voice');
+            const b = req.body || {};
+            // Which agent is speaking decides the voice. Charon for Jarvis,
+            // Leda for Scout — Apsara's picks, and the point is that she can
+            // tell from the first syllable whether she is hearing yard data or
+            // something that may have messaged a trucker.
+            const { AGENTS } = require('./helpers/voiceRouter');
+            const voice = (AGENTS[b.agent] && AGENTS[b.agent].voice) || undefined;
+            const wav = await say(b.text, { voice });
+            res.set('Content-Type', 'audio/wav');
+            res.send(wav);
+        } catch (e) {
+            console.warn('[API] voice/say failed:', e.message);
+            // 503, not 500: the text answer already reached the app and is on
+            // screen. Losing the audio is a degraded experience, not an error
+            // in the thing she asked for.
+            res.status(503).json({ error: e.message });
+        }
+    });
+
     // ── Confirming an action the assistant proposed ───────────────────────
     // Per Apsara 2026-08-29: the assistant may act, within the yard, but she
     // chose propose-then-confirm over direct writes.

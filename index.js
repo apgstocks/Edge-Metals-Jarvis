@@ -145,6 +145,12 @@ scheduler.init({ sendToManager, sendToTeam, sendMessage });
 
 // ── HTTP up first — dashboard usable while WA scans QR ─────────────────────────
 const app = createApi();
+// Pre-synthesise the fixed spoken phrases so the wake word never waits on the
+// network. Deliberately NOT awaited: a slow or failing warm-up must not hold
+// up the server starting, and the worst case without it is that the first
+// "Yes?" takes a second.
+try { require('./helpers/voice').warmUp().catch(() => {}); } catch (e) {}
+
 app.listen(cfg.API_PORT, () => {
     console.log(`[BOOT] API + dashboard on :${cfg.API_PORT}`);
     console.log(`[BOOT] APP_PASSWORD:   ${cfg.APP_PASSWORD ? 'set (' + cfg.APP_PASSWORD.length + ' chars)' : 'NOT SET — logins will fail with 500'}`);

@@ -134,3 +134,6 @@ _to_delete/tmp_obj_uLvNxO
 
 # Built APKs — 5-6 MB binaries, rebuildable from source. Never in git.
 builds/
+
+# Synthesised speech, rebuildable from the API. Not source.
+data/voice-cache/

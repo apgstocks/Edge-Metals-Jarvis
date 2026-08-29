@@ -209,8 +209,12 @@ try {
     });
 } catch (e) { /* falls back to hand-rolled checks below */ }
 
-const LOOKBACK_DAYS = 3;
-const MAX_EMAILS_PER_RUN = 25;   // bounds both Gemini spend and digest length
+// Both bounds are env-overridable ONLY so the quality ruler can sweep a wide
+// window in one measurement run (scripts/ruler.js). The defaults are the
+// production values and nothing sets these in normal operation — scheduler.js
+// calls run() every 5 minutes with no env, so its behaviour is unchanged.
+const LOOKBACK_DAYS = Number(process.env.REPLYWATCH_LOOKBACK_DAYS) || 3;
+const MAX_EMAILS_PER_RUN = Number(process.env.REPLYWATCH_MAX_EMAILS) || 25;   // bounds both Gemini spend and digest length
 const MIN_CONFIDENCE = 0.6;
 
 // ── Continuous monitoring — Apsara, 2026-08-22: "i want email to be
