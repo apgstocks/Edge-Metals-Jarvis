@@ -392,7 +392,11 @@ function violations(state) {
     ck('the acknowledgement completes before the capture opens',
        /speak\(\{ phrase: 'wake' \}\)\.then\(\(\) => captureCommand\(''\)/.test(html));
     ck('  and a wake word WITH a command attached skips the acknowledgement',
-       /if \(rest\) \{ captureCommand\(rest\); return; \}/.test(html));
+       /if \(rest && rest\.length >= 3\) \{ captureCommand\(rest\); return; \}/.test(html));
+    // A two-letter remainder is recogniser noise, not an instruction — found
+    // by the end-to-end simulation when "hey service is" left "is".
+    ck('  but a scrap left over is not treated as a command',
+       /rest\.length >= 3/.test(html));
 
     // ── the self-test ─────────────────────────────────────────────────────
     // Three rounds of "it is not talking back" were answered by guessing.

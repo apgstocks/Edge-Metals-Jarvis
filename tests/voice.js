@@ -223,7 +223,8 @@ console.log('\n─ voice: routing and speech ───────────�
     ck('  including every alternative, not just the best guess',
        /vlog\('heard \[' \+ voiceMode \+ '\]', all/.test(html));
     ck('  it says when nothing matched', /no wake match in any alternative/.test(html));
-    ck('  and when something did', /WAKE MATCHED on/.test(html));
+    ck('  and when something did', /WAKE MATCHED/.test(html));
+    ck('  and whether it matched across sessions', /across sessions/.test(html));
     ck('  it records every machine transition', /vlog\('machine ' \+ event/.test(html));
     ck('  it records whether the audio was fetched', /audio fetched|phrase fetched/.test(html));
     ck('  and whether it actually played', /playback ' \+ \(ok \? 'OK'/.test(html));
@@ -233,7 +234,25 @@ console.log('\n─ voice: routing and speech ───────────�
 
     // The alternatives are checked, not just matches[0]. This is the fix.
     ck('EVERY alternative is checked for the wake phrase',
-       /const matched = all\.find\(\(m\) => isWakePhrase\(m\)\)/.test(html));
+       /let matched = all\.find\(\(m\) => isWakePhrase\(m\)\)/.test(html));
+
+    // ── the rolling window ────────────────────────────────────────────────
+    // From Apsara's own log: the session ended after "hey" and the name never
+    // arrived in it. Matching one partial could never have worked, because the
+    // text was not there. The window joins what was heard across sessions.
+    ck('there is a rolling window of what was recently heard', /HEARD_WINDOW_MS/.test(html));
+    ck('  the wake phrase is matched against it too', /isWakePhrase\(win\)/.test(html));
+    // The authoritative path is the FINAL result, per Android's documented
+    // behaviour of omitting the last word from partials.
+    ck('the wake loop asks for FINAL results, not partials',
+       /partialResults: false, popup: false \}\);\n    const finals/.test(html)
+       || /const res = await SR\.start\(\{[^}]*partialResults: false/.test(html));
+    ck('  and there is only ONE wake rule, not a copy per listener',
+       (html.match(/function handleWakeCandidates/g) || []).length === 1);
+    ck('  and it is cleared once it fires, so it cannot re-trigger',
+       /clearHeardWindow\(\);/.test(html));
+    ck('the watchdog restarts the loop in seconds, not tens of seconds',
+       /wakeCycle\(\); \}\n  \}, 3000\);/.test(html) || /\}, 3000\);/.test(html));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

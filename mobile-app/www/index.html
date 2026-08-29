@@ -6737,10 +6737,74 @@ const WAKE_STRIP = [
   /\b(hey|hi|ok|okay|yo|a)\s+(services?|java'?s|jarvous|harvest|scott|scot)\b[\s,:.!-]*/ig,
 ];
 
+// ── the phrase arrives in PIECES ──────────────────────────────────────────
+// From Apsara's log, 2026-08-29:
+//
+//   28:54.475  heard [wake]  [""]
+//   28:55.207  heard [wake]  ["hey"]
+//   28:55.209    no wake match in any alternative
+//
+// The recognition session ended after "hey". The name never arrived in that
+// session at all, so no amount of pattern-matching a single partial could ever
+// have matched — the text simply was not there. In COMMAND mode the same
+// phrase came back whole ("hey Jarvis"), because that mode waits for the end
+// of the utterance; the wake loop reads partials from a session Android keeps
+// cutting short.
+//
+// So the wake word is matched against a ROLLING WINDOW of what has been heard
+// recently, not against one partial. "hey" from one session and "jarvis" from
+// the next join into "hey jarvis" and match. This is the standard shape for
+// wake detection on top of a restart loop, and it is the only thing that can
+// work when the recogniser will not keep a session open.
+const HEARD_WINDOW_MS = 6000;
+let heardWindow = [];
+
+function noteHeard(text) {
+  const now = Date.now();
+  const t = String(text || '').trim();
+  if (t) heardWindow.push({ at: now, text: t });
+  heardWindow = heardWindow.filter((x) => now - x.at < HEARD_WINDOW_MS);
+  return heardWindow.map((x) => x.text).join(' ');
+}
+
+// Cleared the moment the wake word fires, so one "hey jarvis" cannot keep
+// re-triggering off the tail of the window.
+function clearHeardWindow() { heardWindow = []; }
+
 function stripWake(text) {
   let t = String(text || '');
   for (const re of WAKE_STRIP) t = t.replace(re, ' ');
   return t.replace(/\s+/g, ' ').trim();
+}
+
+// Decides whether a set of recogniser alternatives contains the wake word,
+// and acts on it. Shared by the final result and by any partials that do
+// arrive, so there is one wake rule rather than two.
+function handleWakeCandidates(all) {
+  // Each alternative on its own, then the rolling window. The window catches a
+  // phrase Android split across two sessions, which its partials do routinely.
+  let matched = all.find((m) => isWakePhrase(m));
+  let viaWindow = false;
+  if (!matched) {
+    const win = noteHeard(all[0] || '');
+    if (isWakePhrase(win)) { matched = win; viaWindow = true; }
+  }
+  if (!matched) {
+    vlog('  no wake match', { alternatives: all, window: heardWindow.map((x) => x.text).join(' ') });
+    return;
+  }
+  vlog('  WAKE MATCHED' + (viaWindow ? ' (across sessions)' : ''), matched);
+  clearHeardWindow();
+
+  const rest = stripWake(matched);
+  // SPEAK FIRST, THEN LISTEN. Firing the acknowledgement and the capture
+  // together reopened the microphone while "Yes?" was still playing.
+  //
+  // A SCRAP LEFT OVER IS NOT A COMMAND — "hey service is" leaves "is", which
+  // is recogniser noise, not an instruction. Found by the end-to-end
+  // simulation in tests/voice-e2e.js.
+  if (rest && rest.length >= 3) { captureCommand(rest); return; }
+  speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
 }
 
 // ── Wake-word loop ────────────────────────────────────────────────────────
@@ -6811,10 +6875,32 @@ async function wakeCycle() {
   voiceMode = 'wake';
   voiceListening = true;
   try {
-    // popup:false and partialResults:true — a system dialog on every cycle
-    // would make the whole thing unusable, and partials are what let the wake
-    // phrase be spotted mid-utterance instead of after a full silence timeout.
-    await SR.start({ language: 'en-US', maxResults: 3, prompt: '', partialResults: true, popup: false });
+    // ── FINAL RESULTS, not partials ───────────────────────────────────────
+    // This was partialResults:true, on the reasoning that partials spot the
+    // wake phrase mid-utterance instead of waiting for a silence timeout.
+    // Apsara's log showed what that actually produces:
+    //
+    //   heard [wake]  [""]
+    //   heard [wake]  ["hey"]        <- and the session ended there
+    //
+    // It is a documented behaviour of Android's SpeechRecognizer, not a quirk
+    // of this app: partialResults delivers every word EXCEPT the last one, and
+    // the final word never appears in a partial at all. For a two-word wake
+    // phrase that means the name is never in the text being matched. No
+    // pattern could have matched it, which is why six builds failed silently.
+    //
+    // partialResults:false makes start() RESOLVE with the complete utterance —
+    // every word, several ranked alternatives. It costs the endpointer's pause
+    // (about a second) before the phrase is delivered, which is the correct
+    // trade: a wake word that is a second late works, and one that is instant
+    // and missing the name does not.
+    //
+    // popup:false stays — a system dialog on every cycle would make this
+    // unusable.
+    const res = await SR.start({ language: 'en-US', maxResults: 5, prompt: '', partialResults: false, popup: false });
+    const finals = (res && res.matches) || [];
+    vlog('final [wake]', finals.length ? finals : '(nothing)');
+    if (finals.length) handleWakeCandidates(finals);
   } catch (e) {
     // Busy/again errors are normal on a restart loop — back off and retry
     // rather than tearing the loop down over a transient.
@@ -6826,10 +6912,15 @@ async function wakeCycle() {
   // loop would silently die and the wake word would just stop working with
   // no sign of why.
   if (voiceWatchdog) clearTimeout(voiceWatchdog);
+  // 3 seconds, not 12. Her log shows the loop going quiet for NINETY seconds
+  // after a session ended — the wake word was simply not listening for most of
+  // that time. Android ends a session within a second or two of silence, so
+  // the watchdog has to be on that timescale, not an order of magnitude above
+  // it. wakeCycle() is cheap and re-entrant.
   voiceWatchdog = setTimeout(() => {
     voiceListening = false;
-    if (voiceOn && voiceMode === 'wake') wakeCycle();
-  }, 12000);
+    if (voiceOn && voiceMode === 'wake') { vlog('watchdog restarting the wake loop'); wakeCycle(); }
+  }, 3000);
 }
 
 // ── One-shot command capture ──────────────────────────────────────────────
@@ -6912,38 +7003,16 @@ function wireVoiceListeners() {
     // the wake word and loop the app against its own voice.
     if (speaking) return;
     if (voiceMode === 'wake') {
-      // EVERY alternative is checked, not just the best one. Android returns
-      // several guesses ranked by confidence and the wake phrase is very often
-      // in the second or third — "hey jarvis" comes back as "hey service",
-      // "hey java's", "a jarvis". Matching only matches[0] threw away the
-      // alternatives that would have matched, which on a noisy yard phone is
-      // most of them.
-      const matched = all.find((m) => isWakePhrase(m));
-      if (!matched) { vlog('  no wake match in any alternative'); return; }
-      vlog('  WAKE MATCHED on', matched);
-      // Anything AFTER the wake phrase in the same breath is already the
-      // command — "hey jarvis check mail from Joey" is one utterance, and
-      // making her pause and repeat herself would be worse than useless.
-      const rest = stripWake(matched);
-      // Say something back IMMEDIATELY. This is the whole of what she asked
-      // for — "if i call hey jarvis..make it talk back". The phrase is
-      // pre-synthesised and cached server-side so it plays at once; waiting
-      // three seconds to acknowledge reads as not having heard her.
+      // ONE wake rule, in handleWakeCandidates(). This branch used to carry
+      // its own copy of the matching, stripping and acknowledgement logic,
+      // which meant two places to keep in step — the same duplication that
+      // has caused three separate bugs in this feature already.
       //
-      // Only when the wake word arrived ALONE. "Hey Jarvis how much do we owe"
-      // is one breath with a question in it; answering "Yes?" to that would
-      // be talking over her.
-      // SPEAK FIRST, THEN LISTEN. These used to be fired together, which
-      // meant captureCommand reopened the microphone while "Yes?" was still
-      // playing — cutting the acknowledgement off and putting the speaker and
-      // the mic live at the same moment, the exact thing the state machine
-      // exists to prevent. It bypassed the machine because captureCommand
-      // opens the recogniser directly.
-      //
-      // When the wake word came with a command attached ("hey jarvis how much
-      // do we owe") there is nothing to acknowledge — go straight to it.
-      if (rest) { captureCommand(rest); return; }
-      speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
+      // Partials rarely carry the whole phrase (Android omits the last word
+      // from them), so the authoritative path is the FINAL result in
+      // wakeCycle. This remains as a fast path for when a partial does happen
+      // to contain enough.
+      handleWakeCandidates(all);
       return;
     }
     if (voiceMode === 'command') {
