@@ -367,6 +367,33 @@ function violations(state) {
     ck('the "listening" toast fires once per session, not on every restart',
        /__saidListening/.test(html));
 
+    // ── the one-shot capture goes through the machine too ─────────────────
+    // captureCommand() opens the recogniser directly. Until now it did so
+    // WITHOUT telling the machine, which left the single most important rule
+    // in the app — when a microphone may be open — with a bypass around it
+    // that the exhaustive tests could not see, because they only ever tested
+    // the machine.
+    ck('starting a capture tells the machine', /vmSend\('CAPTURE_START'\)/.test(html));
+    ck('ending a capture tells it too', /vmSend\('CAPTURE_END'\)/.test(html));
+    ck('closing the sheet ends the capture', /endCapture\(\);/.test(html));
+
+    // ── the wake word acknowledges BEFORE it starts listening ─────────────
+    // Firing speak() and captureCommand() together reopened the mic while
+    // "Yes?" was still playing: the acknowledgement was cut off and the
+    // speaker and mic were live at the same moment.
+    ck('the acknowledgement completes before the capture opens',
+       /speak\(\{ phrase: 'wake' \}\)\.then\(\(\) => captureCommand\(''\)/.test(html));
+    ck('  and a wake word WITH a command attached skips the acknowledgement',
+       /if \(rest\) \{ captureCommand\(rest\); return; \}/.test(html));
+
+    // ── the self-test ─────────────────────────────────────────────────────
+    // Three rounds of "it is not talking back" were answered by guessing.
+    // This walks the chain and reports what each step actually did.
+    ck('the app can diagnose its own voice', /runVoiceDiagnostic/.test(html));
+    ck('  it checks the plugin, permission, server, fetch and playback',
+       /speech plugin/.test(html) && /microphone permission/.test(html)
+       && /server reachable/.test(html) && /audio playback/.test(html));
+
     // ── ADMIN ONLY ────────────────────────────────────────────────────────
     // Apsara 2026-08-29: "for admin user only as of now". The wake word feeds
     // workflow/brain.js, which messages truckers and suppliers for real, so an

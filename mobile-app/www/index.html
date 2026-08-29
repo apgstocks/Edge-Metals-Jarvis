@@ -542,6 +542,13 @@ body { overflow-y:auto; }
         <button id="btnVoiceSend" class="btn btn-primary" style="flex:2;">Send to Jarvis</button>
       </div>
       <div id="voiceReplies"></div>
+      <!-- Voice self-test. Added 2026-08-29 after three rounds of "it is not
+           talking back" that I could only answer by guessing. It walks the
+           whole chain — plugin, permission, server, audio fetch, playback —
+           and prints what each step actually did. One tap beats another
+           round of speculation. -->
+      <button id="btnVoiceDiag" class="btn" style="width:100%; margin-top:11px; font-size:12px; opacity:.8;">Why isn't it talking?</button>
+      <div id="voiceDiag" style="margin-top:9px; font-size:11.5px; line-height:1.65; white-space:pre-wrap; font-family:ui-monospace,monospace; color:var(--text-muted);"></div>
     </div>
   </div>
 </div>
@@ -6380,6 +6387,77 @@ function playAudio(url) {
   });
 }
 
+// ── Voice self-test ───────────────────────────────────────────────────────
+// Walks every link in the chain and reports what each one DID, rather than
+// leaving a silent failure to be guessed at from the outside. The order is the
+// order the real path takes, so the first ✗ is the cause.
+async function runVoiceDiagnostic() {
+  const out = $('voiceDiag');
+  const lines = [];
+  const say = (t) => { lines.push(t); out.textContent = lines.join('\n'); };
+  out.textContent = 'Checking…';
+  lines.length = 0;
+
+  // 1. the recogniser
+  const SR = voicePlugin();
+  say((SR ? '✓' : '✗') + ' speech plugin ' + (SR ? 'present' : 'MISSING (not the installed app?)'));
+  if (SR) {
+    try {
+      const av = await SR.available();
+      say(((av && (av.available ?? av)) ? '✓' : '✗') + ' recogniser available on this phone');
+      const perm = await SR.requestPermissions();
+      const st = (perm && perm.speechRecognition) || 'unknown';
+      say((st === 'granted' ? '✓' : '✗') + ' microphone permission: ' + st);
+    } catch (e) { say('✗ recogniser check threw: ' + (e && e.message)); }
+  }
+
+  // 2. the server, at all
+  say('  server: ' + (getApiBaseForDisplay() || '(same origin)'));
+  try {
+    const me = await api('/api/me');
+    say('✓ server reachable, signed in as ' + (me && me.role));
+  } catch (e) {
+    say('✗ server unreachable: ' + (e && e.message));
+  }
+
+  // 3. the voice endpoint — the one added most recently, so the likeliest to
+  //    be missing from a server that has not been updated.
+  let blob = null;
+  try {
+    blob = await api('/api/voice/phrase/wake', { raw: true });
+    say('✓ /api/voice/phrase/wake returned ' + Math.round(blob.size / 1024) + ' KB');
+  } catch (e) {
+    say('✗ /api/voice/phrase/wake FAILED: ' + (e && e.message));
+    say('   -> the server likely has no speech endpoint yet.');
+    say('      git pull && npm install && pm2 restart jarvis --update-env');
+  }
+
+  // 4. can this WebView actually PLAY it
+  if (blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const ok = await playAudio(url);
+      say((ok ? '✓' : '✗') + ' audio playback ' + (ok ? 'worked — you should have heard it' : 'FAILED (blocked or unsupported)'));
+    } catch (e) { say('✗ playback threw: ' + (e && e.message)); }
+    try { URL.revokeObjectURL(url); } catch (e) {}
+  }
+
+  // 5. the answering endpoint
+  try {
+    const r = await api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: 'how much do we owe in total' }) });
+    say('✓ /api/voice/ask -> ' + (r && r.agent_name) + ': ' + String((r && r.answer) || '').slice(0, 80));
+  } catch (e) {
+    say('✗ /api/voice/ask FAILED: ' + (e && e.message));
+  }
+
+  say('');
+  say('Send me this list and I will fix the first ✗.');
+}
+
+function getApiBaseForDisplay() {
+  try { return localStorage.getItem('jarvis_api_base') || ''; } catch (e) { return ''; }
+}
+
 // The one entry point. `what` is either {phrase:'wake'} for an instant cached
 // line, or {text, agent} for a real answer.
 // Whether the server can synthesise at all. Remembered so a server that has
@@ -6604,6 +6682,10 @@ async function captureCommand(seedText) {
   // which is the worst possible failure: no error, no feedback, nothing to
   // report. Whatever else breaks now, the sheet appears and says why.
   voiceMode = 'command';
+  // Through the machine. captureCommand used to open the recogniser directly,
+  // which left the one place in the app that can open a microphone outside the
+  // rule that governs microphones — and the exhaustive tests could not see it.
+  vmSend('CAPTURE_START');
   openVoiceSheet(seedText || '');
 
   const SR = voicePlugin();
@@ -6674,8 +6756,17 @@ function wireVoiceListeners() {
       // Only when the wake word arrived ALONE. "Hey Jarvis how much do we owe"
       // is one breath with a question in it; answering "Yes?" to that would
       // be talking over her.
-      if (!rest) speak({ phrase: 'wake' });
-      captureCommand(rest);
+      // SPEAK FIRST, THEN LISTEN. These used to be fired together, which
+      // meant captureCommand reopened the microphone while "Yes?" was still
+      // playing — cutting the acknowledgement off and putting the speaker and
+      // the mic live at the same moment, the exact thing the state machine
+      // exists to prevent. It bypassed the machine because captureCommand
+      // opens the recogniser directly.
+      //
+      // When the wake word came with a command attached ("hey jarvis how much
+      // do we owe") there is nothing to acknowledge — go straight to it.
+      if (rest) { captureCommand(rest); return; }
+      speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
       return;
     }
     if (voiceMode === 'command') {
@@ -6719,7 +6810,10 @@ function closeVoiceSheet() {
   try { SR && SR.stop(); } catch (e) {}
   voiceListening = false;
   voiceMode = null;
-  // Back to watching for the wake word, if it was on before this capture.
+  // The machine decides whether the wake loop resumes — it is the thing that
+  // knows whether she had it on. `if (voiceOn)` was a second, independent copy
+  // of that knowledge, and two copies of a rule is one rule and one bug.
+  endCapture();
   if (voiceOn) setTimeout(wakeCycle, 400);
 }
 
@@ -6773,6 +6867,10 @@ async function sendVoiceCommand() {
 }
 
 function voiceToast(msg) { showWeighToast('flagged', msg, '', 4000); }
+
+// Tells the machine the capture is over, so it can put the wake loop back the
+// way she had it. Called wherever the sheet closes.
+function endCapture() { try { vmSend('CAPTURE_END'); } catch (e) {} }
 
 // Mic button in the header. Tap = one command. Long-press = toggle the wake
 // word, so "always listening" is a deliberate choice rather than something
@@ -6859,6 +6957,7 @@ function wireVoiceUI() {
   $('btnVoiceClose').addEventListener('click', closeVoiceSheet);
   $('btnVoiceSend').addEventListener('click', sendVoiceCommand);
   $('btnVoiceRetry').addEventListener('click', () => captureCommand(''));
+  $('btnVoiceDiag').addEventListener('click', runVoiceDiagnostic);
   $('voiceText').addEventListener('input', () => { $('voiceText').dataset.edited = '1'; });
   $('voiceText').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendVoiceCommand(); }
