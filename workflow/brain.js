@@ -1497,6 +1497,46 @@ function policyDecide(ctx) {
         return { intent: 'silent', resolvedBy: 'policy', data: {} };
     }
 
+    // ── D2. The manager sent a FILE Jarvis cannot open ───────────────────────
+    // A REAL INCIDENT (2026-08-29). She sent EdgeYard-v2.9-debug.apk. Nothing
+    // in index.js downloads a document — the image branch is scoped to yard
+    // staff, the audio branch to voice notes — so the bytes never entered the
+    // process at all. With no coded handler the message fell through to
+    // Gemini, which improvised: "I can help you manage your files. What would
+    // you like to do with the EdgeYard-v2.9-debug.apk file?"
+    //
+    // That sentence is a FALSE PROMISE, and it is worse than a refusal. She
+    // believed it, answered "forward to 13109382525", and got "What should I
+    // send to 13109382525?" — because send_message carries text only and the
+    // file was never anywhere. Two wasted turns and a capability that does
+    // not exist, announced in the first person.
+    //
+    // This is the fourth instance of the pattern her own note at
+    // actions.js:4966 names: the model can only pick from an exhaustive
+    // action list, so a missing capability surfaces as either a refusal or,
+    // worse, an invention. Until forwarding files actually exists, say so.
+    //
+    // SCOPE, deliberately narrow — everything below was checked before this
+    // was added, because each one is a live path that must not change:
+    //   · yard scale tickets return above (isYard branch) and never reach here
+    //   · truckers/suppliers are not isManagerOrTeam, so their media is untouched
+    //   · any pendingAction awaiting an image resolves at lines ~499-610, far
+    //     above this, so a quote's scale-ticket upload still works
+    //   · VOICE NOTES keep hasMedia:true after transcription in index.js, so
+    //     excluding ptt/audio here is load-bearing — without it every voice
+    //     note would be answered with "I can't open that file"
+    //   · a document WITH a caption carries a real instruction; `t` is
+    //     non-empty then and this stays out of the way
+    if (ctx.isManagerOrTeam && ctx.hasMedia && !ctx.mediaBase64 && !t
+        && !['ptt', 'audio'].includes(String(ctx.mediaType || '').toLowerCase())) {
+        return {
+            intent: 'reply', resolvedBy: 'policy',
+            data: { reply: "I can see you sent a file, but I can't open or forward attachments — "
+                + "they never reach me, only the fact that something was sent. "
+                + "Tell me what you need in words and I'll do that part." },
+        };
+    }
+
     // ── E. Trucker/supplier with multiple bookings and a booking no. in text ──
     if ((ctx.isTrucker || ctx.isSupplier) && !ctx.activeBooking && ctx.activeSlots.length > 1) {
         const bkg = resolveBookingNumber(ctx.text);

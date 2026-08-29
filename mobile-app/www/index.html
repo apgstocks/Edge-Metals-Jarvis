@@ -6479,16 +6479,44 @@ function stripWake(text) {
 // turn it off. A phone in a pocket with the mic cycling all day is a battery
 // complaint waiting to happen.
 async function startWakeLoop() {
+  // Belt and braces on the admin gate: the button is hidden for everyone else,
+  // but the loop can also be reached from the state machine's START_MIC
+  // effect, and a hidden button is not a permission check.
+  if (!voiceAllowed()) return;
   const SR = voicePlugin();
-  if (!SR || voiceOn) return;
+  // EVERY failure below says something. Apsara: "after opening app, when i say
+  // hey jarvis, it is not doing anything" — and three of these four paths used
+  // to return in total silence, which is why a dead feature was indistinguishable
+  // from a feature that had not heard her. A bare `return` here is the bug.
+  if (!SR) {
+    voiceToast(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()
+      ? 'This device has no speech recogniser — "Hey Jarvis" cannot run here.'
+      : 'Voice only works in the installed app, not a browser tab.');
+    return;
+  }
+  if (voiceOn) return;                     // already listening; not a failure
   try {
     const avail = await SR.available();
-    if (!(avail && (avail.available ?? avail))) return;
+    if (!(avail && (avail.available ?? avail))) {
+      voiceToast('No speech recogniser available on this phone — some Android builds ship without one.');
+      return;
+    }
     const perm = await SR.requestPermissions();
-    if (perm && perm.speechRecognition === 'denied') { voiceToast('Microphone permission denied — use the mic button instead.'); return; }
-  } catch (e) { return; }
+    if (perm && perm.speechRecognition === 'denied') {
+      // The most likely real cause of silence on a phone that has run this
+      // before: permission was refused once and Android never asks again.
+      voiceToast('Microphone permission is denied. Android Settings → Apps → Edge Yard → Permissions → Microphone.');
+      return;
+    }
+  } catch (e) {
+    voiceToast('Could not start listening: ' + ((e && e.message) || 'unknown error'));
+    return;
+  }
   voiceOn = true;
   renderVoiceButton();
+  // Says so, once, so "is it listening?" is answerable by looking rather than
+  // by saying "Hey Jarvis" and waiting to see.
+  voiceToast('Listening for "Hey Jarvis" or "Hey Scout".');
   wakeCycle();
 }
 
@@ -6717,15 +6745,32 @@ function voiceToast(msg) { showWeighToast('flagged', msg, '', 4000); }
 function renderVoiceButton() {
   const b = $('btnVoice');
   if (!b) return;
+  if (!voiceAllowed()) { b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
   b.textContent = voiceOn ? '🎙' : '🎤';
   b.title = voiceOn ? 'Listening for "Hey Jarvis" — long-press to stop' : 'Tap to speak a command · long-press for "Hey Jarvis"';
   b.style.borderColor = voiceOn ? 'var(--accent)' : 'var(--steel-700)';
   b.style.color = voiceOn ? 'var(--accent)' : 'var(--steel-300)';
 }
 
+// ── voice is ADMIN ONLY for now ───────────────────────────────────────────
+// Per Apsara 2026-08-29: "for admin user only as of now".
+//
+// One function, consulted everywhere, because a capability gate that is
+// spelled out in three places is a capability gate with two ways around it.
+// It matters more here than most: the wake word feeds workflow/brain.js, which
+// messages truckers and suppliers for real, and an always-on microphone in a
+// shared yard phone is not something to hand out by default.
+//
+// The staff role is already blocked server-side from /api/voice/* by the
+// prefix allowlist in api.js; this is the client half, so the button is not
+// even shown to someone who cannot use it.
+function voiceAllowed() { return ROLE === 'admin'; }
+
 function wireVoiceUI() {
   const b = $('btnVoice');
   if (!b || b.dataset.wired) return;
+  if (!voiceAllowed()) { b.classList.add('hidden'); return; }
   b.dataset.wired = '1';
   // TOUCH AND MOUSE ARE THE SAME GESTURE, and Android fires both: a real tap
   // sends touchstart/touchend and THEN synthetic mousedown/mouseup. The first

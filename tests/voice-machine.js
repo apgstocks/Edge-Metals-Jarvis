@@ -336,6 +336,47 @@ function violations(state) {
         ck('  but not when she has switched it off', !off.effects.includes('START_MIC'));
     }
     ck('speaking goes through the machine', /vmSend\('SPEAK_START'\)/.test(html));
+
+    // ── ADMIN ONLY ────────────────────────────────────────────────────────
+    // Apsara 2026-08-29: "for admin user only as of now". The wake word feeds
+    // workflow/brain.js, which messages truckers and suppliers for real, so an
+    // always-on microphone is not a default capability.
+    ck('there is a single voiceAllowed() gate', /function voiceAllowed\(\)/.test(html));
+    ck('  and it is admin-only', /function voiceAllowed\(\)\s*\{\s*return ROLE === 'admin'/.test(html));
+    ck('the wake loop itself refuses for non-admins',
+       /async function startWakeLoop\(\)[\s\S]{0,400}if \(!voiceAllowed\(\)\) return;/.test(html));
+    ck('the button is hidden rather than shown-and-broken',
+       /if \(!voiceAllowed\(\)\) \{ b\.classList\.add\('hidden'\)/.test(html));
+    ck('the gate is consulted in more than one place', (html.match(/voiceAllowed\(\)/g) || []).length >= 3);
+
+    // ── NO SILENT FAILURES ────────────────────────────────────────────────
+    // Three of the four ways startWakeLoop could fail used to `return` with no
+    // message at all, which is why a dead feature looked exactly like a
+    // feature that had not heard her.
+    {
+        const fn = /async function startWakeLoop\(\)[\s\S]*?\n\}/.exec(html);
+        ck('startWakeLoop is findable', !!fn);
+        if (fn) {
+            const body = fn[0];
+            // Named precisely rather than counted. Counting bare `return`s was
+            // too blunt — the admin gate and the already-listening case are
+            // both legitimately silent, and a threshold would just drift.
+            // These are the four paths that MUST speak:
+            ck('  a missing plugin is reported', /voiceToast\([\s\S]{0,200}installed app|no speech recogniser/i.test(body));
+            ck('  a device with no recogniser is reported', /No speech recogniser available/i.test(body));
+            ck('  a denied permission is reported, with where to fix it',
+               /permission is denied[\s\S]{0,120}Permissions/i.test(body));
+            ck('  an unexpected error is reported, not swallowed',
+               /catch \(e\) \{[\s\S]{0,200}voiceToast/.test(body));
+            ck('  and it confirms out loud when it DOES start', /Listening for/.test(body));
+            // The two silent returns that are CORRECT, so a future edit that
+            // makes them noisy is also caught.
+            ck('  the admin gate is silent (the button is simply not there)',
+               /if \(!voiceAllowed\(\)\) return;/.test(body));
+            ck('  already-listening is silent (it is not a failure)',
+               /if \(voiceOn\) return;/.test(body));
+        }
+    }
     ck('  and so does the end of speaking', /vmSend\('SPEAK_END'\)/.test(html));
 }
 
