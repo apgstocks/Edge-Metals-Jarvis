@@ -81,6 +81,14 @@ function makePhone(opts = {}) {
         requestPermissions: async () => ({ speechRecognition: opts.permission || 'granted' }),
         start: async (o) => {
             started.push(o);
+            // HER PHONE'S ACTUAL BEHAVIOUR. In v3.5 the wake loop awaited this
+            // promise before arming its watchdog; on her device it never
+            // resolved, so the loop hung on its very first cycle and the wake
+            // word was dead from the moment it started. Her log shows "wake
+            // loop STARTED" and then not one result line, ever.
+            if (opts.startHangs && o && o.partialResults !== false) {
+                return new Promise(() => {});   // never settles
+            }
             // The real plugin RESOLVES with the final matches when
             // partialResults is false. Documented Android behaviour, and the
             // whole reason the wake loop moved off partials: partials omit the
@@ -336,15 +344,56 @@ function hear(phone, matches) {
     {
         const opts = { finals: [['hey jarvis'], []] };
         const { win, phone } = await bootApp(opts);
-        // The partial arrives first, missing the name — must NOT match.
+        // The partial arrives missing the name, then the name follows.
         hear(phone, ['hey']);
+        await new Promise((r) => setTimeout(r, 50));
+        hear(phone, ['hey jarvis']);
         await new Promise((r) => setTimeout(r, 400));
-        ck('the FINAL result carries the name and wakes it',
+        ck('the full phrase in a later partial wakes it',
            phone.spoken.length > 0,
            'silent — the final result is not being read. started=' + JSON.stringify(phone.started));
-        ck('  and the wake session asked for final results, not partials',
-           phone.started.some((o) => o && o.partialResults === false),
+        // REVERSED from v3.5. Asking for final results was correct on paper
+        // and produced nothing at all on her phone, because start() does not
+        // resolve there. Her logs show partials DO carry the whole phrase in
+        // practice, so partials it is, with the rolling window covering the
+        // case where Android splits them.
+        ck('  the wake session uses partials, which her phone actually delivers',
+           phone.started.some((o) => o && o.partialResults === true),
            'started with: ' + JSON.stringify(phone.started));
+        win.close();
+    }
+
+    // ── 3f. A RECOGNISER THAT NEVER RESOLVES ──────────────────────────────
+    // The v3.5 hang, from Apsara's log. Nothing downstream of start() may be
+    // load-bearing, because on her phone nothing downstream of it ever runs.
+    {
+        const { win, phone } = await bootApp({ startHangs: true });
+        ck('the loop still starts when start() hangs', phone.started.length > 0);
+        // Partial events still arrive from the plugin even while the promise
+        // is pending — that is how the real one behaves.
+        hear(phone, ['jarvis']);
+        await new Promise((r) => setTimeout(r, 300));
+        ck('HANGING start(): the wake word still works',
+           phone.spoken.length > 0,
+           'silent — something downstream of start() is load-bearing again');
+        win.close();
+    }
+
+    // ── 3g. the watchdog is armed BEFORE anything can block ───────────────
+    {
+        const { win } = await bootApp({ startHangs: true });
+        const src = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+        // Comments stripped first: the explanation above the code mentions
+        // SR.start() by name, and matching that instead of the call made this
+        // assertion fail against correct code.
+        const fn = /async function wakeCycle\(\)[\s\S]*?\n\}/.exec(src)[0]
+            .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+        const armAt = fn.indexOf('armWatchdog()');
+        const startAt = fn.indexOf('SR.start(');
+        ck('the watchdog is armed before the recogniser is started',
+           armAt !== -1 && startAt !== -1 && armAt < startAt,
+           'the watchdog sits downstream of the thing it is watching');
+        ck('  and start() is not awaited', !/await SR\.start\(/.test(fn));
         win.close();
     }
 

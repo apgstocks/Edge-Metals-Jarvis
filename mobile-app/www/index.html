@@ -6874,54 +6874,61 @@ async function wakeCycle() {
   if (!SR || !voiceOn || voiceListening) return;
   voiceMode = 'wake';
   voiceListening = true;
-  try {
-    // ── FINAL RESULTS, not partials ───────────────────────────────────────
-    // This was partialResults:true, on the reasoning that partials spot the
-    // wake phrase mid-utterance instead of waiting for a silence timeout.
-    // Apsara's log showed what that actually produces:
-    //
-    //   heard [wake]  [""]
-    //   heard [wake]  ["hey"]        <- and the session ended there
-    //
-    // It is a documented behaviour of Android's SpeechRecognizer, not a quirk
-    // of this app: partialResults delivers every word EXCEPT the last one, and
-    // the final word never appears in a partial at all. For a two-word wake
-    // phrase that means the name is never in the text being matched. No
-    // pattern could have matched it, which is why six builds failed silently.
-    //
-    // partialResults:false makes start() RESOLVE with the complete utterance —
-    // every word, several ranked alternatives. It costs the endpointer's pause
-    // (about a second) before the phrase is delivered, which is the correct
-    // trade: a wake word that is a second late works, and one that is instant
-    // and missing the name does not.
-    //
-    // popup:false stays — a system dialog on every cycle would make this
-    // unusable.
-    const res = await SR.start({ language: 'en-US', maxResults: 5, prompt: '', partialResults: false, popup: false });
-    const finals = (res && res.matches) || [];
-    vlog('final [wake]', finals.length ? finals : '(nothing)');
-    if (finals.length) handleWakeCandidates(finals);
-  } catch (e) {
-    // Busy/again errors are normal on a restart loop — back off and retry
-    // rather than tearing the loop down over a transient.
-    voiceListening = false;
-    if (voiceOn) voiceWatchdog = setTimeout(wakeCycle, 1200);
-    return;
-  }
-  // Android sometimes stops without firing listeningState. Without this the
-  // loop would silently die and the wake word would just stop working with
-  // no sign of why.
-  if (voiceWatchdog) clearTimeout(voiceWatchdog);
-  // 3 seconds, not 12. Her log shows the loop going quiet for NINETY seconds
-  // after a session ended — the wake word was simply not listening for most of
-  // that time. Android ends a session within a second or two of silence, so
-  // the watchdog has to be on that timescale, not an order of magnitude above
-  // it. wakeCycle() is cheap and re-entrant.
-  voiceWatchdog = setTimeout(() => {
-    voiceListening = false;
-    if (voiceOn && voiceMode === 'wake') { vlog('watchdog restarting the wake loop'); wakeCycle(); }
-  }, 3000);
+
+  // ── THE WATCHDOG IS ARMED FIRST, BEFORE ANYTHING CAN BLOCK ──────────────
+  // v3.5 awaited SR.start() and only armed the watchdog afterwards. Apsara's
+  // log shows the consequence exactly:
+  //
+  //   44:11.502  wake loop STARTED
+  //   ...and then not one "final [wake]" line, ever...
+  //
+  // start() never resolved, so the line after it never ran, so the watchdog
+  // was never set, so nothing ever restarted the loop. The wake word was dead
+  // from the moment it started. A hang I introduced while fixing something
+  // else — and the reason a watchdog must never sit downstream of the thing it
+  // is supposed to be watching.
+  const armWatchdog = () => {
+    if (voiceWatchdog) clearTimeout(voiceWatchdog);
+    voiceWatchdog = setTimeout(() => {
+      voiceListening = false;
+      if (voiceOn && voiceMode === 'wake') { vlog('watchdog restarting the wake loop'); wakeCycle(); }
+    }, 4000);
+  };
+  armWatchdog();
+
+  // ── partialResults: TRUE ────────────────────────────────────────────────
+  // Reverted from v3.5's partialResults:false. The reasoning for that change
+  // was sound — Android omits the last word from partials — but her device
+  // then produced no result at all, because start() does not resolve here.
+  //
+  // Her own logs settle which is real: in COMMAND mode, with partials on, the
+  // full phrase DID arrive —
+  //
+  //   44:53.992  heard [command]  ["hey scout","he scout","scout"]
+  //
+  // So partials work on this phone and do carry the whole phrase. What they
+  // sometimes do is split it across sessions, which is what the rolling window
+  // in handleWakeCandidates() is for. Observed behaviour beats documented
+  // behaviour when the two disagree.
+  //
+  // NOT AWAITED. Whether start() resolves, rejects, or hangs forever, the
+  // watchdog above is already running and the loop cannot die.
+  Promise.resolve()
+    .then(() => SR.start({ language: 'en-US', maxResults: 5, prompt: '', partialResults: true, popup: false }))
+    .then((res) => {
+      // Some plugin versions resolve with the final matches even with
+      // partials on. Free extra signal when it happens; harmless when not.
+      const finals = (res && res.matches) || [];
+      if (finals.length) { vlog('final [wake]', finals); handleWakeCandidates(finals); }
+    })
+    .catch((e) => {
+      // Busy/again errors are routine on a restart loop. Logged, not fatal —
+      // the watchdog restarts regardless.
+      vlog('wake start failed', (e && e.message) || String(e));
+      voiceListening = false;
+    });
 }
+
 
 // ── One-shot command capture ──────────────────────────────────────────────
 // Used both by the mic button and by the wake word once it fires. Longer

@@ -242,11 +242,19 @@ console.log('\n─ voice: routing and speech ───────────�
     // text was not there. The window joins what was heard across sessions.
     ck('there is a rolling window of what was recently heard', /HEARD_WINDOW_MS/.test(html));
     ck('  the wake phrase is matched against it too', /isWakePhrase\(win\)/.test(html));
-    // The authoritative path is the FINAL result, per Android's documented
-    // behaviour of omitting the last word from partials.
-    ck('the wake loop asks for FINAL results, not partials',
-       /partialResults: false, popup: false \}\);\n    const finals/.test(html)
-       || /const res = await SR\.start\(\{[^}]*partialResults: false/.test(html));
+    // REVERSED after Apsara's second log. Asking for FINAL results was right
+    // on paper — Android omits the last word from partials — and produced
+    // nothing whatsoever on her phone, because start() never resolves there:
+    // "wake loop STARTED" and then not one result line. Her logs also show
+    // partials DO carry the whole phrase in command mode. Observed behaviour
+    // beats documented behaviour when they disagree; the rolling window covers
+    // the case where Android splits the phrase across sessions.
+    ck('the wake loop uses partials, which her phone actually delivers',
+       /partialResults: true, popup: false/.test(html));
+    ck('  and nothing downstream of start() is load-bearing',
+       !/await SR\.start\(\{[^}]*partialResults: false/.test(html));
+    ck('  the watchdog is armed before the recogniser starts',
+       /armWatchdog\(\);[\s\S]{0,3000}SR\.start\(/.test(html));
     ck('  and there is only ONE wake rule, not a copy per listener',
        (html.match(/function handleWakeCandidates/g) || []).length === 1);
     ck('  and it is cleared once it fires, so it cannot re-trigger',
