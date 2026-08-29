@@ -24,8 +24,8 @@ android {
         applicationId "com.edgemetals.loads"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 32
-        versionName "4.1"
+        versionCode 33
+        versionName "5.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -73,6 +73,16 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // ── On-device wake word ────────────────────────────────────────────────
+    // Picovoice Porcupine. Replaces eleven builds of SpeechRecognizer driven in
+    // a restart loop — see docs/voice-wake-word-research.md for why that could
+    // never work and what the literature says instead.
+    //
+    // "Jarvis" is a BUILT-IN keyword, so it needs no model file and no custom
+    // training. A custom word ("Scout") is a .ppn dropped into src/main/assets
+    // and is picked up automatically by WakeWordPlugin.
+    implementation 'ai.picovoice:porcupine-android:3.0.2'
 }
 
 apply from: 'capacitor.build.gradle'

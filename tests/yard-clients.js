@@ -151,6 +151,14 @@ section('F — one tap on the mic is one capture');
         // extracted so it could be tested exhaustively). This sandbox stands in
         // for it, and uses the REAL machine so the toggle is exercised against
         // the same rule the app obeys, not a mock that always agrees.
+        // Porcupine stubs. This sandbox evaluates the long-press handler in
+        // isolation, so anything the handler now touches must exist here — the
+        // wake word moved to an on-device engine (WakeWordPlugin.java) and the
+        // toggle consults it. Stubbed rather than mocked away, so the handler
+        // still exercises the real branch.
+        const usingPorcupine = () => false;
+        const startPorcupine = () => {};
+        const stopPorcupine = () => {};
         const VM = require('../mobile-app/www/voice-machine.js');
         let vmState = VM.initial();
         const vmSend = (event) => {

@@ -104,6 +104,27 @@ function makePhone(opts = {}) {
         addListener: (name, fn) => { (events[name] = events[name] || []).push(fn); },
     };
 
+    // The wake-word engine. Present only when the test asks for it, so the
+    // no-plugin path (a browser tab, or an APK built before this) is still
+    // exercised by every other case.
+    const wakeListeners = [];
+    const WakeWord = opts.porcupine ? {
+        available: async () => ({ available: true, micGranted: true, builtIn: 'jarvis', customModels: [] }),
+        start: async (o) => {
+            started.push({ porcupine: true, accessKey: o && o.accessKey });
+            if (!o || !o.accessKey) throw new Error('no-access-key');
+            if (opts.porcupineKeyBad) throw new Error('PorcupineInvalidArgumentException: AccessKey rejected');
+            porcupineRunning.value = true;
+            return { started: true, keywords: 'jarvis' };
+        },
+        stop: async () => { porcupineRunning.value = false; },
+        pause: async () => { porcupinePaused.push('pause'); },
+        resume: async () => { porcupinePaused.push('resume'); },
+        addListener: (name, fn) => { if (name === 'wake') wakeListeners.push(fn); },
+    } : null;
+    const porcupineRunning = { value: false };
+    const porcupinePaused = [];
+
     const TextToSpeech = {
         speak: async (o) => {
             if (opts.deviceTts === false) throw new Error('no engine');
@@ -155,7 +176,8 @@ function makePhone(opts = {}) {
         return json(Array.isArray(opts.emptyAs) ? opts.emptyAs : []);
     }
 
-    return { events, spoken, fetched, started, SpeechRecognition, TextToSpeech, fakeFetch, wav };
+    return { events, spoken, fetched, started, SpeechRecognition, TextToSpeech, WakeWord,
+             fakeFetch, wav, wakeListeners, porcupineRunning, porcupinePaused };
 }
 
 async function bootApp(opts = {}) {
@@ -182,7 +204,10 @@ async function bootApp(opts = {}) {
             // The phone.
             window.Capacitor = {
                 isNativePlatform: () => true,
-                Plugins: { SpeechRecognition: phone.SpeechRecognition, TextToSpeech: phone.TextToSpeech },
+                Plugins: Object.assign(
+                    { SpeechRecognition: phone.SpeechRecognition, TextToSpeech: phone.TextToSpeech },
+                    phone.WakeWord ? { WakeWord: phone.WakeWord } : {},
+                ),
             };
             window.fetch = phone.fakeFetch;
             // Signed in already, so boot reaches the app rather than the login
@@ -191,6 +216,10 @@ async function bootApp(opts = {}) {
             // assumed. Getting this wrong left the app on the login screen and
             // made every assertion below fail for the wrong reason.
             try { window.localStorage.setItem('jarvis_sid', 'test-token'); } catch (e) {}
+            try {
+                if (opts.picovoiceKey) window.localStorage.setItem('picovoice_key', opts.picovoiceKey);
+                else window.localStorage.removeItem('picovoice_key');
+            } catch (e) {}
             // Audio is not implemented in jsdom; this records the play instead.
             window.Audio = function (src) {
                 const self = this;
@@ -628,6 +657,65 @@ function hear(phone, matches) {
         const said = phone.spoken.map((x) => x.text || '').join(' ');
         ck('  and it did not ask "hey. Shall I?"', !/^hey\. Shall I/.test(said),
            'spoken: ' + JSON.stringify(phone.spoken));
+        win.close();
+    }
+
+    // ── 3n. PORCUPINE ─────────────────────────────────────────────────────
+    // Apsara chose the real engine after eleven builds on SpeechRecognizer.
+    // See docs/voice-wake-word-research.md.
+    {
+        const { win, phone, logs } = await bootApp({ porcupine: true, picovoiceKey: 'test-key' });
+        ck('Porcupine is started at boot when a key is set',
+           phone.started.some((o) => o && o.porcupine),
+           'never started: ' + JSON.stringify(phone.started) + '\n        ' + logs());
+        ck('  and it is given the key', phone.started.some((o) => o && o.accessKey === 'test-key'));
+
+        // THE property that matters. Two engines on one microphone is not a
+        // fallback, it is a fight — and the loop being replaced has eleven
+        // builds of evidence that it does not work.
+        ck('the SpeechRecognizer wake loop is NOT also running',
+           !phone.started.some((o) => o && !o.porcupine && o.partialResults !== undefined),
+           'the old loop started too: ' + JSON.stringify(phone.started));
+
+        // The engine fires; the app acknowledges and listens.
+        phone.wakeListeners.forEach((f) => f({ keyword: 'jarvis' }));
+        await new Promise((r) => setTimeout(r, 400));
+        ck('a detection speaks the acknowledgement', phone.spoken.length > 0,
+           'silent: ' + JSON.stringify(phone.spoken));
+        win.close();
+    }
+
+    // ── 3o. the detector is silenced while the app speaks ─────────────────
+    // The self-trigger is a property of having a speaker and a microphone, not
+    // of which engine is listening. Porcupine must be paused for exactly the
+    // same reason the old loop was stopped.
+    {
+        const { win, phone } = await bootApp({ porcupine: true, picovoiceKey: 'test-key' });
+        phone.wakeListeners.forEach((f) => f({ keyword: 'jarvis' }));
+        await new Promise((r) => setTimeout(r, 400));
+        ck('speaking pauses the wake detector',
+           phone.porcupinePaused.includes('pause'),
+           'never paused: ' + JSON.stringify(phone.porcupinePaused));
+        win.close();
+    }
+
+    // ── 3p. no key: it does not start, and does not fall back to the loop ──
+    {
+        const { win, phone } = await bootApp({ porcupine: true });   // no key
+        ck('with no key, Porcupine does not start',
+           !phone.porcupineRunning.value);
+        // With no key the OLD loop is the only thing available, so it may run —
+        // that is the deliberate fallback, and it must not be silent about it.
+        ck('  the app still starts some microphone', phone.started.length > 0);
+        win.close();
+    }
+
+    // ── 3q. a rejected key is reported, not swallowed ─────────────────────
+    {
+        const { win, phone, logs } = await bootApp({ porcupine: true, picovoiceKey: 'bad', porcupineKeyBad: true });
+        ck('a rejected key does not leave it silently dead',
+           /porcupine FAILED/.test(logs()),
+           'log: ' + logs());
         win.close();
     }
 

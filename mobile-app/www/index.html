@@ -547,6 +547,21 @@ body { overflow-y:auto; }
            whole chain — plugin, permission, server, audio fetch, playback —
            and prints what each step actually did. One tap beats another
            round of speculation. -->
+      <!-- Picovoice AccessKey. Lives HERE rather than in the server box on the
+           sign-in screen: that box is a deliberately undiscoverable recovery
+           gesture for a signed-out phone, and this is an everyday admin
+           setting for someone already signed in. The voice sheet is where
+           voice things belong and is already admin-gated. -->
+      <div id="wakeKeyRow" style="margin-top:11px; padding-top:11px; border-top:1px solid rgba(255,255,255,.08);">
+        <div style="font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); margin-bottom:5px;">Wake word key <span id="wakeKeyState"></span></div>
+        <div style="display:flex; gap:8px;">
+          <input id="wakeKeyInput" type="text" placeholder="Picovoice AccessKey" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 style="flex:1; min-width:0; background:var(--surface-sunken); border:1px solid rgba(255,255,255,.16); border-radius:8px; color:var(--text-strong); padding:9px 10px; font-size:12px; font-family:ui-monospace,monospace;">
+          <button id="btnSaveWakeKey" class="btn btn-primary" style="font-size:12px; padding:0 14px;">Save</button>
+        </div>
+        <div id="wakeKeyMsg" style="margin-top:6px; font-size:11.5px; color:var(--text-muted);">Free key from console.picovoice.ai. Stored on this phone only.</div>
+      </div>
+
       <div style="display:flex; gap:8px; margin-top:11px;">
         <button id="btnVoiceDiag" class="btn" style="flex:1; font-size:12px; opacity:.85;">Why isn't it talking?</button>
         <button id="btnVoiceLog" class="btn" style="flex:1; font-size:12px; opacity:.85;">Show log</button>
@@ -6309,6 +6324,112 @@ let speaking = false;
 let voiceMuted = false;             // her switch, not a state
 try { voiceMuted = localStorage.getItem('jarvis_voice_muted') === '1'; } catch (e) {}
 
+// ── the wake word, done properly ──────────────────────────────────────────
+// Picovoice Porcupine, via the native plugin in WakeWordPlugin.java.
+//
+// This REPLACES the SpeechRecognizer restart loop rather than sitting beside
+// it. Eleven builds went into that loop and none of them worked; the research
+// (docs/voice-wake-word-research.md) says it never could, because
+// SpeechRecognizer is a transcription API that explicitly does not support
+// wake-word detection. Porcupine is a small keyword-spotting model that owns
+// the microphone itself: no sessions, no endpointer, no partial results,
+// nothing for this file to drive.
+//
+// "Jarvis" is built into the SDK. "Scout" needs a custom .ppn from the
+// Picovoice console dropped into mobile-app/android/app/src/main/assets/ —
+// the plugin picks up whatever is there, so it starts working without a code
+// change.
+//
+// THE KEY IS ENTERED, NOT BUILT IN. A Picovoice AccessKey is per-account and
+// rotates; baking one into the APK would mean a rebuild every time it changed,
+// which is the same mistake the server URL used to make (see the comment on
+// DEFAULT_API_BASE). It lives in localStorage and is typed once.
+function wakePlugin() {
+  const cap = window.Capacitor;
+  if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+  return (cap.Plugins && cap.Plugins.WakeWord) || null;
+}
+
+function porcupineKey() {
+  try { return localStorage.getItem('picovoice_key') || ''; } catch (e) { return ''; }
+}
+function setPorcupineKey(k) {
+  try {
+    if (k) localStorage.setItem('picovoice_key', String(k).trim());
+    else localStorage.removeItem('picovoice_key');
+  } catch (e) {}
+}
+
+// True when the real engine is available AND configured. Everything else in
+// the app branches on this: when it is true the old loop must never start.
+function usingPorcupine() { return !!wakePlugin() && !!porcupineKey(); }
+
+let porcupineOn = false;
+
+async function startPorcupine() {
+  const W = wakePlugin();
+  if (!W) return false;
+  const key = porcupineKey();
+  if (!key) { vlog('porcupine: no access key set'); return false; }
+  if (porcupineOn) return true;
+
+  // The mic permission is requested through the speech plugin, which already
+  // owns that dialogue. Porcupine only checks it.
+  try {
+    const SR = voicePlugin();
+    if (SR) await SR.requestPermissions();
+  } catch (e) {}
+
+  try {
+    const r = await W.start({ accessKey: key });
+    porcupineOn = true;
+    vlog('porcupine STARTED', r && r.keywords);
+    if (!window.__saidListening) {
+      window.__saidListening = true;
+      voiceToast('Listening for "' + ((r && r.keywords) || 'Jarvis').replace(/,/g, '" or "') + '".');
+    }
+    renderVoiceButton();
+    return true;
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    vlog('porcupine FAILED', msg);
+    // Each of these needs a different answer from the person holding the phone,
+    // so they are not collapsed into one message.
+    if (/no-access-key/.test(msg)) voiceToast('No Picovoice key yet — add it in Server settings.');
+    else if (/no-mic-permission/.test(msg)) voiceToast('Microphone permission is denied. Android Settings → Apps → Edge Yard → Permissions.');
+    else if (/Activation|LimitReached|Throttled/i.test(msg)) voiceToast('Picovoice key rejected or its free limit is reached: ' + msg);
+    else if (/Invalid|AccessKey/i.test(msg)) voiceToast('That Picovoice key was not accepted: ' + msg);
+    else voiceToast('Wake word could not start: ' + msg);
+    return false;
+  }
+}
+
+async function stopPorcupine() {
+  const W = wakePlugin();
+  porcupineOn = false;
+  try { if (W) await W.stop(); } catch (e) {}
+  renderVoiceButton();
+}
+
+// Speaking must silence the detector, exactly as it silenced the old loop —
+// the self-trigger is a property of having a microphone and a speaker, not of
+// which engine is listening.
+async function pausePorcupine() { try { if (porcupineOn && wakePlugin()) await wakePlugin().pause(); } catch (e) {} }
+async function resumePorcupine() { try { if (porcupineOn && wakePlugin()) await wakePlugin().resume(); } catch (e) {} }
+
+function wirePorcupine() {
+  const W = wakePlugin();
+  if (!W || W.__wired) return;
+  W.__wired = true;
+  W.addListener('wake', (ev) => {
+    const word = (ev && ev.keyword) || 'jarvis';
+    vlog('PORCUPINE WAKE', word);
+    // Same behaviour as before from here on: acknowledge, then listen for the
+    // command. The difference is that this fires reliably.
+    speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
+  });
+}
+
 // ── the voice log ─────────────────────────────────────────────────────────
 // Apsara, after five silent builds: "still no talkback. add logs".
 //
@@ -6389,7 +6510,16 @@ function vmSend(event) {
   // window where both are live at once.
   for (const eff of r.effects) {
     if (eff === 'STOP_SPEAKING') stopSpeaking();
-    else if (eff === 'STOP_MIC') { voiceOn = false; const SR = voicePlugin(); try { SR && SR.stop(); } catch (e) {} if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; } renderVoiceButton(); }
+    else if (eff === 'STOP_MIC') {
+      voiceOn = false;
+      const SR = voicePlugin(); try { SR && SR.stop(); } catch (e) {}
+      if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; }
+      // The detector has a microphone too. Speaking must silence it or the
+      // phone hears its own reply — the self-trigger is a property of having a
+      // speaker and a mic, not of which engine is listening.
+      pausePorcupine();
+      renderVoiceButton();
+    }
     else if (eff === 'START_MIC') {
       // WHO OWNS THE MICROPHONE MATTERS, not just whether it is open.
       //
@@ -6403,6 +6533,7 @@ function vmSend(event) {
       // A capture already opens the recogniser itself. When one is running it
       // owns the microphone, and the wake loop must stay out of the way.
       if (vmState && vmState.capturing) { vlog('mic stays with the capture'); }
+      else if (usingPorcupine()) { resumePorcupine(); }
       else startWakeLoop();
     }
     else if (eff === 'OPEN_CAPTURE') { /* captureCommand is called by the caller that knows the seed text */ }
@@ -6864,6 +6995,12 @@ async function startWakeLoop() {
   // but the loop can also be reached from the state machine's START_MIC
   // effect, and a hidden button is not a permission check.
   if (!voiceAllowed()) return;
+  // ── REPLACED, NOT SUPPLEMENTED ────────────────────────────────────────
+  // When Porcupine is configured this loop must not run at all. Two engines
+  // on one microphone is not a fallback, it is a fight — and this particular
+  // loop has eleven builds of evidence that it does not work. It stays only
+  // for the case where no Picovoice key has been entered yet.
+  if (usingPorcupine()) { vlog('wake loop suppressed — Porcupine is running'); return; }
   const SR = voicePlugin();
   // EVERY failure below says something. Apsara: "after opening app, when i say
   // hey jarvis, it is not doing anything" — and three of these four paths used
@@ -7349,10 +7486,11 @@ function renderVoiceButton() {
   if (!b) return;
   if (!voiceAllowed()) { b.classList.add('hidden'); return; }
   b.classList.remove('hidden');
-  b.textContent = voiceOn ? '🎙' : '🎤';
-  b.title = voiceOn ? 'Listening for "Hey Jarvis" — long-press to stop' : 'Tap to speak a command · long-press for "Hey Jarvis"';
-  b.style.borderColor = voiceOn ? 'var(--accent)' : 'var(--steel-700)';
-  b.style.color = voiceOn ? 'var(--accent)' : 'var(--steel-300)';
+  const listening = voiceOn || porcupineOn;
+  b.textContent = listening ? '🎙' : '🎤';
+  b.title = listening ? 'Listening for "Jarvis" — long-press to stop' : 'Tap to speak a command · long-press to listen';
+  b.style.borderColor = listening ? 'var(--accent)' : 'var(--steel-700)';
+  b.style.color = listening ? 'var(--accent)' : 'var(--steel-300)';
 }
 
 // ── voice is ADMIN ONLY for now ───────────────────────────────────────────
@@ -7394,8 +7532,13 @@ function wireVoiceUI() {
       // Through the machine, so the setting is persisted and the same rule
       // decides the mic here as everywhere else.
       vmSend('USER_TOGGLE');
-      if (vmState && vmState.enabled) voiceToast('Listening for "Hey Jarvis" or "Hey Scout" while the app is open.');
-      else voiceToast('Stopped listening.');
+      if (vmState && vmState.enabled) {
+        if (usingPorcupine()) startPorcupine();
+        else voiceToast('Listening for "Hey Jarvis" or "Hey Scout" while the app is open.');
+      } else {
+        stopPorcupine();
+        voiceToast('Stopped listening.');
+      }
     }, 550);
   };
   const endHold = (ev) => {
@@ -7427,6 +7570,41 @@ function wireVoiceUI() {
   $('btnVoiceSend').addEventListener('click', sendVoiceCommand);
   $('btnVoiceRetry').addEventListener('click', () => captureCommand(''));
   $('btnVoiceDiag').addEventListener('click', runVoiceDiagnostic);
+
+  // ── the wake word key ───────────────────────────────────────────────────
+  (function wireWakeKey() {
+    const row = $('wakeKeyRow');
+    if (!row) return;
+    // Only meaningful in the installed app — the plugin does not exist in a
+    // browser tab, and offering a key field that can do nothing is worse than
+    // not offering it.
+    if (!wakePlugin()) { row.classList.add('hidden'); return; }
+    const input = $('wakeKeyInput');
+    const state = $('wakeKeyState');
+    const msg = $('wakeKeyMsg');
+    const shown = () => {
+      const k = porcupineKey();
+      // Never render the whole key back: it is a credential, and a shoulder
+      // over the phone in a yard is the normal case, not the exception.
+      input.value = '';
+      input.placeholder = k ? ('saved ••••' + k.slice(-4)) : 'Picovoice AccessKey';
+      state.textContent = porcupineOn ? '— running' : (k ? '— saved, not started' : '— not set');
+      state.style.color = porcupineOn ? 'var(--accent)' : 'var(--text-muted)';
+    };
+    shown();
+    $('btnSaveWakeKey').addEventListener('click', async () => {
+      const v = (input.value || '').trim();
+      if (!v) { msg.textContent = 'Paste the AccessKey from console.picovoice.ai first.'; return; }
+      setPorcupineKey(v);
+      msg.textContent = 'Starting…';
+      await stopPorcupine();
+      const ok = await startPorcupine();
+      msg.textContent = ok
+        ? 'Running. Say "Jarvis".'
+        : 'Did not start — see the message above, or Show log.';
+      shown();
+    });
+  })();
   $('btnVoiceLog').addEventListener('click', () => {
     const el = $('voiceLog'); const copy = $('btnVoiceLogCopy');
     const showing = !el.classList.contains('hidden');
@@ -7467,6 +7645,10 @@ function wireVoiceUI() {
   //
   // Sent after wireVoiceListeners() so the partialResults handler exists
   // before the recogniser can deliver anything to it.
+  // The real engine first. vmSend's START_MIC effect routes to whichever is
+  // in play, so this only has to get it running once.
+  wirePorcupine();
+  if (usingPorcupine()) { startPorcupine(); }
   vmSend('APP_FOREGROUND');
 
   // ── the app must not listen while it is off screen ─────────────────────
