@@ -6450,6 +6450,17 @@ async function runVoiceDiagnostic() {
     say('✗ /api/voice/ask FAILED: ' + (e && e.message));
   }
 
+  // 6. the phone's own voice — the fallback that guarantees SOMETHING is said
+  const TTS = deviceTtsPlugin();
+  if (!TTS) {
+    say("✗ phone's own voice: plugin missing");
+  } else {
+    try {
+      const ok = await speakOnDevice('Device voice test.');
+      say((ok ? '✓' : '✗') + " phone's own voice " + (ok ? '— you should have heard that' : 'FAILED'));
+    } catch (e) { say("✗ phone's own voice threw: " + (e && e.message)); }
+  }
+
   say('');
   say('Send me this list and I will fix the first ✗.');
 }
@@ -6457,6 +6468,77 @@ async function runVoiceDiagnostic() {
 function getApiBaseForDisplay() {
   try { return localStorage.getItem('jarvis_api_base') || ''; } catch (e) { return ''; }
 }
+
+// ── the phone's own voice, as a fallback ──────────────────────────────────
+// Apsara, after four rounds: "still no talkback".
+//
+// The Gemini voice is the one she chose and it is worth having. But it needs a
+// server that has been updated, a network, and a working API key — three
+// things that can each be absent in a yard — and when any of them is missing
+// the result so far has been SILENCE. That is the wrong failure. A robotic
+// voice that answers beats a human voice that does not.
+//
+// So: Android's built-in engine, wired here as the fallback it should have
+// been from the start. Offline, instant, no server, and installed with the app
+// (@capacitor-community/text-to-speech, added at the beginning of this work
+// and then left unused — my oversight).
+//
+// It is only ever reached when the good voice fails. Nothing about the Gemini
+// path changes.
+function deviceTtsPlugin() {
+  const cap = window.Capacitor;
+  if (!cap || !cap.isNativePlatform || !cap.isNativePlatform()) return null;
+  return (cap.Plugins && cap.Plugins.TextToSpeech) || null;
+}
+
+// The device voice must obey exactly the same rule as the good one: the
+// microphone is shut while anything is talking. Routing it through the state
+// machine rather than calling the plugin directly is what stops the fallback
+// from quietly reintroducing the self-trigger this whole design exists to
+// prevent.
+async function speakWithMicClosed(text) {
+  if (!text) return false;
+  const TTS = deviceTtsPlugin();
+  if (!TTS) return false;
+  speaking = true;
+  vmSend('SPEAK_START');
+  try {
+    return await speakOnDevice(text);
+  } finally {
+    speaking = false;
+    setTimeout(() => { if (!voiceMuted) vmSend('SPEAK_END'); }, 400);
+  }
+}
+
+async function speakOnDevice(text) {
+  const TTS = deviceTtsPlugin();
+  if (!TTS || !text) return false;
+  try {
+    await TTS.speak({
+      text: String(text).slice(0, 600),
+      lang: 'en-US',
+      // A shade faster than default, for the same reason the Gemini direction
+      // is brisk: nobody in a yard is waiting through a slow sentence.
+      rate: 1.1,
+      pitch: 1.0,
+      volume: 1.0,
+      category: 'ambient',
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// What the phone should say when the server voice is unavailable. The fixed
+// phrases have server-side wording; these are their local equivalents.
+const LOCAL_PHRASES = {
+  wake: 'Yes?',
+  working: 'On it.',
+  done: 'Done.',
+  unheard: "Didn't catch that.",
+  offline: "Can't reach the server.",
+};
 
 // The one entry point. `what` is either {phrase:'wake'} for an instant cached
 // line, or {text, agent} for a real answer.
@@ -6472,7 +6554,9 @@ let voiceServerOk = null;   // null = unknown, true/false once tried
 function reportVoiceUnavailable() {
   if (voiceServerOk === false) return;
   voiceServerOk = false;
-  voiceToast('I heard you, but I have no voice — the server has no speech endpoint yet. Update the server and restart it.');
+  voiceToast(deviceTtsPlugin()
+    ? "Using the phone's own voice — the server has no speech endpoint yet. Update and restart it for the proper voice."
+    : 'I heard you, but I have no voice — the server has no speech endpoint yet.');
 }
 
 async function speak(what) {
@@ -6508,7 +6592,11 @@ async function speak(what) {
       if (!phraseCache[what.phrase]) {
         const blob = await api('/api/voice/phrase/' + encodeURIComponent(what.phrase), { raw: true })
           .catch(() => null);
-        if (!blob) { reportVoiceUnavailable(); return false; }
+        if (!blob) {
+          reportVoiceUnavailable();
+          // Say it with the phone instead of saying nothing.
+          return speakWithMicClosed(LOCAL_PHRASES[what.phrase] || '');
+        }
         phraseCache[what.phrase] = URL.createObjectURL(blob);
       }
       voiceServerOk = true;
@@ -6519,7 +6607,10 @@ async function speak(what) {
         body: JSON.stringify({ text: what.text, agent: what.agent || 'jarvis' }),
         raw: true,
       }).catch(() => null);
-      if (!blob) { reportVoiceUnavailable(); return false; }
+      if (!blob) {
+        reportVoiceUnavailable();
+        return speakWithMicClosed(what.text);
+      }
       voiceServerOk = true;
       url = URL.createObjectURL(blob);
       temporary = true;

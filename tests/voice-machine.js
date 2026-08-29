@@ -356,8 +356,16 @@ function violations(state) {
             ck('the audio is fetched BEFORE the mic is closed', fetchAt < stopAt);
             ck('  and the mic is only closed once there is something to play',
                /Audio in hand\. NOW close the mic/.test(body));
-            ck('a failed fetch returns without touching the mic',
-               /reportVoiceUnavailable\(\); return false;/.test(body));
+            // REVISED once the device-voice fallback landed. The original
+            // property was "a failed fetch must not touch the mic", which was
+            // right when a failed fetch meant silence. Now a failed fetch
+            // still SPEAKS, on the phone's own voice, so touching the mic is
+            // correct — provided the same rule governs it.
+            //
+            // The property that survives: the mic is only ever touched when
+            // something is actually going to be said.
+            ck('a failed fetch falls back to the phone rather than going silent',
+               /reportVoiceUnavailable\(\);[\s\S]{0,200}speakWithMicClosed\(/.test(body));
             ck('the mic is still reopened after a successful play',
                /vmSend\('SPEAK_END'\)/.test(body));
         }
@@ -390,6 +398,27 @@ function violations(state) {
     // Three rounds of "it is not talking back" were answered by guessing.
     // This walks the chain and reports what each step actually did.
     ck('the app can diagnose its own voice', /runVoiceDiagnostic/.test(html));
+
+    // ── never silent ──────────────────────────────────────────────────────
+    // Four rounds of "no talkback" all had the same shape: the good voice was
+    // unavailable, so NOTHING was said. A robotic voice that answers beats a
+    // human voice that does not.
+    ck('the phone\'s own voice is wired as a fallback', /deviceTtsPlugin/.test(html));
+    ck('  it is used when the phrase fetch fails',
+       /reportVoiceUnavailable\(\);[\s\S]{0,180}speakWithMicClosed\(LOCAL_PHRASES/.test(html));
+    ck('  and when an answer cannot be synthesised',
+       /reportVoiceUnavailable\(\);[\s\S]{0,120}speakWithMicClosed\(what\.text\)/.test(html));
+    // THE important one. A fallback that bypassed the machine would quietly
+    // reintroduce the self-trigger the whole design exists to prevent.
+    ck('  the fallback obeys the SAME microphone rule',
+       /async function speakWithMicClosed[\s\S]{0,400}vmSend\('SPEAK_START'\)[\s\S]{0,400}vmSend\('SPEAK_END'\)/.test(html));
+    ck('  and it never calls the plugin outside that wrapper',
+       (html.match(/speakOnDevice\(/g) || []).length <= 3);   // definition, wrapper, self-test
+    // With NO fallback available either, nothing is said — and then the mic
+    // must be left exactly as it was. This is the old property, kept.
+    ck('  with no fallback at all, the mic is not touched',
+       /const TTS = deviceTtsPlugin\(\);\s*\n\s*if \(!TTS\) return false;\s*\n\s*speaking = true;/.test(html));
+    ck('the self-test checks the fallback too', /phone's own voice/.test(html));
     ck('  it checks the plugin, permission, server, fetch and playback',
        /speech plugin/.test(html) && /microphone permission/.test(html)
        && /server reachable/.test(html) && /audio playback/.test(html));
