@@ -132,6 +132,13 @@ function makePhone(opts = {}) {
         });
         if (u.includes('/api/me')) return json({ role: opts.role || 'admin' });
         if (u.includes('/api/voice/phrase') || u.includes('/api/voice/say')) {
+            // Record WHAT was asked to be spoken, not just that something was.
+            // Without this the harness could see that audio played but not
+            // whether it was the right words — and "read the instruction back"
+            // is a claim about the words.
+            if (u.includes('/api/voice/say') && init && init.body) {
+                try { spoken.push({ via: 'server', text: JSON.parse(init.body).text }); } catch (e) {}
+            }
             if (opts.voiceServer === false) return json({ error: 'Cannot GET' }, 404);
             return {
                 ok: true, status: 200,
@@ -189,7 +196,7 @@ async function bootApp(opts = {}) {
                 const self = this;
                 this.src = src;
                 this.play = () => {
-                    phone.spoken.push({ via: 'server', src: String(src) });
+                    phone.spoken.push({ via: 'played', src: String(src) });
                     setTimeout(() => { if (self.onended) self.onended(); }, 0);
                     return Promise.resolve();
                 };
@@ -202,7 +209,11 @@ async function bootApp(opts = {}) {
 
     // Let boot's async work settle, and the external script load.
     await new Promise((r) => setTimeout(r, 400));
-    return { dom, win: dom.window, phone, scriptErrors };
+    // The app keeps its own log (vlog). Surfacing it on a failure turns "it
+    // did not speak" into "here is every step it took", which is the whole
+    // reason that log exists on her phone too.
+    const logs = () => (dom.window.vlogLines || []).slice(-14).join('\n        ');
+    return { dom, win: dom.window, phone, scriptErrors, logs };
 }
 
 // Queues what the FINAL result of the next session will be, the way the real
@@ -248,7 +259,8 @@ function hear(phone, matches) {
            phone.fetched.some((u) => u.includes('/api/voice/phrase')),
            'fetched: ' + JSON.stringify(phone.fetched));
 
-        ck('  and played it', phone.spoken.some((s) => s.via === 'server'));
+        ck('  and played it', phone.spoken.some((s) => s.via === 'played'),
+           JSON.stringify(phone.spoken));
         win.close();
     }
 
@@ -417,6 +429,79 @@ function hear(phone, matches) {
         win.close();
     }
 
+    // ── 3i-a. AN INSTRUCTION IS READ BACK AND CONFIRMED BY VOICE ──────────
+    // Apsara: "just get voice confirmation".
+    //
+    // Auto-sending everything is fast and hands-free, and lets a mistranscribed
+    // "message the trucker" reach a real person. A TAP removes the risk and the
+    // point both. Spoken confirmation keeps her hands free AND puts the exact
+    // words in front of her before anything happens.
+    {
+        const { win, phone, logs, scriptErrors } = await bootApp();
+        hear(phone, ['hey jarvis message the trucker we are running late']);
+        await new Promise((r) => setTimeout(r, 500));
+        ck('an instruction is NOT sent immediately',
+           !phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'it sent without confirming: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        ck('  it is read back out loud instead',
+           phone.spoken.some((x) => /Shall I/i.test(x.text || '')),
+           'nothing read back: ' + JSON.stringify(phone.spoken)
+             + '\n        errors: ' + JSON.stringify(scriptErrors)
+             + '\n        ' + logs());
+
+        // She says yes.
+        hear(phone, ['yes']);
+        await new Promise((r) => setTimeout(r, 500));
+        ck('  saying YES sends it',
+           phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'still not sent: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice')))
+             + '\n        ' + logs());
+        win.close();
+    }
+
+    // ── 3i-b. saying no cancels it ────────────────────────────────────────
+    {
+        const { win, phone } = await bootApp();
+        hear(phone, ['hey jarvis message the trucker we are running late']);
+        await new Promise((r) => setTimeout(r, 400));
+        hear(phone, ['no']);
+        await new Promise((r) => setTimeout(r, 400));
+        ck('saying NO cancels the instruction',
+           !phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'it sent anyway: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        ck('  and says so', phone.spoken.some((x) => /Cancelled/i.test(x.text || '')));
+        win.close();
+    }
+
+    // ── 3i-c. anything unclear is treated as NO ───────────────────────────
+    // The asymmetry that matters: a misheard "yes" sends a real message to a
+    // real person; a misheard "no" costs her saying it again.
+    {
+        for (const reply of ['what', 'hmm', 'the truck is here', 'yesterday']) {
+            const { win, phone } = await bootApp();
+            hear(phone, ['hey jarvis email joey about the container']);
+            await new Promise((r) => setTimeout(r, 400));
+            hear(phone, [reply]);
+            await new Promise((r) => setTimeout(r, 400));
+            ck(`"${reply}" is not a yes, so nothing is sent`,
+               !phone.fetched.some((u) => u.includes('/api/voice/ask')),
+               'it sent on an unclear reply');
+            win.close();
+        }
+    }
+
+    // ── 3i-d. a QUESTION is never made to confirm ─────────────────────────
+    {
+        const { win, phone } = await bootApp();
+        hear(phone, ['hey scout how much do we owe']);
+        await new Promise((r) => setTimeout(r, 450));
+        ck('a question is answered without a "Shall I?"',
+           phone.fetched.some((u) => u.includes('/api/voice/ask'))
+             && !phone.spoken.some((x) => /Shall I/i.test(x.text || '')),
+           'spoken=' + JSON.stringify(phone.spoken));
+        win.close();
+    }
+
     // ── 3i. an INSTRUCTION is sent too, and answered aloud ────────────────
     // REVERSED from the previous commit at Apsara's explicit instruction:
     // asked whether to auto-send questions only or everything, she chose
@@ -430,8 +515,10 @@ function hear(phone, matches) {
     {
         const { win, phone } = await bootApp();
         hear(phone, ['hey jarvis message the trucker we are running late']);
-        await new Promise((r) => setTimeout(r, 500));
-        ck('a spoken INSTRUCTION is also sent without a tap',
+        await new Promise((r) => setTimeout(r, 400));
+        hear(phone, ['yes']);
+        await new Promise((r) => setTimeout(r, 400));
+        ck('a spoken INSTRUCTION is sent once confirmed, with no tap anywhere',
            phone.fetched.some((u) => u.includes('/api/voice/ask')),
            'not sent: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
         ck('  and its reply is spoken back too',
@@ -452,7 +539,9 @@ function hear(phone, matches) {
         ]) {
             const { win, phone } = await bootApp();
             hear(phone, [said]);
-            await new Promise((r) => setTimeout(r, 450));
+            await new Promise((r) => setTimeout(r, 400));
+            // Instructions are read back first; a yes carries them through.
+            if (!/how much|is edge/.test(said)) { hear(phone, ['yes']); await new Promise((r) => setTimeout(r, 400)); }
             ck(`"${said}" is sent AND spoken back`,
                phone.fetched.some((u) => u.includes('/api/voice/ask')) && phone.spoken.length > 0,
                'sent=' + phone.fetched.some((u) => u.includes('/api/voice/ask'))

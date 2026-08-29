@@ -6326,7 +6326,11 @@ try { voiceMuted = localStorage.getItem('jarvis_voice_muted') === '1'; } catch (
 //
 // A ring buffer, so it cannot grow without bound on a phone left running.
 const VLOG_MAX = 300;
+// On window on purpose: a top-level `const` in a classic script is NOT a
+// window property, so the end-to-end harness could not read the log and a
+// failure printed nothing. The log is the whole point of having a log.
 const vlogLines = [];
+try { window.vlogLines = vlogLines; } catch (e) {}
 function vlog(msg, detail) {
   const t = new Date();
   const stamp = String(t.getMinutes()).padStart(2, '0') + ':'
@@ -6386,7 +6390,21 @@ function vmSend(event) {
   for (const eff of r.effects) {
     if (eff === 'STOP_SPEAKING') stopSpeaking();
     else if (eff === 'STOP_MIC') { voiceOn = false; const SR = voicePlugin(); try { SR && SR.stop(); } catch (e) {} if (voiceWatchdog) { clearTimeout(voiceWatchdog); voiceWatchdog = null; } renderVoiceButton(); }
-    else if (eff === 'START_MIC') { startWakeLoop(); }
+    else if (eff === 'START_MIC') {
+      // WHO OWNS THE MICROPHONE MATTERS, not just whether it is open.
+      //
+      // Found by the end-to-end harness: after reading an instruction back,
+      // the capture opened for her "yes" — and the machine's START_MIC effect
+      // called startWakeLoop(), which sets voiceMode back to 'wake'. Her "yes"
+      // was then handed to the wake-word matcher, which of course found no
+      // wake word in it and dropped it. The confirmation could never be
+      // answered.
+      //
+      // A capture already opens the recogniser itself. When one is running it
+      // owns the microphone, and the wake loop must stay out of the way.
+      if (vmState && vmState.capturing) { vlog('mic stays with the capture'); }
+      else startWakeLoop();
+    }
     else if (eff === 'OPEN_CAPTURE') { /* captureCommand is called by the caller that knows the seed text */ }
   }
   return r.effects;
@@ -6809,10 +6827,21 @@ function handleWakeCandidates(all) {
     // the sheet and then waiting for a second recognition session — or for her
     // to tap Send — is the difference between an assistant and a form.
     // Anything that could ACT still waits; see looksLikeSafeQuestion().
-    // Everything, per her instruction. "Hey Scout, how much do we owe" and
-    // "Hey Jarvis, message the trucker" both go straight through.
-    vlog('wake carried a command — sending it straight away', rest);
-    setTimeout(() => sendVoiceCommand(), 60);
+    // A question rides straight through; anything that can act is read back
+    // for a spoken yes first. Same rule as a tapped capture — one place would
+    // be better still, but captureCommand seeds the box asynchronously.
+    if (looksLikeSafeQuestion(rest)) {
+      vlog('wake carried a question — asking it straight away', rest);
+      setTimeout(() => sendVoiceCommand(), 60);
+    } else {
+      vlog('wake carried an instruction — confirming by voice', rest);
+      pendingConfirm = rest;
+      setTimeout(() => {
+        setVoiceSheetState('working', 'Say yes to confirm.');
+        speak({ text: confirmationLine(rest), agent: 'jarvis' })
+          .then(() => captureCommand(''), () => captureCommand(''));
+      }, 60);
+    }
     return;
   }
   speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
@@ -7034,6 +7063,16 @@ function wireVoiceListeners() {
       return;
     }
     if (voiceMode === 'command') {
+      // ── a yes or no answers immediately ─────────────────────────────────
+      // Waiting for the recognition session to END before acting on "yes"
+      // makes her wait a second for nothing, and depends on a listeningState
+      // event that this plugin does not reliably emit — the same class of
+      // assumption that left the wake loop hanging in v3.5. A clear yes or no
+      // needs no more context than itself.
+      if (pendingConfirm) {
+        const answer = all.find((m) => SAID_YES.test(m) || SAID_NO.test(m));
+        if (answer) { answerConfirmation(answer); return; }
+      }
       const box = $('voiceText');
       // Don't fight the user: once they start correcting the transcript by
       // hand, stop overwriting it from the mic.
@@ -7068,26 +7107,23 @@ function wireVoiceListeners() {
       // is a wrong sentence on screen. Making her tap Send to hear an answer
       // she asked for out loud defeats the feature.
       //
-      // EVERYTHING is sent. Apsara, asked directly whether questions only or
-      // everything: "Auto-send everything, no exceptions."
-      //
-      // Her call, made with the trade-off stated: an instruction reaches
-      // workflow/brain.js, which messages truckers and suppliers for real, so
-      // a mistranscription can send a real message to a real person with no
-      // moment to catch it. She weighed that against tapping Send on every
-      // sentence and chose speed. That is a legitimate call for someone
-      // standing in a yard with their hands full.
-      //
-      // What softens it, and why it is not reckless: the router in
-      // helpers/voiceRouter.js sends anything yard-shaped to Scout, which
-      // cannot message anyone; Scout's own actions still need a Confirm tap on
-      // the card; and the transcript stays on screen so she can see what was
-      // heard. The exposure is freight instructions specifically.
-      vlog('auto-sending', text);
-      setVoiceSheetState('working', looksLikeSafeQuestion(text)
-        ? 'Asking…'
-        : 'Doing that now — this may message someone.');
-      sendVoiceCommand();
+      // ── is this the answer to a "Shall I?" ────────────────────────────
+      if (pendingConfirm) { answerConfirmation(text); return; }
+
+      // ── a question goes straight through ──────────────────────────────
+      if (looksLikeSafeQuestion(text)) {
+        vlog('auto-sending a question', text);
+        setVoiceSheetState('working', 'Asking…');
+        sendVoiceCommand();
+        return;
+      }
+
+      // ── anything that can ACT is read back first ──────────────────────
+      vlog('asking for spoken confirmation', text);
+      pendingConfirm = text;
+      setVoiceSheetState('working', 'Say yes to confirm.');
+      speak({ text: confirmationLine(text), agent: 'jarvis' })
+        .then(() => captureCommand(''), () => captureCommand(''));
     }
   });
 }
@@ -7184,6 +7220,59 @@ function looksLikeSafeQuestion(text) {
   if (t.length < 3) return false;
   if (ACTS_ON_THE_WORLD.test(t)) return false;
   return IS_A_QUESTION.test(t);
+}
+
+// ── spoken confirmation ───────────────────────────────────────────────────
+// Apsara: "just get voice confirmation".
+//
+// The resolution of a real tension. Auto-sending everything is fast and
+// hands-free, which is what a yard needs — and it means a mistranscribed
+// "message the trucker" reaches a real person with no chance to catch it. Her
+// own log shows this recogniser turning "hey scout" into "hiskout". Requiring a
+// TAP would remove the risk and the point both: an assistant you have to stop
+// and touch is a form.
+//
+// So the confirmation is SPOKEN. Jarvis reads the instruction back and waits
+// for a yes. Hands stay free, and nothing that acts on the world happens
+// without her hearing exactly what it is first.
+//
+// QUESTIONS ARE NOT CONFIRMED. "How much do we owe" reaches Scout, which can
+// only read; asking "shall I?" before answering a question would be absurd.
+// Only things that can act are read back.
+let pendingConfirm = null;      // the instruction awaiting a yes
+
+// Generous on both, because this is the last gate before something real
+// happens. Anything that is NOT clearly a yes is treated as a no: a misheard
+// "yes" sends a real message, a misheard "no" costs her saying it again.
+const SAID_YES = /^\s*(yes|yeah|yep|yup|ya|sure|ok|okay|do it|go ahead|send it|confirm|confirmed|correct|right|please do|affirmative)\b/i;
+const SAID_NO = /^\s*(no|nope|nah|cancel|stop|don'?t|do not|wait|forget it|never mind|nevermind|negative)\b/i;
+
+// Resolves a pending "Shall I?". One function, called from the partial
+// listener and from the end of a capture, so a yes means the same thing
+// whichever arrives first.
+function answerConfirmation(text) {
+  const instruction = pendingConfirm;
+  pendingConfirm = null;
+  if (!instruction) return;
+  if (SAID_YES.test(text)) {
+    vlog('confirmed by voice', instruction);
+    const box = $('voiceText');
+    if (box) { box.value = instruction; delete box.dataset.edited; }
+    setVoiceSheetState('working', 'Doing that now…');
+    sendVoiceCommand();
+    return;
+  }
+  // Anything that is not clearly a yes is a no.
+  vlog(SAID_NO.test(text) ? 'declined by voice' : 'not a clear yes — treating as no', text);
+  const box = $('voiceText');
+  if (box) box.value = '';
+  setVoiceSheetState('empty', 'Cancelled.');
+  speak({ text: 'Cancelled.', agent: 'jarvis' });
+}
+
+// The instruction read back as a question.
+function confirmationLine(text) {
+  return String(text || '').trim().replace(/[.?!]+$/, '') + '. Shall I?';
 }
 
 function voiceToast(msg) { showWeighToast('flagged', msg, '', 4000); }
