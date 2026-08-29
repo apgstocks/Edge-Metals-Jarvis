@@ -598,6 +598,39 @@ function hear(phone, matches) {
         win.close();
     }
 
+    // ── 3m. "ONLY HEY DETECTED MOST OF THE TIMES" ─────────────────────────
+    // Her log, v4.0:
+    //
+    //   28:33.417  heard [command]  ["hey"]
+    //   28:33.639  command finished (recogniser stopped)  hey
+    //   28:33.748  heard [command]  ["hey scout","he scout", ...]
+    //
+    // listeningState fires 222ms after the first partial and the real words
+    // arrive 109ms AFTER that. Finishing on the event finishes with "hey",
+    // every time, and throws the name away.
+    {
+        const { win, phone, logs } = await bootApp();
+        win.document.getElementById('btnVoice').dispatchEvent(new win.Event('click'));
+        await new Promise((r) => setTimeout(r, 150));
+
+        hear(phone, ['hey']);
+        // The event says "stopped" while the recogniser is still transcribing.
+        (phone.events.listeningState || []).forEach((f) => f({ status: 'stopped' }));
+        await new Promise((r) => setTimeout(r, 110));
+        // ...and THEN the actual words land, exactly as on her phone.
+        hear(phone, ['hey scout how much do we owe', 'he scout how much do we owe']);
+        await new Promise((r) => setTimeout(r, 1400));
+
+        const asked = phone.fetched.some((u) => u.includes('/api/voice/ask'));
+        ck('a late transcript is NOT thrown away as just "hey"', asked,
+           'nothing asked\n        ' + logs());
+        // And what was sent must be the WHOLE thing, not the fragment.
+        const said = phone.spoken.map((x) => x.text || '').join(' ');
+        ck('  and it did not ask "hey. Shall I?"', !/^hey\. Shall I/.test(said),
+           'spoken: ' + JSON.stringify(phone.spoken));
+        win.close();
+    }
+
     // ── 4. ordinary yard talk must NOT wake it ────────────────────────────
     {
         const { win, phone } = await bootApp();

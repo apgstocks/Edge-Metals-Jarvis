@@ -6774,7 +6774,13 @@ const WAKE_STRIP = [
 // the next join into "hey jarvis" and match. This is the standard shape for
 // wake detection on top of a restart loop, and it is the only thing that can
 // work when the recogniser will not keep a session open.
-const HEARD_WINDOW_MS = 6000;
+// 12 seconds, not 6. Her log shows the wake session dying after "hey" every
+// time, with the name arriving in a LATER session or not at all — so the
+// window has to outlive several restart cycles for the two halves of "hey
+// scout" to meet. The cost of a longer window is a slightly wider chance of a
+// stray match; the cost of a shorter one is a wake word that never fires,
+// which is what she has had for ten builds.
+const HEARD_WINDOW_MS = 12000;
 let heardWindow = [];
 
 function noteHeard(text) {
@@ -7108,8 +7114,27 @@ function wireVoiceListeners() {
     voiceListening = false;
     if (voiceMode === 'wake' && voiceOn) { wakeCycle(); return; }
     if (voiceMode === 'command') {
-      // Same completion path as the debounce above, whichever arrives first.
-      finishCommand('recogniser stopped');
+      // ── DO NOT FINISH HERE. GIVE THE LATE WORDS A CHANCE. ───────────────
+      // Her log, v4.0:
+      //
+      //   28:33.417  heard [command]  ["hey"]
+      //   28:33.639  command finished (recogniser stopped)  hey
+      //   28:33.748  heard [command]  ["hey scout","he scout", ...]
+      //
+      // listeningState fires 222ms after the first partial, and the actual
+      // words arrive 109ms AFTER that. Finishing on the event therefore
+      // finishes with "hey" every single time and throws the name away — which
+      // is exactly what she reported: "only hey detected most of the times".
+      //
+      // I had this backwards last round: I concluded the event never fires
+      // here. It fires, and it fires too early. The recogniser is still
+      // transcribing when it says it has stopped.
+      //
+      // So the event only ARMS the debounce; the debounce decides. Late
+      // partials land inside the window and push it out, so the transcript
+      // used is the last one she actually said.
+      vlog('recogniser stopped — waiting for late words');
+      scheduleCommandFinish(700);
     }
   });
 }
@@ -7240,10 +7265,13 @@ const SAID_NO = /^\s*(no|nope|nah|cancel|stop|don'?t|do not|wait|forget it|never
 let commandFinishTimer = null;
 let commandFinished = false;
 
-function scheduleCommandFinish() {
+// `ms` is how long to wait for more words. Longer while she may still be
+// talking, shorter once the recogniser claims to have stopped — but never
+// zero, because on this device the words arrive AFTER that claim.
+function scheduleCommandFinish(ms) {
   commandFinished = false;
   if (commandFinishTimer) clearTimeout(commandFinishTimer);
-  commandFinishTimer = setTimeout(() => finishCommand('silence'), 1200);
+  commandFinishTimer = setTimeout(() => finishCommand('no more words'), ms || 1200);
 }
 
 function cancelCommandFinish() {
