@@ -6382,16 +6382,39 @@ function playAudio(url) {
 
 // The one entry point. `what` is either {phrase:'wake'} for an instant cached
 // line, or {text, agent} for a real answer.
+// Whether the server can synthesise at all. Remembered so a server that has
+// not been updated yet produces ONE clear message rather than a silent failure
+// on every single wake word.
+let voiceServerOk = null;   // null = unknown, true/false once tried
+
+// Says it ONCE. A message on every wake word would be its own kind of noise,
+// and the cause is always the same: the server cannot synthesise speech. The
+// overwhelmingly likely reason is that the server has not been updated yet and
+// has no /api/voice routes at all, so the message names that.
+function reportVoiceUnavailable() {
+  if (voiceServerOk === false) return;
+  voiceServerOk = false;
+  voiceToast('I heard you, but I have no voice — the server has no speech endpoint yet. Update the server and restart it.');
+}
+
 async function speak(what) {
   if (voiceMuted) return false;
   try {
-    // The machine closes the mic. It is asked FIRST and its STOP_MIC effect is
-    // carried out before a byte of audio plays — the ordering that stops the
-    // phone hearing itself. It also remembers the wake setting, so the resume
-    // below restores exactly what she had.
-    speaking = true;
-    vmSend('SPEAK_START');
-
+    // ── AUDIO FIRST, MIC SECOND ─────────────────────────────────────────
+    // Apsara: "listening is switching on and off at recurrent interval. also
+    // when i say hey jarvis/scout, no talkback."
+    //
+    // Those two are the SAME bug. The first version stopped the microphone,
+    // then went to fetch the audio, then restarted the microphone in a
+    // `finally`. When the fetch failed — an old server with no /api/voice
+    // routes, no signal in the yard, anything — the result was a mic that
+    // stopped and started on every wake word while never saying a word. The
+    // churn WAS the failure, made visible.
+    //
+    // So nothing is stopped until there is something to play. The mic stays
+    // open during the fetch, which is harmless: no audio is coming out of the
+    // speaker, so there is nothing for it to hear itself say. The moment the
+    // audio is in hand, and only then, SPEAK_START closes the mic.
     let url = null, temporary = false;
     if (what.phrase) {
       // A fixed line — "Yes?" and friends. Kept in memory after the first
@@ -6407,9 +6430,10 @@ async function speak(what) {
       if (!phraseCache[what.phrase]) {
         const blob = await api('/api/voice/phrase/' + encodeURIComponent(what.phrase), { raw: true })
           .catch(() => null);
-        if (!blob) return false;
+        if (!blob) { reportVoiceUnavailable(); return false; }
         phraseCache[what.phrase] = URL.createObjectURL(blob);
       }
+      voiceServerOk = true;
       url = phraseCache[what.phrase];
     } else {
       const blob = await api('/api/voice/say', {
@@ -6417,23 +6441,29 @@ async function speak(what) {
         body: JSON.stringify({ text: what.text, agent: what.agent || 'jarvis' }),
         raw: true,
       }).catch(() => null);
-      if (!blob) return false;
+      if (!blob) { reportVoiceUnavailable(); return false; }
+      voiceServerOk = true;
       url = URL.createObjectURL(blob);
       temporary = true;
     }
 
-    const ok = await playAudio(url);
-    // Only the one-off answers are released. The cached phrases are kept on
-    // purpose — revoking them would throw away the reason they are cached.
-    if (temporary) { try { URL.revokeObjectURL(url); } catch (e) {} }
-    return ok;
+    // Audio in hand. NOW close the mic, and not a moment before.
+    speaking = true;
+    vmSend('SPEAK_START');
+    try {
+      return await playAudio(url);
+    } finally {
+      if (temporary) { try { URL.revokeObjectURL(url); } catch (e) {} }
+      speaking = false;
+      // A short settle before the mic reopens, so the tail of the speaker does
+      // not land in it. The machine decides whether it reopens at all.
+      setTimeout(() => { if (!voiceMuted) vmSend('SPEAK_END'); }, 400);
+    }
   } catch (e) {
-    return false;
-  } finally {
+    // Never leaves the mic shut: SPEAK_START is only reached once audio
+    // exists, so an exception before that point has changed nothing.
     speaking = false;
-    // A short settle before the mic reopens, so the tail of the speaker does
-    // not land in it. The machine decides whether it reopens at all.
-    setTimeout(() => { if (!voiceMuted) vmSend('SPEAK_END'); }, 400);
+    return false;
   }
 }
 
@@ -6514,9 +6544,14 @@ async function startWakeLoop() {
   }
   voiceOn = true;
   renderVoiceButton();
-  // Says so, once, so "is it listening?" is answerable by looking rather than
-  // by saying "Hey Jarvis" and waiting to see.
-  voiceToast('Listening for "Hey Jarvis" or "Hey Scout".');
+  // ONCE per app session. Android's recogniser is not continuous — it stops on
+  // silence and is restarted, constantly — so a toast here fired on every
+  // restart and read as the feature switching itself on and off. The icon in
+  // the header is the live indicator; this is just the first confirmation.
+  if (!window.__saidListening) {
+    window.__saidListening = true;
+    voiceToast('Listening for "Hey Jarvis" or "Hey Scout".');
+  }
   wakeCycle();
 }
 

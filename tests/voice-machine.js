@@ -337,6 +337,36 @@ function violations(state) {
     }
     ck('speaking goes through the machine', /vmSend\('SPEAK_START'\)/.test(html));
 
+    // ── AUDIO FIRST, MIC SECOND ───────────────────────────────────────────
+    // Apsara: "listening is switching on and off at recurrent interval. also
+    // when i say hey jarvis/scout, no talkback." Both symptoms, one cause: the
+    // mic was stopped BEFORE the audio was fetched, so a fetch that failed
+    // produced a stop/start cycle on every wake word and never a word spoken.
+    // The churn was the failure made visible.
+    {
+        const fn = /async function speak\(what\)[\s\S]*?\n\}/.exec(html);
+        ck('speak() is findable', !!fn);
+        if (fn) {
+            const body = fn[0];
+            const fetchAt = Math.min(
+                ...[/api\('\/api\/voice\/phrase/, /api\('\/api\/voice\/say/]
+                    .map((re) => { const m = re.exec(body); return m ? m.index : Infinity; }),
+            );
+            const stopAt = body.indexOf("vmSend('SPEAK_START')");
+            ck('the audio is fetched BEFORE the mic is closed', fetchAt < stopAt);
+            ck('  and the mic is only closed once there is something to play',
+               /Audio in hand\. NOW close the mic/.test(body));
+            ck('a failed fetch returns without touching the mic',
+               /reportVoiceUnavailable\(\); return false;/.test(body));
+            ck('the mic is still reopened after a successful play',
+               /vmSend\('SPEAK_END'\)/.test(body));
+        }
+    }
+    ck('an unavailable voice is reported once, not on every wake word',
+       /if \(voiceServerOk === false\) return;/.test(html));
+    ck('the "listening" toast fires once per session, not on every restart',
+       /__saidListening/.test(html));
+
     // ── ADMIN ONLY ────────────────────────────────────────────────────────
     // Apsara 2026-08-29: "for admin user only as of now". The wake word feeds
     // workflow/brain.js, which messages truckers and suppliers for real, so an
