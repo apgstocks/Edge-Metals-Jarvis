@@ -417,17 +417,48 @@ function hear(phone, matches) {
         win.close();
     }
 
-    // ── 3i. but an INSTRUCTION still waits for her tap ────────────────────
-    // The asymmetry that makes the above safe: a needless tap costs a second,
-    // an auto-sent instruction can WhatsApp a supplier.
+    // ── 3i. an INSTRUCTION is sent too, and answered aloud ────────────────
+    // REVERSED from the previous commit at Apsara's explicit instruction:
+    // asked whether to auto-send questions only or everything, she chose
+    // "Auto-send everything, no exceptions", and then "why cant message be
+    // heard and talk back by jarvis/scout".
+    //
+    // The trade-off was stated before she chose it: an instruction reaches
+    // workflow/brain.js, which messages real people, so a mistranscription can
+    // send a real message with no moment to catch it. Her call, made knowingly,
+    // for someone working with their hands full.
     {
         const { win, phone } = await bootApp();
         hear(phone, ['hey jarvis message the trucker we are running late']);
         await new Promise((r) => setTimeout(r, 500));
-        ck('a spoken INSTRUCTION is NOT sent automatically',
-           !phone.fetched.some((u) => u.includes('/api/voice/ask')),
-           'it auto-sent an instruction: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        ck('a spoken INSTRUCTION is also sent without a tap',
+           phone.fetched.some((u) => u.includes('/api/voice/ask')),
+           'not sent: ' + JSON.stringify(phone.fetched.filter((u) => u.includes('voice'))));
+        ck('  and its reply is spoken back too',
+           phone.spoken.length > 0,
+           'nothing spoken: ' + JSON.stringify(phone.spoken));
         win.close();
+    }
+
+    // ── 3j. EVERYTHING is heard and answered aloud ────────────────────────
+    // Her question, verbatim: "why cant message be heard and talk back by
+    // jarvis/scout". Whatever she says, whoever answers, she hears it.
+    {
+        for (const said of [
+            'hey scout how much do we owe',
+            'hey jarvis check my inbox',
+            'hey scout is edge 3 paid',
+            'hey jarvis book a pickup for tomorrow',
+        ]) {
+            const { win, phone } = await bootApp();
+            hear(phone, [said]);
+            await new Promise((r) => setTimeout(r, 450));
+            ck(`"${said}" is sent AND spoken back`,
+               phone.fetched.some((u) => u.includes('/api/voice/ask')) && phone.spoken.length > 0,
+               'sent=' + phone.fetched.some((u) => u.includes('/api/voice/ask'))
+                 + ' spoken=' + JSON.stringify(phone.spoken));
+            win.close();
+        }
     }
 
     // ── 4. ordinary yard talk must NOT wake it ────────────────────────────

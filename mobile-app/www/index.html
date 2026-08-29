@@ -6809,10 +6809,10 @@ function handleWakeCandidates(all) {
     // the sheet and then waiting for a second recognition session — or for her
     // to tap Send — is the difference between an assistant and a form.
     // Anything that could ACT still waits; see looksLikeSafeQuestion().
-    if (looksLikeSafeQuestion(rest)) {
-      vlog('wake carried a question — asking it straight away', rest);
-      setTimeout(() => sendVoiceCommand(), 60);
-    }
+    // Everything, per her instruction. "Hey Scout, how much do we owe" and
+    // "Hey Jarvis, message the trucker" both go straight through.
+    vlog('wake carried a command — sending it straight away', rest);
+    setTimeout(() => sendVoiceCommand(), 60);
     return;
   }
   speak({ phrase: 'wake' }).then(() => captureCommand(''), () => captureCommand(''));
@@ -7068,18 +7068,26 @@ function wireVoiceListeners() {
       // is a wrong sentence on screen. Making her tap Send to hear an answer
       // she asked for out loud defeats the feature.
       //
-      // So: obvious questions go straight through. Anything that might ACT
-      // still waits for the tap. The check below is deliberately CONSERVATIVE
-      // and mirrors helpers/voiceRouter.js — when it is unsure it does not
-      // auto-send, because the cost of being wrong is asymmetric: a needless
-      // tap versus a WhatsApp nobody meant to send.
-      if (looksLikeSafeQuestion(text)) {
-        vlog('auto-sending a question', text);
-        setVoiceSheetState('working', 'Asking…');
-        sendVoiceCommand();
-        return;
-      }
-      setVoiceSheetState('ready', 'Check it, then send.');
+      // EVERYTHING is sent. Apsara, asked directly whether questions only or
+      // everything: "Auto-send everything, no exceptions."
+      //
+      // Her call, made with the trade-off stated: an instruction reaches
+      // workflow/brain.js, which messages truckers and suppliers for real, so
+      // a mistranscription can send a real message to a real person with no
+      // moment to catch it. She weighed that against tapping Send on every
+      // sentence and chose speed. That is a legitimate call for someone
+      // standing in a yard with their hands full.
+      //
+      // What softens it, and why it is not reckless: the router in
+      // helpers/voiceRouter.js sends anything yard-shaped to Scout, which
+      // cannot message anyone; Scout's own actions still need a Confirm tap on
+      // the card; and the transcript stays on screen so she can see what was
+      // heard. The exposure is freight instructions specifically.
+      vlog('auto-sending', text);
+      setVoiceSheetState('working', looksLikeSafeQuestion(text)
+        ? 'Asking…'
+        : 'Doing that now — this may message someone.');
+      sendVoiceCommand();
     }
   });
 }
@@ -7174,7 +7182,7 @@ const IS_A_QUESTION = /(^|\s)(how|what|which|who|whose|when|where|why|is|are|was
 function looksLikeSafeQuestion(text) {
   const t = String(text || '').trim();
   if (t.length < 3) return false;
-  if (ACTS_ON_THE_WORLD.test(t)) return false;   // might DO something — she taps
+  if (ACTS_ON_THE_WORLD.test(t)) return false;
   return IS_A_QUESTION.test(t);
 }
 
