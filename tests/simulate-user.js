@@ -159,14 +159,18 @@ actions.init({
     pushAlert: (level, text) => { console.log(`  [ALERT:${level}] ${text}`); },
 });
 
-async function turn(who, chatId, senderNumber, text) {
+async function turn(who, chatId, senderNumber, text, opts = {}) {
     sent.length = 0;
     msgSeq++;
     let threw = null;
     try {
         await brain.process({
             messageId: 'sim-' + msgSeq, chatId, senderNumber,
-            senderName: who, text, hasMedia: false, isGroup: chatId.endsWith('@g.us'),
+            senderName: who, text, isGroup: chatId.endsWith('@g.us'),
+            // Defaults are exactly what every existing scenario passed, so
+            // adding this argument changes none of them.
+            hasMedia: !!opts.hasMedia, mediaType: opts.mediaType || null,
+            mediaBase64: opts.mediaBase64 || null, mediaMimeType: opts.mediaMimeType || null,
         }, sendMessage);
     } catch (e) {
         threw = e;
@@ -384,6 +388,52 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
         const { resolveDigestIndex } = require(R('workflow/replyWatch.js'));
         const resolved1 = resolveDigestIndex('1');
         ck('S15d "reply to 1" / "ignore 1" resolve to Whittaker (what she was just shown), NOT the stale Tiffany digest', !!resolved1 && /whittaker/i.test(resolved1.fromName || ''));
+    }
+
+    // 16. A FILE she sends that Jarvis cannot open. THE REAL INCIDENT
+    //     (2026-08-29): she sent EdgeYard-v2.9-debug.apk; nothing in index.js
+    //     downloads a document, so the bytes never existed in the process.
+    //     Gemini improvised "I can help you manage your files. What would you
+    //     like to do with the EdgeYard-v2.9-debug.apk file?" — she believed
+    //     it, said "forward to 13109382525", and got "What should I send to
+    //     13109382525?" Two turns spent on a capability that does not exist.
+    //
+    //     nextAIResponse stays null here ON PURPOSE: the stub throws if the
+    //     message reaches the AI, which is precisely the defect. This scenario
+    //     fails loudly the moment the guard stops matching.
+    {
+        say('manager', '[sends EdgeYard-v2.9-debug.apk, no caption]');
+        nextAIResponse = null;
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, '',
+            { hasMedia: true, mediaType: 'document', mediaMimeType: 'application/vnd.android.package-archive' });
+        reply(r); dbg(r);
+        ck('S16a a document never reaches the AI to be improvised about', !r.threw,
+            r.threw ? r.threw.message : '');
+        const said = (r.replies[0]?.text || '');
+        ck('S16b it answers, rather than staying silent', r.replies.length > 0);
+        ck('S16c it says plainly it cannot open or forward the file',
+            /can.?t open|cannot open|can.?t .*forward/i.test(said), said);
+        ck('S16d and it does NOT promise to manage her files',
+            !/help you manage|what would you like to do with/i.test(said), said);
+    }
+
+    // 16b. THE REGRESSION THIS GUARD COULD EASILY HAVE CAUSED. index.js keeps
+    //      hasMedia:true on a voice note AFTER transcribing it into `text`
+    //      (see index.js's ptt/audio branch). A guard that fired on
+    //      "hasMedia and no bytes" alone would answer every single voice note
+    //      with "I can't open that file" — the feature she asked for by name
+    //      ("jarvis should talk"), silently destroyed by a fix for something
+    //      unrelated. This is the assertion that stops that.
+    {
+        say('manager', '[voice note, transcribed to "hi"]');
+        nextAIResponse = null;
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'hi',
+            { hasMedia: true, mediaType: 'ptt', mediaMimeType: 'audio/ogg' });
+        reply(r); dbg(r);
+        ck('S16e a transcribed voice note is still handled as its text',
+            !r.threw && /jarvis|bookings/i.test(r.replies[0]?.text || ''), r.threw ? r.threw.message : (r.replies[0]?.text || ''));
+        ck('S16f a voice note is NOT answered as an unopenable file',
+            !/can.?t open|cannot open/i.test(r.replies[0]?.text || ''), r.replies[0]?.text || '');
     }
 
     console.log(`\n================================================================`);
