@@ -1676,6 +1676,101 @@ section('T5 — collectChaseUps ACTUALLY drops it (the helper must be wired in)'
     ck('and is NOT counted as resolved', rs2.length === 0, JSON.stringify(rs2));
 }
 
+// ══ U. a delivery is not an ask ════════════════════════════════════════════
+// LIVE, 31 Aug 11:00pm, about ONE email:
+//   "Kristal PROVIDES updated ERD, C/O, and ETD for booking DALA86534300."
+//   "Kristal Sosethan — ASKED Accounting Edge for: updated booking confirmation"
+//   "your team owes these answers"
+// The summary says she handed it over; the line under it says she is waiting
+// for it. She sent the confirmation — there was nothing to owe.
+const DELIV = {
+    from: 'Kristal Sosethan <kristal@zimex.com>', subject: 'RE: DALA86534300',
+    to: 'accounts@edgemetals.com', cc: 'apsara@edgemetals.com',
+    myAddress: 'bose@edgemetals.com', managerAddress: 'apsara@edgemetals.com',
+    // The body carries BOTH a delivery and a request, so the grounding check
+    // (quoteAppearsIn) can pass for the cases that should keep an asked_for.
+    // Without a request sentence here U2/U3 fail for an unrelated reason —
+    // the quote is ungrounded — and would have looked like this fix breaking.
+    body: 'Updated ERD is 9/8, C/O 9/11 and ETD 9/18 for booking DALA86534300. '.repeat(3)
+        + 'Please confirm the booking back to us before the cut.',
+    thread: '- Accounting: can you confirm the booking\n- Kristal: sending it now\n',
+    attachments: [],
+};
+
+section('U1 — a summary that says "provides" cannot also carry an ask');
+{
+    AI = { waiting_on: 'colleague', needs_reply: false, confidence: 1, urgency: 'normal',
+        summary: 'Kristal provides updated ERD, C/O, and ETD for booking DALA86534300.',
+        asked_of: 'Accounting Edge', asked_for: 'updated booking confirmation',
+        asked_for_quote: 'Please confirm the booking back to us', key_figures: [], deadline: null };
+    const a = await rw.assess({ ...DELIV });
+    ck('the invented ask is dropped', a.asked_for === null, String(a.asked_for));
+    // The gate is what actually keeps it out of the list, so assert THAT and
+    // not just the field — the field only matters through the gate.
+    ck('and it therefore stops being a team item', rw.isColleagueItem(a) === false);
+}
+
+section('U2 — but a real ask inside a delivery survives');
+{
+    // "provides X AND asks for Y" is a normal freight email and the ask is
+    // the half she has to act on. Dropping it would trade one silent failure
+    // for a worse one.
+    AI = { waiting_on: 'colleague', needs_reply: false, confidence: 1, urgency: 'normal',
+        summary: 'Kristal provides the updated ERD and asks Accounting to confirm the booking.',
+        asked_of: 'Accounting Edge', asked_for: 'booking confirmation',
+        asked_for_quote: 'Please confirm the booking back to us', key_figures: [], deadline: null };
+    const a = await rw.assess({ ...DELIV });
+    ck('an ask stated in the same summary is kept', a.asked_for === 'booking confirmation', String(a.asked_for));
+    ck('and it is still a team item', rw.isColleagueItem(a) === true);
+}
+
+section('U3 — and a plain request is untouched');
+{
+    AI = { waiting_on: 'colleague', needs_reply: false, confidence: 1, urgency: 'normal',
+        summary: 'Kristal needs the booking confirmation back before the 9/11 cut.',
+        asked_of: 'Accounting Edge', asked_for: 'booking confirmation',
+        asked_for_quote: 'Please confirm the booking back to us', key_figures: [], deadline: null };
+    const a = await rw.assess({ ...DELIV });
+    ck('a request keeps its asked_for', a.asked_for === 'booking confirmation', String(a.asked_for));
+}
+
+// ══ V. stored summaries are cleaned when they are SHOWN ════════════════════
+// LIVE, 31 Aug 11:55pm: "Sender wants confirmation of payment amount sent.
+// — octavio fmc, 5 days ago". The exact category opener degenericiseSummary
+// exists to remove, back in front of her days after it was called fixed:
+// the cleaners run inside assess(), on the way IN, and this list re-renders
+// a summary STORED before they existed.
+section('V1 — the chase list cleans what it renders');
+{
+    const msg = rw.buildChaseMessage([{
+        summary: 'Sender wants confirmation of payment amount sent.',
+        fromName: 'octavio fmc', ageDays: 5, subject: 's', waiting_on: 'her',
+        firstFlaggedAt: '2026-08-26T10:00:00Z',
+    }]);
+    ck('a stored category opener does not reach her', !/\bSender wants\b/.test(msg), msg);
+    ck('the sender is named instead', /octavio fmc wants/i.test(msg), msg);
+}
+
+section('V2 — and resolves a relative date against WHEN IT ARRIVED');
+{
+    // Not against now. A "tomorrow" written five days ago means the day after
+    // that mail landed; resolving it against today would invent a new date on
+    // every chase.
+    const msg = rw.buildChaseMessage([{
+        summary: 'Accounting needs the LC confirmed before submission tomorrow.',
+        fromName: 'Accounting Edge', ageDays: 5, subject: 's', waiting_on: 'her',
+        firstFlaggedAt: 'Wed, 26 Aug 2026 19:36:00 -0700',
+    }]);
+    ck('"tomorrow" becomes the date it meant', /August 27/.test(msg) && !/tomorrow/i.test(msg), msg);
+}
+
+section('V3 — a summary with nothing wrong is left exactly as it is');
+{
+    const clean = 'Jinho wants JY70 at $995 and advises against combining the JY71 combos.';
+    const msg = rw.buildChaseMessage([{ summary: clean, fromName: 'Jinho', ageDays: 2, subject: 's', waiting_on: 'her', firstFlaggedAt: '2026-08-29T10:00:00Z' }]);
+    ck('untouched', msg.includes(clean), msg);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

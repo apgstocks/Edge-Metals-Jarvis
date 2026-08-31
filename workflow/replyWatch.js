@@ -1243,6 +1243,43 @@ async function assess(email) {
         waiting_on = 'her';
     }
     let askedForWasDropped = false;
+    // ── A DELIVERY IS NOT AN ASK (2026-08-31) ────────────────────────────
+    // LIVE, 11:00pm. The digest said, about ONE email:
+    //   "Kristal PROVIDES updated ERD, C/O, and ETD for booking DALA86534300."
+    //   "Kristal Sosethan — ASKED Accounting Edge for: updated booking
+    //    confirmation   (your team, not you)"
+    //   "your team owes these answers"
+    // The summary says she is handing something over; the line under it says
+    // she is waiting for it. Both cannot be true, and the second one is what
+    // put the item in a list of obligations. Kristal sent the confirmation —
+    // there was nothing to owe.
+    //
+    // This is the same shape as the "Yurim Cha attached surrendered HBL"
+    // case that forced isColleagueItem/isBystanderItem to require a named
+    // asked_for. That gate works; what defeats it is the model inventing an
+    // asked_for FOR A DELIVERY, which then satisfies it.
+    //
+    // The check the harness can make and the model cannot: its own summary
+    // contradicts its own asked_for. REQUEST_SIGNAL is no use here — it
+    // contains "provide", "send" and "confirm", which are the very words a
+    // delivery uses. This reads the SUMMARY's grammar instead: the sender as
+    // the actor of a handing-over verb.
+    //
+    // Narrow on purpose. Only for the two directions that mean SOMEBODY WAS
+    // ASKED ('colleague', 'someone_else'), and only when the summary carries
+    // no ask of its own — "provides X and asks for Y" keeps its asked_for,
+    // because there really is one.
+    const DELIVERY_IN_SUMMARY = /\b(provides?|provided|sends?|sent|shares?|shared|attach(?:es|ed)?|submits?|submitted|forwards?|forwarded|encloses?|issued?|uploads?|uploaded)\b/i;
+    const ASK_IN_SUMMARY = /\?|\b(asks?|asked|asking|wants?|needs?|requests?|requested|requires?|requesting|awaiting|chasing|reminder)\b/i;
+    if (res.asked_for && (waiting_on === 'colleague' || waiting_on === 'someone_else')) {
+        const summary = String(res.summary || '');
+        if (DELIVERY_IN_SUMMARY.test(summary) && !ASK_IN_SUMMARY.test(summary)) {
+            console.warn(`[REPLYWATCH] summary describes a DELIVERY but asked_for claims a request — dropping "${String(res.asked_for).slice(0, 50)}": "${summary.slice(0, 70)}"`);
+            res.asked_for = null;
+            res.asked_for_quote = null;
+        }
+    }
+
     if (res.asked_for && !quoteAppearsIn(res.asked_for_quote, email.body, waiting_on === 'them' ? 'progress' : 'request')) {
         console.warn(`[REPLYWATCH] asked_for "${String(res.asked_for).slice(0, 60)}" had no verifiable quote in the email — dropping it as ungrounded`);
         res.asked_for = null;
@@ -1996,7 +2033,25 @@ function buildChaseMessage(due) {
         const tail = d.waiting_on === 'them' ? 'nothing back from them yet'
             : d.waiting_on === 'someone_else' ? `${d.asked_of || 'they'} still hasn't answered`
             : 'no reply yet';
-        lines.push(`• *${d.summary || d.subject}* — ${d.fromName}, ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tail}`);
+        // LIVE, 11:55pm: "Sender wants confirmation of payment amount sent.
+        // — octavio fmc, 5 days ago". That is the exact category-opener
+        // degenericiseSummary exists to remove, back in front of her days
+        // after I called it fixed.
+        //
+        // Why it came back: the cleaners run inside assess(), on the way IN.
+        // This list re-renders a summary STORED five days ago, before those
+        // cleaners existed, and nothing re-touches it. Every stored item
+        // keeps whatever text it was written with, permanently.
+        //
+        // So they run here too, on the way OUT. Cleaning at render is the
+        // only version that also fixes history — a backfill would fix the
+        // rows that exist today and nothing written by an older deploy.
+        // Anchored on firstFlaggedAt, which is when the mail arrived, so a
+        // "tomorrow" written five days ago resolves to the day it meant
+        // rather than to now.
+        const shown = resolveRelativeDates(
+            degenericiseSummary(d.summary || d.subject, d.fromName), d.firstFlaggedAt);
+        lines.push(`• *${shown}* — ${d.fromName}, ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tail}`);
         lines.push('');
     }
     lines.push('Ask "what needs my reply" for the current list, or tell me to reply to one.');
