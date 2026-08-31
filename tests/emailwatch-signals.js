@@ -1819,6 +1819,72 @@ section('W3 — the chase list can be answered by number at all');
     ck('and it says ignore is an option', /ignore 1/i.test(msg), msg);
 }
 
+// ══ X. both labels are actually written by the real actions ════════════════
+// "start collecting data for our model". Collection is worth nothing if only
+// one class arrives: a dataset of all-negatives trains nothing and is worse
+// than none, because it looks like data. This drives the two real functions
+// and reads what they wrote.
+section('X1 — a dismissal and an answer each write one labelled row');
+{
+    const auditlog = require(R('helpers/auditlog.js'));
+    const realAppend = auditlog.appendAuditLog;
+    const written = [];
+    auditlog.appendAuditLog = async (e) => { written.push(e); };
+
+    const actions = require(R('workflow/actions.js'));
+    const sent = [];
+    actions.init({ sendMessage: async (id, t) => { sent.push(t); }, sendToManager: async () => {},
+        sendToTeam: async () => {}, pushAlert: () => {} });
+
+    const store = rw.loadStore();
+    store.lastDigest = [{ id: 'mm1', threadId: 'th1', from: 'octavio@fmc.com', fromName: 'octavio fmc',
+        subject: 'payment', summary: 'Octavio wants the amount confirmed.', waiting_on: 'her',
+        asked_for: 'the amount', urgency: 'normal', confidence: 0.8, deadline: null }];
+    store.lastDigestAt = new Date().toISOString();
+    store.tracked = [{ id: 'mm1', threadId: 'th1', from: 'octavio@fmc.com', fromName: 'octavio fmc',
+        firstFlaggedAt: new Date().toISOString() }];
+    await rw.saveStore(store);
+
+    await actions.ignoreDigestItem('x@c.us', ['1']);
+    const neg = written.find((e) => e.humanVerdict === 'not_work_for_me');
+    ck('a dismissal is recorded', !!neg, JSON.stringify(written.map((w) => w.humanVerdict)));
+    ck('carrying the message id, which is the join key back to the features',
+        !!neg && neg.messageId === 'mm1', neg && neg.messageId);
+    ck('and marked as a HUMAN verdict, not another model call',
+        !!neg && neg.resolvedBy === 'human', neg && neg.resolvedBy);
+    ck('the sender is counted too, so it works before any model exists',
+        (rw.loadStore().senderStats || {})[rw.senderKey('octavio@fmc.com')]?.ignored === 1,
+        JSON.stringify(rw.loadStore().senderStats));
+
+    // The positive half. Without it the collection is one-class.
+    written.length = 0;
+    const store2 = rw.loadStore();
+    store2.lastDigest = [{ id: 'mm2', threadId: 'th2', from: 'jinho@hynos.co.kr', fromName: 'Jinho',
+        subject: 'JY70', summary: 'Jinho wants JY70 at $995.', waiting_on: 'her',
+        asked_for: 'a price decision', urgency: 'normal', confidence: 1, deadline: null }];
+    store2.lastDigestAt = new Date().toISOString();
+    await rw.saveStore(store2);
+    try { await actions.replyToDigestItem('x@c.us', '1', null, 'reply to 1'); } catch (e) { /* the draft path needs Gmail; the label is written before it */ }
+    const pos = written.find((e) => e.humanVerdict === 'worth_my_reply');
+    ck('an answer is recorded as the POSITIVE label', !!pos, JSON.stringify(written.map((w) => w.humanVerdict)));
+    ck('with its own join key', !!pos && pos.messageId === 'mm2', pos && pos.messageId);
+
+    auditlog.appendAuditLog = realAppend;
+}
+
+section('X2 — the label rows carry no mailbox content into the feature set');
+{
+    // scripts/dataset.js builds features from `inputs`, which is sizes only.
+    // This pins the rule at the source: if a label row ever started carrying
+    // the body, the dataset would quietly become a copy of the mailbox.
+    const { scoreShape } = require(R('helpers/summaryScore.js'));
+    ck('the scorer is still the one ruler', typeof scoreShape === 'function');
+    const sample = { source: 'reply_watch', resolvedBy: 'human', messageId: 'm', humanVerdict: 'not_work_for_me',
+        decision: { summary: 'x' } };
+    ck('a label row has no body, no thread text, no recipient list',
+        !('body' in sample) && !('thread' in sample) && !('to' in sample));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

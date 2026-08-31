@@ -2978,6 +2978,39 @@ async function replyToDigestItem(chatId, index, details, rawText) {
     // guards, and duplicating any of that here would mean two code paths to
     // keep correct.
     const target = item.from || item.fromName;
+
+    // THE POSITIVE LABEL (2026-08-31). ignoreDigestItem now records a
+    // dismissal; without this the collection would be one-class — every
+    // example a "no", which trains nothing and is worse than no data because
+    // it looks like a dataset.
+    //
+    // What this records is INTENT, not delivery: she said this one is worth
+    // answering. That is the judgement a classifier would be predicting, and
+    // it is available here whether or not the draft is later confirmed. A
+    // "was it actually sent" label would be cleaner and is far rarer — the
+    // send happens two steps later, behind a yes, and most drafts she starts
+    // she also sends.
+    try {
+        const { recordSenderEvent, loadStore, saveStore } = require('./replyWatch');
+        const store = await loadStore();
+        recordSenderEvent(store, item.from || item.fromName, 'replied');
+        await saveStore(store);
+    } catch (e) { /* a label must never block the reply she asked for */ }
+    try {
+        const { appendAuditLog } = require('../helpers/auditlog');
+        await appendAuditLog({
+            source: 'reply_watch', messageId: item.id || null, threadId: item.threadId || null,
+            senderName: item.fromName || null, from: item.from || null, text: item.subject || null,
+            intent: 'answered_by_user', resolvedBy: 'human', actionTaken: 'replied',
+            humanVerdict: 'worth_my_reply',
+            decision: {
+                waiting_on: item.waiting_on || null, asked_for: item.asked_for || null,
+                summary: item.summary || null, urgency: item.urgency || null,
+                confidence: item.confidence ?? null, deadline: item.deadline || null,
+            },
+        });
+    } catch (e) { /* same */ }
+
     return draftReplyForConfirm(chatId, target, details || null, null, rawText || `reply to ${target}`, null);
 }
 
@@ -3047,7 +3080,7 @@ async function ignoreDigestItem(chatId, indices, all = false) {
                 decision: {
                     waiting_on: f.item.waiting_on || null, asked_for: f.item.asked_for || null,
                     summary: f.item.summary || null, urgency: f.item.urgency || null,
-                    confidence: f.item.confidence ?? null,
+                    confidence: f.item.confidence ?? null, deadline: f.item.deadline || null,
                 },
             });
         } catch (e) { /* logging must never block a dismissal */ }
