@@ -1572,6 +1572,110 @@ section('S3 — assess() applies it, not just the helper');
         !require(R('helpers/summaryScore.js')).scoreShape(a.summary).relativeDate, a.summary);
 }
 
+// ══ T. somebody else answered it ═══════════════════════════════════════════
+// THE INCIDENT, 31 Aug 2026. Real headers on thread 1a034bbb32f1c507:
+//   14:25  Matthew  -> To: Tiffany, Apsara     asks to move the appointment
+//   14:39  Tiffany  -> To: Matthew, Apsara     confirms Sept 1, 12 PM
+// The 8:00pm digest still called it "1 email waiting on you". Settled five and
+// a half hours before she saw it. Same hole as the 60-item backlog.
+const TAIL = (from, date) => ({ lastFrom: from, lastDate: date, count: 3 });
+const ASKED_AT = 'Mon, 31 Aug 2026 14:25:09 -0700';
+const MINE = 'apsara@edgemetals.com';
+const ASKER = 'Matthew Ellis Whittaker <WhittakerM@schneider.com>';
+
+section('T1 — a third party answering the thread resolves it');
+{
+    ck('Tiffany answering after Matthew asked counts as moved on',
+        rw.threadMovedOn(TAIL('Tiffany Furleigh <tfurleigh@eccomelt.com>', 'Mon, 31 Aug 2026 14:39:15 -0700'),
+            ASKER, ASKED_AT, MINE) === true);
+}
+
+section('T2 — and the three ways it must NOT fire');
+{
+    // The asker chasing is the ask getting MORE live, not less. Dropping here
+    // would lose exactly the items the digest exists for.
+    ck('the same sender writing again does not resolve anything',
+        rw.threadMovedOn(TAIL(ASKER, 'Mon, 31 Aug 2026 18:00:00 -0700'), ASKER, ASKED_AT, MINE) === false);
+    // Hers is hasSheReplied's job; two code paths claiming the same signal is
+    // how a drop ends up depending on which ran first.
+    ck('her own reply is not this signal',
+        rw.threadMovedOn(TAIL('Apsara <apsara@edgemetals.com>', 'Mon, 31 Aug 2026 19:00:00 -0700'), ASKER, ASKED_AT, MINE) === false);
+    // Flagged on the newest message: its own last line must not read as
+    // advancement, or every item would drop on the scan that created it.
+    ck('a message OLDER than the one flagged is not advancement',
+        rw.threadMovedOn(TAIL('Tiffany <tfurleigh@eccomelt.com>', 'Mon, 31 Aug 2026 10:00:00 -0700'), ASKER, ASKED_AT, MINE) === false);
+}
+
+section('T3 — unknowns stay unknown, never a drop');
+{
+    // A drop is destructive: she stops hearing about it. Anything unreadable
+    // must return null so the caller keeps the item, and null !== true.
+    ck('no thread tail -> null', rw.threadMovedOn(null, ASKER, ASKED_AT, MINE) === null);
+    ck('no sender on the last message -> null', rw.threadMovedOn(TAIL('', 'Mon, 31 Aug 2026 14:39:15 -0700'), ASKER, ASKED_AT, MINE) === null);
+    ck('an unparseable date -> null', rw.threadMovedOn(TAIL('t@x.com', 'not a date'), ASKER, ASKED_AT, MINE) === null);
+    ck('a missing flag time -> null', rw.threadMovedOn(TAIL('t@x.com', 'Mon, 31 Aug 2026 14:39:15 -0700'), ASKER, null, MINE) === null);
+    ck('and null never satisfies the caller, which tests === true',
+        (rw.threadMovedOn(null, ASKER, ASKED_AT, MINE) === true) === false);
+}
+
+section('T4 — one Gmail call still answers both questions');
+{
+    // The re-check runs per tracked item on a metered mailbox. Splitting
+    // threadTail out was to keep it at ONE threads.get, not two.
+    let calls = 0;
+    const fake = { users: { threads: { get: async () => {
+        calls++;
+        return { data: { messages: [{ payload: { headers: [
+            { name: 'From', value: 'Tiffany <tfurleigh@eccomelt.com>' },
+            { name: 'Date', value: 'Mon, 31 Aug 2026 14:39:15 -0700' }] } }] } };
+    } } } };
+    const tail = await rw.threadTail(fake, 'th1');
+    ck('threadTail returns the sender and the date', !!tail && /Tiffany/.test(tail.lastFrom) && !!tail.lastDate);
+    ck('for one call', calls === 1, String(calls));
+    const replied = await rw.hasSheReplied(fake, 'th1', MINE);
+    ck('hasSheReplied still works and is still false here', replied === false, String(replied));
+}
+
+section('T5 — collectChaseUps ACTUALLY drops it (the helper must be wired in)');
+{
+    // Reverse-verification caught this file failing without it: T1-T4 only
+    // exercise threadMovedOn as a pure function, so disabling the drop inside
+    // collectChaseUps changed nothing and every test still passed. A helper
+    // that works and is never called is the exact trap resolveRelativeDates
+    // fell into two days ago. This drives the real function.
+    const mkGmail = (lastFrom, lastDate) => ({ users: { threads: { get: async () => ({
+        data: { messages: [{ payload: { headers: [
+            { name: 'From', value: lastFrom }, { name: 'Date', value: lastDate }] } }] } }) } } });
+    const item = () => ({
+        threadId: 'th1', from: 'WhittakerM@schneider.com', fromName: 'Matt Whittaker',
+        subject: 'Purchase Order #4302902-Appointment needed',
+        summary: 'Matt asks to reset the delivery appointment for 9/1.',
+        // Six days old so it is past AGING_DAYS and would otherwise be CHASED,
+        // which is what makes the drop observable rather than incidental.
+        firstFlaggedAt: new Date(Date.now() - 6 * 86400000).toISOString(),
+    });
+
+    const dropped = [item()];
+    const rs1 = [];
+    const due1 = await rw.collectChaseUps(
+        mkGmail('Tiffany Furleigh <tfurleigh@eccomelt.com>', new Date().toUTCString()),
+        'apsara@edgemetals.com', dropped, rs1, true, rw.loadStore());
+    ck('a thread a third party answered is NOT chased', due1.length === 0, JSON.stringify(due1.map((d) => d.fromName)));
+    ck('and it leaves the tracked list entirely', dropped.length === 0, String(dropped.length));
+    ck('counted as resolved, not silently vanished', rs1.length === 1, JSON.stringify(rs1));
+
+    // THE OTHER HALF. The same item, same age, where the ASKER is the one who
+    // wrote last — that is a chase-me signal and must survive untouched.
+    const kept = [item()];
+    const rs2 = [];
+    const due2 = await rw.collectChaseUps(
+        mkGmail('Matthew Ellis Whittaker <WhittakerM@schneider.com>', new Date().toUTCString()),
+        'apsara@edgemetals.com', kept, rs2, true, rw.loadStore());
+    ck('the asker writing again keeps the item', kept.length === 1, String(kept.length));
+    ck('and it is still chased', due2.length === 1, JSON.stringify(due2.map((d) => d.fromName)));
+    ck('and is NOT counted as resolved', rs2.length === 0, JSON.stringify(rs2));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

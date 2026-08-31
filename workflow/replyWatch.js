@@ -1604,19 +1604,81 @@ function groupMatters(flagged) {
 // treat null as "leave it tracked, ask again later" rather than as answered —
 // dropping a chase-up because of a transient API blip is exactly the silent
 // failure this feature exists to prevent.
-async function hasSheReplied(gmail, threadId, myAddress) {
-    if (!gmail || !threadId || !myAddress) return null;
+// One call, two questions. Split out 2026-08-31 so the "did the thread move
+// on" check below costs no extra Gmail round trip — the same threads.get was
+// already being made for hasSheReplied, and this mailbox is on a metered bill.
+async function threadTail(gmail, threadId) {
+    if (!gmail || !threadId) return null;
     try {
-        const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'metadata', metadataHeaders: ['From'] });
+        const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'metadata', metadataHeaders: ['From', 'Date'] });
         const msgs = thread?.data?.messages || [];
         if (!msgs.length) return null;
-        const lastFrom = (msgs[msgs.length - 1]?.payload?.headers || [])
-            .find((h) => (h.name || '').toLowerCase() === 'from')?.value || '';
-        return lastFrom.toLowerCase().includes(myAddress.toLowerCase());
+        const hs = msgs[msgs.length - 1]?.payload?.headers || [];
+        const pick = (n) => (hs.find((h) => (h.name || '').toLowerCase() === n) || {}).value || '';
+        return { lastFrom: pick('from'), lastDate: pick('date'), count: msgs.length };
     } catch (err) {
         console.warn('[REPLYWATCH] thread re-check failed:', err.message);
         return null;
     }
+}
+
+async function hasSheReplied(gmail, threadId, myAddress) {
+    if (!myAddress) return null;
+    const tail = await threadTail(gmail, threadId);
+    if (!tail) return null;
+    return String(tail.lastFrom).toLowerCase().includes(String(myAddress).toLowerCase());
+}
+
+// ── SOMEBODY ELSE ANSWERED IT (2026-08-31) ─────────────────────────────────
+// THE INCIDENT. The 8:00pm digest said "1 email waiting on you — Matt
+// Whittaker asks to reset delivery appointment for 9/1". Apsara's own Gmail
+// summary of the same thread:
+//
+//   * Apsara requested delivery appointment for PO #4302902 ... Aug 31 1 PM
+//   * Matthew requested rescheduling to Sept 1 due to delay, and TIFFANY
+//     CONFIRMED moving delivery to Sept 1 at 12 PM.
+//
+// Checked against the real headers on thread 1a034bbb32f1c507:
+//   14:25  Matthew  -> To: Tiffany, Apsara     (asks to move it)
+//   14:39  Tiffany  -> To: Matthew, Apsara     (confirms Sept 1, 12 PM)
+// Fourteen minutes. The digest fired five and a half hours later and still
+// called it hers to answer. It was settled before she ever saw it.
+//
+// This is ALSO the 60-item backlog, and it is a bigger hole than the mailbox
+// split that produced the sent index: hasSheReplied asks "is the last message
+// from HER". A thread somebody ELSE resolves can never satisfy that, so it
+// stays in the count until MAX_CHASES burns out thirteen days later. Every
+// thread in this business is three-party — carrier, yard, us — so "resolved
+// by someone else" is not an edge case, it is the normal case.
+//
+// THE DISCRIMINATOR, and it has to be narrow. Any newer message is NOT enough:
+// the flagged sender writing "any update?" is newer and means the ask is MORE
+// live, not less. What signals engagement is a newer message from a DIFFERENT
+// party than the one who asked — somebody else has picked it up.
+//
+// Deliberately conservative about what it then does: this drops the item from
+// the chase queue, it does not assert the outcome was good. If a third party
+// only muddied the thread, she stops being nudged about something real — which
+// is why the log names every item this drops, so a wrong drop is visible
+// rather than silent.
+function threadMovedOn(tail, flaggedFrom, flaggedAt, myAddress) {
+    if (!tail || !tail.lastFrom) return null;
+    const addr = (v) => {
+        const m = String(v || '').match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);
+        return m ? m[0].toLowerCase() : String(v || '').trim().toLowerCase();
+    };
+    const last = addr(tail.lastFrom);
+    if (!last) return null;
+    // Hers is hasSheReplied's job, not this one.
+    if (myAddress && last === addr(myAddress)) return false;
+    // The person who asked is still the person waiting. Not engagement.
+    if (flaggedFrom && last === addr(flaggedFrom)) return false;
+    // It must genuinely be LATER than the message we flagged, or a thread we
+    // flagged on its newest message would look advanced by its own last line.
+    const at = Date.parse(tail.lastDate || '');
+    const flagged = Date.parse(flaggedAt || '');
+    if (!Number.isFinite(at) || !Number.isFinite(flagged)) return null;
+    return at > flagged;
 }
 
 const DAY_MS = 86400000;
@@ -1759,9 +1821,21 @@ async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], c
         // authoritative when it fires; the sent index is the one that actually
         // fires, because her replies go out from a different account than the
         // one polled. Either being true drops the item.
-        const answered = await hasSheReplied(gmail, t.threadId, myAddress);
+        // ONE threads.get, three signals. See threadMovedOn above for why the
+        // third one exists and why it is the biggest of the three.
+        const tail = await threadTail(gmail, t.threadId);
+        const answered = tail ? String(tail.lastFrom).toLowerCase().includes(String(myAddress || '').toLowerCase()) : null;
         const wrote = sheWroteSince(store, t.from, t.firstFlaggedAt);
+        const movedOn = threadMovedOn(tail, t.from, t.firstFlaggedAt, myAddress);
         if (answered === true || wrote === true) { repliedSenders.push(t.from || t.fromName); continue; }
+        if (movedOn === true) {
+            // Named, not silent. A wrong drop here means she stops hearing
+            // about something real, so it has to be visible in the log.
+            console.log(`[REPLYWATCH] dropping "${String(t.summary || t.subject || '').slice(0, 60)}" — `
+                + `${senderLabel(tail.lastFrom)} answered on that thread after ${senderLabel(t.from)} asked`);
+            repliedSenders.push(t.from || t.fromName);
+            continue;
+        }
 
         const ageDays = (now - firstAt) / DAY_MS;
         const lastChase = t.lastChasedAt ? Date.parse(t.lastChasedAt) : null;
@@ -3030,7 +3104,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
