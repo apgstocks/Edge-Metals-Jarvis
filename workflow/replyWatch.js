@@ -461,10 +461,21 @@ function recordSenderEvent(store, from, event) {
     const key = senderKey(from);
     if (!key) return;
     store.senderStats = store.senderStats || {};
-    const s = store.senderStats[key] || { flagged: 0, replied: 0, firstSeenAt: null, lastRepliedAt: null };
+    const s = store.senderStats[key] || { flagged: 0, replied: 0, ignored: 0, firstSeenAt: null, lastRepliedAt: null };
     if (!s.firstSeenAt) s.firstSeenAt = new Date().toISOString();
     if (event === 'flagged') s.flagged = (s.flagged || 0) + 1;
     if (event === 'replied') { s.replied = (s.replied || 0) + 1; s.lastRepliedAt = new Date().toISOString(); }
+    // 'ignored' added 2026-08-31, when Apsara asked to train a model on which
+    // mail she ignores. There was nothing to train on: ignoreDigestItem
+    // deleted the item from `tracked` and recorded NOTHING, and this function
+    // only understood 'flagged' and 'replied'. Every dismissal she has ever
+    // made was thrown away at the moment it was made.
+    //
+    // A dismissal is the cleanest label this system can get. "Needs a reply"
+    // is inferred; "I do not want to see this" is stated. Recording it is the
+    // prerequisite for any model, and it also pays off immediately through
+    // senderHistoryLine below, with no model at all.
+    if (event === 'ignored') { s.ignored = (s.ignored || 0) + 1; s.lastIgnoredAt = new Date().toISOString(); }
     store.senderStats[key] = s;
 }
 
@@ -475,7 +486,13 @@ function recordSenderEvent(store, from, event) {
 function senderHistoryLine(store, from) {
     const s = (store && store.senderStats) ? store.senderStats[senderKey(from)] : null;
     if (!s || !s.flagged) return '';
-    const { flagged = 0, replied = 0 } = s;
+    const { flagged = 0, replied = 0, ignored = 0 } = s;
+    // An explicit dismissal outranks an inferred non-reply: she SAID she did
+    // not want this. Stated before inferred, so three dismissals speak even
+    // when the reply ratio looks ambiguous.
+    if (ignored >= 3) {
+        return `HISTORY WITH THIS SENDER: she has explicitly dismissed ${ignored} of their emails from her list${replied ? ` and replied to ${replied}` : ' and replied to none'}. She has told us this sender's mail is not work for her — weigh it heavily, but a genuinely urgent first real request can still break the pattern.`;
+    }
     // Below this, the ratio is noise. Two data points do not make a pattern —
     // the same reason dailyLearning refuses to draft a rule from a one-off.
     if (flagged < 3) return '';
@@ -2021,6 +2038,11 @@ function buildDeadlineMessage(due) {
 
 function buildChaseMessage(due) {
     const lines = [`${due.length} email${due.length === 1 ? '' : 's'} still open:`, ''];
+    // NUMBERED, not bulleted (2026-08-31). Apsara, looking at a chase-up:
+    // "What if i want to ignore that mail?" — and there was no answer. The
+    // list used "•", so there was no number to name, while its own footer
+    // said "tell me to reply to one". See the lastDigest write in run() for
+    // the half of this that actually made "ignore 1" dangerous.
     for (const d of due) {
         // Same layout rule as buildDeadlineMessage (Apsara, 2026-08-24:
         // "description should not go next line .side by side"). Applied here
@@ -2051,10 +2073,10 @@ function buildChaseMessage(due) {
         // rather than to now.
         const shown = resolveRelativeDates(
             degenericiseSummary(d.summary || d.subject, d.fromName), d.firstFlaggedAt);
-        lines.push(`• *${shown}* — ${d.fromName}, ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tail}`);
+        lines.push(`${lines.filter((l) => /^\d+\. /.test(l)).length + 1}. *${shown}* — ${d.fromName}, ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tail}`);
         lines.push('');
     }
-    lines.push('Ask "what needs my reply" for the current list, or tell me to reply to one.');
+    lines.push('Say "reply to 1" to answer one, or "ignore 1" to stop me nudging about it.');
     return lines.join('\n');
 }
 
@@ -3137,6 +3159,21 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 critical: true, subject: 'Emails still unanswered', dedupeKey: 'reply-chaseups',
             });
             if (!res.delivered) throw new Error(res.queued ? 'queued for retry (WhatsApp unavailable)' : 'not delivered');
+            // THE DANGEROUS HALF. The chase message goes out AFTER the digest
+            // in the same run, and until now it did not touch lastDigest. So
+            // "ignore 1" or "reply to 1" typed straight after a chase-up
+            // resolved against the DIGEST sent minutes earlier — a different
+            // email entirely. Silently dismissing or replying to the wrong
+            // one, which is the same failure as the "reply to 1" index drift
+            // already documented above.
+            //
+            // Most-recent-list-wins is the only rule a person can hold in
+            // their head, and it is the rule the digest already follows. So
+            // the chase list claims the numbers once it has actually been
+            // delivered — the same after-a-confirmed-send discipline as the
+            // digest, so a failed send never renumbers what she is looking at.
+            store.lastDigest = chaseUps;
+            store.lastDigestAt = new Date().toISOString();
         }
         catch (err) {
             console.error('[REPLYWATCH] chase-up send failed:', err.message);

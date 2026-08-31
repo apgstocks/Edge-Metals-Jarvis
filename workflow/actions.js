@@ -3021,6 +3021,37 @@ async function ignoreDigestItem(chatId, indices, all = false) {
     const ids = new Set(found.map((f) => f.item.id).filter(Boolean));
     const store = await loadStore();
     const before = new Set((store.tracked || []).map((t) => t.id));
+    // RECORD THE DISMISSAL BEFORE DELETING IT (2026-08-31). Until now this
+    // line was the whole of "ignore": the item was filtered out of `tracked`
+    // and nothing anywhere remembered that she had rejected it. Apsara asked
+    // to train a model on what she ignores; there was no data, because the
+    // signal was destroyed at the moment it was produced.
+    //
+    // Two records, for two different horizons. senderStats is read TODAY by
+    // senderHistoryLine and reaches the prompt as a prior — value with no
+    // model at all. The audit row is the training set: the decision, the
+    // inputs behind it, and now the human verdict on it, one line per event.
+    const { recordSenderEvent } = require('./replyWatch');
+    const { appendAuditLog } = require('../helpers/auditlog');
+    for (const f of found) {
+        try { recordSenderEvent(store, f.item.from || f.item.fromName, 'ignored'); } catch (e) {}
+        try {
+            await appendAuditLog({
+                source: 'reply_watch', messageId: f.item.id || null, threadId: f.item.threadId || null,
+                senderName: f.item.fromName || null, from: f.item.from || null,
+                text: f.item.subject || null,
+                intent: 'dismissed_by_user', resolvedBy: 'human', actionTaken: 'ignored',
+                // The label, stated rather than inferred — this is the row a
+                // classifier would train on.
+                humanVerdict: 'not_work_for_me',
+                decision: {
+                    waiting_on: f.item.waiting_on || null, asked_for: f.item.asked_for || null,
+                    summary: f.item.summary || null, urgency: f.item.urgency || null,
+                    confidence: f.item.confidence ?? null,
+                },
+            });
+        } catch (e) { /* logging must never block a dismissal */ }
+    }
     store.tracked = (store.tracked || []).filter((t) => !ids.has(t.id));
     await saveStore(store);
 

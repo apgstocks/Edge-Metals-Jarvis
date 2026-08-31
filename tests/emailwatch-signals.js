@@ -1771,6 +1771,54 @@ section('V3 — a summary with nothing wrong is left exactly as it is');
     ck('untouched', msg.includes(clean), msg);
 }
 
+// ══ W. a dismissal is a label, and it was being thrown away ════════════════
+// Apsara, 31 Aug: "What if i want to ignore that mail?" then "Train a model
+// based on that." There was nothing to train on. ignoreDigestItem filtered
+// the item out of `tracked` and recorded NOTHING, and recordSenderEvent only
+// understood 'flagged' and 'replied'. Every dismissal she ever made was
+// destroyed at the moment she made it.
+section('W1 — an ignore is now counted');
+{
+    const st = { senderStats: {} };
+    rw.recordSenderEvent(st, 'Octavio <octavio@fmc.com>', 'ignored');
+    rw.recordSenderEvent(st, 'octavio@fmc.com', 'ignored');
+    const rec = st.senderStats[rw.senderKey('octavio@fmc.com')];
+    ck('dismissals accumulate on the sender', rec && rec.ignored === 2, JSON.stringify(rec));
+    ck('and are keyed on the address, not the display name', Object.keys(st.senderStats).length === 1,
+        JSON.stringify(Object.keys(st.senderStats)));
+    ck('flagged and replied are untouched by it', (rec.flagged || 0) === 0 && (rec.replied || 0) === 0);
+}
+
+section('W2 — and it reaches the prompt as a prior, with no model involved');
+{
+    // The point of recording it TODAY: value without waiting for a classifier.
+    const st = { senderStats: { [rw.senderKey('octavio@fmc.com')]: { flagged: 4, replied: 0, ignored: 3 } } };
+    const line = rw.senderHistoryLine(st, 'octavio@fmc.com');
+    ck('three dismissals produce a history line', !!line, line);
+    ck('and it says she DISMISSED them — stated, not inferred',
+        /dismissed/i.test(line) && /3/.test(line), line);
+
+    // Stated beats inferred. Below the bar it must fall back to the ratio
+    // wording rather than over-claiming from one or two dismissals.
+    const few = rw.senderHistoryLine({ senderStats: { [rw.senderKey('a@b.com')]: { flagged: 4, replied: 2, ignored: 1 } } }, 'a@b.com');
+    ck('one dismissal does not speak for the sender', !/dismissed/i.test(few), few);
+    ck('the reply-ratio wording still works', /replied to 2 of 4/.test(few), few);
+}
+
+section('W3 — the chase list can be answered by number at all');
+{
+    // "What if i want to ignore that mail?" had no answer: the list used "•",
+    // so there was no number to name, while its own footer said "tell me to
+    // reply to one".
+    const msg = rw.buildChaseMessage([
+        { summary: 'Octavio wants the payment amount confirmed.', fromName: 'octavio fmc', ageDays: 5, subject: 's', waiting_on: 'her', firstFlaggedAt: '2026-08-26T10:00:00Z' },
+        { summary: 'Andy is chasing the EDO on the TURQUOISE roll.', fromName: 'Andy Park', ageDays: 7, subject: 's', waiting_on: 'them', firstFlaggedAt: '2026-08-24T10:00:00Z' },
+    ]);
+    ck('items are numbered', /^1\. /m.test(msg) && /^2\. /m.test(msg), msg);
+    ck('no stray bullets left behind', !/^• /m.test(msg), msg);
+    ck('and it says ignore is an option', /ignore 1/i.test(msg), msg);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
