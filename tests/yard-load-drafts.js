@@ -78,12 +78,29 @@ function section(t) { console.log('\n=== ' + t + ' ==='); }
         await drafts.deleteDraft(messy.id);
     }
 
-    section('the two-item rule, and clearing back out');
+    section('one item is enough, and clearing back out');
     {
-        ck('one filled item is not worth saving', !drafts.isWorthSaving({ items: [{ description: 'Steel' }] }));
-        ck('two filled items are', drafts.isWorthSaving({ items: [{ description: 'Steel' }, { description: 'Copper' }] }));
-        ck('blank rows do not count toward the two', !drafts.isWorthSaving({ items: [{ description: 'Steel' }, {}, { description: '' }] }));
-        ck('a weight alone counts as content', drafts.isWorthSaving({ items: [{ gross_weight: 100 }, { net_weight: 50 }] }));
+        // REVERSED 2026-08-29. Apsara: "as soon user starts typing 1 item, it
+        // needs to auto save."
+        //
+        // This asserted the opposite until today, and the old rule was not
+        // unreasonable — it stopped a form someone merely opened from becoming
+        // a draft. But itemHasContent() already does that: a row only counts
+        // once it carries a description or a weight. The second row was
+        // guarding a case that cannot happen, and charging for it the FIRST
+        // item if the phone died mid-load. In a yard that is the whole reason
+        // drafts exist.
+        ck('ONE filled item is now worth saving', drafts.isWorthSaving({ items: [{ description: 'Steel' }] }));
+        ck('two filled items still are', drafts.isWorthSaving({ items: [{ description: 'Steel' }, { description: 'Copper' }] }));
+        ck('a weight alone counts as content', drafts.isWorthSaving({ items: [{ gross_weight: 100 }] }));
+        ck('a tare alone counts too', drafts.isWorthSaving({ items: [{ tare_weight: 40 }] }));
+
+        // The guard that is actually doing the work. An untouched form must
+        // still save nothing — otherwise every tap on Add Load leaves litter
+        // in the draft strip.
+        ck('blank rows are still not content', !drafts.isWorthSaving({ items: [{}, { description: '' }] }));
+        ck('  whitespace is not content either', !drafts.isWorthSaving({ items: [{ description: '   ' }] }));
+        ck('  a zero weight is not content', !drafts.isWorthSaving({ items: [{ gross_weight: 0 }] }));
         ck('an empty item list is not worth saving', !drafts.isWorthSaving({ items: [] }));
         ck('a missing item list does not throw', !drafts.isWorthSaving({}));
     }

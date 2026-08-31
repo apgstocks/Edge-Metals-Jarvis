@@ -102,7 +102,17 @@ function isWorthSaving(input = {}) {
         String(it.description || '').trim()
         || Number(it.gross_weight) || Number(it.tare_weight) || Number(it.net_weight)
     ));
-    return filled.length >= 2;
+    // ONE item, not two. Apsara 2026-08-29: "as soon user starts typing 1
+    // item, it needs to auto save."
+    //
+    // The original two-item rule was there to stop a form someone merely
+    // opened and tapped from becoming a draft. That job is already done by
+    // itemHasContent(): a row only counts once it carries a description or a
+    // weight, so an untouched blank row still saves nothing. Requiring a SECOND
+    // row on top of that was protecting against a case that cannot happen, at
+    // the cost of losing the first item if the phone died or the app was
+    // closed — which in a yard is the whole reason drafts exist.
+    return filled.length >= 1;
 }
 
 module.exports = { listDrafts, getDraft, saveDraft, deleteDraft, isWorthSaving, MAX_DRAFTS };

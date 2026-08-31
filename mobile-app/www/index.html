@@ -1167,7 +1167,7 @@ function setDraftStatus(state, detail) {
   } else if (state === 'saving') {
     el.innerHTML = '<span class="dot"></span><span>Saving draft…</span>';
   } else if (state === 'waiting') {
-    el.innerHTML = '<span>Autosaves once 2 items are entered</span>';
+    el.innerHTML = '<span>Autosaves as soon as you enter an item</span>';
   } else {
     el.innerHTML = '';
   }
@@ -1218,8 +1218,12 @@ async function saveLoadDraft() {
 function queueLoadDraftSave() {
   if (draftTimer) clearTimeout(draftTimer);
   if (!editingLoadId) {
+    // ONE item is enough — per Apsara, and matching isWorthSaving() in
+    // helpers/loadDrafts.js. The two must agree or the badge says "Saving…"
+    // for something the server then refuses to save, which is worse than no
+    // badge at all.
     const filled = (currentLoadItems || []).filter(itemHasContent).length;
-    if (filled >= 2) setDraftStatus('saving');
+    if (filled >= 1) setDraftStatus('saving');
   }
   draftTimer = setTimeout(saveLoadDraft, DRAFT_DEBOUNCE_MS);
 }

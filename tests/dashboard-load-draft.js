@@ -74,22 +74,37 @@ ck('a failed save is reported, not swallowed',
    /Draft not saved/.test(saveSrc2));
 ck('a failure still does not block the form (no throw, no return before save)',
    !/throw new Error\('quota/.test(saveSrc2));
-ck('fewer than 2 items explains itself instead of showing nothing',
+ck('an empty form explains itself instead of showing nothing',
    /setDraftStatus\('waiting'\)/.test(saveSrc2));
 ck('editing an existing load shows no draft status at all',
    /if \(editingLoadId\) \{ setDraftStatus\('none'\); return; \}/.test(saveSrc2));
 
 const queueSrc = grab('queueLoadDraftSave');
-ck('"saving" only appears once there are 2 filled items',
-   /filled >= 2\) setDraftStatus\('saving'\)/.test(queueSrc));
+// REVERSED 2026-08-29 at Apsara's instruction: "as soon user starts typing 1
+// item, it needs to auto save."
+//
+// The old two-item rule guarded against a form someone merely opened becoming
+// a draft. itemHasContent() already does that job — a row only counts once it
+// carries a description or a weight — so the second row was protecting against
+// a case that cannot happen, at the cost of losing the FIRST item if the phone
+// died. In a yard that is the whole reason drafts exist.
+ck('"saving" appears as soon as ONE item is filled in',
+   /filled >= 1\) setDraftStatus\('saving'\)/.test(queueSrc));
+ck('  and it no longer waits for a second item',
+   !/filled >= 2\) setDraftStatus\('saving'\)/.test(queueSrc));
 
 const clearSrc = grab('clearLoadDraft');
 ck('clearing the draft also clears a stale "saved" message',
    /setDraftStatus\('none'\)/.test(clearSrc));
 
 const statusSrc = grab('setDraftStatus');
+// The copy is asserted as a whole sentence, not a fragment: a search-and-
+// replace on part of it left "Autosaves as soon as you fill in an item are
+// entered" on both clients, which reads as broken English to whoever uses it.
+ck('the waiting message is a whole sentence, no stray words',
+   /Autosaves as soon as you enter an item</.test(statusSrc));
 ck('every state renders something distinguishable',
-   /Draft saved/.test(statusSrc) && /Saving draft/.test(statusSrc) && /Autosaves once 2 items/.test(statusSrc));
+   /Draft saved/.test(statusSrc) && /Saving draft/.test(statusSrc) && /Autosaves as soon as/.test(statusSrc));
 
 // ── item totals ────────────────────────────────────────────────────────────
 // Per Apsara 2026-08-28: the running gross/tare/net at the foot of the item
