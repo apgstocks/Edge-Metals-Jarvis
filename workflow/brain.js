@@ -1141,6 +1141,28 @@ function policyDecide(ctx) {
             };
         }
 
+        // ── MUTE — "what if i want ignore?", asked twice ────────────────
+        // Deliberately ABOVE the "ignore N" rule below, because the phrases
+        // overlap: "ignore 1 permanently" has to reach the mute, not the
+        // one-off. The distinguishing word is the permanence, never the
+        // number, so the number alone still means the one-off it always did.
+        if ((m = ctx.text.trim().match(/^(?:mute|block|stop\s+(?:telling|showing|nudging)\s*(?:me)?\s*about)\s+#?(\d{1,2})\s*$/i))
+            || (m = ctx.text.trim().match(/^(?:ignore|dismiss)\s+#?(\d{1,2})\s+(?:permanently|for good|forever|always|and\s+(?:stop|don'?t)\b.*)$/i))) {
+            return { intent: 'mute_matter', resolvedBy: 'policy', data: { index: m[1] } };
+        }
+        // By NAME is a sender mute — a much stronger claim than a thread, so
+        // it only ever happens when she says the name outright.
+        if ((m = ctx.text.trim().match(/^(?:mute|block)\s+(?!#?\d)(.+?)\s*$/i))) {
+            return { intent: 'mute_matter', resolvedBy: 'policy', data: { target: m[1].trim() } };
+        }
+        if ((m = ctx.text.trim().match(/^(?:unmute|unblock|unignore|start\s+(?:showing|telling)\s*(?:me)?\s*(?:about)?)\s+(.+?)\s*$/i))) {
+            return { intent: 'unmute_matter', resolvedBy: 'policy', data: { target: m[1].trim() } };
+        }
+        // The audit. A filter she cannot see is a filter she cannot trust.
+        if (/^(?:what am i ignoring|what'?s muted|show (?:my )?mutes?|list mutes?|who am i ignoring|what are we ignoring)\??$/i.test(ctx.text.trim())) {
+            return { intent: 'show_mutes', resolvedBy: 'policy', data: {} };
+        }
+
         // "ignore 3" / "ignore #3" / "dismiss 1 and 3" / "ignore 1,3" — the
         // question she asked directly: "if i say ignore 3, will it remove?"
         // At the time, no. This is that answer built. Same digest-index
@@ -2074,6 +2096,9 @@ async function route(decision, ctx, sendMessage) {
         case 'rescan_mail':            return actions.rescanMail(chatId);
         case 'show_pending_replies':    return actions.showPendingReplies(chatId);
         case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
+        case 'mute_matter':           return actions.muteMatter(chatId, { index: d.index || null, target: d.target || null });
+        case 'unmute_matter':         return actions.unmuteMatter(chatId, d.target || null);
+        case 'show_mutes':            return actions.showMutes(chatId);
         case 'ignore_digest_item':      return actions.ignoreDigestItem(chatId, d.indices, d.all === true);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);

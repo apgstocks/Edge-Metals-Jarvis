@@ -492,6 +492,94 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
         try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
     }
 
+    // 18. MUTE. Apsara asked "what if i want ignore?" twice. The first answer
+    //     was a number to say. This is the second half: "ignore 1" drops ONE
+    //     item and deliberately leaves `seen` alone, so the next message on
+    //     that thread comes straight back — which for the rolling Bill of
+    //     Lading threads is every few hours.
+    {
+        require(R('helpers/context.js')).clearSession(MANAGER_CHAT);
+        require(R('helpers/context.js')).updateSession(MANAGER_CHAT, { menuContext: null, lastInstruction: null });
+        try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
+        const rw = require(R('workflow/replyWatch.js'));
+        const store = await rw.loadStore();
+        store.lastDigest = [{ id: 'x1', threadId: 'thread-bl', from: 'raj@eagleinbrit.com',
+            fromName: 'Rajkumar', subject: 'Draft Bill of Lading MEDUADA20500' }];
+        store.lastDigestAt = new Date().toISOString();
+        store.tracked = [{ id: 'x1', threadId: 'thread-bl', from: 'raj@eagleinbrit.com',
+            fromName: 'Rajkumar', firstFlaggedAt: new Date().toISOString() }];
+        await rw.saveStore(store);
+
+        say('manager', 'mute 1');
+        nextAIResponse = null;
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'mute 1');
+        reply(r); dbg(r);
+        const said = r.replies.map((x) => x.text).join(' ');
+        ck('S18a "mute 1" is deterministic — it never reaches the AI', !r.threw,
+            r.threw ? r.threw.message.slice(0, 120) : 'ok');
+        ck('S18b it says what it muted and until when', /Muted that thread/i.test(said) && /\d{4}-\d{2}-\d{2}/.test(said), said.slice(0, 200));
+        ck('S18c and how to undo it', /unmute/i.test(said), said.slice(0, 200));
+
+        const after = await rw.loadStore();
+        ck('S18d the mute is stored against the THREAD, not the person',
+            !!(after.muted && after.muted.threads && after.muted.threads['thread-bl'])
+            && Object.keys(after.muted.senders || {}).length === 0,
+            JSON.stringify(after.muted));
+        ck('S18e it survives a save/load round trip — the store allowlist has eaten three fields already',
+            !!rw.mutedReason(after, 'raj@eagleinbrit.com', 'thread-bl'),
+            JSON.stringify(after.muted));
+        ck('S18f and it drops the item from the chase queue too', (after.tracked || []).length === 0,
+            JSON.stringify(after.tracked));
+
+        // A DIFFERENT thread from the same sender must still get through — the
+        // whole reason a thread mute is the default.
+        ck('S18g another thread from the same sender is NOT muted',
+            rw.mutedReason(after, 'raj@eagleinbrit.com', 'other-thread') === null);
+    }
+
+    // 18b. A SENDER mute is the stronger claim and only happens by name.
+    {
+        say('manager', 'mute Rajkumar');
+        nextAIResponse = null;
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'mute Rajkumar');
+        reply(r); dbg(r);
+        const said = r.replies.map((x) => x.text).join(' ');
+        ck('S18h "mute <name>" mutes the sender', /Muted Rajkumar/i.test(said), said.slice(0, 160));
+        ck('S18i and says plainly it covers everything they send', /everything they send/i.test(said), said.slice(0, 200));
+
+        const r2 = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'what am i ignoring');
+        const said2 = r2.replies.map((x) => x.text).join(' ');
+        ck('S18j the mutes are listable — a filter she cannot see is one she cannot trust',
+            /Currently ignoring/i.test(said2) && /Rajkumar/i.test(said2), said2.slice(0, 220));
+        ck('S18k and every one shows its expiry', /until \d{4}-\d{2}-\d{2}/.test(said2), said2.slice(0, 220));
+
+        const r3 = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'unmute Rajkumar');
+        const said3 = r3.replies.map((x) => x.text).join(' ');
+        ck('S18l unmuting works by the name she used, not the address',
+            /Unmuted/i.test(said3), said3.slice(0, 160));
+        const after = await require(R('workflow/replyWatch.js')).loadStore();
+        ck('S18m and it is really gone from the store',
+            Object.keys((after.muted || {}).senders || {}).length === 0, JSON.stringify(after.muted));
+    }
+
+    // 18c. THE OVERLAP THAT MATTERS. "ignore 1" is a one-off and must NOT
+    //      become permanent just because a mute now exists next to it.
+    {
+        const rw = require(R('workflow/replyWatch.js'));
+        const store = await rw.loadStore();
+        store.lastDigest = [{ id: 'y1', threadId: 'thread-2', from: 'a@b.com', fromName: 'Someone', subject: 's' }];
+        store.lastDigestAt = new Date().toISOString();
+        store.tracked = [{ id: 'y1', threadId: 'thread-2', from: 'a@b.com', fromName: 'Someone', firstFlaggedAt: new Date().toISOString() }];
+        await rw.saveStore(store);
+        say('manager', 'ignore 1');
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'ignore 1');
+        reply(r);
+        const after = await rw.loadStore();
+        ck('S18n a plain "ignore 1" still means ONCE, not forever',
+            Object.keys((after.muted || {}).threads || {}).indexOf('thread-2') === -1,
+            JSON.stringify(after.muted));
+    }
+
     console.log(`\n================================================================`);
     console.log(`${pass} passed, ${fail} failed`);
     if (fail) {

@@ -3022,6 +3022,81 @@ async function replyToDigestItem(chatId, index, details, rawText) {
 // reply actually causes. It does NOT touch `seen`, so the assessment itself
 // stands; if a NEW message lands on that thread later, it is judged fresh on
 // its own terms rather than being permanently exempted.
+// ── MUTE — "what if i want ignore?", asked twice ───────────────────────────
+// ignoreDigestItem drops ONE item and deliberately leaves `seen` alone, so
+// the next message on that thread comes straight back. These are the version
+// that stays stopped. See the MUTE block in replyWatch.js for why a thread
+// mute is the default and a sender mute has to be asked for by name.
+async function muteMatter(chatId, { index = null, target = null, days = null } = {}) {
+    const rw = require('./replyWatch');
+    const store = await rw.loadStore();
+
+    // From a numbered item: mute the THREAD. She is saying "this matter is
+    // not mine", not "this person never is".
+    if (index != null) {
+        let item = null;
+        try { item = rw.resolveDigestIndex(String(index)); } catch (e) {}
+        if (!item) {
+            await _send(chatId, `I don't have a #${index} from a recent list. Ask "what needs my reply" for a fresh one.`);
+            return { action_taken: 'mute_unknown_index' };
+        }
+        if (!item.threadId) {
+            await _send(chatId, `I can drop #${index} from the list, but I don't have a thread id for it, so I can't promise it stays gone. Say "ignore ${index}" for the one-off.`);
+            return { action_taken: 'mute_no_thread' };
+        }
+        const { until } = rw.addMute(store, { threadId: item.threadId, label: item.fromName || item.from, days: days || undefined });
+        store.tracked = (store.tracked || []).filter((t) => t.threadId !== item.threadId);
+        await rw.saveStore(store);
+        await _send(chatId, `Muted that thread — nothing more from it until ${until.slice(0, 10)}.\n`
+            + `It's ${item.fromName || item.from} re "${String(item.subject || '').slice(0, 50)}".\n`
+            + `Say "what am I ignoring" to see everything muted, or "unmute ${item.fromName || item.from}" to undo.`);
+        return { action_taken: 'muted_thread' };
+    }
+
+    // By name: a SENDER mute. Stronger and stated outright, which is the only
+    // way it should ever happen.
+    if (target) {
+        const { until } = rw.addMute(store, { sender: target, label: target, days: days || undefined });
+        await rw.saveStore(store);
+        await _send(chatId, `Muted ${target} — I won't raise their mail until ${until.slice(0, 10)}.\n`
+            + `That covers everything they send, not just this thread, so I'll say so if you ask "what am I ignoring".\n`
+            + `Undo any time with "unmute ${target}".`);
+        return { action_taken: 'muted_sender' };
+    }
+    await _send(chatId, `Mute what? Say "mute 1" for an item on the list, or "mute Rajkumar" for a sender.`);
+    return { action_taken: 'mute_no_target' };
+}
+
+async function unmuteMatter(chatId, target) {
+    const rw = require('./replyWatch');
+    const store = await rw.loadStore();
+    const hit = target ? rw.removeMute(store, target) : null;
+    if (!hit) {
+        await _send(chatId, `I'm not muting anything matching "${target || ''}". Say "what am I ignoring" to see the list.`);
+        return { action_taken: 'unmute_not_found' };
+    }
+    await rw.saveStore(store);
+    await _send(chatId, `Unmuted ${target}. Their mail will show up again from the next scan.`);
+    return { action_taken: 'unmuted' };
+}
+
+// A filter she cannot see is a filter she cannot trust. This is the audit.
+async function showMutes(chatId) {
+    const rw = require('./replyWatch');
+    const live = rw.activeMutes(await rw.loadStore());
+    const rows = [
+        ...Object.entries(live.senders).map(([k, v]) => ({ what: v.label || k, kind: 'everything they send', until: v.until })),
+        ...Object.entries(live.threads).map(([, v]) => ({ what: v.label || 'a thread', kind: 'one thread', until: v.until })),
+    ];
+    if (!rows.length) {
+        await _send(chatId, `Nothing is muted — you're seeing everything.`);
+        return { action_taken: 'mutes_none' };
+    }
+    const lines = rows.map((r, i) => `${i + 1}. ${r.what} — ${r.kind}, until ${r.until.slice(0, 10)}`);
+    await _send(chatId, `Currently ignoring:\n${lines.join('\n')}\n\nAll of these expire on their own. Say "unmute <name>" to end one early.`);
+    return { action_taken: 'mutes_shown' };
+}
+
 async function ignoreDigestItem(chatId, indices, all = false) {
     const { resolveDigestIndex, loadStore, saveStore } = require('./replyWatch');
 
@@ -5686,6 +5761,9 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
 verifyBookings,
 applyVerifiedSchedules,
 ignoreDigestItem,
+muteMatter,
+unmuteMatter,
+showMutes,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).

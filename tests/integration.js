@@ -671,6 +671,43 @@ section('Inbox triage — notification gating (urgent / batching / overnight)');
     const e3 = AUDIT.find((x) => x && x.messageId === 'a3');
     ck('nor is an outsider item', e3 && e3.intent, 'not_ours');
 
+    // ── A MUTE MUST ACTUALLY SKIP THE SCAN ───────────────────────────────
+    // Caught by reverse-verification: with the mute check in run() replaced
+    // by null, every mute test still passed, because they all exercised the
+    // store and the commands and none of them exercised the SCAN. Third time
+    // this session a helper has been provably correct and provably unwired.
+    //
+    // AI is stubbed to throw here on purpose — reaching the model at all is
+    // the failure. The mute is checked before assess() precisely so a muted
+    // sender costs no Gemini call, which is a cost saving as much as a quiet
+    // inbox.
+    {
+        clean(); sent = []; LA_HOUR = 10; MSGS = [{ id: 'mute1' }];
+        const store = rw.loadStore();
+        rw.addMute(store, { sender: 'raj@x.com', label: 'Raj' });
+        await rw.saveStore(store);
+        let reachedModel = false;
+        const prevAssess = ASSESS;
+        ASSESS = new Proxy({}, { get() { reachedModel = true; return undefined; } });
+        const r = await rw.run({ sendToManager: send });
+        ck('a muted sender is not flagged', r.flagged, 0);
+        ck('and nothing is sent about it', sent.length, 0);
+        ckTrue('and the model was never called for it', !reachedModel);
+        ASSESS = prevAssess;
+
+        // The other half: unmuting really lifts the skip. Asserted on the
+        // gate the scan reads rather than by re-running run() — a second run
+        // in this harness is also subject to the hourly-floor and seen-list
+        // state, so a failure there would not tell us whether the UNMUTE
+        // worked or whether the pacing did.
+        const s2 = rw.loadStore();
+        rw.removeMute(s2, 'raj@x.com');
+        await rw.saveStore(s2);
+        ckTrue('unmuting lifts the skip the scan reads',
+            rw.mutedReason(rw.loadStore(), 'raj@x.com', null) === null);
+        clean();
+    }
+
     TO = 'apsara@edgemetals.com';
 
     clean();

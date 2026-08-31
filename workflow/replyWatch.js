@@ -343,11 +343,12 @@ function bulkMailSignal(headers) {
 // on 2026-08-22, so upgrading does not re-flag every email already assessed.
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} };
     if (raw.seen && typeof raw.seen === 'object') {
         return {
             seen: raw.seen,
             lastDigest: Array.isArray(raw.lastDigest) ? raw.lastDigest : [],
+            muted: (raw.muted && typeof raw.muted === 'object') ? { senders: raw.muted.senders || {}, threads: raw.muted.threads || {} } : { senders: {}, threads: {} },
             // Flagged but not yet told to her — the queue that makes
             // out-of-hours holding lossless.
             undelivered: Array.isArray(raw.undelivered) ? raw.undelivered : [],
@@ -375,7 +376,7 @@ function loadStore() {
             failures: (raw.failures && typeof raw.failures === 'object') ? raw.failures : {},
         };
     }
-    return { seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} }; // legacy flat format
+    return { muted: { senders: {}, threads: {} }, seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} }; // legacy flat format
 }
 async function saveStore(store) {
     // Keep only what the lookback window could still surface. Anything older
@@ -398,6 +399,11 @@ async function saveStore(store) {
         // that is rebuilt from scratch every run is not an index.
         sentIndex: store.sentIndex || {},
         sentIndexUpdatedAt: store.sentIndexUpdatedAt || null,
+        // FOURTH TIME writing a line on this allowlist. lastScanAt, sentIndex
+        // and failures were each silently swallowed by it. A mute it drops is
+        // a mute that quietly stops working — she would tell Jarvis to stop
+        // and it would keep going.
+        muted: store.muted || { senders: {}, threads: {} },
         // THIRD TIME on this allowlist. lastScanAt and sentIndex were both
         // silently swallowed by it before. A failure counter that resets on
         // every write can never reach its cap.
@@ -1683,6 +1689,86 @@ async function hasSheReplied(gmail, threadId, myAddress) {
     return String(tail.lastFrom).toLowerCase().includes(String(myAddress).toLowerCase());
 }
 
+// ── MUTE: "what if i want ignore?" (2026-08-31) ────────────────────────────
+// She asked twice. The first time the answer was a number to say; this is the
+// second, larger half. "ignore 1" removes ONE item from the chase queue and
+// deliberately does not touch `seen` — so the NEXT message on that thread is
+// judged fresh and comes straight back. For the rolling Bill of Lading
+// threads that is every few hours, and telling Jarvis to stop has no way of
+// meaning "and stay stopped".
+//
+// TWO GRAINS, and the default is the safer one. A THREAD mute says "this
+// particular matter is not mine" — it ends when the matter does. A SENDER
+// mute says "nothing from this person is ever mine", which is a much stronger
+// claim: the yard that sends ten routine BL drafts is also the yard that
+// eventually sends the one about a container stuck at the terminal. So a
+// sender mute is only ever created when she names the sender outright.
+//
+// EVERY MUTE EXPIRES. A permanent silent filter is the most dangerous thing
+// in this file — a missed EDO chase costs demurrage, and a filter nobody can
+// see is one nobody audits. Thirty days is long enough to be useful and short
+// enough that a wrong one corrects itself.
+const MUTE_DAYS = 30;
+
+function muteKey(v) {
+    const m = String(v || '').match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);
+    return m ? m[0].toLowerCase() : String(v || '').trim().toLowerCase();
+}
+
+function activeMutes(store) {
+    const out = { senders: {}, threads: {} };
+    const now = Date.now();
+    for (const kind of ['senders', 'threads']) {
+        const src = (store && store.muted && store.muted[kind]) || {};
+        for (const [k, v] of Object.entries(src)) {
+            const until = Date.parse((v && v.until) || '');
+            if (Number.isFinite(until) && until > now) out[kind][k] = v;
+        }
+    }
+    return out;
+}
+
+// Returns the reason it is muted, or null. A STRING so the caller can log
+// which rule fired — a silent skip is how a mute becomes a mystery.
+function mutedReason(store, from, threadId) {
+    const live = activeMutes(store);
+    if (threadId && live.threads[threadId]) return `thread muted until ${live.threads[threadId].until.slice(0, 10)}`;
+    const k = muteKey(from);
+    if (k && live.senders[k]) return `sender ${k} muted until ${live.senders[k].until.slice(0, 10)}`;
+    return null;
+}
+
+function addMute(store, { sender = null, threadId = null, label = null, days = MUTE_DAYS }) {
+    store.muted = store.muted || { senders: {}, threads: {} };
+    const until = new Date(Date.now() + days * DAY_MS).toISOString();
+    const rec = { until, at: new Date().toISOString(), label: label || null };
+    if (threadId) store.muted.threads[threadId] = rec;
+    if (sender) store.muted.senders[muteKey(sender)] = rec;
+    return { until, days };
+}
+
+function removeMute(store, target) {
+    store.muted = store.muted || { senders: {}, threads: {} };
+    const k = muteKey(target);
+    let hit = null;
+    if (store.muted.senders[k]) { hit = { kind: 'sender', key: k }; delete store.muted.senders[k]; }
+    else if (store.muted.threads[target]) { hit = { kind: 'thread', key: target }; delete store.muted.threads[target]; }
+    else {
+        // Let her unmute by the name she muted with, not just the address.
+        for (const [key, v] of Object.entries(store.muted.senders)) {
+            if (v.label && String(v.label).toLowerCase().includes(String(target).toLowerCase())) {
+                hit = { kind: 'sender', key }; delete store.muted.senders[key]; break;
+            }
+        }
+        if (!hit) for (const [key, v] of Object.entries(store.muted.threads)) {
+            if (v.label && String(v.label).toLowerCase().includes(String(target).toLowerCase())) {
+                hit = { kind: 'thread', key }; delete store.muted.threads[key]; break;
+            }
+        }
+    }
+    return hit;
+}
+
 // ── SOMEBODY ELSE ANSWERED IT (2026-08-31) ─────────────────────────────────
 // THE INCIDENT. The 8:00pm digest said "1 email waiting on you — Matt
 // Whittaker asks to reset delivery appointment for 9/1". Apsara's own Gmail
@@ -2535,6 +2621,17 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // Machine mail — cheap pre-filter, see NEVER_REPLY_PATTERNS.
         if (NEVER_REPLY_PATTERNS.some((re) => re.test(from))) { seen[ref.id] = new Date().toISOString(); continue; }
 
+        // Checked BEFORE assess(), so a muted sender costs no Gemini call at
+        // all — the mute is a cost saving as well as a quiet inbox. Named in
+        // the log every time, because a filter that acts silently is one she
+        // cannot audit, and this one can hide a real request.
+        const muteHit = mutedReason(store, from, msg && msg.threadId);
+        if (muteHit) {
+            console.log(`[REPLYWATCH] skipping "${String(subject || '').slice(0, 50)}" from ${senderLabel(from)} — ${muteHit}`);
+            seen[ref.id] = new Date().toISOString();
+            continue;
+        }
+
         // Out-of-office and other auto-responders. Judged by RFC headers, not
         // body text — see helpers/gmail.js's isAutoReply. Two reasons this
         // matters: an OOO bounce assessed by Gemini can plausibly read as
@@ -3196,7 +3293,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
