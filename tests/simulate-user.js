@@ -436,6 +436,62 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
             !/can.?t open|cannot open/i.test(r.replies[0]?.text || ''), r.replies[0]?.text || '');
     }
 
+    // 17. THE AMBIGUOUS "1" — LIVE, 31 Aug 2026, 8:54 PM. Three bot messages
+    //     went out inside an hour:
+    //       8:00pm  digest, numbered, item 1 = Matt Whittaker
+    //       8:45pm  "Trucker check for today — ... (yes/no)"   [sets a pending]
+    //       8:50pm  digest, numbered, item 1 = Andy Park
+    //     Bose replied "1" four minutes after the second digest.
+    //
+    //     The pending branch runs before everything else, so "1" is read as an
+    //     answer to the 8:45 yes/no question. It is not "yes", so the trucker
+    //     check is DECLINED and cleared. The digest item he was pointing at is
+    //     never touched, and nothing tells him either thing happened.
+    //
+    //     Asserts what SHOULD happen: a bare list index must not silently
+    //     answer an unrelated yes/no question.
+    {
+        // ISOLATE. The first version of this scenario "passed" because a
+        // menuContext left over from S1's greeting caught the "1" and opened
+        // the bookings submenu — nothing to do with the pending at all. A
+        // test that passes on a path the incident never took proves nothing.
+        // clearSession() is NOT enough: menuContext is persisted in
+        // helpers/memory.js and re-hydrated by context.js on the next turn,
+        // so it survives the clear. Null it explicitly.
+        require(R('helpers/context.js')).clearSession(MANAGER_CHAT);
+        require(R('helpers/context.js')).updateSession(MANAGER_CHAT, { menuContext: null, lastInstruction: null });
+        say('Jarv', 'Trucker check for today — any bookings need to go out to a trucker? (yes/no)');
+        await actions.setPending(MANAGER_CHAT, { type: 'wizard_start' });
+        say('Jarv', '[digest sent, item 1 = Andy Park]');
+        say('Bose', '1');
+        nextAIResponse = null;
+        const r = await turn('Bose', MANAGER_CHAT, MANAGER_NUM, '1');
+        reply(r); dbg(r);
+        const still = actions.getPending(MANAGER_CHAT);
+        const said = r.replies.map((x) => x.text).join(' ');
+        ck('S17a it did not reach the AI to be guessed at', !r.threw,
+            r.threw ? r.threw.message.slice(0, 140) : 'ok');
+        ck('S17b the trucker check is NOT silently declined',
+            !!still, still ? 'ok' : 'PENDING CLEARED — a list index answered a yes/no question');
+        ck('S17c it names BOTH things "1" could mean',
+            /digest/i.test(said) && /trucker/i.test(said), said.slice(0, 240) || '(said nothing)');
+        ck('S17d it names the sender, so she can tell which item that is',
+            /Whittaker/i.test(said), said.slice(0, 240));
+        ck('S17e and says how to answer each one', /reply to 1/i.test(said), said.slice(0, 240));
+
+        // NO AMBIGUITY -> NO QUESTION. Asking when there is only one possible
+        // referent is exactly the friction she objected to on the pasted-link
+        // fix ("why should i say cancel?"). With the pending resolved, a bare
+        // "1" must just act on the digest item.
+        await actions.clearPending(MANAGER_CHAT);
+        require(R('helpers/context.js')).updateSession(MANAGER_CHAT, { menuContext: null });
+        const r2 = await turn('Bose', MANAGER_CHAT, MANAGER_NUM, '1');
+        const said2 = r2.replies.map((x) => x.text).join(' ');
+        ck('S17f with nothing else pending, "1" is just the digest item — no question asked',
+            !/could mean two things/i.test(said2), said2.slice(0, 200));
+        try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
+    }
+
     console.log(`\n================================================================`);
     console.log(`${pass} passed, ${fail} failed`);
     if (fail) {

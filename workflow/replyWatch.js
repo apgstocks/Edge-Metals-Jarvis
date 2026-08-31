@@ -2185,8 +2185,23 @@ function buildDigest(matters, emailCount) {
             lines.push('Say "reply to 1" if you want to weigh in anyway.');
             return lines.join('\n');
         }
-        lines.push('Nothing here is waiting on your reply — these are things others owe you.');
-        lines.push('Say "reply to 1" if you want me to draft a nudge for your yes.');
+        // LIVE, 31 Aug 2026. The digest read:
+        //   "1 your team is handling: ... Andy Park — asked Accounting Edge
+        //    for: confirmation on pulling empty container   (your team, not you)"
+        //   "Nothing here is waiting on your reply — these are things others
+        //    owe you."
+        // The footer says the opposite of the item. Andy ASKED Accounting
+        // Edge; her own team owes Andy, not the other way round. This branch
+        // only ever tested `elsewhere`, so a colleague-only digest fell
+        // through to the "owed" wording, which is right for `owed` and
+        // backwards for `colleague`.
+        const colleagueOnly = colleague.length && !owed.length;
+        lines.push(colleagueOnly
+            ? 'Nothing here is waiting on your reply — your team owes these answers.'
+            : 'Nothing here is waiting on your reply — these are things others owe you.');
+        lines.push(colleagueOnly
+            ? 'Say "reply to 1" if you want me to draft the answer for your yes.'
+            : 'Say "reply to 1" if you want me to draft a nudge for your yes.');
         return lines.join('\n');
     }
     if (!replies.length) {

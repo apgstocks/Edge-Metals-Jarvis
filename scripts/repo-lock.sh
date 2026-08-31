@@ -56,7 +56,17 @@ expired() { [ "$(age)" -gt "$TTL_SECONDS" ]; }
 # lease, so the two agree without either needing to know about the other.
 released() { [ "$(since)" = "0" ]; }
 free()     { [ ! -d "$LOCK" ] || released; }
-me()    { echo "${JARVIS_AGENT:-$(whoami)@$(hostname -s 2>/dev/null || echo local)-$$}"; }
+# IDENTITY MUST BE STABLE ACROSS INVOCATIONS. The first version ended this in
+# "-$$", which looked reasonable and broke immediately: every shell call is a
+# new process, so the pid changed between `acquire` and the pre-commit hook and
+# the holder never recognised its own lease — the lock blocked the session that
+# took it. A session is not a process.
+#
+# $HOME is the stable, session-scoped thing available in both places (each
+# agent session gets its own home). Set JARVIS_AGENT to something readable if
+# two sessions ever share a home; without it they would look like one holder
+# and the lease would never block, which fails OPEN — the safe direction.
+me()    { echo "${JARVIS_AGENT:-$(basename "${HOME:-local}")@$(hostname -s 2>/dev/null || echo local)}"; }
 
 case "${1:-status}" in
 
@@ -87,7 +97,8 @@ WHAT="$(cat "$LOCK/what" 2>/dev/null || echo '(no description)')"
 NOW="$(date +%s)"
 case "$AT" in ''|*[!0-9]*) exit 0 ;; esac          # unreadable -> fail open
 [ $(( NOW - AT )) -gt "$TTL" ] && exit 0            # expired    -> fail open
-ME="${JARVIS_AGENT:-$(whoami)@$(hostname -s 2>/dev/null || echo local)-$PPID}"
+# Must match me() above exactly — see the note there on why no pid.
+ME="${JARVIS_AGENT:-$(basename "${HOME:-local}")@$(hostname -s 2>/dev/null || echo local)}"
 [ "$OWNER" = "$ME" ] && exit 0                      # mine       -> allow
 cat >&2 <<MSG
 
@@ -167,7 +178,10 @@ HOOKEOF
   steal)
     [ -d "$LOCK" ] || { echo "not held"; exit 0; }
     echo "taking it from $(owner) (held $(( $(age) / 60 )) min: $(what))"
-    rm -rf "$LOCK"; mkdir -p "$LOCK"
+    # Overwrite in place. Same reason release() does not delete: rm can be
+    # forbidden, and a steal that half-worked would be worse than one that
+    # never ran.
+    mkdir -p "$LOCK"
     me > "$LOCK/owner"; now > "$LOCK/at"; echo "${2:-stolen}" > "$LOCK/what"
     echo "now yours"
     ;;

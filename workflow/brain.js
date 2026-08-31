@@ -1068,6 +1068,66 @@ function policyDecide(ctx) {
             }
         }
 
+        // ── A BARE NUMBER IS AMBIGUOUS. ASK. ────────────────────────────
+        // LIVE, 31 Aug 2026, 8:54 PM. Three bot messages inside an hour:
+        //   8:00pm  digest, item 1 = Matt Whittaker
+        //   8:45pm  "Trucker check for today — ... (yes/no)"  [opens a pending]
+        //   8:50pm  digest, item 1 = Andy Park
+        // Bose replied "1". Simulated with the session state cleared, that
+        // matches NO rule in this file and falls through to Gemini to guess,
+        // with three live referents in play. Whatever it picked, nobody was
+        // told which one — and one of the candidates was "decline the trucker
+        // check", which is destructive and silent.
+        //
+        // It is also worth being honest about why this went unnoticed: with a
+        // menuContext left over from any earlier menu, "1" is claimed by the
+        // menu handler at line ~885 instead — even days later, because
+        // menuContext never expires. So the behaviour was not one wrong
+        // answer, it was a different wrong answer depending on history.
+        //
+        // Same instruction she gave for the pasted Google Sheet link ("it
+        // should have asked instead"): with more than one live referent, ask
+        // and name them. With exactly one, just do it — asking then is the
+        // friction she objects to.
+        //
+        // SCOPE, checked against every other user of a bare number:
+        //   · list-selection pendings (select_trucker/select_supplier and the
+        //     wizard steps) resolve numbers in section A0 and return long
+        //     before this point, so they are untouched
+        //   · a menu number still works, because menuContext is checked
+        //     before this and is only set when a menu was actually shown
+        //   · "reply to 1" and "ignore 1" are explicit and unaffected
+        if (/^#?\d{1,2}$/.test(ctx.text.trim())) {
+            const n = ctx.text.trim().replace('#', '');
+            const candidates = [];
+            const { lastDigest, lastDigestAt } = (() => {
+                try { return require('./replyWatch').loadStore() || {}; } catch (e) { return {}; }
+            })();
+            const digestFresh = (() => {
+                const at = Date.parse(lastDigestAt || '');
+                return Number.isFinite(at) && Date.now() - at < 12 * 60 * 60 * 1000;
+            })();
+            const item = digestFresh && Array.isArray(lastDigest)
+                ? lastDigest[parseInt(n, 10) - 1] : null;
+            if (item) candidates.push({ kind: 'digest', label: `item ${n} from the last digest (${item.fromName || item.from || 'that sender'})` });
+            if (ctx.pendingAction) {
+                // pendingFullReminder is declared further down; function
+                // declarations hoist, so this is the same text the nudge uses
+                // rather than a second wording that could drift from it.
+                const line = String(pendingFullReminder(ctx.pendingAction) || '').replace(/^\(|\)$/g, '').trim();
+                candidates.push({ kind: 'pending', label: line || 'the question I asked earlier' });
+            }
+            if (candidates.length > 1) {
+                return { intent: 'reply', resolvedBy: 'policy', data: { reply:
+                    `"${n}" could mean two things right now, and one of them I cannot undo:\n`
+                    + candidates.map((c, i) => `  ${i + 1}. ${c.label}`).join('\n')
+                    + `\n\nSay "reply to ${n}" for the digest item, or answer the other one directly.` } };
+            }
+            if (candidates.length === 1 && candidates[0].kind === 'digest') {
+                return { intent: 'reply_to_digest_item', resolvedBy: 'policy', data: { index: n, details: null } };
+            }
+        }
+
         // "reply to 2" / "reply 2" / "reply to 2: confirmed for Friday" —
         // answers a numbered entry from the last needs-a-reply digest.
         // Checked BEFORE the general "reply to <name>" rule below so a bare
