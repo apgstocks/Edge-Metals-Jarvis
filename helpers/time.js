@@ -21,6 +21,55 @@ try {
     console.warn('[TIME] chrono-node not installed — falling back to built-in date patterns only. Run `npm install` to enable it.');
 }
 
+// ── today, as a person at the Brea yard would write it ─────────────────────
+// Added 2026-08-29. `new Date().toISOString().slice(0, 10)` was being used as
+// the default business date for payments, and that is the UTC day. Past 5pm in
+// Brea, UTC has already rolled over, so an evening payment was being stamped
+// with TOMORROW's date — silently, and on a money record.
+//
+// AMERICA/LOS_ANGELES, not the server's own clock — Apsara, 2026-08-29: "it
+// should be in Brea, LA time". That matters beyond tidiness: the VM's timezone
+// is a deployment detail nobody sets deliberately, so a rebuild or a move to a
+// different host could shift every recorded payment date by a day without one
+// line of code changing. Pinning it to the yard's actual timezone makes the
+// date a property of the business, not of the machine. It is also the
+// convention the whole rest of this file already uses.
+//
+// 'en-CA' because that locale formats as YYYY-MM-DD, which is the format
+// stored everywhere in this app — avoiding a hand-rolled reassembly of the
+// Intl parts, which is where this kind of code usually goes wrong.
+//
+// ── RESTORED 2026-09-01 ───────────────────────────────────────────────────
+// These two functions, and their line in module.exports, went missing in
+// commit 37b3513 ("proforma"), which appears to have written an older copy of
+// this file over the newer one. Seven live call sites were left calling
+// functions that no longer existed:
+//
+//   helpers/payments.js:104     addPayment          → recording a payment THREW
+//   helpers/receivables.js:85   receivable payments → same
+//   helpers/yardActions.js:90   record_payment      → the assistant's write path
+//   helpers/yardActions.js:134  create_load
+//   helpers/yardChatLog.js:37   the chat log's day
+//   helpers/yardBrief.js:49,117 the daily brief
+//
+// This was not a test-only failure. `require(...).todayLocal is not a
+// function` is a TypeError at request time: on the deployed server, recording
+// a payment was broken. Restored verbatim rather than rewritten, and added
+// back ADDITIVELY — the genuine parseNaturalTime fix that arrived in the same
+// commit (the afternoon/`bareTimeOnly` bug) is deliberately left untouched.
+const YARD_TZ = 'America/Los_Angeles';
+
+function todayLocal(d = new Date()) {
+    return d.toLocaleDateString('en-CA', { timeZone: YARD_TZ });
+}
+
+// n days back, on the same Brea-day basis. Subtracts whole days from the
+// instant and re-reads the LA calendar date, so a DST changeover cannot make
+// "7 days ago" land on the wrong day.
+function daysAgoLocal(n, d = new Date()) {
+    return todayLocal(new Date(d.getTime() - (Number(n) || 0) * 86400000));
+}
+
 function getLADate() {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
 }
@@ -301,4 +350,5 @@ function parseNaturalTime(text) {
     }
 }
 
-module.exports = { getLADate, getLATime, daysUntil, parseUSDate, parseNaturalTime };
+module.exports = {
+    todayLocal, daysAgoLocal, getLADate, getLATime, daysUntil, parseUSDate, parseNaturalTime };

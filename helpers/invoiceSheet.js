@@ -123,6 +123,11 @@ function buildColumnMap(headers) {
     };
 }
 
+// RESTORED 2026-09-01 — this require, and the two round2() calls it feeds,
+// were lost when commit 37b3513 ("proforma") wrote an older copy of this file
+// over the newer one. See the comment at the first call site.
+const { round2 } = require('./money');
+
 function safeStr(v) { return v == null ? '' : String(v).trim(); }
 function safeFloat(v) {
     const n = parseFloat(String(v || '').replace(/,/g, '').replace(/\$/g, ''));
@@ -406,7 +411,20 @@ async function buildContainerInvoiceData(containerNo) {
         const d = rowToDict(row, colMap);
         const weight = safeFloat(d.weight);
         const rate = safeFloat(d.inv_price);
-        const amount = weight * rate;
+        // Rounded PER LINE, per Apsara 2026-08-28. weight * rate is raw
+        // floating point: 13.5 x 1.15 comes out as 15.524999999999999, and
+        // ten such lines accumulate to 155.25000000000003 — a customer-facing
+        // invoice must not carry that. Rounding each line and then summing the
+        // rounded lines is also the ordinary invoicing convention: the total
+        // equals what is printed beside each row, so the document adds up when
+        // someone checks it by hand.
+        //
+        // RESTORED 2026-09-01: lost to commit 37b3513, along with the same
+        // call below and the require at the top of the file. The sibling
+        // documents (helpers/proformaPdf.js, helpers/invoicePdf.js) kept
+        // theirs, so the Excel invoice had quietly started disagreeing with
+        // the PDF of the same invoice.
+        const amount = round2(weight * rate);
         if (!freight) {
             const fv = evalFreight(d.freight_charge);
             if (fv > 0) freight = fv;
@@ -486,7 +504,8 @@ async function buildMultiContainerInvoiceData(containerNos) {
         const containerNo = safeStr(d.container_no).toUpperCase();
         const weight = safeFloat(d.weight);
         const rate = safeFloat(d.inv_price);
-        const amount = weight * rate;
+        // Rounded per line — see the identical call above for why.
+        const amount = round2(weight * rate);
         if (!freight) {
             const fv = evalFreight(d.freight_charge);
             if (fv > 0) freight = fv;
