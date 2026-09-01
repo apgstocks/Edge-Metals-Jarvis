@@ -124,8 +124,6 @@ function buildColumnMap(headers) {
 }
 
 function safeStr(v) { return v == null ? '' : String(v).trim(); }
-const { round2 } = require('./money');
-
 function safeFloat(v) {
     const n = parseFloat(String(v || '').replace(/,/g, '').replace(/\$/g, ''));
     return Number.isFinite(n) ? n : 0;
@@ -307,7 +305,24 @@ function invNoTailCodes(invNo) {
     if (!s) return [];
     const idx = s.lastIndexOf('_');
     const tail = idx === -1 ? s : s.slice(idx + 1);
-    return tail.split(',').map((x) => x.trim()).filter(Boolean);
+    const parts = tail.split(',').map((x) => x.trim()).filter(Boolean);
+    if (!parts.length) return [];
+
+    // EXPAND the shortened form back to whole codes. Since 2026-09-01 a
+    // multi-container Inv No writes the shared prefix once —
+    // "260901_AL_26JY95,96,97" — so the bare "96" and "97" here mean
+    // 26JY96 and 26JY97. Without this, searching "26JY97" would silently
+    // fail to find a merged invoice: the stored token is just "97".
+    //
+    // A later part that carries its OWN letters (a run crossing a code
+    // change, e.g. "26JY99,26KA01") is already whole and is left alone.
+    const head = parts[0];
+    const m = head.match(/^(.*?)(\d+)$/);
+    const prefix = m && m[1] ? m[1] : '';
+    return parts.map((p, i) => {
+        if (i === 0 || !prefix) return p;
+        return /^\d+$/.test(p) ? `${prefix}${p}` : p;
+    });
 }
 
 // Mirror of findContainersByNumber, keyed on the Inv No. tail instead of the
@@ -391,14 +406,7 @@ async function buildContainerInvoiceData(containerNo) {
         const d = rowToDict(row, colMap);
         const weight = safeFloat(d.weight);
         const rate = safeFloat(d.inv_price);
-        // Rounded PER LINE, per Apsara 2026-08-28. weight * rate is raw
-        // floating point: 13.5 x 1.15 comes out as 15.524999999999999, and
-        // ten such lines accumulate to 155.25000000000003 — a customer-facing
-        // invoice must not carry that. Rounding each line and then summing the
-        // rounded lines is also the ordinary invoicing convention: the total
-        // equals what is printed beside each row, so the document adds up when
-        // someone checks it by hand.
-        const amount = round2(weight * rate);
+        const amount = weight * rate;
         if (!freight) {
             const fv = evalFreight(d.freight_charge);
             if (fv > 0) freight = fv;
@@ -478,14 +486,7 @@ async function buildMultiContainerInvoiceData(containerNos) {
         const containerNo = safeStr(d.container_no).toUpperCase();
         const weight = safeFloat(d.weight);
         const rate = safeFloat(d.inv_price);
-        // Rounded PER LINE, per Apsara 2026-08-28. weight * rate is raw
-        // floating point: 13.5 x 1.15 comes out as 15.524999999999999, and
-        // ten such lines accumulate to 155.25000000000003 — a customer-facing
-        // invoice must not carry that. Rounding each line and then summing the
-        // rounded lines is also the ordinary invoicing convention: the total
-        // equals what is printed beside each row, so the document adds up when
-        // someone checks it by hand.
-        const amount = round2(weight * rate);
+        const amount = weight * rate;
         if (!freight) {
             const fv = evalFreight(d.freight_charge);
             if (fv > 0) freight = fv;
@@ -625,82 +626,7 @@ function findPackingRow(packingRows, itemDesc) {
     return packingRows[0];
 }
 
-
-// RESTORED 2026-08-22. Removed by commit 8dc3495 ("INV BY INV NO"), which
-// added findContainersByInvNo/invNoTailCodes and, in writing this file back,
-// dropped this one. helpers/receivables.js's buildLedger() calls it, so every
-// receivables question answered "Couldn't read the invoice sheet:
-// invoiceSheet.listAllInvoices is not a function" — the second regression of
-// this exact shape today; see the restored block in workflow/actions.js for
-// the first.
-// ── Every invoice on the sheet, with its total ──────────────────────────────
-// Built 2026-08-22 for the receivables ledger (helpers/receivables.js). Lives
-// HERE, not there, on purpose: the invoice total is real money, and the rule
-// for it — sum(weight × inv price), then subtract freight ONCE per invoice —
-// already exists twice in this file (buildContainerInvoiceData and
-// buildMultiContainerInvoiceData, which agree exactly). A third copy in
-// another file would be a place for the three to silently drift apart, and
-// the symptom would be an AR balance that disagrees with the invoice PDF the
-// customer is holding.
-//
-// Grouped by INV NO. rather than by container, because that's the unit a
-// customer actually owes against: one invoice can cover several containers
-// (see buildMultiContainerInvoiceData), and freight applies once to the
-// invoice, not once per container.
-//
-// Rows with no invoice number are skipped rather than lumped together — an
-// unnumbered row is a draft or a spacer, not a debt.
-async function listAllInvoices(forceRefresh) {
-    const { headers, rows } = await fetchRawSheet(forceRefresh);
-    const colMap = buildColumnMap(headers);
-    if (colMap.inv_no === -1) {
-        throw new Error('Invoice sheet header layout changed — expected an "Inv No." column');
-    }
-    const byInvNo = new Map();
-    for (const row of rows) {
-        const d = rowToDict(row, colMap);
-        const invNo = safeStr(d.inv_no);
-        if (!invNo) continue;
-        if (!byInvNo.has(invNo)) {
-            byInvNo.set(invNo, {
-                inv_no: invNo,
-                consignee: safeStr(d.consignee),
-                customer: safeStr(d.customer),
-                inv_date: safeStr(d.inv_date),
-                terms: safeStr(d.terms),
-                containers: [],
-                subtotal: 0,
-                freight: 0,
-                line_count: 0,
-            });
-        }
-        const inv = byInvNo.get(invNo);
-        inv.subtotal += safeFloat(d.weight) * safeFloat(d.inv_price);
-        inv.line_count += 1;
-        const c = safeStr(d.container_no).toUpperCase();
-        if (c && !inv.containers.includes(c)) inv.containers.push(c);
-        // First non-zero freight wins, exactly as the two builders above do.
-        if (!inv.freight) {
-            const fv = evalFreight(d.freight_charge);
-            if (fv > 0) inv.freight = fv;
-        }
-        // Keep the first non-empty header value seen for the invoice — later
-        // rows of a multi-container invoice often leave these blank and carry
-        // only line-item data.
-        if (!inv.consignee) inv.consignee = safeStr(d.consignee);
-        if (!inv.customer) inv.customer = safeStr(d.customer);
-        if (!inv.inv_date) inv.inv_date = safeStr(d.inv_date);
-        if (!inv.terms) inv.terms = safeStr(d.terms);
-    }
-    return Array.from(byInvNo.values()).map((inv) => ({
-        ...inv,
-        subtotal: Math.round(inv.subtotal * 100) / 100,
-        final_amount: Math.round((inv.subtotal - inv.freight) * 100) / 100,
-    }));
-}
-
 module.exports = {
-    listAllInvoices, // restored 2026-08-22, see above
     findContainersByInvNo, invNoTailCodes,
     findContainersForBuyer,
     findContainersByNumber,

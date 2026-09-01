@@ -21,36 +21,6 @@ try {
     console.warn('[TIME] chrono-node not installed — falling back to built-in date patterns only. Run `npm install` to enable it.');
 }
 
-// ── today, as a person at the Brea yard would write it ─────────────────────
-// Added 2026-08-29. `new Date().toISOString().slice(0, 10)` was being used as
-// the default business date for payments, and that is the UTC day. Past 5pm in
-// Brea, UTC has already rolled over, so an evening payment was being stamped
-// with TOMORROW's date — silently, and on a money record.
-//
-// AMERICA/LOS_ANGELES, not the server's own clock — Apsara, 2026-08-29: "it
-// should be in Brea, LA time". That matters beyond tidiness: the VM's timezone
-// is a deployment detail nobody sets deliberately, so a rebuild or a move to a
-// different host could shift every recorded payment date by a day without one
-// line of code changing. Pinning it to the yard's actual timezone makes the
-// date a property of the business, not of the machine. It is also the
-// convention the whole rest of this file already uses.
-//
-// 'en-CA' because that locale formats as YYYY-MM-DD, which is the format
-// stored everywhere in this app — avoiding a hand-rolled reassembly of the
-// Intl parts, which is where this kind of code usually goes wrong.
-const YARD_TZ = 'America/Los_Angeles';
-
-function todayLocal(d = new Date()) {
-    return d.toLocaleDateString('en-CA', { timeZone: YARD_TZ });
-}
-
-// n days back, on the same Brea-day basis. Subtracts whole days from the
-// instant and re-reads the LA calendar date, so a DST changeover cannot make
-// "7 days ago" land on the wrong day.
-function daysAgoLocal(n, d = new Date()) {
-    return todayLocal(new Date(d.getTime() - (Number(n) || 0) * 86400000));
-}
-
 function getLADate() {
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
 }
@@ -141,14 +111,6 @@ function parseNaturalTime(text) {
     const lower = String(text).toLowerCase().trim()
         .replace(/\b(la|los angeles|pacific|pst|pdt)\s*time\b/g, '')
         .replace(/\b(pst|pdt)\b/g, '')
-        // "@7am" is her shorthand for "at 7am" and it was the canonical live
-        // bug this chrono work was started for — every hand-rolled pattern
-        // recognised "7am" and none of them survived the "@". chrono does not
-        // rescue it either: with no day in the text it reports the day as
-        // UNCERTAIN, and the certainty guard below then correctly refuses to
-        // guess. So the fix belongs here, in normalisation, not in either
-        // parser: drop an "@" that is sitting directly in front of a time.
-        .replace(/(^|\s)@\s*(?=\d)/g, '$1')
         .trim();
 
     // Relative-to-real-now spans are timezone-agnostic by construction —
@@ -289,7 +251,20 @@ function parseNaturalTime(text) {
         const residue   = outside.replace(/\b(at|on|by|around|about|sharp|please)\b/g, '').replace(/[^a-z0-9]/g, '');
         const bareTimeOnly = residue.length === 0;
 
-        if (!dayCertain && !(sameDayAsNow && hourCertain && bareTimeOnly)) {
+        // TIME-DEPENDENT BUG, caught 2026-09-01 by the suite running in the
+        // evening: case (b) used to also require the parsed date to be TODAY.
+        // With forwardDate:true, chrono rolls a time that has already passed
+        // to TOMORROW — so "@7am" resolved to tomorrow, failed the same-day
+        // check, and was rejected as unparseable for most of every day. It
+        // passed every morning and failed every afternoon, which is the worst
+        // kind of bug to find in production.
+        //
+        // The same-day check was never what made case (b) safe. `bareTimeOnly`
+        // is: it proves chrono consumed the WHOLE input, so there was no date
+        // reference for it to silently drop. Once that holds, whichever day
+        // forwardDate picked is correct by construction, and requiring "today"
+        // only breaks the afternoon.
+        if (!dayCertain && !(hourCertain && bareTimeOnly)) {
             console.warn(`[TIME] chrono could not confidently date "${text}" (day uncertain) — treating as unparseable rather than guessing`);
             return null;
         }
@@ -310,10 +285,10 @@ function parseNaturalTime(text) {
         let parsed = laWallClockToUTC(y, mo - 1, d, hour, min);
         if (!(parsed instanceof Date) || isNaN(parsed.getTime())) return null;
 
-        // Bare time-of-day that has already passed today means tomorrow —
-        // identical to the rule the hand-rolled bare-clock branch above
-        // applies, restated here so "@7am" and "7am" cannot disagree about
-        // which day they mean.
+        // Safety net only. forwardDate:true already rolls a passed bare time
+        // to tomorrow, so this normally does nothing — it exists so "@7am"
+        // and "7am" cannot disagree about which day they mean if chrono ever
+        // changes that behaviour.
         if (!dayCertain && sameDayAsNow && parsed.getTime() <= Date.now()) {
             const nd = new Date(now); nd.setDate(nd.getDate() + 1);
             parsed = laWallClockToUTC(nd.getFullYear(), nd.getMonth(), nd.getDate(), hour, min);
@@ -326,5 +301,4 @@ function parseNaturalTime(text) {
     }
 }
 
-module.exports = {
-    todayLocal, daysAgoLocal, getLADate, getLATime, daysUntil, parseUSDate, parseNaturalTime };
+module.exports = { getLADate, getLATime, daysUntil, parseUSDate, parseNaturalTime };

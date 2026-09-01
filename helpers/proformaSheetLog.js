@@ -522,6 +522,31 @@ function bumpInvNoUntilUnique(invNo, existing) {
     return candidate;
 }
 
+// Joins container codes for the Inv No, writing the shared prefix ONCE.
+//
+// Apsara, 2026-09-01: "260901_AL_26JY95,26JY96,26JY97,26JY98,26JY99 SHOULD BE
+// 260901_AL_26JY95,96,97,98,99".
+//
+// The first code is written in full; every following code that shares its
+// alpha prefix is written as just its trailing number. A code with a
+// DIFFERENT prefix (a run that crosses a code change, e.g. 26JY99 then
+// 26KA01) is kept in full — shortening it would be ambiguous, and an
+// ambiguous container reference on an invoice is worth more characters.
+//
+// dashboard/documents.html builds the same string client-side for the PDF
+// and helpers/invoiceSheet.js expands it back for the Inv No search; all
+// three must agree on this format.
+function shortenContainerCodes(codes) {
+    const list = (codes || []).filter(Boolean);
+    if (!list.length) return '';
+    const m = String(list[0]).match(/^(.*?)(\d+)$/);
+    const prefix = m && m[1] ? m[1] : null;
+    return list.map((c, i) => {
+        if (i === 0 || !prefix) return c;
+        return String(c).startsWith(prefix) ? String(c).slice(prefix.length) : c;
+    }).join(',');
+}
+
 // body: the same payload POSTed to /api/proforma/generate — see the column
 // mapping notes at the top of this file for exactly where each value goes.
 async function logProformaToSheet(body) {
@@ -589,7 +614,7 @@ async function logProformaToSheet(body) {
     // below can run ONCE per invoice rather than once per row.
     const rowGroups = [];
     for (const g of groups.values()) {
-        const joined = g.codes.join(',');
+        const joined = shortenContainerCodes(g.codes);
         const codeWithItem = g.itemCode && joined ? `${g.itemCode}_${joined}` : joined;
         const invNo = joined ? `${invDateCompact}_${codeWithItem}`.trim() : (body.inv_no || '');
         const groupRows = [];
@@ -663,7 +688,7 @@ async function logProformaToSheet(body) {
 }
 
 module.exports = {
-    logProformaToSheet, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
+    logProformaToSheet, shortenContainerCodes, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
     getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches, clearRowFormatting,
     reorderColumnToPosition,
 };
