@@ -715,7 +715,7 @@ body[data-theme="light"] {
       </div>
       <div class="grid4">
         <div class="field"><label>Buyer's Order No</label><input id="pf_buyer_po"></div>
-        <div class="field"><label>Buyer PO Date</label><input type="date" id="pf_buyer_po_date"></div>
+        <div class="field"><label>Buyer PO Date</label><input id="pf_buyer_po_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <div class="field"><label>Country of Origin</label><input id="pf_country_of_origin" value="USA"></div>
         <div class="field"><label>Shipment Allowance</label><input id="pf_shipment_allowance" value="+/- 10% on weights"></div>
       </div>
@@ -940,7 +940,7 @@ function renderZimexResults(result) {
       <td>${esc(r.container_no || '')}</td>
       <td>${esc(r.consignee || '')}</td>
       <td>${esc(r.inv_no || '')}</td>
-      <td>${esc(r.inv_date || '')}</td>
+      <td>${esc(fmtDate(r.inv_date))}</td>
       <td>${fmtMoney(r.freight_amt)}</td>
     </tr>`).join('') || `<tr><td colspan="6" style="text-align:center; color:var(--text-faint);">Nothing outstanding for this period.</td></tr>`;
   $('zimexSheetOnlyWrap').classList.remove('hidden');
@@ -1146,7 +1146,7 @@ function renderJioResults(result) {
 
   $('jioResultsBody').innerHTML = matched.map((r) => `
     <tr>
-      <td>${esc(r.invoice_date || '—')}</td>
+      <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td>${esc(r.invoice_no || '—')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
       <td>${esc(r.shipper || '')}</td>
@@ -1251,7 +1251,7 @@ function renderSherResults(result) {
 
   $('sherResultsBody').innerHTML = matched.map((r) => `
     <tr>
-      <td>${esc(r.invoice_date || '—')}</td>
+      <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
       <td>${r.quantity != null ? r.quantity : '—'}</td>
       <td>${r.sheet_count != null ? r.sheet_count : '—'}</td>
@@ -1353,12 +1353,12 @@ function renderAjResults(result) {
 
   $('ajResultsBody').innerHTML = matched.map((r) => `
     <tr>
-      <td>${esc(r.invoice_date || '—')}</td>
+      <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td>${esc(r.invoice_no || '—')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
       <td>${esc(r.shipper || '')}</td>
-      <td>${esc(r.pickup_date || '')}</td>
+      <td>${esc(fmtDate(r.pickup_date))}</td>
       <td>${fmtMoney(r.rate)}</td>
       <td>${fmtMoney(r.amount)}</td>
       <td>${r.other_charge ? fmtMoney(r.other_charge) : '—'}</td>
@@ -1501,54 +1501,66 @@ $('pf_consignee').addEventListener('blur', () => {
   lookupPricingMemory($('pf_consignee').value.trim());
 });
 
-// ── Invoice Date: shown MM/DD/YYYY, sent YYYY-MM-DD ───────────────────────
-// Apsara, 2026-09-01: "ALSO INVOICE DATE SHOULD BE MM/DD/YYYY."
+// ── Dates are MM/DD/YYYY everywhere they are SHOWN ──────────────────────────
+// Apsara, 2026-09-01: "wherever date applicable it should be mm/dd/yyyy only."
 //
-// This was an <input type="date">. A native date input renders in the
-// BROWSER/OS locale and there is no way to force a format on it — so it can
-// show YYYY-MM-DD or DD/MM/YYYY depending on the machine, which is exactly
-// the wrong property for a field that ends up on a financial document. It is
-// now a plain text field that always shows MM/DD/YYYY.
+// Two separate jobs, deliberately kept apart:
+//   fmtDate/toUsDate — what a PERSON sees. Always MM/DD/YYYY.
+//   toIsoDate        — what goes over the WIRE and into storage. Always
+//                      YYYY-MM-DD, because that is what every API, sheet and
+//                      saved record in this app already expects, and it is
+//                      the only shape that sorts and compares correctly.
 //
-// The value sent to the server stays YYYY-MM-DD, deliberately. Everything
-// downstream already expects that shape, and one place breaks LOUDLY if it
-// changes: proformaSheetLog builds the Inv No via
-// `inv_date.replace(/-/g,'').slice(2)`, so "09/01/2026" would yield
-// "/01/2026" and quietly corrupt every invoice number for the day.
+// Native <input type="date"> was replaced wherever it appeared: it renders in
+// the browser/OS locale with no way to force a format, so the same screen
+// could read 2026-09-01 on one machine and 01/09/2026 on another. Fine for a
+// personal app; not for dates that land on invoices.
 function toUsDate(d) {
   if (!d) return '';
+  if (typeof d === 'string') {
+    const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})/);        // YYYY-MM-DD[...]
+    if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(d.trim())) return d.trim(); // already right
+  }
   const dt = (d instanceof Date) ? d : new Date(d);
   if (isNaN(dt.getTime())) return '';
   return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}/${dt.getFullYear()}`;
 }
 
-// MM/DD/YYYY (or a couple of forgiving variants) -> YYYY-MM-DD.
-// Returns '' rather than a guess when it cannot tell — a wrong date on an
-// invoice is worse than an empty one she is asked to fill in.
+// Display helper for table cells and read-only text: formats when it can,
+// and returns the ORIGINAL string when it cannot. Never blanks a value it
+// does not recognise — a date it fails to parse is still information, and
+// showing "—" in its place would look like missing data.
+function fmtDate(v, fallback = '') {
+  if (v === null || v === undefined || v === '') return fallback;
+  return toUsDate(v) || String(v);
+}
+
+// MM/DD/YYYY (and forgiving variants) -> YYYY-MM-DD. Returns '' rather than
+// guessing — a wrong date is worse than an empty one someone is asked to fix.
 function toIsoDate(v) {
   const s = String(v || '').trim();
   if (!s) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;            // already canonical
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if (!m) return '';
   let [, mm, dd, yy] = m;
   if (yy.length === 2) yy = String(2000 + Number(yy));
   const mi = Number(mm), di = Number(dd);
-  // Reject impossible dates instead of letting Date roll them over —
-  // "13/45/2026" must not silently become some day in the following year.
+  // Reject impossible dates rather than letting Date roll them over —
+  // "13/45/2026" must not quietly become a day in the following year.
   if (mi < 1 || mi > 12 || di < 1 || di > 31) return '';
   return `${yy}-${String(mi).padStart(2, '0')}-${String(di).padStart(2, '0')}`;
 }
 
-// Normalises whatever a person typed to MM/DD/YYYY when they leave the field,
-// so "9/1/26" settles as "09/01/2026" rather than being silently rejected
-// later.
+// Tidies what was typed to MM/DD/YYYY on blur, so "9/1/26" settles as
+// "09/01/2026" instead of being silently rejected later.
 function wireUsDateField(id) {
-  const el = $(id);
+  const el = typeof id === 'string' ? $(id) : id;
   if (!el) return;
   el.addEventListener('blur', () => {
     const iso = toIsoDate(el.value);
-    if (!iso) return;                     // leave it alone; nothing to fix
+    if (!iso) return;
     const [y, m, d] = iso.split('-');
     el.value = `${m}/${d}/${y}`;
   });
@@ -2185,6 +2197,7 @@ function resetWizard() {
   // afterward — this only sets the starting value.
   $('pf_inv_date').value = toUsDate(new Date());
   wireUsDateField('pf_inv_date');
+  wireUsDateField('pf_buyer_po_date');
   showWizStep(1);
 }
 function showWizStep(n) {
@@ -2384,7 +2397,7 @@ function collectProformaPayload() {
     payment_term: $('pf_payment_term').value.trim(),
     freight_label: $('pf_freight_label').value,
     buyer_po: $('pf_buyer_po').value.trim(),
-    buyer_po_date: $('pf_buyer_po_date').value,
+    buyer_po_date: toIsoDate($('pf_buyer_po_date').value),
     country_of_origin: $('pf_country_of_origin').value.trim(),
     shipment_allowance: $('pf_shipment_allowance').value.trim(),
     containers,
@@ -2670,7 +2683,7 @@ function renderInvContainerList(containers, preCheckNos) {
         </div>
         <div style="text-align:right; font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">
           <div>${esc(c.inv_no || '—')}</div>
-          <div>${esc(c.inv_date || '')}</div>
+          <div>${esc(fmtDate(c.inv_date))}</div>
         </div>
       </div>
     </div>`).join('');

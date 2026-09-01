@@ -87,8 +87,8 @@ tr:last-child td { border-bottom:none; }
 
   <div id="panelReport" class="hidden">
     <div style="display:flex; gap:10px; align-items:end; margin-bottom:16px;">
-      <div class="field" style="margin-bottom:0;"><label>From</label><input type="date" id="rptFrom"></div>
-      <div class="field" style="margin-bottom:0;"><label>To</label><input type="date" id="rptTo"></div>
+      <div class="field" style="margin-bottom:0;"><label>From</label><input id="rptFrom" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+      <div class="field" style="margin-bottom:0;"><label>To</label><input id="rptTo" placeholder="MM/DD/YYYY" autocomplete="off"></div>
       <button id="btnRptApply" class="btn btn-secondary">Apply</button>
       <button id="btnRptClear" class="btn btn-secondary">Clear</button>
     </div>
@@ -102,7 +102,7 @@ tr:last-child td { border-bottom:none; }
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
         <div class="field"><label>Buyer *</label><input id="lm_buyer" placeholder="e.g. Eccomelt"></div>
         <div class="field"><label>Buyer address</label><input id="lm_buyer_address"></div>
-        <div class="field"><label>Date</label><input type="date" id="lm_date"></div>
+        <div class="field"><label>Date</label><input id="lm_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <div class="field"><label>Trucker</label><input id="lm_trucker" placeholder="who hauled it"></div>
       </div>
       <div class="field" style="margin-top:10px;"><label>Description (optional overall note)</label><input id="lm_description"></div>
@@ -129,6 +129,72 @@ tr:last-child td { border-bottom:none; }
 </section>
 
 <script>
+// ── Dates are MM/DD/YYYY everywhere they are SHOWN ──────────────────────────
+// Apsara, 2026-09-01: "wherever date applicable it should be mm/dd/yyyy only."
+//
+// Two separate jobs, deliberately kept apart:
+//   fmtDate/toUsDate — what a PERSON sees. Always MM/DD/YYYY.
+//   toIsoDate        — what goes over the WIRE and into storage. Always
+//                      YYYY-MM-DD, because that is what every API, sheet and
+//                      saved record in this app already expects, and it is
+//                      the only shape that sorts and compares correctly.
+//
+// Native <input type="date"> was replaced wherever it appeared: it renders in
+// the browser/OS locale with no way to force a format, so the same screen
+// could read 2026-09-01 on one machine and 01/09/2026 on another. Fine for a
+// personal app; not for dates that land on invoices.
+function toUsDate(d) {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})/);        // YYYY-MM-DD[...]
+    if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(d.trim())) return d.trim(); // already right
+  }
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}/${dt.getFullYear()}`;
+}
+
+// Display helper for table cells and read-only text: formats when it can,
+// and returns the ORIGINAL string when it cannot. Never blanks a value it
+// does not recognise — a date it fails to parse is still information, and
+// showing "—" in its place would look like missing data.
+function fmtDate(v, fallback = '') {
+  if (v === null || v === undefined || v === '') return fallback;
+  return toUsDate(v) || String(v);
+}
+
+// MM/DD/YYYY (and forgiving variants) -> YYYY-MM-DD. Returns '' rather than
+// guessing — a wrong date is worse than an empty one someone is asked to fix.
+function toIsoDate(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) return '';
+  let [, mm, dd, yy] = m;
+  if (yy.length === 2) yy = String(2000 + Number(yy));
+  const mi = Number(mm), di = Number(dd);
+  // Reject impossible dates rather than letting Date roll them over —
+  // "13/45/2026" must not quietly become a day in the following year.
+  if (mi < 1 || mi > 12 || di < 1 || di > 31) return '';
+  return `${yy}-${String(mi).padStart(2, '0')}-${String(di).padStart(2, '0')}`;
+}
+
+// Tidies what was typed to MM/DD/YYYY on blur, so "9/1/26" settles as
+// "09/01/2026" instead of being silently rejected later.
+function wireUsDateField(id) {
+  const el = typeof id === 'string' ? $(id) : id;
+  if (!el) return;
+  el.addEventListener('blur', () => {
+    const iso = toIsoDate(el.value);
+    if (!iso) return;
+    const [y, m, d] = iso.split('-');
+    el.value = `${m}/${d}/${y}`;
+  });
+}
+
+
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 const $ = (id) => document.getElementById(id);
 async function api(path, opts = {}) {
@@ -160,7 +226,7 @@ function loadCard(l) {
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
         <div>
           <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.buyer)}</div>
-          <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">${esc(l.date || '(no date)')} ${l.trucker_name ? '· ' + esc(l.trucker_name) : ''} · ${l.id}</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">${esc(fmtDate(l.date, '(no date)'))} ${l.trucker_name ? '· ' + esc(l.trucker_name) : ''} · ${l.id}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${fmtMoney(l.amount)}</div>
@@ -181,11 +247,7 @@ async function loadLoads() {
   const root = $('loadsList');
   root.innerHTML = '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Loading…</div>';
   try {
-    // GET /api/outbound-loads returns a bare array, matching /api/loads. It
-    // previously returned { loads: [...] }; accepting both keeps this page
-    // working if it is ever opened against an older server.
-    const res = await api('/api/outbound-loads');
-    const loads = Array.isArray(res) ? res : ((res && res.loads) || []);
+    const { loads } = await api('/api/outbound-loads');
     root.innerHTML = loads.length ? loads.map(loadCard).join('') : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No outbound loads yet.</div>';
     root.querySelectorAll('.btn-del-load').forEach((btn) => btn.addEventListener('click', async () => {
       if (!confirm('Delete this outbound load?')) return;
@@ -234,7 +296,8 @@ async function loadReport() {
     $('rptSummary').innerHTML = `<div style="color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;
   }
 }
-$('btnRptApply').addEventListener('click', () => { rptFrom = $('rptFrom').value; rptTo = $('rptTo').value; loadReport(); });
+$('btnRptApply').addEventListener('click', () => { rptFrom = toIsoDate($('rptFrom').value); rptTo = toIsoDate($('rptTo').value); loadReport(); });
+wireUsDateField('rptFrom'); wireUsDateField('rptTo'); wireUsDateField('lm_date');
 $('btnRptClear').addEventListener('click', () => { rptFrom = ''; rptTo = ''; $('rptFrom').value = ''; $('rptTo').value = ''; loadReport(); });
 
 // ── Add load modal ───────────────────────────────────────────────────────
@@ -284,7 +347,7 @@ $('btnInboundSearch').addEventListener('click', async () => {
     const { loads } = await api('/api/loads/lookup?q=' + encodeURIComponent(q));
     box.innerHTML = loads.length ? loads.map((l) => `
       <div style="display:flex; justify-content:space-between; padding:6px 10px; background:var(--surface-sunken); border-radius:var(--radius-xs); font-size:12px;">
-        <span>${esc(l.id)} — ${esc(l.seller || '')} · ${esc(l.date || '')} · ${fmtMoney(l.amount)}</span>
+        <span>${esc(l.id)} — ${esc(l.seller || '')} · ${esc(fmtDate(l.date))} · ${fmtMoney(l.amount)}</span>
         <button type="button" class="btn btn-secondary lm-link" data-id="${esc(l.id)}" style="padding:2px 8px; font-size:9px;">Link</button>
       </div>`).join('') : '<div style="font-size:11px; color:var(--text-faint);">No matches.</div>';
     box.querySelectorAll('.lm-link').forEach((b) => b.addEventListener('click', () => {
@@ -307,7 +370,7 @@ $('lmSave').addEventListener('click', async () => {
   })).filter((it) => it.description || it.gross_weight || it.price);
   const body = {
     buyer, buyer_address: $('lm_buyer_address').value.trim() || null,
-    date: $('lm_date').value || null, trucker_name: $('lm_trucker').value.trim() || null,
+    date: toIsoDate($('lm_date').value) || null, trucker_name: $('lm_trucker').value.trim() || null,
     description: $('lm_description').value.trim() || '',
     items, linked_inbound_load_ids: linkedInbound.map((l) => l.id),
   };
