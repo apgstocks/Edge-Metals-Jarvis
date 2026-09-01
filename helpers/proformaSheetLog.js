@@ -47,7 +47,12 @@
 //                        code][number]). This matches the real sheet's
 //                        per-row numbering exactly (one running number per
 //                        container), not one shared invoice number.
-//   Terms             <- payload.trade_terms
+//   Terms             <- payload.payment_term (e.g. "LC") — per Apsara,
+//                        2026-09-01: "in terms in sheet, i want payment
+//                        terms to be reflected there". This column used to
+//                        carry trade_terms (FOB/CIF); it no longer does.
+//                        Trade terms still appear on the PDF itself, they
+//                        are just not what this column tracks.
 //   Customer           <- first line of the buyer/consignee address block
 //                        (the company name shown on the PDF) — per
 //                        Apsara's explicit request; matches how this
@@ -549,9 +554,18 @@ function shortenContainerCodes(codes) {
 
 // body: the same payload POSTed to /api/proforma/generate — see the column
 // mapping notes at the top of this file for exactly where each value goes.
-async function logProformaToSheet(body) {
+//
+// Split out of logProformaToSheet so the row-shaping — which is where the
+// real decisions live (which Inv No. each container gets, what lands in
+// Terms) — can be tested without a Google Sheets round-trip. Returns
+// { rowGroups, rows }; rowGroups is what the uniqueness bump walks.
+function buildProformaRowGroups(body) {
     const consignee = (body.consignee_sheet_tag || body.consignee || '').trim();
-    const terms = (body.trade_terms || '').trim();
+    // Sheet's "Terms" column = PAYMENT terms ("LC", "T/T 100% ..."), not
+    // trade terms. Apsara, 2026-09-01. Falls back to the older field name
+    // only so a stale client that still posts `payment_terms` is not
+    // silently logged with an empty Terms column.
+    const terms = (body.payment_term || body.payment_terms || '').trim();
     const proformaDate = todayStr();
     const invDateCompact = (body.inv_date || '').replace(/-/g, '').slice(2); // "2026-08-19" -> "260819"
 
@@ -568,55 +582,59 @@ async function logProformaToSheet(body) {
     // scoping.
     const blankRow = () => Array(HEADER_ROW.length).fill('');
 
-    // ── Inv No. for a MULTI-CONTAINER proforma ──────────────────────────────
+    // ── Inv No. when a proforma covers SEVERAL containers ───────────────────
     //
-    // Apsara, 2026-08-22: "if more than one container in proforma-inv no
-    // should get appended as [date]_code_26JY96,26JY97 ETC.."
+    // Apsara, 2026-09-01: "while putting the entry in sheet, i want invoice no
+    // should be put as ... 260901_RC_26JY100 ... / ... 260901_RC_26JY101 ...",
+    // confirmed as "sheet per container, PDF combined".
     //
-    // A proforma is ONE invoice. When it covers several containers, it still
-    // has one number, and that number names every container on it:
-    //   260819_AC_26JY96,26JY97
-    // Previously each container was given its OWN number, so a single
-    // document split into several invoice identities on the sheet and
-    // downstream grouping (helpers/invoiceSheet.js groups rows by Inv No.)
-    // saw them as unrelated invoices.
+    // So the two surfaces deliberately differ, and that is not an
+    // inconsistency to be tidied up later:
+    //   PDF / form   — ONE combined number naming every container on the
+    //                  document: "260901_RC_26JY100,101". That is what the
+    //                  customer receives, and it is one document.
+    //   THIS SHEET   — one row per container, each carrying its OWN full
+    //                  number: "260901_RC_26JY100", "260901_RC_26JY101".
+    //                  The sheet is a per-container ledger (Container #,
+    //                  received amounts, freight, ETA are all per-container
+    //                  columns), so a shared number would make those columns
+    //                  unfillable.
     //
-    // Grouped by ITEM CODE rather than lumping every container together. Her
-    // format carries exactly one code, which only makes sense while the
-    // containers share one — the normal case, and then the result is exactly
-    // what she asked for. When a proforma genuinely mixes materials, forcing
-    // one number would have to pick a single code and silently misdescribe
-    // the rest: helpers/invoiceSheet.js's resolveItemDesc reads that code
-    // back out of the Inv No. to label the goods, so a wrong code becomes a
-    // wrong item description on a financial document. Separate numbers per
-    // material is the honest representation. A single-container proforma is
-    // simply a group of one and produces the identical string it always did.
-    const groups = new Map(); // itemCode(upper) -> { itemCode, codes[], containers[] }
+    // KNOWN CONSEQUENCE, accepted: helpers/invoiceSheet.js groups sheet rows
+    // by Inv No., so a five-container proforma now reads back as five rows
+    // rather than one. That IS the per-container ledger she keeps by hand,
+    // and it is the shape this file wrote before 2026-08-22. The combined
+    // form is still understood on the read side (invNoTailCodes expands
+    // "..._26JY100,101"), so old rows keep working.
+    //
+    // Grouping is per CONTAINER, but a container's several LINE ITEMS still
+    // share one number — that part of the 2026-08-22 fix is kept deliberately.
+    // Dropping it re-opens the real bug found that day: the uniqueness bump
+    // ran per row, so a container's second line item collided with its first
+    // and was bumped to a fabricated number that could belong to a genuinely
+    // different container. A repeated container_no is merged for the same
+    // reason rather than being allowed to collide.
+    const groups = new Map(); // invNo -> { invNo, containers[] }
     for (const container of (body.containers || [])) {
         const containerCode = (container.container_no || '').trim();
         const itemCode = (container.item_code || '').trim();
-        // Strip a glued item-code prefix so it is not repeated once per
-        // container in the joined list ("AC_26JY96,AC_26JY97"). Same
-        // double-prefix guard as before, just applied per code — an older
-        // client that still sends "AC_26JY19" therefore yields the identical
-        // Inv No. it always did.
+        // Strip a glued item-code prefix so it is not written twice
+        // ("260901_AC_AC_26JY96"). An older client that still sends
+        // "AC_26JY19" therefore yields the identical Inv No. it always did.
         const bare = (itemCode && containerCode.toUpperCase().startsWith(`${itemCode.toUpperCase()}_`))
             ? containerCode.slice(itemCode.length + 1)
             : containerCode;
-        const key = itemCode.toUpperCase();
-        if (!groups.has(key)) groups.set(key, { itemCode, codes: [], containers: [] });
-        const g = groups.get(key);
-        if (bare && !g.codes.includes(bare)) g.codes.push(bare); // de-dup a repeated container
-        g.containers.push(container);
+        const codeWithItem = itemCode && bare ? `${itemCode}_${bare}` : bare;
+        const invNo = codeWithItem ? `${invDateCompact}_${codeWithItem}`.trim() : (body.inv_no || '');
+        const key = invNo || `__blank_${groups.size}`;
+        if (!groups.has(key)) groups.set(key, { invNo, containers: [] });
+        groups.get(key).containers.push(container);
     }
 
-    // rowGroups keeps each group's rows together so the uniqueness check
-    // below can run ONCE per invoice rather than once per row.
+    // rowGroups keeps each container's rows together so the uniqueness check
+    // below runs ONCE per invoice number rather than once per row.
     const rowGroups = [];
     for (const g of groups.values()) {
-        const joined = shortenContainerCodes(g.codes);
-        const codeWithItem = g.itemCode && joined ? `${g.itemCode}_${joined}` : joined;
-        const invNo = joined ? `${invDateCompact}_${codeWithItem}`.trim() : (body.inv_no || '');
         const groupRows = [];
         for (const container of g.containers) {
             for (const item of (container.items || [])) {
@@ -624,7 +642,7 @@ async function logProformaToSheet(body) {
                 const desc = (item.desc || '').trim();
                 const row = blankRow();
                 row[0] = consignee;
-                row[1] = invNo;
+                row[1] = g.invNo;
                 row[8] = terms;
                 row[9] = customerName;
                 row[10] = proformaDate;
@@ -633,9 +651,13 @@ async function logProformaToSheet(body) {
                 groupRows.push(row);
             }
         }
-        if (groupRows.length) rowGroups.push({ invNo, rows: groupRows });
+        if (groupRows.length) rowGroups.push({ invNo: g.invNo, rows: groupRows });
     }
-    const rows = rowGroups.flatMap((g) => g.rows);
+    return { rowGroups, rows: rowGroups.flatMap((g) => g.rows) };
+}
+
+async function logProformaToSheet(body) {
+    const { rowGroups, rows } = buildProformaRowGroups(body);
 
     if (!rows.length) return { logged: 0 };
 
@@ -688,7 +710,7 @@ async function logProformaToSheet(body) {
 }
 
 module.exports = {
-    logProformaToSheet, shortenContainerCodes, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
+    logProformaToSheet, buildProformaRowGroups, shortenContainerCodes, HEADER_ROW, SHEET_FILE_NAME, TAB_NAME,
     getOrCreateSpreadsheetId, getSheets, ensureTab, upsertRowsByKey, renameHeaderCellIfMatches, clearRowFormatting,
     reorderColumnToPosition,
 };

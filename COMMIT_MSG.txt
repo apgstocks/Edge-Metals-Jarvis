@@ -1,0 +1,48 @@
+Fix "Ignore 1" -> "#undefined": indices was never in the AI data mapping
+
+LIVE, 1 Sep 11:30am. After a chase-up she typed "Ignore 1" and got:
+
+    I don't have a #undefined from a recent digest.
+
+"#undefined" is ignoreDigestItem printing (indices || [])[0], so the
+action ran with NO indices at all.
+
+ROOT CAUSE, and it is not the mute change I suspected. aiDecide maps the
+model's JSON onto `data` through an explicit field list — bkg_no,
+target_name, note, reply, city, term, apply, all, and a dozen more.
+`indices` is not on it and never has been. The prompt has told the model
+to return indices since the day ignore_digest_item was written, the model
+returns it correctly, and this mapping drops it on the floor. So EVERY
+ignore that reached the AI rather than the policy regex has been broken
+since it shipped, and printed "#undefined" at her.
+
+FIFTH TIME this codebase has been bitten by a field allowlist. saveStore's
+has silently eaten lastScanAt, sentIndex and failures, and nearly ate
+`muted` yesterday. Always the same shape: a list that must be edited in a
+second place whenever a field is added, and no error when it is not.
+Worth replacing with a pass-through — not in the same change as a live fix.
+
+Second, independent: ignoreDigestItem must never print "#undefined"
+whatever reaches it. With exactly one thing on the list, "ignore" can only
+mean that one, so it does it; with more, it asks which. Asking her to
+number a list of one is the friction she has objected to twice.
+
+REVERSE-VERIFICATION CAUGHT THE TWO FIXES MASKING EACH OTHER. S19d first
+used a one-item list, so the no-indices fallback rescued it and the test
+passed with the mapping bug reintroduced. With two items only a real
+`indices` can pick the second, and removing the mapping line now fails.
+
+S18n already covered "ignore 1" and passed — it only asserted no MUTE was
+created, never that the ignore resolved. Fourth time this session a test
+has passed while the thing it names was broken, and the first that
+reached her.
+
+Suite: simulate-user 51 passed, 0 failed.
+
+NOT MINE: tests/integration.js currently fails 10 in the working tree,
+from another session's in-flight proforma/sheet work. That same edit also
+overwrote the mute scan test committed in 191152f — restore it from there.
+The tree lease guards commits, not concurrent edits of one file.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt

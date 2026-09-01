@@ -1292,7 +1292,23 @@ async function assess(email) {
     // ASKED ('colleague', 'someone_else'), and only when the summary carries
     // no ask of its own — "provides X and asks for Y" keeps its asked_for,
     // because there really is one.
-    const DELIVERY_IN_SUMMARY = /\b(provides?|provided|sends?|sent|shares?|shared|attach(?:es|ed)?|submits?|submitted|forwards?|forwarded|encloses?|issued?|uploads?|uploaded)\b/i;
+    // WIDENED 2026-09-01, and the first version was the wrong abstraction.
+    // I wrote a list of DELIVERY verbs when the real category is broader:
+    // a message that CLOSES a loop rather than opening one. A live chase-up
+    // five days later showed the gap:
+    //
+    //   "RadMetals thanks Geethabose for releasing the booking and container.
+    //    — 5 days ago, 'Accounting Edge' still hasn't answered"
+    //
+    // A thank-you note. Nobody was asked anything, nothing is owed, and it
+    // had been chased every other day for five days. "thanks" was simply not
+    // on my verb list — which is what happens when you enumerate instead of
+    // naming the category.
+    //
+    // Two ways a message closes a loop: HANDING SOMETHING OVER (a delivery)
+    // and ACKNOWLEDGING (thanks, noted, receipt confirmed). Both mean the
+    // sender is finishing, not starting.
+    const DELIVERY_IN_SUMMARY = /\b(provides?|provided|sends?|sent|shares?|shared|attach(?:es|ed)?|submits?|submitted|forwards?|forwarded|encloses?|issued?|uploads?|uploaded|thanks?|thanked|thanking|acknowledges?|acknowledged|apologi[sz]es?|apologi[sz]ed|confirms receipt|confirming receipt)\b/i;
     const ASK_IN_SUMMARY = /\?|\b(asks?|asked|asking|wants?|needs?|requests?|requested|requires?|requesting|awaiting|chasing|reminder)\b/i;
     if (res.asked_for && (waiting_on === 'colleague' || waiting_on === 'someone_else')) {
         const summary = String(res.summary || '');

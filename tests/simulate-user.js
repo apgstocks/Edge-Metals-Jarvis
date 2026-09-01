@@ -580,6 +580,85 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
             JSON.stringify(after.muted));
     }
 
+    // 19. LIVE REGRESSION, 1 Sep 11:30am. After a chase-up she typed
+    //     "Ignore 1" and got:
+    //       "I don't have a #undefined from a recent digest."
+    //     "#undefined" is ignoreDigestItem printing (indices || [])[0] — so
+    //     the action ran with NO indices at all. S18n already covered "ignore
+    //     1" and passed, because it only asserted that no MUTE was created.
+    //     It never checked that the ignore itself resolved. Fourth time this
+    //     session a test has passed while the thing it names was broken, and
+    //     the first one that reached her.
+    {
+        require(R('helpers/context.js')).clearSession(MANAGER_CHAT);
+        require(R('helpers/context.js')).updateSession(MANAGER_CHAT, { menuContext: null, lastInstruction: null });
+        try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
+        const rw = require(R('workflow/replyWatch.js'));
+        const store = await rw.loadStore();
+        store.lastDigest = [{ id: 'z9', threadId: 'th-z9', from: 'joey@hynos.co.kr',
+            fromName: 'Joey', subject: 'Al combo order' }];
+        store.lastDigestAt = new Date().toISOString();
+        store.tracked = [{ id: 'z9', threadId: 'th-z9', from: 'joey@hynos.co.kr',
+            fromName: 'Joey', firstFlaggedAt: new Date().toISOString() }];
+        await rw.saveStore(store);
+
+        // ALL CAPS on purpose. She typed "Ignore 1" on 1 Sep at 11:30 and
+        // "IGNORE 1" again at 22:46 — the same failure, eleven hours apart,
+        // because the fix was never deployed. Casing is not the cause, and
+        // pinning it here stops that being re-litigated next time.
+        say('manager', 'IGNORE 1');
+        nextAIResponse = null;   // reaching the AI at all is the bug
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'IGNORE 1');
+        reply(r); dbg(r);
+        const said = r.replies.map((x) => x.text).join(' ');
+        ck('S19a "Ignore 1" is handled deterministically', !r.threw,
+            r.threw ? r.threw.message.slice(0, 140) : 'ok');
+        ck('S19b it never says "#undefined"', !/#undefined/.test(said), said.slice(0, 200));
+        ck('S19c and the item is actually dropped',
+            ((await rw.loadStore()).tracked || []).length === 0,
+            JSON.stringify((await rw.loadStore()).tracked));
+
+        // THE ACTUAL ROOT CAUSE, which the policy path hides. `indices` was
+        // never in aiDecide's data mapping, so every ignore that reached the
+        // AI instead of the regex arrived with indices undefined. This drives
+        // the AI path deliberately.
+        // TWO items on purpose. With one, the no-indices fallback below would
+        // rescue this and the assertion would pass with the mapping bug still
+        // present — the two fixes mask each other, which reverse-verification
+        // caught. With two, only a real `indices` can pick the second.
+        const store2 = await rw.loadStore();
+        store2.lastDigest = [
+            { id: 'z8a', threadId: 'th-z8a', from: 'a@hynos.co.kr', fromName: 'Joey', subject: 'first' },
+            { id: 'z8', threadId: 'th-z8', from: 'joey@hynos.co.kr', fromName: 'Joey', subject: 'Al combo' }];
+        store2.lastDigestAt = new Date().toISOString();
+        store2.tracked = [
+            { id: 'z8a', threadId: 'th-z8a', from: 'a@hynos.co.kr', fromName: 'Joey', firstFlaggedAt: new Date().toISOString() },
+            { id: 'z8', threadId: 'th-z8', from: 'joey@hynos.co.kr', fromName: 'Joey', firstFlaggedAt: new Date().toISOString() }];
+        await rw.saveStore(store2);
+        nextAIResponse = { action: 'ignore_digest_item', indices: ['2'], confidence: 0.9, reasoning: 'x' };
+        const r2 = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'get rid of the first one please');
+        reply(r2);
+        const said2 = r2.replies.map((x) => x.text).join(' ');
+        ck('S19d an ignore routed by the AI carries its indices through',
+            !/#undefined/.test(said2), said2.slice(0, 200));
+        const left = ((await rw.loadStore()).tracked || []).map((t) => t.id);
+        ck('S19e and drops the RIGHT one — the second, not whatever was first',
+            left.length === 1 && left[0] === 'z8a', JSON.stringify(left));
+
+        // And the belt-and-braces half: even with NO indices at all, a
+        // one-item list is unambiguous and must never print "#undefined".
+        const store3 = await rw.loadStore();
+        store3.lastDigest = [{ id: 'z7', threadId: 'th-z7', from: 'a@b.com', fromName: 'Someone', subject: 's' }];
+        store3.lastDigestAt = new Date().toISOString();
+        store3.tracked = [{ id: 'z7', threadId: 'th-z7', from: 'a@b.com', fromName: 'Someone', firstFlaggedAt: new Date().toISOString() }];
+        await rw.saveStore(store3);
+        const r3 = await actions.ignoreDigestItem(MANAGER_CHAT, undefined);
+        const said3 = sent.map((x) => x.text).join(' ');
+        ck('S19f no indices + a one-item list = do the obvious thing',
+            !/#undefined/.test(said3) && ((await rw.loadStore()).tracked || []).length === 0,
+            said3.slice(0, 200));
+    }
+
     console.log(`\n================================================================`);
     console.log(`${pass} passed, ${fail} failed`);
     if (fail) {

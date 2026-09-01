@@ -2435,6 +2435,24 @@ async function process(rawEvent, sendMessage) {
                 recipient_query: ai.recipient_query, details: ai.details,
                 city: ai.city, term: ai.term,
                 apply: ai.apply === true, all: ai.all === true,
+                // LIVE, 1 Sep 11:30am. She typed "Ignore 1" and got back
+                // "I don't have a #undefined from a recent digest."
+                //
+                // `indices` was never on this list. The AI prompt has told
+                // the model to return it since the day ignore_digest_item was
+                // written — the model was returning it correctly, and this
+                // mapping dropped it on the floor. So EVERY ignore that
+                // reached the AI rather than the policy regex was broken,
+                // always, and printed "#undefined" at her.
+                //
+                // FIFTH TIME this codebase has been bitten by a field
+                // allowlist. saveStore's has silently eaten lastScanAt,
+                // sentIndex and failures, and nearly ate `muted` yesterday.
+                // The pattern is always the same: a list that must be edited
+                // in a second place whenever a field is added, with no error
+                // when it is not. Worth replacing with a pass-through, but
+                // not in the same change as a live bug fix.
+                indices: ai.indices,
             },
         };
     }

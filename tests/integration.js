@@ -1,7 +1,34 @@
 // END-TO-END INTEGRATION TEST — run: node tests/integration.js
 //
-// Read-only. Runs anywhere, needs no API key and no writable data/ directory.
-// Exercises the REAL deployed modules, not copies.
+// Needs no API key and no network. Exercises the REAL deployed modules, not
+// copies.
+//
+// ⚠ BUG FIXED 2026-09-01 — READ THIS BEFORE TOUCHING THE FILE PATHS ⚠
+//
+// This header used to claim "Read-only... needs no writable data/ directory".
+// That was FALSE and it did real damage. Two sections (Inbox triage, WhatsApp
+// resilience) call fs.unlinkSync() on cfg.REPLY_WATCH_FILE and
+// managerOutbox.OUTBOX_FILE to get a clean slate — and with no DATA_DIR
+// override those resolve to the LIVE data/reply_watch.json and
+// data/manager_outbox.json.
+//
+// So every `node tests/integration.js` on the production box silently:
+//   • deleted Apsara's inbox-triage state — the seen-set, what was awaiting
+//     a reply, and the chase-up counters (chases restart at zero, so a
+//     customer already chased 3 times gets chased 3 more times);
+//   • deleted her queue of undelivered manager notifications; and
+//   • LEFT TEST FIXTURES BEHIND in that queue — "digest A", "chase B",
+//     "a thing" — which the running server then retried as if they were real
+//     messages, and would have emailed her as critical alerts.
+//
+// Confirmed against her live box on 2026-09-01: all three fixtures were
+// sitting in data/manager_outbox.json alongside a genuine customer alert.
+//
+// THE FIX: DATA_DIR is redirected to a throwaway temp directory on the FIRST
+// LINE below, before anything requires config.js (which reads it once, at
+// module load, and caches). The assertion under it fails the whole run if a
+// future edit ever lets a live path back in. Do not move either of them, and
+// do not require config above them.
 //
 // Built 2026-08-22 covering everything added that day: the pending arbiter,
 // spacing-tolerant name matching, and the three new MIT dependencies
@@ -13,9 +40,33 @@
 // is worth exactly nothing if nobody ever tests it — so it is tested here,
 // by forcing the requires to fail and re-running the same assertions.
 
+// ── MUST BE FIRST: redirect all data-file writes away from the live box ──
+const os = require('os');
+const fsBoot = require('fs');
+const pathBoot = require('path');
+const TEST_DATA_DIR = fsBoot.mkdtempSync(pathBoot.join(os.tmpdir(), 'jarvis-test-data-'));
+process.env.DATA_DIR = TEST_DATA_DIR;
+
 const assert = require('assert');
 const Module = require('module');
 const path = require('path');
+
+// Fail loudly rather than quietly eating her production state. config.js
+// resolves DATA_DIR exactly once at load, so if this ever points back at the
+// repo the override was defeated and the whole run must stop.
+{
+    const cfgBoot = require(path.join(__dirname, '..', 'config'));
+    const live = pathBoot.join(pathBoot.join(__dirname, '..'), 'data');
+    for (const [name, f] of [['REPLY_WATCH_FILE', cfgBoot.REPLY_WATCH_FILE],
+                             ['EMAIL_PROCESSED_FILE', cfgBoot.EMAIL_PROCESSED_FILE]]) {
+        if (!f) continue;
+        if (pathBoot.resolve(f).startsWith(pathBoot.resolve(live))) {
+            console.error(`\nREFUSING TO RUN: ${name} still points at the live data directory (${f}).`);
+            console.error('This suite deletes those files. See the header comment.');
+            process.exit(2);
+        }
+    }
+}
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -996,6 +1047,107 @@ section('Email surface — audit of edge cases (2026-08-22)');
     ckTrue('injected text sits inside the fence', p.indexOf('IGNORE ALL PREVIOUS') > p.indexOf(rw.FENCE) && p.indexOf('IGNORE ALL PREVIOUS') < p.indexOf(rw.FENCE_END));
     ckTrue('the prompt tells the model the fence is data', /never instructions to you/i.test(p));
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+section('Proforma → Edge Metals sheet — per-container rows, payment terms');
+// Apsara, 2026-09-01: the sheet gets ONE ROW PER CONTAINER, each with its own
+// full Inv No. ("260901_RC_26JY100", "260901_RC_26JY101"), and the Terms
+// column carries PAYMENT terms ("LC"), not trade terms. The PDF keeps the
+// combined short form — the two surfaces differ on purpose.
+//
+// This path had ZERO test coverage until now, which is indefensible for the
+// code that writes rows into a financial ledger. The row shaping was split
+// out of logProformaToSheet specifically so it could be asserted here without
+// touching Google Sheets.
+{
+    const psl = require(R('helpers/proformaSheetLog'));
+    const body = {
+        consignee_sheet_tag: 'Joey/Taewon',
+        payment_term: 'LC',
+        trade_terms: 'FOB',                       // deliberately different, must NOT win
+        inv_date: '2026-09-01',
+        consignee_address: ['TAEWON AUTOMOTIVE CO., LTD', 'Seoul, Korea'],
+        containers: [
+            { container_no: '26JY100',    item_code: 'RC', items: [{ desc: 'Regular combo', rate: 675 }] },
+            { container_no: 'RC_26JY101', item_code: 'RC', items: [{ desc: 'Regular combo', rate: 675 }] },
+        ],
+    };
+    const { rows, rowGroups } = psl.buildProformaRowGroups(body);
+
+    ck('two containers produce two rows', rows.length, 2);
+    ck('each container is its own invoice group', rowGroups.length, 2);
+    ck('first container gets its own full Inv No.',  rows[0][1], '260901_RC_26JY100');
+    ck('second container gets its own full Inv No.', rows[1][1], '260901_RC_26JY101');
+    // The glued form "RC_26JY101" must not become "260901_RC_RC_26JY101".
+    ckTrue('a container_no already carrying its item code is not double-prefixed',
+        !/RC_RC/.test(rows[1][1]));
+    ck('Terms column holds PAYMENT terms', rows[0][8], 'LC');
+    ckTrue('trade terms are NOT written into the Terms column',
+        rows.every((r) => r[8] !== 'FOB'));
+    ck('consignee tag', rows[0][0], 'Joey/Taewon');
+    ck('customer name is the first address line', rows[0][9], 'TAEWON AUTOMOTIVE CO., LTD');
+    ck('item description logged verbatim', rows[0][12], 'Regular combo');
+    ck('rate lands in Inv price', rows[0][14], 675);
+    ckTrue('every other column is left blank, not guessed',
+        rows[0].every((v, i) => [0, 1, 8, 9, 10, 12, 14].includes(i) || v === ''));
+
+    // The 2026-08-22 bug this must not re-open: a container with TWO line
+    // items must stay ONE invoice, or the uniqueness bump invents a number
+    // that can belong to a genuinely different container.
+    const twoItems = psl.buildProformaRowGroups({
+        ...body,
+        containers: [{ container_no: '26JY100', item_code: 'RC', items: [
+            { desc: 'Regular combo', rate: 675 }, { desc: 'Shred', rate: 300 },
+        ] }],
+    });
+    ck('a container with two line items yields two rows', twoItems.rows.length, 2);
+    ck('...but only ONE invoice group', twoItems.rowGroups.length, 1);
+    ck('...and both rows share one number', twoItems.rows[0][1], twoItems.rows[1][1]);
+
+    // A repeated container must merge, not collide — a collision would be
+    // silently bumped into a fabricated number downstream.
+    const dupe = psl.buildProformaRowGroups({
+        ...body,
+        containers: [
+            { container_no: '26JY100', item_code: 'RC', items: [{ desc: 'Regular combo', rate: 675 }] },
+            { container_no: '26JY100', item_code: 'RC', items: [{ desc: 'Regular combo', rate: 675 }] },
+        ],
+    });
+    ck('a repeated container_no stays one invoice group', dupe.rowGroups.length, 1);
+
+    // Mixed materials: each container keeps its own item code, so nothing is
+    // ever mislabelled by being forced under a single code.
+    const mixed = psl.buildProformaRowGroups({
+        ...body,
+        containers: [
+            { container_no: '26JY100', item_code: 'RC', items: [{ desc: 'Regular combo', rate: 675 }] },
+            { container_no: '26JY101', item_code: 'AL', items: [{ desc: 'Aluminium',     rate: 900 }] },
+        ],
+    });
+    ck('mixed materials keep their own codes', mixed.rows.map((r) => r[1]),
+        ['260901_RC_26JY100', '260901_AL_26JY101']);
+
+    // Fallbacks: a stale client posting the older field name, and a proforma
+    // with no container code at all.
+    ck('older payment_terms field still fills Terms',
+        psl.buildProformaRowGroups({ ...body, payment_term: '', payment_terms: 'T/T 30 days' }).rows[0][8],
+        'T/T 30 days');
+    ck('no container code falls back to the typed Inv No.',
+        psl.buildProformaRowGroups({ ...body, inv_no: 'MANUAL-1',
+            containers: [{ container_no: '', item_code: '', items: [{ desc: 'X', rate: 1 }] }] }).rows[0][1],
+        'MANUAL-1');
+    ck('a proforma with no items logs nothing',
+        psl.buildProformaRowGroups({ ...body, containers: [] }).rows.length, 0);
+
+    // The PDF side is unchanged: still the combined short form.
+    ck('PDF-side joining still shortens a run',
+        psl.shortenContainerCodes(['26JY100', '26JY101']), '26JY100,101');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Leave nothing behind. Best-effort: a leftover temp dir is harmless, and
+// failing the run over a cleanup hiccup would be worse than the mess.
+try { fsBoot.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch (e) { /* tmp reaper gets it */ }
 
 // ─────────────────────────────────────────────────────────────────────────
 console.log('\n========== SUMMARY ==========');

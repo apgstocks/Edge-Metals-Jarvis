@@ -3115,6 +3115,26 @@ async function ignoreDigestItem(chatId, indices, all = false) {
         indices = Array.from({ length: n }, (_, i) => String(i + 1));
     }
 
+    // NEVER SAY "#undefined". Live symptom of the mapping bug above: with no
+    // indices this printed `a #${(indices || [])[0]}` — undefined — which
+    // tells her nothing and reads as a crash.
+    //
+    // With exactly one thing on the list, "ignore" can only mean that one, so
+    // do it. The alternative is asking her to number a list of one, which is
+    // the friction she has objected to twice ("why should i say cancel?").
+    if (!indices || !indices.length) {
+        const store1 = await loadStore();
+        const list = store1.lastDigest || [];
+        if (list.length === 1) {
+            indices = ['1'];
+        } else {
+            await _send(chatId, list.length
+                ? `Which one? There are ${list.length} on the list — say "ignore 2", or "ignore all".`
+                : `Nothing on the list right now.`);
+            return { action_taken: 'digest_ignore_no_index' };
+        }
+    }
+
     const found = [], missing = [];
     for (const idx of indices || []) {
         let item = null;

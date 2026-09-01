@@ -460,6 +460,9 @@ body[data-theme="light"] {
         <button class="verify-subtab-btn active" data-verify-subtab="aj-transport">AJ Transport</button>
         <button class="verify-subtab-btn" data-verify-subtab="sher-trucking">Sher Trucking</button>
         <button class="verify-subtab-btn" data-verify-subtab="jio">Jio</button>
+        <button class="verify-subtab-btn" data-verify-subtab="ntg">NTG</button>
+        <button class="verify-subtab-btn" data-verify-subtab="tql">TQL</button>
+        <button class="verify-subtab-btn" data-verify-subtab="schneider">Schneider</button>
       </div>
       <div id="verifyPanelAjTransport">
         <div class="section-label" style="margin-top:0;">Upload AJ Transport invoices</div>
@@ -586,6 +589,28 @@ body[data-theme="light"] {
           </div>
         </div>
       </div>
+      <!-- ── NTG / TQL / Schneider ────────────────────────────────────────
+           Added 2026-09-01 per Apsara: "add a new tabs like NTG,TQL,
+           Schenider in transport".
+
+           Deliberately INERT until a real invoice from each has been read.
+           Every working carrier tab here is built on an extractor tuned to
+           that carrier's exact invoice layout — Jio's "W/O Ref" container
+           field, AJ's "Dry Run" and "Extra Scale" charge lines, Sher's
+           booking-quantity column. Writing those blind produces a tab that
+           looks finished and quietly mis-reads money on a reconciliation
+           screen, which is worse than an obviously-unfinished tab. The
+           routing, buttons and panels are real; the parsing waits for a
+           sample. -->
+      <div id="verifyPanelNtg" class="hidden">
+        <div class="placeholder-note">NTG verification isn't wired up yet — send me one NTG invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
+      </div>
+      <div id="verifyPanelTql" class="hidden">
+        <div class="placeholder-note">TQL verification isn't wired up yet — send me one TQL invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
+      </div>
+      <div id="verifyPanelSchneider" class="hidden">
+        <div class="placeholder-note">Schneider verification isn't wired up yet — send me one Schneider invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
+      </div>
     </div>
 
     <!-- ── Commission ──────────────────────────────────────────────────── -->
@@ -675,7 +700,21 @@ body[data-theme="light"] {
         <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type in the material(s) for this container — quantity defaults to 21 MT, edit it if this container's different.</div>
         <div id="pfWizItemsEditor" style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>
         <button id="btnPfWizAddItem" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px; margin-bottom:14px;">+ Add material</button>
-        <div class="field" style="max-width:220px;"><label>How many containers/loads?</label><input id="pfWiz_containerCount" type="number" min="1" value="1"></div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <div class="field" style="max-width:220px;"><label>How many containers/loads?</label><input id="pfWiz_containerCount" type="number" min="1" value="1"></div>
+          <!-- Apsara, 2026-09-01: "in addition to material asking in proforma,
+               i want payment terms should be asked from user. after input
+               reflect that in payment terms". Asked here rather than on the
+               price step because it belongs with the deal terms, and because
+               this value now also drives the Terms column of the Edge Metals
+               sheet (see helpers/proformaSheetLog.js) — it is no longer a
+               PDF-only field. -->
+          <div class="autocomplete-box" style="flex:1; min-width:260px;">
+            <div class="field"><label>Payment terms</label>
+              <input id="pfWiz_payment_term" placeholder="e.g. LC, or T/T 100% Against Shipping Documents" autocomplete="off"></div>
+            <div id="pfWizPayTermList" class="autocomplete-list hidden"></div>
+          </div>
+        </div>
         <div style="display:flex; justify-content:space-between; margin-top:10px;"><button id="btnPfWiz2Back" type="button" class="btn btn-secondary">Back</button><button id="btnPfWiz2Next" type="button" class="btn btn-primary">Next</button></div>
       </div>
 
@@ -819,12 +858,13 @@ const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyG
 // in sync with each group's row of .verify-subtab-btn buttons above.
 const VERIFY_GROUP_SUBTABS = {
   freight: ['zimex'],
-  transport: ['aj-transport', 'sher-trucking', 'jio'],
+  transport: ['aj-transport', 'sher-trucking', 'jio', 'ntg', 'tql', 'schneider'],
   commission: ['joey', 'pan-metal'],
 };
 const VERIFY_SUBTAB_PANELS = {
   zimex: 'verifyPanelZimex',
   'aj-transport': 'verifyPanelAjTransport', 'sher-trucking': 'verifyPanelSherTrucking', 'jio': 'verifyPanelJio',
+  ntg: 'verifyPanelNtg', tql: 'verifyPanelTql', schneider: 'verifyPanelSchneider',
   joey: 'verifyPanelJoey', 'pan-metal': 'verifyPanelPanMetal',
 };
 function setVerifyGroup(name) {
@@ -1558,12 +1598,81 @@ function toIsoDate(v) {
 function wireUsDateField(id) {
   const el = typeof id === 'string' ? $(id) : id;
   if (!el) return;
+  if (el.dataset.usDateWired === '1') return;   // resetWizard() calls this on every Proforma tab open
+  el.dataset.usDateWired = '1';
   el.addEventListener('blur', () => {
     const iso = toIsoDate(el.value);
     if (!iso) return;
     const [y, m, d] = iso.split('-');
     el.value = `${m}/${d}/${y}`;
   });
+  attachDatePicker(el);
+}
+
+// ── Calendar picker on a MM/DD/YYYY text field ────────────────────────────
+// Apsara, 2026-09-01: "date should have picker".
+//
+// Why not just switch these to <input type="date">: a native date input
+// renders in the BROWSER's locale, not a format we choose. On her Mac today
+// that happens to be MM/DD/YYYY, but it is not guaranteed, and she has asked
+// three separate times for MM/DD/YYYY specifically ("wherever date
+// applicable it should be mm/dd/yyyy only"). A locale change, a different
+// machine, or a colleague's laptop would silently start showing DD/MM/YYYY
+// on invoice dates — the exact ambiguity that makes 09/01 vs 01/09 a real
+// commercial problem on an export document.
+//
+// So the visible field stays a text input we fully control, and a hidden
+// native date input is attached purely to supply the calendar UI. Picking a
+// date writes MM/DD/YYYY back into the text field; typing into the text
+// field keeps working exactly as before. If the browser has no showPicker()
+// the button falls back to focusing the hidden input, and if even that does
+// nothing the field is still typeable — the picker is additive, it never
+// becomes the only way in.
+function attachDatePicker(el) {
+  const wrap = el.parentElement;
+  if (!wrap) return;
+  if (getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+  el.style.paddingRight = '32px';   // keep typed text clear of the button
+
+  const native = document.createElement('input');
+  native.type = 'date';
+  // Kept in the DOM (not display:none) because showPicker() refuses to open
+  // for an element that isn't rendered. Zero-sized and pinned under the
+  // button instead, so the popup anchors where the button is.
+  native.style.cssText = 'position:absolute; right:8px; bottom:8px; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none;';
+  native.tabIndex = -1;
+  native.setAttribute('aria-hidden', 'true');
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '\u{1F4C5}';
+  btn.title = 'Pick a date';
+  btn.style.cssText = 'position:absolute; right:4px; bottom:4px; width:24px; height:26px; padding:0; background:none; border:0; cursor:pointer; font-size:13px; line-height:1; opacity:.65;';
+  btn.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
+  btn.addEventListener('mouseleave', () => { btn.style.opacity = '.65'; });
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    // Open on whatever is currently typed, so the calendar lands on the
+    // right month instead of today when she is correcting an old date.
+    native.value = toIsoDate(el.value) || '';
+    try { native.showPicker(); }
+    catch (err) { try { native.focus(); native.click(); } catch (e2) { /* typing still works */ } }
+  });
+
+  native.addEventListener('change', () => {
+    if (!native.value) return;
+    const [y, m, d] = native.value.split('-');
+    el.value = `${m}/${d}/${y}`;
+    // Anything listening for edits on this field (nothing today, but the
+    // Inv No. retrofit and pricing lookups all hang off input/change
+    // elsewhere) must see a picked date the same as a typed one.
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+
+  wrap.appendChild(native);
+  wrap.appendChild(btn);
 }
 
 // ── Item-description autocomplete ─────────────────────────────────────────
@@ -1693,9 +1802,30 @@ async function preloadCustomerDescs(customer) {
   try {
     const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(name));
     window._pfCustomerDescs = (info && info.items) ? Object.keys(info.items) : [];
+    // Payment terms too, now that the wizard asks for them a step later.
+    // Still read-only with respect to the FULL form — nothing here touches
+    // #pf_payment_term; that stays lookupPricingMemory's job at hand-off, so
+    // the wizard cannot populate the form from behind itself.
+    window._pfMemoryPaymentTerms = (info && info.payment_terms) || '';
+    applyWizPaymentTermMemory();
   } catch (e) {
     window._pfCustomerDescs = []; // unknown customer — the generic list still applies
+    window._pfMemoryPaymentTerms = '';
   }
+}
+
+// Fills the wizard's payment-terms box from what this customer was last
+// invoiced on — but only while she has not typed in it. Fired from the
+// lookup's completion rather than on step entry because the lookup is
+// deliberately not awaited (see btnPfWiz1Next): the step must open instantly
+// even when the network is slow, so the remembered value arrives after.
+function applyWizPaymentTermMemory() {
+  const el = $('pfWiz_payment_term');
+  if (!el || !window._pfMemoryPaymentTerms) return;
+  if (el.dataset.dirty === '1') return;
+  const cur = el.value.trim();
+  if (cur && cur !== PF_PAYMENT_TERM_DEFAULT) return;
+  el.value = window._pfMemoryPaymentTerms;
 }
 
 // ── Pricing memory auto-fill ──────────────────────────────────────────────
@@ -2044,8 +2174,11 @@ async function lookupPricingMemory(customer) {
     // anything she has actually typed is left alone. Apsara, 2026-08-22:
     // "PORT OF DISCHARGE, TRADE TERMS, PAYMENT TERMS SHOULD BE AUTO
     // POPULATED."
+    // ...unless the wizard just asked her for it on this proforma, in which
+    // case her answer is the more recent fact and memory must not clobber it.
     const payEl = $('pf_payment_term');
-    if (info.payment_terms && payEl && (!payEl.value.trim() || payEl.value.trim() === PF_PAYMENT_TERM_DEFAULT)) {
+    if (info.payment_terms && payEl && !window._pfPaymentTermFromWizard
+        && (!payEl.value.trim() || payEl.value.trim() === PF_PAYMENT_TERM_DEFAULT)) {
         payEl.value = info.payment_terms;
     }
     window._pfLastPricing = info;
@@ -2178,14 +2311,23 @@ $('btnAddContainer').addEventListener('click', () => addContainer());
 // 21 MT just ask user to enter the material") that's gone — now it's one
 // freeform material step defaulting every new row to 21 MT, always
 // editable, no material-specific branching.
-const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount: 1 };
+const pfWiz = { consignee: null, consigneeEntry: null, items: [], containerCount: 1, paymentTerm: '' };
 
 function resetWizard() {
   pfWiz.consignee = null; pfWiz.consigneeEntry = null; pfWiz.items = []; pfWiz.containerCount = 1;
+  pfWiz.paymentTerm = '';
+  window._pfPaymentTermFromWizard = false;
   pfNextContainerCode = null; // don't carry a previous consignee's number sequence into a new proforma
   window._pfConsigneeSheetTag = null;
   $('pfWiz_consignee').value = '';
   $('pfWiz_containerCount').value = '1';
+  // Starts on the house default and is NOT marked dirty, so this customer's
+  // remembered terms can still replace it once the lookup lands — the moment
+  // she types anything, the dirty flag stops both that and the full form's
+  // own auto-fill from overwriting her.
+  $('pfWiz_payment_term').value = PF_PAYMENT_TERM_DEFAULT;
+  delete $('pfWiz_payment_term').dataset.dirty;
+  $('pfWizPayTermList').classList.add('hidden');
   $('pfWizConsigneeList').classList.add('hidden');
   $('pfWizard').classList.remove('hidden');
   $('pfFullForm').classList.add('hidden');
@@ -2274,6 +2416,54 @@ $('btnPfWizAddItem').addEventListener('click', () => {
   pfWiz.items.push({ desc: '', qty: 21, rate: 0 });
   renderWizItemsEditor();
 });
+
+// Payment-terms suggestions. The customer's own remembered terms come first
+// and are marked as such; the rest are the standard shapes, offered purely
+// to save typing. Nothing is ever auto-selected and the box is a plain text
+// input — anything not on this list is typed and used as-is.
+const PF_PAY_TERM_SUGGESTIONS = [
+  'LC',
+  'LC at sight',
+  'T/T 100% Against Shipping Documents',
+  'T/T 30% advance, 70% against shipping documents',
+  'DP (Documents against Payment)',
+  'DA (Documents against Acceptance)',
+];
+function renderWizPayTermList() {
+  const el = $('pfWiz_payment_term');
+  const box = $('pfWizPayTermList');
+  const q = el.value.trim().toLowerCase();
+  const remembered = (window._pfMemoryPaymentTerms || '').trim();
+  const seen = new Set();
+  const list = [];
+  if (remembered) { list.push({ v: remembered, tag: 'last used for this customer' }); seen.add(remembered.toLowerCase()); }
+  for (const v of PF_PAY_TERM_SUGGESTIONS) {
+    if (seen.has(v.toLowerCase())) continue;
+    seen.add(v.toLowerCase());
+    list.push({ v, tag: '' });
+  }
+  const shown = list.filter((x) => !q || x.v.toLowerCase().includes(q)).slice(0, 6);
+  if (!shown.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.innerHTML = shown.map((x, i) =>
+    `<div class="autocomplete-item" data-i="${i}">${esc(x.v)}${x.tag ? ` <span style="color:var(--text-faint); font-size:10px;">— ${esc(x.tag)}</span>` : ''}</div>`).join('');
+  box.classList.remove('hidden');
+  box.querySelectorAll('.autocomplete-item').forEach((node) => node.addEventListener('mousedown', (e) => {
+    // Same mousedown/preventDefault as every other dropdown here — a click
+    // handler fires after blur has already hidden the list.
+    e.preventDefault();
+    const picked = shown[Number(node.dataset.i)];
+    if (!picked) return;
+    el.value = picked.v;
+    el.dataset.dirty = '1';
+    box.classList.add('hidden');
+  }));
+}
+$('pfWiz_payment_term').addEventListener('input', () => {
+  $('pfWiz_payment_term').dataset.dirty = '1';
+  renderWizPayTermList();
+});
+$('pfWiz_payment_term').addEventListener('focus', () => renderWizPayTermList());
+$('pfWiz_payment_term').addEventListener('blur', () => setTimeout(() => $('pfWizPayTermList').classList.add('hidden'), 150));
 $('btnPfWiz2Back').addEventListener('click', () => showWizStep(1));
 $('btnPfWiz2Next').addEventListener('click', async () => {
   // read back whatever was edited on this step before moving on
@@ -2285,6 +2475,9 @@ $('btnPfWiz2Next').addEventListener('click', async () => {
   })).filter((it) => it.desc);
   if (!pfWiz.items.length) return;
   pfWiz.containerCount = Math.max(1, parseInt($('pfWiz_containerCount').value, 10) || 1);
+  // Blank is allowed and means "leave the form's own default alone" — this
+  // step must never be able to wipe Payment Terms off the PDF.
+  pfWiz.paymentTerm = $('pfWiz_payment_term').value.trim();
   await renderWizPriceEditor();
   showWizStep(3);
 });
@@ -2323,6 +2516,16 @@ $('btnPfWiz3Finish').addEventListener('click', () => {
   window._pfConsigneeSheetTag = pfWiz.consigneeEntry ? ((pfWiz.consigneeEntry.aliases || []).join('/') || pfWiz.consignee) : null;
   $('pfContainers').innerHTML = '';
   for (let i = 0; i < pfWiz.containerCount; i++) addContainer(pfWiz.items.map((it) => ({ ...it })));
+  // Payment terms she was asked for on step 2 land on the real field here —
+  // "after input reflect that in payment terms". Set BEFORE
+  // lookupPricingMemory() and flagged, because that function also fills this
+  // field from memory and would otherwise race: it overwrites whenever the
+  // field still reads as the untouched default, and "LC" typed on step 2
+  // could be replaced a moment later by whatever the last invoice used. Her
+  // answer on this proforma wins over the remembered one.
+  if (pfWiz.paymentTerm) $('pf_payment_term').value = pfWiz.paymentTerm;
+  window._pfPaymentTermFromWizard =
+    !!pfWiz.paymentTerm && pfWiz.paymentTerm !== PF_PAYMENT_TERM_DEFAULT;
   lookupPricingMemory(pfWiz.consignee || '');
 
   $('pfWizard').classList.add('hidden');
@@ -2330,6 +2533,7 @@ $('btnPfWiz3Finish').addEventListener('click', () => {
 });
 
 $('btnPfWizSkip').addEventListener('click', () => {
+  window._pfPaymentTermFromWizard = false; // never answered — memory may fill it
   $('pfWizard').classList.add('hidden');
   $('pfFullForm').classList.remove('hidden');
   if (!$('pfContainers').children.length) addContainer();

@@ -1885,6 +1885,50 @@ section('X2 — the label rows carry no mailbox content into the feature set');
         !('body' in sample) && !('thread' in sample) && !('to' in sample));
 }
 
+// ══ Y. a thank-you is not an obligation ════════════════════════════════════
+// LIVE chase-up, 1 Sep, five days running:
+//   "RadMetals thanks Geethabose for releasing the booking and container.
+//    — 5 days ago, 'Accounting Edge' still hasn't answered"
+// Nobody was asked anything. It is a courtesy note, and it had been chased
+// every other day for five days. My delivery guard from 31 Aug listed verbs
+// (provides/sends/attaches) instead of naming the category — a message that
+// CLOSES a loop rather than opening one — so "thanks" fell straight through.
+section('Y1 — a courtesy note carries no outstanding ask');
+{
+    const COURTESY = {
+        from: 'RadMetals <radmetals@radmetals.com>', subject: 'RE: booking release',
+        to: 'accounts@edgemetals.com', cc: 'apsara@edgemetals.com',
+        myAddress: 'bose@edgemetals.com', managerAddress: 'apsara@edgemetals.com',
+        body: 'Thank you for releasing the booking and the container, we appreciate it. '.repeat(4)
+            + 'Please let us know if anything else is needed.',
+        thread: '- Accounting: released the booking\n- RadMetals: thank you\n',
+        attachments: [],
+    };
+    for (const [name, summary] of [
+        ['thanks',       'RadMetals thanks Geethabose for releasing the booking and container.'],
+        ['acknowledges', 'RadMetals acknowledges the container release.'],
+        ['apologises',   'RadMetals apologises for the earlier confusion on the release.'],
+    ]) {
+        AI = { waiting_on: 'someone_else', needs_reply: false, confidence: 1, urgency: 'normal',
+            summary, asked_of: 'Accounting Edge', asked_for: 'the booking release',
+            asked_for_quote: 'Please let us know if anything else is needed',
+            key_figures: [], deadline: null };
+        const a = await rw.assess({ ...COURTESY });
+        ck(`[${name}] the invented ask is dropped`, a.asked_for === null, String(a.asked_for));
+    }
+
+    // AND THE HALF THAT MUST SURVIVE. "Thanks — now please send X" is a real
+    // request wearing a polite opener, and it is most of freight correspondence.
+    AI = { waiting_on: 'colleague', needs_reply: false, confidence: 1, urgency: 'normal',
+        summary: 'RadMetals thanks the team and asks Accounting to send the release confirmation.',
+        asked_of: 'Accounting Edge', asked_for: 'the release confirmation',
+        asked_for_quote: 'Please let us know if anything else is needed',
+        key_figures: [], deadline: null };
+    const still = await rw.assess({ ...COURTESY });
+    ck('a thanks WITH an ask keeps the ask', still.asked_for === 'the release confirmation', String(still.asked_for));
+    ck('and stays a team item', rw.isColleagueItem(still) === true);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
