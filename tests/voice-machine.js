@@ -432,7 +432,26 @@ function violations(state) {
     // workflow/brain.js, which messages truckers and suppliers for real, so an
     // always-on microphone is not a default capability.
     ck('there is a single voiceAllowed() gate', /function voiceAllowed\(\)/.test(html));
-    ck('  and it is admin-only', /function voiceAllowed\(\)\s*\{\s*return ROLE === 'admin'/.test(html));
+    ck('  and it is admin-only', /function voiceAllowed\(\)\s*\{\s*return VOICE_UI_ENABLED && ROLE === 'admin'/.test(html));
+
+    // ── SHIPPED OFF ───────────────────────────────────────────────────────
+    // Apsara 2026-09-01: "remove the audio option in app" → "the mic button —
+    // hide it for now".
+    //
+    // These assertions pin the SHIPPED DEFAULT, which is the thing that can
+    // drift silently. The voice machinery below is all still tested (the e2e
+    // harness flips the flag on to exercise it), so without these the suite
+    // would go on proving voice works while the app ships with it off —
+    // exactly the "green test, dead feature" failure this project already had
+    // once. If the flag ever flips back on by accident, this fails.
+    ck('voice ships OFF by one boolean, not by deletion',
+       /const VOICE_UI_ENABLED = false;/.test(html));
+    ck('  the wake engine is gated on it too, not just the button',
+       /function usingPorcupine\(\)\s*\{\s*return voiceAllowed\(\)/.test(html));
+    ck('  and the machinery is still present, not ripped out',
+       /async function startWakeLoop\(\)/.test(html)
+       && /async function startPorcupine\(\)/.test(html)
+       && /function wireVoiceUI\(\)/.test(html));
     ck('the wake loop itself refuses for non-admins',
        /async function startWakeLoop\(\)[\s\S]{0,400}if \(!voiceAllowed\(\)\) return;/.test(html));
     ck('the button is hidden rather than shown-and-broken',

@@ -1386,6 +1386,44 @@ async function resumeDraft(id) {
 // Same helper, same wording, same rules. The website copy is the reference;
 // if these two ever disagree about what "part paid" means, the number on a
 // phone and the number on a laptop stop matching for the same load.
+// ── which of Delete / Pay a load still deserves ───────────────────────────
+// Per Apsara 2026-09-01: "delete should not be there for partial and full
+// payment ... once full payment is done - remove pay option."
+//
+// Both read the SERVER's payment summary (GET /api/loads attaches
+// `payment` from helpers/payments.paymentSummary) rather than recomputing
+// paid/pending here. One place owns the arithmetic; a card cannot disagree
+// with a ticket about whether something is settled.
+//
+// THESE ARE UI GUARDS, NOT SECURITY. DELETE /api/loads/:id and
+// POST /api/payments both still work exactly as before — deliberately.
+// Hiding a button is the right way to stop a mistake; removing a route is a
+// breaking API change, and the server is also what the yard assistant and
+// the tests talk to.
+//
+// The escape hatch is intentional and worth knowing: delete the PAYMENT
+// first (the Pay sheet lists them, each with its own remove), and the load
+// becomes deletable again. Money entered against a load has to be
+// unwound before the load itself can go — which is the correct order anyway.
+function loadIsDeletable(l) {
+  const p = l && l.payment;
+  return !(p && Number(p.paid) > 0);
+}
+
+// Payable while anything is outstanding. Note the two edge cases:
+//   - `overpaid` — already MORE than settled, so no Pay. If she needs to
+//     correct an overpayment the fix is removing the wrong payment, not
+//     adding another.
+//   - `paid_amount_unknown` — a load with no priced items has no total to
+//     settle against, so "is it fully paid" has no answer. Pay stays, since
+//     hiding it would strand a real load with no way to record money
+//     against it.
+function loadIsPayable(l) {
+  const p = l && l.payment;
+  if (!p) return true;
+  return p.status !== 'paid' && p.status !== 'overpaid';
+}
+
 function paymentBadgeHtml(l) {
   const p = l && l.payment;
   if (!p || !p.paid) return '';
@@ -2967,6 +3005,15 @@ function loadCardHtml(l) {
         <span>Gross weight: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span>Tare weight: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <!-- Amount — per Apsara 2026-09-01 ("add invoice amount in grid box
+             in addition to gross,tare,net"). Same server-computed total the
+             ticket and the Pay sheet use (l.amount, summed from priced items
+             in helpers/loads.js), formatted by the shared fmtAmount so it
+             carries the $ and two decimals like everywhere else.
+             An em-dash when there is no total, NOT $0.00: a load whose items
+             have no price yet is worth "not priced", and printing $0.00
+             would read as "worth nothing", which is a different claim. -->
+        <span style="font-weight:700; color:var(--text-strong);">Amount: ${l.amount != null && fmtAmount(l.amount) ? esc(fmtAmount(l.amount)) : '—'}</span>
       </div>
       ${paymentBadgeHtml(l)}
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
@@ -3033,10 +3080,11 @@ function loadCardHtml(l) {
              (still requireAdmin-gated) — deliberately left there rather
              than deleted, since removing a route is a breaking API
              change and nothing in this app calls it anymore anyway. -->
-        <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+        ${loadIsDeletable(l) ? `<button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>` : ''}
         <!-- Pay, mirroring the website (2026-08-28). Sits with Edit/Delete
-             because it is something done TO an existing load. -->
-        <button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Pay</button>
+             because it is something done TO an existing load. Disappears once
+             there is nothing left to pay — see loadIsPayable. -->
+        ${loadIsPayable(l) ? `<button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Pay</button>` : ''}
       </div>
     </div>`;
 }
@@ -3092,10 +3140,40 @@ function filterLoads(loads, query) {
 // extra JS — with only the FIRST (most recent) group open by default once
 // there's more than one, per Apsara's "expand based on dates" once the deck
 // has more cards than fits comfortably on one screen.
-function loadDeckSectionsHtml(loads, emptyMsg) {
+// opts.flat renders ONE grid instead of per-date sections.
+//
+// Per Apsara 2026-09-01: "on filtering of load by say, seller - it should not
+// group by date." The date sections exist to make a particular day findable
+// in a long deck — but once you have searched for a seller you are no longer
+// looking for a day, you are looking at that seller's loads, and splitting
+// six results across five collapsed date headers hides four of them behind a
+// disclosure triangle. (Only the FIRST section renders open.) So a search
+// result is a flat, newest-first list.
+//
+// The unfiltered deck keeps its date sections — that view genuinely is
+// "what happened when".
+function loadDeckSectionsHtml(loads, emptyMsg, opts) {
+  const flat = !!(opts && opts.flat);
+  const empty = `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
+
+  if (flat) {
+    const rows = (loads || []).slice().sort((a, b) => {
+      // Newest first, undated last — the same ordering groupLoadsByDate
+      // produces, just without the headings.
+      const ad = a && a.date ? a.date : '';
+      const bd = b && b.date ? b.date : '';
+      if (!ad && !bd) return 0;
+      if (!ad) return 1;
+      if (!bd) return -1;
+      return bd.localeCompare(ad);
+    });
+    if (!rows.length) return empty;
+    return `<div class="load-deck-grid">${rows.map(loadCardHtml).join('')}</div>`;
+  }
+
   const groups = groupLoadsByDate(loads);
   if (!groups.length) {
-    return `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
+    return empty;
   }
   return groups.map((g, i) => `
     <details class="load-date-section" ${i === 0 ? 'open' : ''}>
@@ -3783,8 +3861,12 @@ function wireLoadsEvents() {
   const searchInput = $('loadSearch');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
+      const q = String(searchInput.value || '').trim();
       const filtered = filterLoads(loadsCache, searchInput.value);
-      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.');
+      // flat ONLY while there is something typed. Clearing the box has to
+      // put the date sections back, or the grouping would be gone for good
+      // after the first search until the tab is reloaded.
+      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.', { flat: !!q });
       wireDeckEvents();
     });
   }
@@ -6366,7 +6448,11 @@ function setPorcupineKey(k) {
 
 // True when the real engine is available AND configured. Everything else in
 // the app branches on this: when it is true the old loop must never start.
-function usingPorcupine() { return !!wakePlugin() && !!porcupineKey(); }
+// voiceAllowed() is checked here, not just at the button, because this
+// function is what the boot path and the state machine's START_MIC effect
+// consult to decide whether to open the microphone. With voice off it must
+// answer no, or the engine starts with no way to see or stop it.
+function usingPorcupine() { return voiceAllowed() && !!wakePlugin() && !!porcupineKey(); }
 
 let porcupineOn = false;
 
@@ -7509,7 +7595,24 @@ function renderVoiceButton() {
 // The staff role is already blocked server-side from /api/voice/* by the
 // prefix allowlist in api.js; this is the client half, so the button is not
 // even shown to someone who cannot use it.
-function voiceAllowed() { return ROLE === 'admin'; }
+// ── voice switched OFF at the front door ──────────────────────────────────
+// Per Apsara 2026-09-01: "remove the audio option in app" — clarified as
+// "the mic button — hide it for now".
+//
+// This is ONE boolean, not a deletion. Every line of the voice work is still
+// here: the state machine, the Porcupine plugin, the Gemini TTS route, the
+// tests. Flipping this back to true restores all of it. Deleting it would
+// throw away a day of native plugin work to satisfy a "for now".
+//
+// It gates MORE than the button, deliberately. Hiding the button while
+// leaving the wake word armed would be the worst of both: the microphone
+// still opens on app start, but the only visible indicator that it is
+// listening — and the long-press that turns it off — are both gone. An
+// invisible hot mic in a shared yard phone is not "hidden", it is a
+// liability. So the flag turns the whole capability off, and the UI with it.
+const VOICE_UI_ENABLED = false;
+
+function voiceAllowed() { return VOICE_UI_ENABLED && ROLE === 'admin'; }
 
 function wireVoiceUI() {
   const b = $('btnVoice');

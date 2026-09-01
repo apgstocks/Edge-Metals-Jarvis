@@ -3191,6 +3191,16 @@ function loadCardHtml(l) {
         <span>Gross weight: ${l.gross_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span>Tare weight: ${l.tare_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
+        <!-- Amount — per Apsara 2026-09-01 ("add invoice amount in grid box
+             in addition to gross,tare,net"). Same server-computed total the
+             ticket uses (l.amount, summed from priced items in
+             helpers/loads.js), formatted by the shared fmtAmount so it
+             carries the $ and two decimals like everywhere else.
+             An em-dash when there is no total, NOT $0.00: a load whose items
+             have no price yet is worth "not priced", and printing $0.00
+             would read as "worth nothing", which is a different claim.
+             Mirrors mobile-app/www/index.html. -->
+        <span style="font-weight:700; color:var(--text-strong);">Amount: ${l.amount != null && fmtAmount(l.amount) ? esc(fmtAmount(l.amount)) : '—'}</span>
       </div>
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
@@ -3228,9 +3238,37 @@ function loadCardHtml(l) {
              requireAdmin-gated), deliberately left rather than deleted:
              removing a route is a breaking API change and nothing calls
              it anymore anyway. -->
-        <button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+        ${loadIsDeletable(l) ? `<button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>` : ''}
       </div>
     </div>`;
+}
+
+// ── a load with money against it is not deletable ─────────────────────────
+// Per Apsara 2026-09-01: "delete should not be there for partial and full
+// payment."
+//
+// Reads the SERVER's payment summary (GET /api/loads attaches `payment`
+// from helpers/payments.paymentSummary) rather than recomputing paid/pending
+// here. One place owns the arithmetic.
+//
+// Applied on the WEBSITE too, even though payments are only *recorded* in
+// the mobile app. If it were mobile-only, a desktop admin could delete a
+// load the phone refuses to — the same record, two answers. The rule belongs
+// to the load, not to the client that happens to be showing it.
+//
+// THIS IS A UI GUARD, NOT SECURITY. DELETE /api/loads/:id still works
+// exactly as before and still cascades deletePaymentsForLoad — deliberately:
+// hiding a button is the right way to stop a mistake, removing a route is a
+// breaking API change.
+//
+// Escape hatch, by design: remove the PAYMENT first (in the app's Pay sheet)
+// and the load becomes deletable again. Money has to be unwound before the
+// record it was booked against can go.
+//
+// Mirrors loadIsDeletable in mobile-app/www/index.html.
+function loadIsDeletable(l) {
+  const p = l && l.payment;
+  return !(p && Number(p.paid) > 0);
 }
 
 // Groups loads by their `date` field (the date picked in the modal, not
@@ -3283,10 +3321,40 @@ function filterLoads(loads, query) {
 // extra JS — with only the FIRST (most recent) group open by default once
 // there's more than one, per Apsara's "expand based on dates" once the deck
 // has more cards than fits comfortably on one screen.
-function loadDeckSectionsHtml(loads, emptyMsg) {
+// opts.flat renders ONE grid instead of per-date sections.
+//
+// Per Apsara 2026-09-01: "on filtering of load by say, seller - it should not
+// group by date." The date sections exist to make a particular day findable
+// in a long deck — but once you have searched for a seller you are no longer
+// looking for a day, you are looking at that seller's loads, and splitting
+// six results across five collapsed date headers hides four of them behind a
+// disclosure triangle. (Only the FIRST section renders open.) So a search
+// result is a flat, newest-first list.
+//
+// The unfiltered deck keeps its date sections — that view genuinely is
+// "what happened when". Mirrors mobile-app/www/index.html.
+function loadDeckSectionsHtml(loads, emptyMsg, opts) {
+  const flat = !!(opts && opts.flat);
+  const empty = `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
+
+  if (flat) {
+    const rows = (loads || []).slice().sort((a, b) => {
+      // Newest first, undated last — the same ordering groupLoadsByDate
+      // produces, just without the headings.
+      const ad = a && a.date ? a.date : '';
+      const bd = b && b.date ? b.date : '';
+      if (!ad && !bd) return 0;
+      if (!ad) return 1;
+      if (!bd) return -1;
+      return bd.localeCompare(ad);
+    });
+    if (!rows.length) return empty;
+    return `<div class="load-deck-grid">${rows.map(loadCardHtml).join('')}</div>`;
+  }
+
   const groups = groupLoadsByDate(loads);
   if (!groups.length) {
-    return `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
+    return empty;
   }
   return groups.map((g, i) => `
     <details class="load-date-section" ${i === 0 ? 'open' : ''}>
@@ -3766,8 +3834,12 @@ function wireLoadsEvents() {
   const searchInput = $('loadSearch');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
+      const q = String(searchInput.value || '').trim();
       const filtered = filterLoads(loadsCache, searchInput.value);
-      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.');
+      // flat ONLY while there is something typed. Clearing the box has to
+      // put the date sections back, or the grouping would be gone for good
+      // after the first search until the tab is reloaded.
+      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.', { flat: !!q });
       wireDeckEvents();
     });
   }

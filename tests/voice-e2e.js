@@ -180,8 +180,37 @@ function makePhone(opts = {}) {
              fakeFetch, wav, wakeListeners, porcupineRunning, porcupinePaused };
 }
 
+// ── the app ships with voice OFF; this harness turns it back on ───────────
+//
+// Apsara 2026-09-01 asked for the mic button hidden, which is done with one
+// boolean (VOICE_UI_ENABLED) rather than by deleting a day of native-plugin
+// work. That leaves this harness with a choice: test the app as shipped and
+// watch 35 assertions go red for a feature that is merely switched off, or
+// flip the switch and keep testing the machinery that is still there.
+//
+// It flips the switch. The SHIPPED DEFAULT is asserted separately, in
+// tests/voice-machine.js, against the untouched source — so "voice is off in
+// the build" and "voice still works when on" are two claims tested in two
+// places, and neither can quietly become the other.
+//
+// It throws rather than no-oping if the anchor is gone. A silent miss here
+// would leave the harness booting a voice-disabled app and calling it a pass
+// — which is precisely the green-test-dead-feature bug this file exists
+// because of.
+function enableVoiceFlag(html) {
+    const anchor = 'const VOICE_UI_ENABLED = false;';
+    if (!html.includes(anchor)) {
+        throw new Error(
+            'voice-e2e: could not find `' + anchor + '` in mobile-app/www/index.html. ' +
+            'If the flag was renamed or removed, update enableVoiceFlag — do NOT ignore this, ' +
+            'the harness would otherwise test an app with voice switched off and report it green.'
+        );
+    }
+    return html.replace(anchor, 'const VOICE_UI_ENABLED = true;');
+}
+
 async function bootApp(opts = {}) {
-    const html = inlineScripts(fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8'));
+    const html = enableVoiceFlag(inlineScripts(fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8')));
     const phone = makePhone(opts);
 
     // file:// at the real www directory, with resources enabled, so the
