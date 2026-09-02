@@ -3128,8 +3128,15 @@ async function ignoreDigestItem(chatId, indices, all = false) {
         if (list.length === 1) {
             indices = ['1'];
         } else {
+            // The first version of this said 'say "ignore 2"' — a hardcoded
+            // example — to someone who had just typed "ignore 1". It read as
+            // though Jarvis had not understood her at all. Echo the real
+            // range, and name the multi-item form, since "ignore 1,2" is
+            // exactly what she reached for next.
             await _send(chatId, list.length
-                ? `Which one? There are ${list.length} on the list — say "ignore 2", or "ignore all".`
+                ? `Which one? There are ${list.length} on the list — say "ignore 1"`
+                  + (list.length > 1 ? ` through "ignore ${list.length}", "ignore 1,2" for several,` : ',')
+                  + ` or "ignore all".`
                 : `Nothing on the list right now.`);
             return { action_taken: 'digest_ignore_no_index' };
         }

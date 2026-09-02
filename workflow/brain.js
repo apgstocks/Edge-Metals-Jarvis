@@ -216,7 +216,37 @@ function parseContactQuoteCommand(rawText) {
 // heard, and that the old one is still open. See the reminder-tail's
 // "_queued" suffix check further down for why that doesn't ALSO trigger a
 // redundant second reminder right after.
+// ── LIST COMMANDS ALWAYS JUMP A PENDING (2026-09-02) ───────────────────────
+// LIVE. A chase-up printed three numbered items, and within twenty seconds:
+//   "ignore 1"    -> nothing
+//   "ignore 2"    -> "Which one? There are 3 on the list"
+//   "ignore 1,2"  -> "Which one? There are 3 on the list"
+// The ten-second gap before each reply is the tell: these went to the model,
+// not to the regex that has handled "ignore 1,3" since the day it was written.
+// detectFreshCommand only ever recognised quote commands, so with ANY pending
+// open the pending-specific blocks got first refusal and an explicit list
+// reference fell through to the AI — which does not carry `indices`.
+//
+// "ignore 1" typed under a numbered list Jarvis just printed is not ambiguous
+// and never answers an unrelated question. It jumps.
+//
+// SCOPE: the PREFIXED forms only. A bare "1" still belongs to whatever
+// pending asked "which trucker?" — that is a real answer to a real question,
+// and stealing it would break the wizards. "ignore 1" never is.
+const LIST_COMMAND = new RegExp([
+    String.raw`^(?:please\s+)?(?:ignore|dismiss|skip|clear)\s+#?\d{1,2}(?:\s*(?:,|and)\s*#?\d{1,2})*\s*$`,
+    String.raw`^(?:please\s+)?(?:ignore|dismiss|skip|clear)\s+(?:all|everything|all of (?:it|them))\s*$`,
+    String.raw`^(?:please\s+)?reply\s+(?:to\s+)?#?\d{1,2}`,
+    String.raw`^(?:mute|block|unmute|unblock|unignore)\s+\S`,
+    String.raw`^what am i ignoring\??$`,
+].join('|'), 'i');
+
 function detectFreshCommand(ctx) {
+    if (LIST_COMMAND.test(String(ctx.text || '').trim())) {
+        // Re-routed through the normal grammar below rather than duplicated
+        // here: one definition of what "ignore 1" means, not two that drift.
+        return { needsPolicyRerun: true };
+    }
     const parsedQuote = parseGetQuoteCommand(ctx.text);
     if (parsedQuote) {
         return {
@@ -510,7 +540,15 @@ function policyDecide(ctx) {
     // own reply never goes through this path. ─────────────────────────────
     if (ctx.isManagerOrTeam && ctx.pendingAction) {
         const fresh = detectFreshCommand(ctx);
-        if (fresh) return fresh;
+        // A fully-formed intent returns as before.
+        if (fresh && !fresh.needsPolicyRerun) return fresh;
+        // needsPolicyRerun means "this is a list command". Hide the pending
+        // from the rest of this function so every `ctx.pendingAction?.type`
+        // block below falls through and the grammar that actually owns
+        // "ignore 1" gets it. A local copy, not a mutation — the caller's ctx
+        // and the pending itself are untouched, so an unanswered question is
+        // still unanswered afterwards and still gets its nudge.
+        if (fresh && fresh.needsPolicyRerun) ctx = { ...ctx, pendingAction: null };
     }
 
     // ── A0. Ready-check pending — applies to whoever the question was sent to

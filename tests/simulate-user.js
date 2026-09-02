@@ -659,6 +659,65 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
             said3.slice(0, 200));
     }
 
+    // 20. LIVE, 2 Sep 21:10. A chase-up printed three numbered items and then:
+    //       "ignore 1"   -> nothing
+    //       "ignore 2"   -> "Which one? There are 3 on the list"
+    //       "ignore 1,2" -> "Which one? There are 3 on the list"
+    //     The ten-second pause before each reply is the tell — they reached
+    //     the model, not the regex that has handled "ignore 1,3" since it was
+    //     written. detectFreshCommand only ever knew quote commands, so with a
+    //     pending open the pending blocks got first refusal and an explicit
+    //     list reference fell through to the AI, which carries no `indices`.
+    {
+        require(R('helpers/context.js')).clearSession(MANAGER_CHAT);
+        require(R('helpers/context.js')).updateSession(MANAGER_CHAT, { menuContext: null, lastInstruction: null });
+        const rw = require(R('workflow/replyWatch.js'));
+        const mk = (n) => ({ id: 'q' + n, threadId: 'th-q' + n, from: `p${n}@x.com`,
+            fromName: 'Person ' + n, subject: 's' + n, firstFlaggedAt: new Date().toISOString() });
+        const seed = async () => {
+            const st = await rw.loadStore();
+            st.lastDigest = [mk(1), mk(2), mk(3)];
+            st.lastDigestAt = new Date().toISOString();
+            st.tracked = [mk(1), mk(2), mk(3)];
+            await rw.saveStore(st);
+        };
+
+        // THE CONDITION THAT BROKE IT: an unrelated pending is open.
+        await seed();
+        await actions.setPending(MANAGER_CHAT, { type: 'wizard_start' });
+        say('manager', 'ignore 1   [with an unrelated pending open]');
+        nextAIResponse = null;          // reaching the AI at all is the bug
+        const r = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'ignore 1');
+        reply(r); dbg(r);
+        ck('S20a "ignore 1" jumps the pending instead of going to the AI', !r.threw,
+            r.threw ? r.threw.message.slice(0, 130) : 'ok');
+        const said = r.replies.map((x) => x.text).join(' ');
+        ck('S20b and it does not ask "which one"', !/Which one\?/i.test(said), said.slice(0, 160));
+        ck('S20c the item is actually dropped',
+            ((await rw.loadStore()).tracked || []).length === 2,
+            JSON.stringify(((await rw.loadStore()).tracked || []).map((t) => t.id)));
+
+        // The multi-index form she reached for next.
+        await seed();
+        const r2 = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'ignore 1,2');
+        const left = ((await rw.loadStore()).tracked || []).map((t) => t.id);
+        ck('S20d "ignore 1,2" drops both', left.length === 1 && left[0] === 'q3', JSON.stringify(left));
+
+        // AND THE LINE THAT MUST NOT MOVE: a BARE number is still the
+        // pending's answer, not a list reference. Stealing it would break
+        // every wizard that asks "which trucker?".
+        await seed();
+        try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
+        await actions.setPending(MANAGER_CHAT, { type: 'select_trucker', options: ['TruckerX', 'Dave'] });
+        const before = actions.getPending(MANAGER_CHAT);
+        ck('S20e a pending that answers with numbers is still armed', !!before);
+        const r3 = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, '1');
+        ck('S20f a BARE "1" is not stolen by the list grammar',
+            ((await rw.loadStore()).tracked || []).length === 3,
+            JSON.stringify(((await rw.loadStore()).tracked || []).map((t) => t.id)));
+        try { await actions.clearPending(MANAGER_CHAT); } catch (e) {}
+    }
+
     console.log(`\n================================================================`);
     console.log(`${pass} passed, ${fail} failed`);
     if (fail) {

@@ -2041,6 +2041,63 @@ section('AA2 — collectChaseUps stops replaying it');
         JSON.stringify(due2.map((d) => d.summary)));
 }
 
+// ══ AB. the action line must not invent a criterion ════════════════════════
+// LIVE, 2 Sep:
+//   "Tiffany offers Friday 9/11 at 8 AM or that afternoon for an appointment."
+//   -> "Confirm earliest available appointment date."
+// Apsara: "This is not earliest.." Tiffany offered a CHOICE between two named
+// slots; the action turned that into a decision rule nobody set. It is the
+// one line she is meant to act on, so an invented criterion sends her to
+// answer a question that was never asked.
+const APPT = {
+    from: 'Tiffany Furleigh <tfurleigh@eccomelt.com>', subject: 'RE: appointment',
+    to: 'apsara@edgemetals.com', cc: '', myAddress: 'bose@edgemetals.com',
+    managerAddress: 'apsara@edgemetals.com',
+    body: 'We can do Friday 9/11 at 8 AM, or that afternoon if it suits you better. '.repeat(3),
+    thread: '- Apsara: asked for a slot\n- Tiffany: offering two\n', attachments: [],
+};
+const OFFER = { waiting_on: 'her', needs_reply: true, confidence: 0.9, urgency: 'normal',
+    summary: 'Tiffany offers Friday 9/11 at 8 AM or that afternoon for an appointment.',
+    asked_for: null, asked_for_quote: null, key_figures: [], deadline: null };
+
+section('AB1 — a superlative nobody used takes the action line with it');
+{
+    AI = { ...OFFER, action_needed: 'Confirm earliest available appointment date.' };
+    const a = await rw.assess({ ...APPT });
+    ck('the invented action is dropped', a.action_needed === null, String(a.action_needed));
+    // The item itself must survive — this is still mail she has to answer.
+    ck('but the email is still flagged for her', a.needs_reply === true && a.waiting_on === 'her',
+        `${a.waiting_on}/${a.needs_reply}`);
+    ck('and the summary is untouched', /8 AM/.test(a.summary || ''), a.summary);
+}
+
+section('AB2 — a qualifier the sender DID use is kept');
+{
+    AI = { ...OFFER, action_needed: 'Confirm the earliest slot Tiffany offered.' };
+    const a = await rw.assess({ ...APPT,
+        body: 'Please confirm the earliest slot that works: Friday 9/11 at 8 AM, or that afternoon. '.repeat(3) });
+    ck('grounded in the body, so it stays', /earliest/i.test(a.action_needed || ''), String(a.action_needed));
+}
+
+section('AB3 — grounding is against the SOURCE, never the summary');
+{
+    // The summary is the model's own output. Grounding one generation against
+    // another is circular and would wave every invention straight through.
+    AI = { ...OFFER,
+        summary: 'Tiffany offers the earliest Friday slot for an appointment.',
+        action_needed: 'Confirm earliest available appointment date.' };
+    const a = await rw.assess({ ...APPT });
+    ck('a superlative present only in the SUMMARY does not ground the action',
+        a.action_needed === null, String(a.action_needed));
+}
+
+section('AB4 — an ordinary action is untouched');
+{
+    AI = { ...OFFER, action_needed: 'Confirm which of the two slots works.' };
+    const a = await rw.assess({ ...APPT });
+    ck('no qualifier, no interference', /which of the two/i.test(a.action_needed || ''), String(a.action_needed));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

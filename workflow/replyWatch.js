@@ -1502,6 +1502,41 @@ async function assess(email) {
         if (/^(please\s+)?(reply|respond|answer|get back|follow up|action|handle|deal with)\b(\s+(to|on|with))?\s*(this|that|it|them|him|her|the (email|mail|message|sender))?\s*(email|mail|message)?\.?$/i.test(t)) return null;
         const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
         if (norm(t) === norm(res.summary)) return null;
+
+        // ── A QUALIFIER NOBODY USED (2026-09-02) ─────────────────────────
+        // LIVE:
+        //   "Tiffany offers Friday 9/11 at 8 AM or that afternoon for an
+        //    appointment."
+        //   -> "Confirm EARLIEST available appointment date."
+        // Apsara: "This is not earliest.."
+        //
+        // Tiffany offered a CHOICE between two named slots. The action turned
+        // that into a decision rule she never set. It is one word, and it is
+        // the one line in the digest Apsara is meant to act on — so a
+        // criterion invented there sends her to answer a question nobody
+        // asked, and it reads as instruction rather than as a guess.
+        //
+        // Same discipline as asked_for's quote grounding: a superlative has to
+        // come from the SOURCE. Checked against the body and the thread and
+        // deliberately NOT against res.summary — the summary is the model's
+        // own output, so grounding one generation against another is circular
+        // and would wave this straight through.
+        //
+        // Drops the whole action rather than editing it. The digest already
+        // renders action_needed as optional, so losing it degrades to "she
+        // has mail from Tiffany about an appointment" — true — instead of an
+        // instruction that is subtly wrong. Rewriting a sentence to remove a
+        // word is how you get a new sentence nobody checked.
+        const UNGROUNDED_QUALIFIER = /\b(earliest|latest|soonest|cheapest|best|fastest|quickest|highest|lowest|first available|next available|as soon as possible|asap|immediately|urgently)\b/i;
+        const q = t.match(UNGROUNDED_QUALIFIER);
+        if (q) {
+            const source = `${email.body || ''}\n${email.thread || ''}`;
+            const word = q[0].toLowerCase();
+            if (!new RegExp('\\b' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(source)) {
+                console.warn(`[REPLYWATCH] action "${t.slice(0, 60)}" invents "${word}" — nobody in the email said it; dropping the action line`);
+                return null;
+            }
+        }
         return defence(t);
     })();
 
