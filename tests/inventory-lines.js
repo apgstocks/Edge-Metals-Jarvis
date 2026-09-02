@@ -237,6 +237,56 @@ function clientChecks() {
     }, 900));
 }
 
+// ── G. the wiring, on EVERY path that paints those rows ───────────────────
+// Apsara, 2026-09-02: "in inventory when i click item type sealed units, it is
+// not displaying anything."
+//
+// My bug, and a specific kind: the toggles were wired only on the sub-tab
+// SWITCH path, not on the initial render. The website's initial render happens
+// to be the same function, so it worked there — I verified it there, and
+// shipped both clients. One tested, two shipped.
+//
+// The wiring now lives in wireInvLineToggles and every paint path calls it.
+// These assertions are about the CALL SITES, because the function being
+// correct was never the problem.
+section('G — a paint path without wiring is a dead feature');
+for (const [name, file] of [['app', 'mobile-app/www/index.html'], ['website', 'dashboard/index.html']]) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+
+    ck(`${name}: the wiring is one shared function`, /function wireInvLineToggles\(from, to\)/.test(src),
+       'inline copies are how one path keeps it and another quietly does not');
+
+    // Count the paints against the wirings. Every place that writes those rows
+    // into the DOM has to be followed by a call.
+    const paints = (src.match(/INV_SUBTAB_RENDER\[[a-zA-Z]*[sS]ubTab\]/g) || []).length;
+    const wirings = (src.match(/wireInvLineToggles\(/g) || []).length - 1;   // minus the definition
+    ck(`${name}: every render of the rows is wired`, wirings >= 2 && wirings >= paints - 1,
+       `${paints} paint sites, ${wirings} wiring calls — a paint without a wiring is a type you can tap that does nothing`);
+}
+{
+    // The app specifically: the initial render is paintInventory, NOT the
+    // sub-tab switch. That is the path that was broken, so it gets named.
+    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    // Brace-matched. The first version sliced from paintInventory to
+    // renderInventoryTab — which sits EARLIER in the file, so the slice was
+    // empty and the assertion failed against a correct fix.
+    const bodyOf = (src, name) => {
+        const i = src.indexOf('function ' + name + '(');
+        if (i < 0) return '';
+        let d = 0, k = src.indexOf('{', i);
+        for (; k < src.length; k++) {
+            if (src[k] === '{') d++;
+            else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+        }
+        return src.slice(i);
+    };
+    const paint = bodyOf(app, 'paintInventory');
+    ck('app: the FIRST render wires the toggles', /wireInvLineToggles\(mobInvFrom, mobInvTo\)/.test(paint),
+       'this exact omission is what made tapping an item type do nothing on a freshly opened tab');
+    ck('app: and so does the sub-tab switch',
+       /wireInvLineToggles\(mobInvFrom, mobInvTo\)/.test(bodyOf(app, 'paintInvSubtab')));
+}
+
 function done() {
     console.log(`\n  ${pass} passed, ${fail} failed`);
     if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }

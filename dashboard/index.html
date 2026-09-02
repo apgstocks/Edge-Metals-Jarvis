@@ -1015,15 +1015,7 @@ async function renderInventory() {
       <div id="invSubtabBody">${INV_SUBTAB_RENDER[invSubTab](data)}</div>
     </section>`;
 
-  // ── wire the item-type drill-down ───────────────────────────────────────
-  // Re-run after EVERY repaint of this body, because switching sub-tab or
-  // applying a date filter rebuilds the rows and would otherwise leave the
-  // toggles dead. The panel state (invLinesOpen) survives the repaint, so a
-  // type that was open stays open.
-  document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
-    toggleInvLines(el.getAttribute('data-inv-toggle'), invFrom, invTo);
-  }));
-  renderInvLines();
+  wireInvLineToggles(invFrom, invTo);
 
   $('btnInvApply').addEventListener('click', () => { invFrom = toIsoDate($('inv_from').value); invTo = toIsoDate($('inv_to').value); renderInventory(); });
   wireUsDateField('inv_from'); wireUsDateField('inv_to');
@@ -1037,12 +1029,8 @@ async function renderInventory() {
     if (btn.dataset.subtab === invSubTab || !invData) return;
     invSubTab = btn.dataset.subtab;
     $('invSubtabBody').innerHTML = INV_SUBTAB_RENDER[invSubTab](invData);
-    // The sub-tab switch rebuilds the rows, so the drill-down toggles have to
-    // be re-bound — otherwise clicking a type does nothing after one switch.
-    document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
-      toggleInvLines(el.getAttribute('data-inv-toggle'), invFrom, invTo);
-    }));
-    renderInvLines();
+    // The sub-tab switch rebuilds the rows, so the toggles are re-bound.
+    wireInvLineToggles(invFrom, invTo);
     root.querySelectorAll('.inv-subtab-btn').forEach(b => {
       const on = b.dataset.subtab === invSubTab;
       b.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
@@ -4127,6 +4115,26 @@ async function toggleInvLines(description, from, to) {
       invLinesCache[key] = { error: e.message || 'could not load', lines: [], count: 0 };
     }
   }
+  renderInvLines();
+}
+
+// ── wire the item-type drill-down ─────────────────────────────────────────
+// Called after EVERY repaint of the inventory rows, and there is more than one
+// such path — which is exactly how this broke.
+//
+// Apsara, 2026-09-02: "in inventory when i click item type sealed units, it is
+// not displaying anything." The wiring had been added only to the sub-tab
+// SWITCH path, so tapping a type on a freshly opened Inventory tab did
+// nothing at all. It worked on the website, where the initial render is the
+// same function, and I verified it there and shipped both. One client tested,
+// two clients shipped.
+//
+// Pulled out here so a paint path cannot exist without the wiring sitting
+// beside it.
+function wireInvLineToggles(from, to) {
+  document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
+    toggleInvLines(el.getAttribute('data-inv-toggle'), from, to);
+  }));
   renderInvLines();
 }
 

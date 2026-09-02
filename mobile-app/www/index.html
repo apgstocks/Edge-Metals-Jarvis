@@ -5388,21 +5388,33 @@ function mobInvKey() {
   return `${mobInvFrom}|${mobInvTo}`;
 }
 
+// ── wire the item-type drill-down ─────────────────────────────────────────
+// Called after EVERY repaint of the inventory rows, and there is more than one
+// such path — which is exactly how this broke.
+//
+// Apsara, 2026-09-02: "in inventory when i click item type sealed units, it is
+// not displaying anything." The wiring had been added only to the sub-tab
+// SWITCH path, so tapping a type on a freshly opened Inventory tab did
+// nothing at all. It worked on the website, where the initial render is the
+// same function, and I verified it there and shipped both. One client tested,
+// two clients shipped.
+//
+// Pulled out here so a paint path cannot exist without the wiring sitting
+// beside it.
+function wireInvLineToggles(from, to) {
+  document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
+    toggleInvLines(el.getAttribute('data-inv-toggle'), from, to);
+  }));
+  renderInvLines();
+}
+
 // Repaints ONLY the sub-tab body from data already held. This is what the
 // sub-tab buttons call now.
 function paintInvSubtab() {
   if (!mobInvData) return;
   const body = $('invSubtabBody');
   if (body) body.innerHTML = MOB_INV_SUBTAB_RENDER[mobInvSubTab](mobInvData);
-  // ── wire the item-type drill-down ───────────────────────────────────────
-  // Re-run after EVERY repaint of this body, because switching sub-tab or
-  // applying a date filter rebuilds the rows and would otherwise leave the
-  // toggles dead. The panel state (invLinesOpen) survives the repaint, so a
-  // type that was open stays open.
-  document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
-    toggleInvLines(el.getAttribute('data-inv-toggle'), mobInvFrom, mobInvTo);
-  }));
-  renderInvLines();
+  wireInvLineToggles(mobInvFrom, mobInvTo);
 
   $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => {
     const on = btn.dataset.subtab === mobInvSubTab;
@@ -5478,6 +5490,10 @@ function paintInventory(data, loading) {
       <div id="invSubtabBody">${body}</div>
       <div id="invStaleHint" style="margin-top:12px; font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); text-align:center;">${loading ? 'Loading…' : ''}</div>
     </section>`;
+  // THE PATH THAT WAS MISSING. paintInventory renders the whole tab,
+  // sub-tab body included, so the toggles it draws need wiring here too —
+  // not only when a sub-tab is switched.
+  wireInvLineToggles(mobInvFrom, mobInvTo);
   $('btnInvApply').addEventListener('click', () => { mobInvFrom = $('inv_from').value; mobInvTo = $('inv_to').value; renderInventoryTab(); });
   $('btnInvClear').addEventListener('click', () => { mobInvFrom = ''; mobInvTo = ''; renderInventoryTab(); });
   // Sub-tab switch repaints from data already held — no refetch. All three
