@@ -137,3 +137,8 @@ builds/
 
 # Synthesised speech, rebuildable from the API. Not source.
 data/voice-cache/
+mobile-app/android/app/build.gradle
+mobile-app/www/index.html
+tests/form-parity.js
+tests/mobile-layout.js
+tests/spend-report.js
