@@ -496,7 +496,13 @@ async function getOrCreateReportsFolder(drive) {
 // upload is an ordinary Drive write. A files.update with new media on an
 // existing Google Sheet replaces its content in place, so the link never
 // changes and anyone who has it keeps working.
-async function upsertReportFile(name, buffer, { asGoogleSheet = false } = {}) {
+// updateOnly: refresh the file if it is already there, but do NOT bring it
+// into existence. Added 2026-09-02 for the empty monthly expense workbooks —
+// see the call site in helpers/sheetSync.js for why "update but never create"
+// is the shape that is actually wanted, rather than simply skipping.
+// Returns null when there was nothing to update, so callers can tell "no file"
+// apart from "here is the file".
+async function upsertReportFile(name, buffer, { asGoogleSheet = false, updateOnly = false } = {}) {
     if (!buffer) throw new Error('file buffer required');
     const drive = getDrive();
     const parentId = await getOrCreateReportsFolder(drive);
@@ -522,6 +528,8 @@ async function upsertReportFile(name, buffer, { asGoogleSheet = false } = {}) {
         });
         return updated.data;
     }
+    // Nothing on Drive, and the caller asked not to bring one into existence.
+    if (updateOnly) return null;
     const created = await drive.files.create({
         requestBody: asGoogleSheet
             ? { name, parents: [parentId], mimeType: 'application/vnd.google-apps.spreadsheet' }

@@ -107,9 +107,31 @@ async function runSync(months) {
         const expOverall = await expensesOverallWorkbookBuffer(allExpenses);
         results.expenseSheet = await upsertReportFile('Expenses-Overall', Buffer.from(expOverall), { asGoogleSheet: true });
         for (const monthKey of months) {
+            // ── a month with no expenses does not get a file ───────────────
+            // Apsara, 2026-09-02: "when expense daily is 0, don't create a new
+            // sheet. ignore."
+            //
+            // `months` comes from whichever months had LOAD activity, so a
+            // busy month with no expenses in it was still getting an
+            // Expenses-YYYY-MM.xlsx uploaded — a workbook whose only content
+            // is one sheet reading "No expenses recorded for YYYY-MM yet."
+            // (see buildMonthlyExpensesWorkbook). One per month, cluttering
+            // the Drive folder and appearing in the report links.
+            //
+            // NOT a plain skip, though. If a month HAD expenses and they were
+            // all since deleted, its file must still be refreshed, or it would
+            // freeze at its last non-empty state and keep showing money that
+            // is no longer recorded — the same trap the comment above warns
+            // about for the overall sheet. So: update if it exists, never
+            // create if it does not.
+            const hasAny = allExpenses.some(e => e && e.date && String(e.date).startsWith(monthKey));
             const buf = await monthlyExpensesWorkbookBuffer(allExpenses, monthKey);
-            const file = await upsertReportFile(`Expenses-${monthKey}.xlsx`, Buffer.from(buf));
-            results.expenseMonths.push({ monthKey, file });
+            const file = await upsertReportFile(`Expenses-${monthKey}.xlsx`, Buffer.from(buf), { updateOnly: !hasAny });
+            // A month that has never had an expense yields no file at all —
+            // don't report one. scheduler.js also guards on m.file, but an
+            // entry with file:null is not a real result and shouldn't be in
+            // the list for any other caller either.
+            if (file) results.expenseMonths.push({ monthKey, file });
         }
     }
     return results;
@@ -165,4 +187,8 @@ async function syncNow(extraMonths = []) {
 
 function syncStatus() { return { lastSyncOk, lastSyncError }; }
 
-module.exports = { scheduleSync, syncNow, monthKeyFor, syncStatus };
+// runSync is exported for tests/expense-sheets.js. Deliberately the raw
+// function rather than syncNow: syncNow swallows every error to keep a Drive
+// outage from breaking a load save, which is right in production and useless
+// in a test — a broken sync would report as a silent success.
+module.exports = { scheduleSync, syncNow, runSync, monthKeyFor, syncStatus };
