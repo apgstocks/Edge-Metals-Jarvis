@@ -1687,6 +1687,34 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── Spend report ──────────────────────────────────────────────────────
+    // Per Apsara 2026-09-02: "a report ... where i can track the monthly spent
+    // of cash/zelle/wire. date wise filter can also be there like quickbook."
+    //
+    // Optional ?from=YYYY-MM-DD&to=YYYY-MM-DD, inclusive; omitted means
+    // all-time. Computed on every request from payments, expenses and the
+    // petty cash ledger — nothing cached, so a deleted payment is gone from
+    // the report on the next call.
+    //
+    // requireAdmin: this is every figure the business spends, across both
+    // sides. Staff see their own yard screens and the cash balance, not this.
+    app.get('/api/reports/spend', requireAdmin, (req, res) => {
+        try {
+            const { buildSpendReport } = require('./helpers/spendReport');
+            const { listPayments } = require('./helpers/payments');
+            const { loadExpenses } = require('./helpers/expenses');
+            const { listEntries } = require('./helpers/pettyCash');
+            const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+            res.json(buildSpendReport({
+                payments: listPayments(),
+                expenses: loadExpenses(),
+                pettyEntries: listEntries(),
+                from: ymd(req.query.from),
+                to: ymd(req.query.to),
+            }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── Petty cash — the physical cash box ────────────────────────────────
     // Per Apsara 2026-09-02. A ledger of top-ups and cash withdrawals; the
     // balance is their sum. See helpers/pettyCash.js for why it is rows rather
@@ -2082,9 +2110,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // Every mutation schedules a sheet sync, same as loads.
     app.get('/api/expenses', requireAdmin, (req, res) => {
         try {
-            const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES } = require('./helpers/expenses');
+            const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES, EXPENSE_METHODS } = require('./helpers/expenses');
             const all = loadExpenses();
-            res.json({ expenses: all, report: getExpenseReport(all, {}), categories: EXPENSE_CATEGORIES });
+            // methods travels with the payload for the same reason categories
+            // does: the dropdown is built from the server's list, so it cannot
+            // drift from what the server will accept.
+            let pettyBalance = null;
+            try { pettyBalance = require('./helpers/pettyCash').balance(); } catch (e) {}
+            res.json({ expenses: all, report: getExpenseReport(all, {}), categories: EXPENSE_CATEGORIES, methods: EXPENSE_METHODS, petty_cash_balance: pettyBalance });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
     app.post('/api/expenses', requireAdmin, async (req, res) => {

@@ -58,6 +58,34 @@ function nextExpenseId(expenses) {
 // tab or any total, so both are hard-required rather than silently
 // defaulted. Same choke-point approach as validateLoadForSave: enforced
 // here, so any caller (current or future) is covered, not just the UI.
+// ── how an expense was paid ───────────────────────────────────────────────
+// Per Apsara 2026-09-02: a report of "monthly spent of cash/zelle/wire" needs
+// a field it can group by, and this was free text ("e.g. Card, Cash") until
+// today. "cash", "Cash" and "cash app" are three different strings, and any
+// grouping of them is a guess about money.
+//
+// The four load modes plus Card and Other, so one vocabulary spans both sides
+// of the report — a load payment and an expense paid the same way land in the
+// same column.
+const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Cheque', 'Card', 'Other'];
+
+// Matches case-insensitively and returns the CANONICAL spelling, or null.
+// Null rather than 'Other' on purpose: an unrecognised legacy value is
+// unclassified, and calling it "Other" would assert a fact about how that
+// money moved that nobody actually recorded.
+function normalizeMethod(v) {
+    const q = String(v || '').trim().toLowerCase();
+    if (!q) return null;
+    return EXPENSE_METHODS.find((m) => m.toLowerCase() === q) || null;
+}
+
+// EXISTING ENTRIES ARE NOT MIGRATED — her choice ("fixed dropdown, leave old
+// entries blank"). Their stored payment_method string is left exactly as it
+// is; nothing rewrites or deletes it. It simply does not match the list, so
+// the report counts it as unclassified and the edit form shows the box empty.
+// Keeping the original text costs nothing and means the information is still
+// there if she ever wants it back.
+
 function validateExpense(entry) {
     const amount = toNum(entry.amount);
     if (amount === null) throw new Error('Validation: amount is required.');
@@ -81,7 +109,7 @@ async function addExpense(entry) {
         category: (entry.category && String(entry.category).trim()) || 'Other',
         description: String(entry.description).trim(),
         vendor: (entry.vendor && String(entry.vendor).trim()) || null,
-        payment_method: (entry.payment_method && String(entry.payment_method).trim()) || null,
+        payment_method: normalizeMethod(entry.payment_method),
         amount: round2(amount),
         notes: (entry.notes && String(entry.notes).trim()) || null,
     };
@@ -91,11 +119,47 @@ async function addExpense(entry) {
         if (list.length > 20000) list.length = 20000;
         return list;
     });
+
+    // ── a CASH expense comes out of the box ───────────────────────────────
+    // Apsara 2026-09-02: "if expense is added -> expense amount must be
+    // adjusted in petty cash as well." Only Cash: an expense paid by card or
+    // transfer never touched the drawer, and deducting it would make the
+    // balance stop matching the notes in it — the one thing petty cash has to
+    // get right.
+    //
+    // ORDER IS THE OPPOSITE OF A PAYMENT, deliberately. A payment reserves
+    // cash first because it is about to hand money over and must not promise
+    // what it does not have. An expense is a RECEIPT for money already spent,
+    // so the record is what matters: it is written first and always survives,
+    // and the ledger follows. A failed withdrawal here leaves the expense
+    // recorded and the box reading high, which is visible in the report as a
+    // cash expense with no matching withdrawal — and far better than losing
+    // the receipt.
+    //
+    // It is also never refused, even when the box does not cover it. See
+    // withdrawForExpense: refusing would not un-spend the money, it would just
+    // stop the record being made. `cash_shortfall` is returned so the screen
+    // can say so, which is what she asked for ("If expense is more but petty
+    // cash is less, notify user").
+    rec.cash_shortfall = 0;
+    if (rec.payment_method === 'Cash') {
+        try {
+            const res = await require('./pettyCash').withdrawForExpense({
+                amount: rec.amount, expenseId: rec.id, date: rec.date,
+                createdBy: rec.created_by,
+            });
+            rec.cash_shortfall = res.shortfall;
+        } catch (e) {
+            console.error(`[EXPENSES] ${rec.id} recorded but petty cash was NOT adjusted:`, e.message);
+            rec.cash_error = e.message;
+        }
+    }
     return rec;
 }
 
 async function editExpense(id, entry) {
     const amount = validateExpense(entry);
+    const before = getExpense(id);
     let updated = null;
     await mutateJson(cfg.EXPENSES_FILE, [], (list) => {
         const e = list.find(x => x.id === id);
@@ -105,7 +169,7 @@ async function editExpense(id, entry) {
             category: (entry.category && String(entry.category).trim()) || 'Other',
             description: String(entry.description).trim(),
             vendor: (entry.vendor && String(entry.vendor).trim()) || null,
-            payment_method: (entry.payment_method && String(entry.payment_method).trim()) || null,
+            payment_method: normalizeMethod(entry.payment_method),
             amount: round2(amount),
             notes: (entry.notes && String(entry.notes).trim()) || null,
             updated_at: new Date().toISOString(),
@@ -113,6 +177,43 @@ async function editExpense(id, entry) {
         updated = e;
         return list;
     });
+    if (!updated) return updated;
+
+    // ── keep the cash ledger in step with the edit ────────────────────────
+    // Four transitions matter, and only two of them are obvious:
+    //   Cash -> Cash, amount changed   : reverse the old, take the new
+    //   Cash -> Card/Zelle/...         : reverse. The money never left the box.
+    //   Card/... -> Cash               : take it now. It did.
+    //   anything else                  : nothing to do.
+    //
+    // Done as REVERSE-THEN-RETAKE rather than by adjusting the existing row.
+    // Editing a ledger row in place destroys the history of what it used to
+    // say, and the whole reason this is a ledger is that cash has no bank
+    // statement to reconstruct it from. Two rows tell the true story: money
+    // out, money back, money out again.
+    //
+    // A same-amount Cash -> Cash edit (fixing a typo in the description) is
+    // skipped entirely, so routine edits do not litter the ledger.
+    const wasCash = !!before && before.payment_method === 'Cash';
+    const isCash = updated.payment_method === 'Cash';
+    const amountChanged = !before || round2(before.amount) !== round2(updated.amount);
+    updated.cash_shortfall = 0;
+    try {
+        const petty = require('./pettyCash');
+        if (wasCash && (!isCash || amountChanged)) {
+            await petty.reverseForExpense(id, { note: 'expense edited' });
+        }
+        if (isCash && (!wasCash || amountChanged)) {
+            const res = await petty.withdrawForExpense({
+                amount: updated.amount, expenseId: id, date: updated.date,
+                createdBy: updated.created_by,
+            });
+            updated.cash_shortfall = res.shortfall;
+        }
+    } catch (e) {
+        console.error(`[EXPENSES] ${id} edited but petty cash was NOT adjusted:`, e.message);
+        updated.cash_error = e.message;
+    }
     return updated;
 }
 
@@ -131,6 +232,15 @@ async function deleteExpense(id) {
         list.splice(idx, 1);
         return list;
     });
+    // Deleting a cash expense puts the money back — the expense was the only
+    // reason it left. Reversal row, idempotent, same as everywhere else.
+    if (removed && removed.payment_method === 'Cash') {
+        try {
+            await require('./pettyCash').reverseForExpense(id, { note: 'expense deleted' });
+        } catch (e) {
+            console.error(`[EXPENSES] deleted ${id} but could NOT return ${removed.amount} to petty cash:`, e.message);
+        }
+    }
     return removed;
 }
 
@@ -178,6 +288,6 @@ function getExpenseReport(allExpenses, { from, to } = {}) {
 }
 
 module.exports = {
-    EXPENSE_CATEGORIES,
+    EXPENSE_CATEGORIES, EXPENSE_METHODS, normalizeMethod,
     loadExpenses, addExpense, editExpense, deleteExpense, getExpense, getExpenseReport,
 };

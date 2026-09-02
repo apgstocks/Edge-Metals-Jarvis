@@ -63,9 +63,12 @@ const toNum = (v) => {
 // future kind cannot be mistaken for one of these.
 //   topup    — cash put INTO the box. Positive.
 //   payment  — cash taken OUT to pay a load. Negative. Carries payment_id.
-//   reversal — a deleted cash payment putting the money BACK. Positive,
-//              carries the payment_id it reverses.
-const ENTRY_KINDS = ['topup', 'payment', 'reversal'];
+//   expense  — cash taken OUT for an expense. Negative. Carries expense_id.
+//              Unlike a payment this is allowed to overdraw — see
+//              withdrawForExpense for why the two differ.
+//   reversal — money put BACK when a payment or expense is undone. Positive,
+//              carries reverses_entry_id (and the payment/expense id).
+const ENTRY_KINDS = ['topup', 'payment', 'expense', 'reversal'];
 
 function newEntryId() {
     return `PC_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -186,6 +189,92 @@ async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, 
     return result;
 }
 
+// ── take cash out, for an EXPENSE ─────────────────────────────────────────
+//
+// Returns { entry, taken, available, shortfall }.
+//
+// THIS ONE IS ALLOWED TO OVERDRAW, and a load payment is not. That asymmetry
+// is deliberate, and it is about what the two records mean:
+//
+//   a load payment is money about to be handed over. You cannot hand over
+//   cash you do not have, so the box refuses and the operator tops it up.
+//
+//   an expense is a receipt for money ALREADY SPENT — a fuel stop last week,
+//   a part bought yesterday. Refusing it would not un-spend the money; it
+//   would just stop the record being made. So it always goes in, and if the
+//   box does not cover it the balance goes negative.
+//
+// A negative balance is therefore INFORMATION, not corruption: it means cash
+// left the drawer that was never entered here. `shortfall` is returned so the
+// screen can say exactly that — Apsara, 2026-09-02: "If expense is more but
+// petty cash is less, notify user."
+async function withdrawForExpense({ amount, expenseId, date, createdBy } = {}) {
+    const want = round2(toNum(amount));
+    if (want == null || want <= 0) throw new Error('an expense amount must be greater than zero');
+
+    let result = null;
+    await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        const available = balanceOf(list);
+        const entry = {
+            id: newEntryId(),
+            kind: 'expense',
+            date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
+            amount: round2(-want),               // the FULL amount, never capped
+            note: null,
+            load_id: null,
+            payment_id: null,
+            expense_id: expenseId || null,
+            created_at: new Date().toISOString(),
+            created_by: createdBy || null,
+        };
+        list.push(entry);
+        result = {
+            entry,
+            taken: want,
+            available,
+            // How much of this the box could not cover. Zero when it could.
+            shortfall: want - available > CENT ? round2(want - available) : 0,
+        };
+        return list;
+    });
+    return result;
+}
+
+// Undoes an expense withdrawal — on delete, and on an edit that changes the
+// amount or the method. Same reversal-row approach as a payment, and
+// idempotent for the same reason.
+async function reverseForExpense(expenseId, { createdBy, note } = {}) {
+    if (expenseId == null) return null;
+    const key = String(expenseId);
+    let record = null;
+    await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        const taken = list.filter((e) => e && e.kind === 'expense' && String(e.expense_id) === key);
+        if (!taken.length) return list;
+        const reversedIds = new Set(list.filter((e) => e && e.kind === 'reversal').map((e) => e.reverses_entry_id));
+        const outstanding = taken.filter((e) => !reversedIds.has(e.id));
+        if (!outstanding.length) return list;                       // already refunded
+        const total = round2(outstanding.reduce((a, e) => a + (toNum(e.amount) || 0), 0)) || 0;   // negative
+        record = {
+            id: newEntryId(),
+            kind: 'reversal',
+            date: require('./time').todayLocal(),
+            amount: round2(-total),               // positive
+            note: note || 'expense removed',
+            load_id: null,
+            payment_id: null,
+            expense_id: key,
+            reverses_entry_id: outstanding[0].id,
+            created_at: new Date().toISOString(),
+            created_by: createdBy || null,
+        };
+        list.push(record);
+        return list;
+    });
+    return record;
+}
+
 // Links a withdrawal to the payment it turned out to belong to.
 //
 // The withdrawal has to be written BEFORE the payment exists (the money is
@@ -226,6 +315,9 @@ async function reverseForPayment(idOrEntryId, { createdBy } = {}) {
     let record = null;
     await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
+        // kind === 'payment' only. An expense withdrawal can carry the same
+        // shape but is undone by reverseForExpense — mixing them would let
+        // deleting a payment refund an unrelated expense.
         const matches = (e) => e && (e.payment_id === key || e.id === key);
         const taken = list.filter((e) => matches(e) && e.kind === 'payment');
         if (!taken.length) return list;                                   // never drew on cash
@@ -282,5 +374,6 @@ async function deleteEntry(id) {
 
 module.exports = {
     ENTRY_KINDS, listEntries, balance, balanceOf, history,
-    addTopUp, withdrawForPayment, stampPaymentId, reverseForPayment, deleteEntry,
+    addTopUp, withdrawForPayment, stampPaymentId, reverseForPayment,
+    withdrawForExpense, reverseForExpense, deleteEntry,
 };

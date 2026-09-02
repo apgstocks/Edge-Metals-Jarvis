@@ -562,6 +562,9 @@ const NAV_ITEMS = [
   // and the page renders read-only for them. The write routes are
   // requireAdmin server-side, so the boundary does not depend on this flag.
   { id: 'petty',     label: 'Petty Cash',  group: 'Yard' },
+  // Spend report — every figure the business pays out, both sides of it,
+  // so adminOnly. Staff keep Loads and the cash balance.
+  { id: 'spend',     label: 'Spend Report', group: 'Yard', adminOnly: true },
   { id: 'contacts',  label: 'Price Lists', group: 'Yard', adminOnly: true },
   // Outbound loads (sales to buyers, e.g. Eccomelt) — mirror of Loads
   // above, but a separate standalone page (dashboard/outbound-loads.html),
@@ -751,6 +754,7 @@ async function loadTab(tab) {
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
     if (tab === 'petty') return renderPettyCashTab();
+    if (tab === 'spend') return renderSpendReportTab();
     if (tab === 'loads') {
       // Purchases and sales in one deck — a sale she can't see is a sale she
       // can't delete, and deletion is what rolls inventory back. _kind tells
@@ -3954,6 +3958,141 @@ function filterLoads(loads, query) {
 //
 // The unfiltered deck keeps its date sections — that view genuinely is
 // "what happened when". Mirrors mobile-app/www/index.html.
+// ── Spend report ───────────────────────────────────────────────────────────
+// Apsara, 2026-09-02: "A report needs to be there.. where i can track the
+// monthly spent of cash/zelle/wire. date wise filter can also be there like
+// quickbook."
+//
+// Every figure is SERVER-COMPUTED (helpers/spendReport.js). This screen
+// renders and filters; it never adds anything up. A report that does its own
+// arithmetic is a second implementation waiting to disagree with the ledger it
+// claims to describe — and here the two ledgers are money.
+let spendFrom = '';
+let spendTo = '';
+
+async function renderSpendReportTab() {
+  const qs = [];
+  if (spendFrom) qs.push('from=' + encodeURIComponent(spendFrom));
+  if (spendTo) qs.push('to=' + encodeURIComponent(spendTo));
+  let rep;
+  try {
+    rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
+  } catch (e) {
+    $('viewRoot').innerHTML = `<section style="max-width:1000px; margin:0 auto; padding:40px 20px;"><div class="card" style="padding:24px; color:var(--status-danger);">Could not load the report: ${esc(e.message || '')}</div></section>`;
+    return;
+  }
+
+  const cols = rep.columns || [];
+  const money = (n) => fmtAmount(Number(n) || 0) || '$0.00';
+  // Zero renders as a dash, not $0.00 — a page of $0.00 is hard to read past,
+  // and "nothing by Wire in August" is what the dash says.
+  const cell = (n) => (Math.abs(Number(n) || 0) < 0.005 ? '<span style="color:var(--text-faint);">—</span>' : esc(money(n)));
+
+  // Preset ranges, because "this month" is the question actually asked and
+  // typing two dates to ask it is friction. QuickBooks does the same.
+  const presets = [
+    ['This month', () => { const d = new Date(); const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; return [m + '-01', m + '-31']; }],
+    ['Last month', () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; return [m + '-01', m + '-31']; }],
+    ['This year',  () => { const y = new Date().getFullYear(); return [`${y}-01-01`, `${y}-12-31`]; }],
+    ['All time',   () => ['', '']],
+  ];
+
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1080px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="margin-bottom:18px;">
+        <div class="eyebrow">// Reports</div>
+        <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Where the money went</h2>
+        <div style="font-size:13px; color:var(--text-muted);">Load payments and expenses together, by month and by how they were paid.</div>
+      </div>
+
+      <div class="card" style="padding:14px 16px; margin-bottom:18px; display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+        <div class="field" style="margin-bottom:0;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}" style="max-width:150px;"></div>
+        <div class="field" style="margin-bottom:0;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}" style="max-width:150px;"></div>
+        <button id="btnSpendApply" class="btn btn-primary" style="padding:8px 16px;">Apply</button>
+        <span style="flex:1;"></span>
+        ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:6px 11px;">${esc(p[0])}</button>`).join('')}
+      </div>
+
+      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap;">
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Total out</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Loads</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.loadTotal))}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Expenses</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.expenseTotal))}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(rep.count)}</div></div>
+      </div>
+
+      <!-- The cash box, reconciled over the same window — her "money out, plus
+           cash in". Opened with X, took in Y, paid out Z, so it should hold W;
+           that last figure is what gets counted against the drawer. -->
+      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Petty cash over this period</div>
+        <div style="display:flex; gap:26px; flex-wrap:wrap; font-family:var(--font-mono); font-size:13px;">
+          <div>Opened <strong>${esc(money(rep.cash.opening))}</strong></div>
+          <div style="color:var(--leaf-600, #2e7d32);">Cash in <strong>+${esc(money(rep.cash.in))}</strong></div>
+          <div style="color:var(--status-danger, #c53030);">Cash out <strong>-${esc(money(rep.cash.out))}</strong></div>
+          <div>Should hold <strong style="color:${Number(rep.cash.closing) < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(money(rep.cash.closing))}</strong></div>
+        </div>
+        ${Number(rep.cash.closing) < 0 ? `<div style="margin-top:9px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Negative — cash left the drawer that was never entered on the Petty cash tab.</div>` : ''}
+      </div>
+
+      ${(rep.months || []).length ? `
+      <div class="card" style="padding:0; overflow-x:auto; margin-bottom:18px;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
+          <thead><tr style="background:var(--surface-sunken); text-align:right;">
+            <th style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Month</th>
+            ${cols.map(c => `<th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c)}</th>`).join('')}
+            <th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-strong);">Total</th>
+          </tr></thead>
+          <tbody>
+            ${rep.months.map(m => `
+            <tr style="border-top:1px solid var(--border-subtle); text-align:right;">
+              <td style="padding:10px 12px; text-align:left; font-family:var(--font-mono); color:var(--text-strong);">${esc(m.month)}</td>
+              ${cols.map(c => `<td style="padding:10px 12px; font-family:var(--font-mono);">${cell(m[c])}</td>`).join('')}
+              <td style="padding:10px 12px; font-family:var(--font-mono); font-weight:700; color:var(--text-strong);">${esc(money(m.total))}</td>
+            </tr>`).join('')}
+            <tr style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
+              <td style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-weight:700;">All</td>
+              ${cols.map(c => `<td style="padding:10px 12px; font-family:var(--font-mono); font-weight:700;">${cell(rep.byMethod[c])}</td>`).join('')}
+              <td style="padding:10px 12px; font-family:var(--font-mono); font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details>
+        <summary style="cursor:pointer; font-family:var(--font-mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); padding:8px 0;">Every entry behind these figures (${esc(rep.rows.length)})</summary>
+        <div class="card" style="padding:0; overflow:hidden; margin-top:10px;">
+          <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+            <tbody>
+              ${rep.rows.map(r => `
+              <tr style="border-top:1px solid var(--border-subtle);">
+                <td style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap;">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : r.date)}</td>
+                <td style="padding:8px 12px;"><span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(r.kind === 'load' ? 'LOAD' : 'EXP')}</span> ${esc(r.label)}</td>
+                <td style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(r.method)}</td>
+                <td style="padding:8px 12px; text-align:right; font-family:var(--font-mono); font-weight:700;">${esc(money(r.amount))}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>`
+      : `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing was paid out in this period.</div>`}
+    </section>`;
+
+  // Dates are typed as MM/DD/YYYY and sent as ISO — the same split the rest of
+  // the app uses: what a person reads, versus what goes over the wire.
+  if (typeof wireUsDateField === 'function') { wireUsDateField('spend_from'); wireUsDateField('spend_to'); }
+  $('btnSpendApply').addEventListener('click', () => {
+    const iso = (v) => (typeof toIsoDate === 'function' ? toIsoDate(v) : v);
+    spendFrom = iso($('spend_from').value) || '';
+    spendTo = iso($('spend_to').value) || '';
+    renderSpendReportTab();
+  });
+  document.querySelectorAll('.btn-spend-preset').forEach(b => b.addEventListener('click', () => {
+    const [f, t] = presets[Number(b.dataset.i)][1]();
+    spendFrom = f; spendTo = t;
+    renderSpendReportTab();
+  }));
+}
+
 // ── Petty cash ─────────────────────────────────────────────────────────────
 // Apsara, 2026-09-02: "a new tab called Petty cash. Date and cash amount needs
 // to be entered here. So it is like cash reserve."
