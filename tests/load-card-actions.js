@@ -219,15 +219,26 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     // Clearing the box must bring the date sections BACK. Passing flat once
     // and never unsetting it would leave the grouping gone for the rest of
     // the session — a plausible bug, so it gets an assertion.
-    // This assertion has now followed the code twice in two days: search-only,
-    // then either-filter when the dropdown arrived, then search-only again
-    // when she asked for the dropdown to go. The PROPERTY has never changed —
-    // clearing the box must bring the date sections back — which is why it
-    // keeps getting rewritten instead of deleted.
-    ck(`${label}: the deck goes flat only while something is typed`, /flat: !!q/.test(src),
+    // ── stated as a PROPERTY, not as today's variable name ───────────────
+    // This has now chased the code four times in two days: search-only, then
+    // either-filter when the dropdown arrived, then search-only when the
+    // dropdown went, now either-filter again with the item picker. The thing
+    // being protected never changed — the deck is flat while something is
+    // narrowing it, and grouped when nothing is — so it is finally written
+    // that way instead of matching a literal.
+    const narrowedDef = /const narrowed = ([^;]+);/.exec(src);
+    ck(`${label}: something decides whether the deck is narrowed`, !!narrowedDef);
+    ck(`${label}:   and the flat/grouped choice follows it`, /flat: narrowed/.test(src),
        'if this ever became "always true", the date grouping would be gone for good');
-    ck(`${label}:   and the query is read from the box each time`,
-       /const q = String\(searchInput\.value \|\| ''\)\.trim\(\);/.test(src));
+    if (narrowedDef) {
+        // Every filter the deck supports must appear in that expression. Add a
+        // third filter and forget it here, and the deck silently stays grouped
+        // while filtered — hiding most of the answer behind collapsed dates.
+        const expr = narrowedDef[1];
+        ck(`${label}:   the free-text search counts`, /\bq\b/.test(expr));
+        ck(`${label}:   the chosen item counts too`, /chosenItemDetail/.test(expr),
+           'a filter missing from this expression leaves the deck grouped while narrowed');
+    }
 }
 
 // ── 6. the amount is on the card ──────────────────────────────────────────
@@ -325,7 +336,98 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     ck(`${label}: the placeholder names what it searches`,
        /Search by date, seller, item, price…/.test(src),
        'a box that quietly got broader is one nobody knows to use');
-    ck(`${label}: results go flat while something is typed`, /flat: !!q/.test(src));
+    // (the flat/grouped rule is asserted once, in section E, as a property —
+    // repeating it here in a second form is how the two drift apart)
+}
+
+// ── 8. the explicit "by item detail" filter ───────────────────────────────
+// Apsara, 2026-09-02: "when i type sealed units in load detail, its not
+// filtering. alternatively you give a check box as by item detail. then give
+// text box, as user starts typing, show all matching item detail. once user
+// select, show all matching load ticket."
+//
+// The free-text box above DOES match item descriptions — verified in section G
+// — so the report was almost certainly about a build that predates it. But the
+// underlying complaint is real and not about a bug: when a search returns
+// nothing there is no way to tell "no loads have this" from "the search is not
+// looking there". Picking from a list the app itself offers removes that
+// doubt, which is why this is worth having alongside the search rather than
+// instead of it.
+section('H — pick an item from a list, get the loads carrying it');
+for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
+    const details = new Function(grab(src, 'itemDetailsInLoads', label) + '; return itemDetailsInLoads;')();
+    const withItem = new Function(grab(src, 'loadsWithItem', label) + '; return loadsWithItem;')();
+
+    const LOADS = [
+        { id: 'L1', items: [{ description: 'Sealed Units' }, { description: 'Copper' }] },
+        { id: 'L2', items: [{ description: ' sealed units ' }] },
+        { id: 'L3', items: [{ description: 'Brass' }] },
+        { id: 'L4', items: [] },
+        { id: 'L5' },
+    ];
+    const ids = (r) => r.map(x => x.id).join(',');
+
+    ck(`${label}: the list offers each distinct item once`,
+       details(LOADS).join('|') === 'Brass|Copper|Sealed Units');
+    ck(`${label}:   de-duplicated case- and space-insensitively`,
+       details(LOADS).filter(d => /sealed/i.test(d)).length === 1,
+       'offering "Sealed Units" and " sealed units " as two choices would be two ways to ask one question');
+    ck(`${label}:   sorted, so it can be scanned`, details(LOADS)[0] === 'Brass');
+    ck(`${label}:   a load with no items contributes nothing`, !details(LOADS).includes(''));
+    ck(`${label}:   and one with no items key does not throw`, details([{ id: 'X' }]).length === 0);
+
+    // EXACT match, the same comparison the Inventory grouping and drill-down
+    // use. Anything looser would put a load under a material it does not have.
+    ck(`${label}: selecting an item returns the loads carrying it`, ids(withItem(LOADS, 'Sealed Units')) === 'L1,L2');
+    ck(`${label}:   matching ignores case and surrounding space`, ids(withItem(LOADS, 'sealed units')) === 'L1,L2');
+    ck(`${label}:   but never on a substring`, ids(withItem(LOADS, 'Sealed')) === '',
+       'this is a chosen option, not a search — a partial match here would be a different feature');
+    ck(`${label}:   an item nothing carries returns nothing, not everything`,
+       ids(withItem(LOADS, 'Titanium')) === '');
+    ck(`${label}:   no selection returns everything`, withItem(LOADS, '').length === LOADS.length);
+
+    // ── the wiring ────────────────────────────────────────────────────────
+    ck(`${label}: there is a checkbox to turn it on`, /id="byItemToggle"/.test(src));
+    ck(`${label}:   revealing a text box`, /id="itemFilterInput"/.test(src));
+    ck(`${label}:   with a suggestion list`, /id="itemFilterAc"/.test(src));
+    ck(`${label}: off by default, so the ordinary case is still one box`,
+       /<div id="byItemPanel" class="hidden"/.test(src));
+
+    // Suggestions must come from the DECK. Offering a material from the full
+    // catalogue that no load carries recreates the exact ambiguity — you pick
+    // something and get nothing — that this control exists to remove.
+    ck(`${label}: suggestions are built from the loads on screen`,
+       /itemDetailsInLoads\(loadsCache\)/.test(src),
+       'offering a material with no loads behind it can only ever answer "nothing found"');
+    ck(`${label}:   each suggestion says how many loads it has`,
+       /loadsWithItem\(loadsCache, d\)\.length/.test(src),
+       'a zero is then visible before you pick it, not after');
+    ck(`${label}: an empty box offers the whole list`, /const matches = q \? all\.filter/.test(src),
+       'someone who does not remember the exact wording needs a way in');
+    ck(`${label}: no match says so rather than showing an empty menu`,
+       /No item matches/.test(src));
+
+    // Selection state has to survive a repaint, and must never outlive the
+    // control that set it.
+    ck(`${label}: the choice survives a tab repaint`, /let chosenItemDetail = '';/.test(src),
+       'losing it after generating a PDF would show every load again — which reads as the filter not working');
+    ck(`${label}: unticking the box clears the filter`,
+       /chosenItemDetail = '';\s*\n\s*itemInput\.value = '';/.test(src),
+       'a filtered deck with its control hidden is the worst of both');
+    ck(`${label}: typing past the chosen item drops the selection`,
+       /if \(chosenItemDetail && itemInput\.value\.trim\(\)\.toLowerCase\(\) !== chosenItemDetail\.toLowerCase\(\)\)/.test(src),
+       'the deck must never be filtered by something the box no longer says');
+    ck(`${label}: what is showing, and how many, is stated on screen`,
+       /Showing <strong[^>]*>\$\{esc\(chosenItemDetail\)\}<\/strong> — \$\{rows\.length\} load/.test(src),
+       'a genuine zero has to be unmistakable — that ambiguity is the whole reason this exists');
+    ck(`${label}: picking uses mousedown, not click`, /el\.addEventListener\('mousedown'/.test(src),
+       'blur fires first on a click and closes the menu before the click lands');
+    ck(`${label}: both controls repaint through ONE function`,
+       (src.match(/searchInput\.addEventListener\('input', repaintDeck\)/g) || []).length === 1
+       && /const repaintDeck = \(\) => \{/.test(src),
+       'two render paths is how they end up disagreeing about what is on screen');
+    ck(`${label}: search and item filter compose`,
+       /let rows = filterLoads\(loadsCache, q\);\s*\n\s*if \(chosenItemDetail\) rows = loadsWithItem\(rows, chosenItemDetail\);/.test(src));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

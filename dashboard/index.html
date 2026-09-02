@@ -4013,6 +4013,41 @@ function formatLoadDateHeading(key) {
 // string of id/date/seller/description/weights/amount. Client-side against
 // loadsCache (already fetched for the deck) rather than a server round trip
 // per keystroke — the loads list is small enough that this is instant.
+// The item picked from the "by item detail" list, or '' for none. Module
+// scope so it survives a repaint of the Loads tab — losing it after
+// generating a PDF would silently show every load again, which reads exactly
+// like the filter not working.
+let chosenItemDetail = '';
+
+// Every distinct item description in the deck, for the type-ahead. Built from
+// the loads ON SCREEN, not the /api/item-types catalogue: the catalogue lists
+// everything ever typed, and offering a material with no loads behind it is an
+// option that can only ever answer "nothing found" — the exact ambiguity this
+// control exists to remove.
+function itemDetailsInLoads(loads) {
+  const seen = new Map();
+  for (const l of (loads || [])) {
+    for (const it of (Array.isArray(l.items) ? l.items : [])) {
+      const raw = String(it.description || '').trim();
+      if (!raw) continue;
+      const k = raw.toLowerCase();
+      if (!seen.has(k)) seen.set(k, raw);
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+}
+
+// Loads carrying a given item. EXACT match on the description, trimmed and
+// case-insensitive — the same comparison groupItemsByDescription and the
+// Inventory drill-down use. It has to be the same, or a load could appear
+// under a material heading it does not belong to.
+function loadsWithItem(loads, description) {
+  const want = String(description || '').trim().toLowerCase();
+  if (!want) return loads;
+  return (loads || []).filter(l => (Array.isArray(l.items) ? l.items : [])
+    .some(it => String(it.description || 'Other').trim().toLowerCase() === want));
+}
+
 function filterLoads(loads, query) {
   // ── ONE box, typed, matching everything on the load ─────────────────────
   // Apsara, 2026-09-02: "instead of select option of item detail filter, make
@@ -4808,12 +4843,37 @@ function renderLoads(loads) {
            Apsara 2026-09-02 ("in load tab also, i should filter by item
            detail") — see filterLoads. The placeholder says so, because a
            search box that quietly got broader is one nobody knows to use. -->
-      <!-- ONE box. It matches the load's own fields AND its items —
-           description and per-item price — per Apsara 2026-09-02: "make it as
-           type and match .. add it to search by date, seller, item, price".
-           The item-type dropdown that briefly sat beside this is gone; see
-           filterLoads for why one typed box beats two controls here. -->
-      <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <!-- ONE box for general search. It matches the load's own fields AND
+           its items — description and per-item price — per Apsara 2026-09-02:
+           "make it as type and match .. add it to search by date, seller,
+           item, price". -->
+      <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price…" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+
+      <!-- ── By item detail ────────────────────────────────────────────────
+           Apsara, 2026-09-02: "when i type sealed units in load detail, its
+           not filtering. alternatively you give a check box as by item
+           detail. then give text box, as user starts typing, show all
+           matching item detail. once user select, show all matching load
+           ticket."
+
+           The free-text box above DOES match item descriptions — but when a
+           search returns nothing there is no way to tell "no loads have
+           this" from "the search is not looking there". This removes that
+           doubt: you pick the material from a list the app itself offers, so
+           a selection either matches loads or genuinely has none.
+
+           Off by default, so the ordinary case is still one box. -->
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-body); cursor:pointer;">
+        <input type="checkbox" id="byItemToggle" style="width:16px; height:16px; accent-color:var(--accent); cursor:pointer;">
+        <span>Filter by item detail</span>
+      </label>
+      <div id="byItemPanel" class="hidden" style="margin-bottom:20px;">
+        <div class="ld-desc-ac-wrap" style="position:relative;">
+          <input id="itemFilterInput" type="text" autocomplete="off" placeholder="Start typing an item — e.g. sealed" style="width:100%; padding:11px 14px; border:1px solid var(--accent); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+          <div id="itemFilterAc" class="ac-dropdown hidden"></div>
+        </div>
+        <div id="itemFilterChosen" style="margin-top:8px; font-size:12.5px; color:var(--text-muted);"></div>
+      </div>
       <div id="draftStrip">${draftStripHtml()}</div>
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
@@ -5334,17 +5394,115 @@ function wireLoadsEvents() {
   }
 
   const searchInput = $('loadSearch');
-  if (searchInput) {
-    searchInput.addEventListener('input', () => {
-      const q = String(searchInput.value || '').trim();
-      const filtered = filterLoads(loadsCache, q);
-      // flat ONLY while something is typed. Once you have searched a material
-      // you are no longer looking for a day, and only the first date section
-      // renders open — grouping would hide most of the answer. Clearing the
-      // box has to put the date sections back.
-      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered,
-        q ? 'No loads match that search.' : 'No loads yet.', { flat: !!q });
-      wireDeckEvents();
+  const itemToggle = $('byItemToggle');
+  const itemInput = $('itemFilterInput');
+  const itemAc = $('itemFilterAc');
+  const itemChosen = $('itemFilterChosen');
+
+  // ── one place that repaints the deck ──────────────────────────────────
+  // Both controls funnel through here. Two paths that each render the deck
+  // is how they end up disagreeing about what is on screen.
+  const repaintDeck = () => {
+    const q = String(searchInput ? searchInput.value : '').trim();
+    let rows = filterLoads(loadsCache, q);
+    if (chosenItemDetail) rows = loadsWithItem(rows, chosenItemDetail);
+    const narrowed = !!q || !!chosenItemDetail;
+    // flat while EITHER is on. Once you have asked for one material you are
+    // no longer looking for a day, and only the first date section renders
+    // open — grouping would hide most of the answer. Clearing both puts the
+    // date sections back.
+    $('loadDeck').innerHTML = loadDeckSectionsHtml(rows,
+      narrowed ? 'No loads match that filter.' : 'No loads yet.', { flat: narrowed });
+    wireDeckEvents();
+    if (itemChosen) {
+      // Says what was picked and HOW MANY loads carry it, so a genuine zero
+      // is unmistakable — that ambiguity is the whole reason this control
+      // exists ("its not filtering" could mean either thing).
+      itemChosen.innerHTML = chosenItemDetail
+        ? `Showing <strong style="color:var(--text-strong);">${esc(chosenItemDetail)}</strong> — ${rows.length} load${rows.length === 1 ? '' : 's'} <button id="itemFilterClear" class="btn" style="font-size:11px; padding:3px 9px; margin-left:6px;">Clear</button>`
+        : '';
+      const clr = $('itemFilterClear');
+      if (clr) clr.addEventListener('click', () => {
+        chosenItemDetail = '';
+        if (itemInput) itemInput.value = '';
+        repaintDeck();
+      });
+    }
+  };
+
+  if (searchInput) searchInput.addEventListener('input', repaintDeck);
+
+  if (itemToggle && itemInput && itemAc) {
+    const closeAc = () => itemAc.classList.add('hidden');
+
+    // Suggestions come from the deck, so anything offered has loads behind
+    // it. Empty box shows the whole list — someone who does not remember the
+    // exact wording needs a way in, which is the same reasoning as the item
+    // description type-ahead in the load form.
+    const showMatches = () => {
+      const q = itemInput.value.trim().toLowerCase();
+      const all = itemDetailsInLoads(loadsCache);
+      const matches = q ? all.filter(d => d.toLowerCase().includes(q)) : all;
+      if (!matches.length) {
+        itemAc.innerHTML = `<div class="ac-item" style="color:var(--text-faint); cursor:default;">No item matches "${esc(itemInput.value.trim())}"</div>`;
+        itemAc.classList.remove('hidden');
+        return;
+      }
+      itemAc.innerHTML = matches.map(d => {
+        const n = loadsWithItem(loadsCache, d).length;
+        return `<div class="ac-item" data-val="${esc(d)}">${esc(d)} <span style="color:var(--text-faint); font-size:11px;">${n} load${n === 1 ? '' : 's'}</span></div>`;
+      }).join('');
+      itemAc.classList.remove('hidden');
+      itemAc.querySelectorAll('.ac-item[data-val]').forEach(el => el.addEventListener('mousedown', (ev) => {
+        // mousedown, not click: blur fires first on a click and would close
+        // the menu before the click landed. Same fix as the load form's
+        // description type-ahead.
+        ev.preventDefault();
+        chosenItemDetail = el.dataset.val;
+        itemInput.value = el.dataset.val;
+        closeAc();
+        repaintDeck();
+      }));
+    };
+
+    itemToggle.addEventListener('change', () => {
+      $('byItemPanel').classList.toggle('hidden', !itemToggle.checked);
+      if (itemToggle.checked) { itemInput.focus(); showMatches(); }
+      else {
+        // Unticking clears the filter. Leaving it applied while its control
+        // is hidden is the worst of both — a deck that is filtered with
+        // nothing on screen explaining why.
+        chosenItemDetail = '';
+        itemInput.value = '';
+        closeAc();
+      }
+      repaintDeck();
+    });
+
+    itemInput.addEventListener('focus', showMatches);
+    itemInput.addEventListener('input', () => {
+      // Typing past a chosen item drops the selection, so the deck is never
+      // filtered by something the box no longer says.
+      if (chosenItemDetail && itemInput.value.trim().toLowerCase() !== chosenItemDetail.toLowerCase()) {
+        chosenItemDetail = '';
+        repaintDeck();
+      }
+      showMatches();
+    });
+    itemInput.addEventListener('blur', () => setTimeout(closeAc, 120));
+    itemInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { closeAc(); return; }
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      // Enter takes the only remaining match — the common case after typing
+      // three letters — rather than submitting anything.
+      const only = itemAc.querySelectorAll('.ac-item[data-val]');
+      if (only.length === 1) {
+        chosenItemDetail = only[0].dataset.val;
+        itemInput.value = chosenItemDetail;
+        closeAc();
+        repaintDeck();
+      }
     });
   }
 
