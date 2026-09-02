@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Debug-only overrides. This source set is merged over main for the debug
+     build type only, so the release APK is completely unaffected.
+
+     Why this exists: debug now installs as com.edgemetals.loads.debug and sits
+     on the phone NEXT TO the real app (see app/build.gradle). Two identical
+     "Edge Yard" icons with no way to tell them apart is how you end up testing
+     against the wrong one. -->
+<resources>
+    <string name="app_name">Edge Yard (debug)</string>
+    <string name="title_activity_main">Edge Yard (debug)</string>
+</resources>
