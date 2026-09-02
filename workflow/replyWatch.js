@@ -249,51 +249,21 @@ const MIN_CONFIDENCE = 0.6;
 const ALERT_START_HOUR = 6;
 const ALERT_END_HOUR = 23;
 
-// ── WHOSE NIGHT IS IT? (2026-09-02) ────────────────────────────────────────
-// LIVE. Six messages between midnight and half five in the morning:
-//   00:15 digest · 01:25 chase · 01:35 chase · 02:40 chase · 03:30 chase
-//   05:30 "3 things due now — OVERDUE by 8d"
+// ── ALERT WINDOW IS LOS ANGELES TIME. THIS IS DELIBERATE. ─────────────────
+// 2026-09-02. I changed this to her local timezone after six messages landed
+// between 00:15 and 05:30 IST, and Apsara overruled it: "no it should work on
+// los angeles time only".
 //
-// The window was real and working. It was pointed at the wrong city.
-// inAlertWindow tested the hour in LOS ANGELES, and IST runs 12.5 hours
-// ahead, so every one of those landed at LA midday:
-//   00:15 IST -> LA 11 · 01:25 -> 12 · 01:35 -> 13 · 02:40 -> 14
-//   03:30 -> 15 · 05:30 -> 17     — all inside 06-23.
-// The inverse is worse: her working morning, 09:00-11:30 IST, is LA
-// 20:30-23:00, and the window CLOSES at 23. Jarvis went quiet exactly when
-// she sat down.
+// Recording the decision so it does not get "fixed" again by someone reading
+// the same symptom. There is no setting that satisfies both — LA's working
+// day IS her night, so anchoring to the port clock means overnight messages,
+// permanently and by choice. She runs a US freight desk; being reachable
+// while the carriers, yards and terminals are open is worth more than an
+// uninterrupted night, and that is her call to make, not the code's.
 //
-// THE DISTINCTION, already written down in scheduler.js: freight DEADLINES
-// are US port dates and stay LA-anchored — laMidnightUTC, daysUntilDeadline
-// and every date the digest prints are untouched here. What was never a port
-// date is WHEN TO INTERRUPT A PERSON. That belongs to the person's clock.
-const MANAGER_TZ_DEFAULT = 'Asia/Kolkata';
-function managerTimezone() {
-    try {
-        const s = cfg.getSettings ? cfg.getSettings() : {};
-        return s.manager_timezone || MANAGER_TZ_DEFAULT;
-    } catch (e) { return MANAGER_TZ_DEFAULT; }
-}
-// hourCycle 'h23' on purpose: hour12:false renders midnight as 24 in some ICU
-// builds, which would put 00:xx outside every sane window and quietly
-// re-create the bug this replaces.
-function managerHour(now = new Date(), tz = null) {
-    try {
-        return Number(new Intl.DateTimeFormat('en-GB', {
-            timeZone: tz || managerTimezone(), hour: '2-digit', hourCycle: 'h23',
-        }).format(now instanceof Date ? now : new Date(now)));
-    } catch (e) {
-        // An unknown timezone must not silence her notifications entirely.
-        // FAIL OPEN — a ping at a bad hour beats a missed booking.
-        console.warn('[REPLYWATCH] bad manager_timezone, staying always-on:', e.message);
-        return NaN;
-    }
-}
-function isInAlertWindow(now = new Date(), tz = null) {
-    const h = managerHour(now, tz);
-    if (!Number.isFinite(h)) return true;
-    return h >= ALERT_START_HOUR && h < ALERT_END_HOUR;
-}
+// If the volume is the problem rather than the hour, the fix is BATCHING, not
+// the timezone: on 2 Sep four separate chase messages went out at 01:25,
+// 01:35, 02:40 and 03:30 where one would have done.
 
 // ── Aging / chase-up — Apsara, 2026-08-22: "if there is something which
 // need our answer yet we didnt give anything after 5 days." ─────────────────
@@ -3114,8 +3084,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // Previously declared 20 lines BELOW this point - using it here as a const
     // would have thrown ReferenceError on every scan (temporal dead zone).
     const laHour = getLADate().getHours();
-    // HER hours, not LA's — see WHOSE NIGHT IS IT? above. Deadlines stay LA.
-    const inAlertWindow = isInAlertWindow();
+    const inAlertWindow = laHour >= ALERT_START_HOUR && laHour < ALERT_END_HOUR;
 
     try {
         const repliedDuringChase = [];
@@ -3271,7 +3240,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             console.error('[REPLYWATCH] digest send failed, keeping queue for next run:', err.message);
         }
     } else if (queued.length) {
-        console.log(`[REPLYWATCH] holding ${queued.length} flagged email(s) — ${!inAlertWindow ? `outside alert window (${managerTimezone()} hour ${managerHour()}, LA hour ${laHour})` : 'waiting for the hourly digest slot'}`);
+        console.log(`[REPLYWATCH] holding ${queued.length} flagged email(s) — ${!inAlertWindow ? `outside alert window (LA hour ${laHour})` : 'waiting for the hourly digest slot'}`);
     }
 
     // Deadline nudges go to the INTERNAL TEAM GROUP, not just to her — per
@@ -3356,7 +3325,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, managerHour, isInAlertWindow, managerTimezone, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
