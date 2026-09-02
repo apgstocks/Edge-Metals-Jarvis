@@ -134,6 +134,13 @@ HOOKEOF
   acquire)
     DESC="${2:-unspecified work}"
     if released; then                            # a released lease is reusable
+        # mkdir -p, not plain writes. `released` is also true when the lock dir
+        # does not exist at all (since() reports 0 for a missing $LOCK/at), so
+        # this branch is taken on a COMPLETELY FREE tree as well as a released
+        # one — and there the three writes below all failed with "No such file
+        # or directory". The script then printed "acquired" and exited 0 while
+        # holding nothing, which is the single worst thing a lock can do.
+        mkdir -p "$LOCK"
         me > "$LOCK/owner"; now > "$LOCK/at"; echo "$DESC" > "$LOCK/what"
         echo "acquired by $(owner) — $DESC"
         exit 0

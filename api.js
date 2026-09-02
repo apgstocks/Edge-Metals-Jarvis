@@ -2177,14 +2177,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // Every mutation schedules a sheet sync, same as loads.
     app.get('/api/expenses', requireAdmin, (req, res) => {
         try {
-            const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES, EXPENSE_METHODS } = require('./helpers/expenses');
+            const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES, EXPENSE_METHODS,
+                    RETIRED_METHODS, DEFAULT_EXPENSE_METHOD } = require('./helpers/expenses');
             const all = loadExpenses();
             // methods travels with the payload for the same reason categories
             // does: the dropdown is built from the server's list, so it cannot
-            // drift from what the server will accept.
+            // drift from what the server will accept. default_method rides
+            // along so which option is pre-selected is decided in ONE place —
+            // a client-side default would silently disagree with the server
+            // the next time the list changes.
+            //
+            // retired_methods is the same idea applied to the OTHER end. The
+            // form offers a record's own stored method back to it so an edit
+            // cannot erase it; without this list the form cannot tell a real
+            // retired value (Zelle — the server still accepts it) from legacy
+            // free text (a typed "cash app" — the server rejects it), so it
+            // offered both. Selecting the second saved as null anyway: an
+            // option that quietly does not take.
             let pettyBalance = null;
             try { pettyBalance = require('./helpers/pettyCash').balance(); } catch (e) {}
-            res.json({ expenses: all, report: getExpenseReport(all, {}), categories: EXPENSE_CATEGORIES, methods: EXPENSE_METHODS, petty_cash_balance: pettyBalance });
+            res.json({ expenses: all, report: getExpenseReport(all, {}), categories: EXPENSE_CATEGORIES,
+                       methods: EXPENSE_METHODS, retired_methods: RETIRED_METHODS,
+                       default_method: DEFAULT_EXPENSE_METHOD,
+                       petty_cash_balance: pettyBalance });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
     app.post('/api/expenses', requireAdmin, async (req, res) => {

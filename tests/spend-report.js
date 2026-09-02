@@ -55,22 +55,47 @@ console.log('\n─ expenses against the cash box, and the spend report ───
 section('A — how an expense was paid is now one of a known set');
 {
     reset();
-    // Narrowed 2026-09-02: "remove other, cheque in paid by."
-    ck('the offered list is exactly the four she wants',
-       expenses.EXPENSE_METHODS.join('/') === 'Cash/Zelle/Wire/Card');
-    ck('  Cheque and Other are no longer offered',
-       !expenses.EXPENSE_METHODS.includes('Cheque') && !expenses.EXPENSE_METHODS.includes('Other'));
+    // Narrowed 2026-09-02 ("remove other, cheque in paid by") and again on
+    // 2026-09-03 ("when i add entry in expense, paid by should be cash/card").
+    ck('the offered list is exactly the two she wants',
+       expenses.EXPENSE_METHODS.join('/') === 'Cash/Card');
+    for (const gone of ['Zelle', 'Wire', 'Cheque', 'Other']) {
+        ck(`  ${gone} is no longer offered`, !expenses.EXPENSE_METHODS.includes(gone));
+    }
+
+    // ── the default ───────────────────────────────────────────────────────
+    // "by default it should be cash". Asserted on the SERVER's constant rather
+    // than on the dropdown, because that is where the decision lives — the
+    // form reads it off the payload (section G).
+    ck('a new expense starts on Cash', expenses.DEFAULT_EXPENSE_METHOD === 'Cash');
+    ck('  and the default is something the server would actually accept',
+       expenses.EXPENSE_METHODS.includes(expenses.DEFAULT_EXPENSE_METHOD),
+       'a default outside the list pre-selects an option that cannot be saved');
 
     // ── retired, not forbidden ────────────────────────────────────────────
-    // Expenses already recorded as Cheque or Other still exist. If saving one
-    // nulled its method, editing a typo in the description would erase how the
-    // money moved — a silent data loss triggered by an unrelated edit.
+    // Expenses already recorded as Zelle, Wire, Cheque or Other still exist.
+    // If saving one nulled its method, editing a typo in the description would
+    // erase how the money moved — silent data loss from an unrelated edit.
     ck('a retired value is still ACCEPTED on save', expenses.normalizeMethod('Cheque') === 'Cheque',
        'otherwise re-saving an old cheque expense erases how it was paid');
     ck('  including Other', expenses.normalizeMethod('other') === 'Other');
+    ck('  and Zelle, retired today', expenses.normalizeMethod('Zelle') === 'Zelle',
+       'a Zelle expense recorded yesterday must survive being edited today');
+    ck('  and Wire', expenses.normalizeMethod('wire') === 'Wire');
     ck('  and they are listed as retired, not deleted',
-       expenses.RETIRED_METHODS.join('/') === 'Cheque/Other');
+       expenses.RETIRED_METHODS.join('/') === 'Zelle/Wire/Cheque/Other');
+    ck('  with no overlap between offered and retired',
+       expenses.EXPENSE_METHODS.every(m => !expenses.RETIRED_METHODS.includes(m)),
+       'a value in both lists means the form would offer it AND mark it withdrawn');
     ck('genuine nonsense is still refused', expenses.normalizeMethod('cash app') === null);
+
+    // A retired method must still leave the cash box alone — the reason it is
+    // retired is nothing to do with how it moved money.
+    {
+        const before = petty.balance();
+        await expenses.addExpense(exp({ amount: 40, payment_method: 'Zelle', description: 'retired zelle' }));
+        ck('  a retired Zelle expense still does not touch petty cash', petty.balance() === before);
+    }
 
     // The REPORT keeps its Cheque column, because loads can still be paid by
     // cheque — PAYMENT_MODES was not touched. Removing it there would push

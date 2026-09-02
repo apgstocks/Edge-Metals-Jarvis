@@ -4891,6 +4891,15 @@ let expenseCategories = [];
 // The server's list of payment methods, fetched with the expenses. Kept in a
 // variable rather than hardcoded so the form and the server cannot disagree.
 let expenseMethods = [];
+// Which one starts selected on a NEW expense. From the server too, for the
+// same reason — a hardcoded 'Cash' here would keep pre-selecting Cash long
+// after the server stopped offering it.
+let expenseDefaultMethod = '';
+// Methods the server no longer OFFERS but still ACCEPTS. Needed to tell a real
+// retired value apart from legacy free text — see openExpenseModal. Null, not
+// [], so "the server did not tell us" is distinguishable from "there are
+// none": an older server sends neither, and there the old behaviour is kept.
+let expenseRetiredMethods = null;
 let editingExpenseId = null;
 
 function todayLocalDateStrForExpense() {
@@ -5302,6 +5311,8 @@ async function renderExpensesTab() {
   const data = await api('/api/expenses');
   expenseCategories = data.categories || [];
   expenseMethods = data.methods || [];
+  expenseDefaultMethod = data.default_method || '';
+  expenseRetiredMethods = Array.isArray(data.retired_methods) ? data.retired_methods : null;
   pettyCash.balance = Number(data.petty_cash_balance) || pettyCash.balance;
   const expenses = data.expenses || [];
   const report = data.report || { total: 0, count: 0, byCategory: [], byDay: [] };
@@ -5393,12 +5404,30 @@ function openExpenseModal(expense) {
   // dropdown cannot offer something the server would reject.
   const sel = $('exp_payment');
   // Cheque and Other were removed on 2026-09-02 ("remove other, cheque in paid
-  // by"). They are RETIRED, not forbidden: an expense already recorded with
-  // one keeps it as an option so that editing the description does not
-  // silently erase how it was paid. It is marked, and it is never offered to
-  // anything else.
+  // by"); Zelle and Wire on 2026-09-03 ("paid by should be cash/card"). They
+  // are RETIRED, not forbidden: an expense already recorded with one keeps it
+  // as an option so that editing the description does not silently erase how
+  // it was paid. It is marked, and it is never offered to anything else.
+  //
+  // Only a value the server would still ACCEPT is offered back. Until
+  // 2026-09-03 this offered back anything non-empty, which meant legacy free
+  // text ("cash app", typed before the field was a dropdown) appeared as a
+  // selectable option and then saved as null, because normalizeMethod rejects
+  // it — an option that silently does not take. Her rule for those was "leave
+  // old entries blank", and blank is now what they get.
+  //
+  // expenseRetiredMethods === null means the server did not send the list at
+  // all (an app pointed at a VM that has not been updated yet). There the old
+  // behaviour is kept deliberately: offering a stored Zelle back is right, and
+  // the alternative — treating every stored value as unknown — would blank a
+  // real method and erase it on save. The narrower rule needs the server's
+  // list to be safe, so it waits for it.
+  const acceptable = expenseRetiredMethods
+    ? (expenseMethods || []).concat(expenseRetiredMethods)
+    : null;
   const retired = expense && expense.payment_method
     && !(expenseMethods || []).includes(expense.payment_method)
+    && (!acceptable || acceptable.includes(expense.payment_method))
     ? expense.payment_method : null;
   sel.innerHTML = ['<option value="">— not recorded —</option>']
     .concat((expenseMethods || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`))
@@ -5408,8 +5437,17 @@ function openExpenseModal(expense) {
   // recorded" — her choice ("leave old entries blank"). The stored string is
   // untouched on the record until she actually saves a new choice, so nothing
   // is destroyed by merely opening the form.
-  sel.value = expense && ((expenseMethods || []).includes(expense.payment_method) || retired === expense.payment_method)
-    ? expense.payment_method : '';
+  //
+  // NEW expense: pre-selected to the server's default, Cash (2026-09-03, "by
+  // default it should be cash"). EXISTING expense: whatever it already says,
+  // and blank if that is nothing. The default deliberately does NOT reach the
+  // edit path — an old expense with no recorded method would come up reading
+  // "Cash", and saving would both rewrite it and withdraw from petty cash for
+  // money that may never have come out of the box.
+  sel.value = expense
+    ? (((expenseMethods || []).includes(expense.payment_method) || retired === expense.payment_method)
+        ? expense.payment_method : '')
+    : (expenseDefaultMethod || '');
   $('exp_amount').value = expense ? (expense.amount ?? '') : '';
   $('expErr').textContent = '';
   $('expenseModal').classList.remove('hidden');

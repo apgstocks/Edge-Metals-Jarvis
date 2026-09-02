@@ -64,17 +64,36 @@ function nextExpenseId(expenses) {
 // today. "cash", "Cash" and "cash app" are three different strings, and any
 // grouping of them is a guess about money.
 //
-// The four load modes plus Card and Other, so one vocabulary spans both sides
-// of the report — a load payment and an expense paid the same way land in the
-// same column.
-const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Card'];
+// Narrowed to two on 2026-09-03: Apsara, "when i add entry in expense, paid by
+// should be cash/card". A yard expense is a receipt from a fuel stop, a parts
+// counter or a repair shop — it is handed over as notes or on the card. Zelle
+// and Wire are how LOADS get paid, not how a receipt gets settled, and every
+// option in a list that is never the right answer is one more chance to pick
+// the wrong one on a phone in a hurry.
+const EXPENSE_METHODS = ['Cash', 'Card'];
+
+// The default for a NEW expense. She asked for it directly, and it matches the
+// yard: most receipts here are cash out of the box.
+//
+// The consequence is worth stating rather than burying, because it is real
+// money: a Cash expense WITHDRAWS FROM PETTY CASH (see addExpense below).
+// Before today the field started blank, so an expense saved without touching
+// the dropdown left the drawer alone. Now the same keystrokes draw the box
+// down. That is the point — it is what makes the balance track reality — but
+// it means "just save it and sort it out later" now moves the ledger.
+//
+// It applies to NEW expenses only. Defaulting on EDIT would take a legacy
+// expense whose method nobody recorded, silently call it Cash, and withdraw
+// for it — a ledger entry invented by opening a form to fix a typo.
+const DEFAULT_EXPENSE_METHOD = 'Cash';
 
 // Offered until 2026-09-02, when Apsara said "remove other, cheque in paid
-// by". Kept as a list rather than deleted, because EXPENSES ALREADY RECORDED
-// WITH THEM STILL EXIST and there are two ways that could go wrong:
+// by"; Zelle and Wire joined them on 2026-09-03. Kept as a list rather than
+// deleted, because EXPENSES ALREADY RECORDED WITH THEM STILL EXIST and there
+// are two ways that could go wrong:
 //
 //   - the spend report groups on its own METHODS list, which still includes
-//     Cheque and Other, so a past cheque expense keeps its column. Nothing is
+//     all four, so a past Zelle or cheque expense keeps its column. Nothing is
 //     rewritten and no history moves.
 //   - EDITING one of those expenses would show an empty "Paid by" box and,
 //     on save, silently null the method — turning a recorded cheque into "not
@@ -83,7 +102,11 @@ const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Card'];
 // So normalizeMethod still ACCEPTS these, and the form offers the record's own
 // retired value back to it while never offering them on anything new. A
 // retired option is not the same as a forbidden one.
-const RETIRED_METHODS = ['Cheque', 'Other'];
+//
+// Note that PAYMENT_MODES on the loads side is untouched: a load is still paid
+// by Zelle or Wire, which is most of how this business pays for metal. This
+// list is the expense form only.
+const RETIRED_METHODS = ['Zelle', 'Wire', 'Cheque', 'Other'];
 
 // Matches case-insensitively and returns the CANONICAL spelling, or null.
 // Null rather than 'Other' on purpose: an unrecognised legacy value is
@@ -306,6 +329,6 @@ function getExpenseReport(allExpenses, { from, to } = {}) {
 }
 
 module.exports = {
-    EXPENSE_CATEGORIES, EXPENSE_METHODS, RETIRED_METHODS, normalizeMethod,
+    EXPENSE_CATEGORIES, EXPENSE_METHODS, RETIRED_METHODS, DEFAULT_EXPENSE_METHOD, normalizeMethod,
     loadExpenses, addExpense, editExpense, deleteExpense, getExpense, getExpenseReport,
 };
