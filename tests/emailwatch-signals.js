@@ -1998,6 +1998,49 @@ section('Z4 — addressed to her ALONE is untouched');
     ck('sole addressee stays hers', a.waiting_on === 'her', a.waiting_on);
 }
 
+// ══ AA. a stale verdict must not keep propagating ══════════════════════════
+// "Yurim sent OBLs and FedEx tracking number 8763 9260 0322. — 5 days ago,
+//  'Accounting Edge' still hasn't answered"   Apsara: "nothing to answer here"
+// She is right and TODAY's code agrees — the item was classified five days
+// ago, before the guard existed, and the stored verdict was replayed on every
+// chase since. Every guard added this week only applied to new mail.
+section('AA1 — the predicate itself');
+{
+    ck('a delivery closes a loop', rw.closesLoopWithoutAsk('Yurim sent OBLs and FedEx tracking number 8763 9260 0322.') === true);
+    ck('so does a thank-you', rw.closesLoopWithoutAsk('RadMetals thanks Geethabose for releasing the booking.') === true);
+    ck('but a delivery WITH an ask does not',
+        rw.closesLoopWithoutAsk('Yurim sent the OBLs and asks you to confirm receipt.') === false);
+    ck('nor does a plain request',
+        rw.closesLoopWithoutAsk('Zimex needs confirmation on the HBL draft.') === false);
+    ck('an empty summary is not a delivery', rw.closesLoopWithoutAsk('') === false);
+}
+
+section('AA2 — collectChaseUps stops replaying it');
+{
+    // Driven through the real function. The predicate being correct proved
+    // nothing on its own — that is the trap this file has caught four times.
+    const gmail = { users: { threads: { get: async () => ({ data: { messages: [{ payload: { headers: [
+        { name: 'From', value: 'Yurim <yurim@zimex.com>' },
+        { name: 'Date', value: new Date(Date.now() - 6 * 86400000).toUTCString() }] } }] } }) } } };
+    const stale = () => ({
+        threadId: 'th-obl', from: 'yurim@zimex.com', fromName: 'Yurim Cha',
+        subject: 'OBLs', summary: 'Yurim sent OBLs and FedEx tracking number 8763 9260 0322.',
+        waiting_on: 'colleague', asked_of: 'Accounting Edge', asked_for: 'confirmation',
+        firstFlaggedAt: new Date(Date.now() - 6 * 86400000).toISOString(),
+    });
+    const items = [stale()], resolved = [];
+    const due = await rw.collectChaseUps(gmail, 'apsara@edgemetals.com', items, resolved, true, rw.loadStore());
+    ck('a five-day-old delivery is not chased', due.length === 0, JSON.stringify(due.map((d) => d.summary)));
+    ck('and it leaves the tracked list', items.length === 0, String(items.length));
+
+    // THE OTHER HALF — a genuine outstanding ask of the same age must survive,
+    // or this becomes a way to silently lose real work.
+    const real = [{ ...stale(), summary: 'Zimex needs confirmation on the HBL draft and invoice.' }];
+    const due2 = await rw.collectChaseUps(gmail, 'apsara@edgemetals.com', real, [], true, rw.loadStore());
+    ck('a real outstanding ask of the same age IS still chased', due2.length === 1,
+        JSON.stringify(due2.map((d) => d.summary)));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

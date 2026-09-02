@@ -1214,6 +1214,19 @@ const isColleagueItem = (a) => !!a && a.waiting_on === 'colleague'
 // edit away, and so the log can say how much it is suppressing.
 const isBystanderItem = () => false;
 
+// ── DOES THIS SUMMARY CLOSE A LOOP RATHER THAN OPEN ONE? ───────────────────
+// Hoisted to module scope 2026-09-02 so the CHASE path can ask the same
+// question assess() asks. It was a pair of local consts, which meant the test
+// only ever ran on new mail — see the verification-layer note in
+// collectChaseUps for why that was not enough.
+const DELIVERY_IN_SUMMARY = /\b(provides?|provided|sends?|sent|shares?|shared|attach(?:es|ed)?|submits?|submitted|forwards?|forwarded|encloses?|issued?|uploads?|uploaded|thanks?|thanked|thanking|acknowledges?|acknowledged|apologi[sz]es?|apologi[sz]ed|confirms receipt|confirming receipt)\b/i;
+const ASK_IN_SUMMARY = /\?|\b(asks?|asked|asking|wants?|needs?|requests?|requested|requires?|requesting|awaiting|chasing|reminder)\b/i;
+function closesLoopWithoutAsk(summary) {
+    const t = String(summary || '');
+    if (!t) return false;
+    return DELIVERY_IN_SUMMARY.test(t) && !ASK_IN_SUMMARY.test(t);
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -1341,15 +1354,7 @@ async function assess(email) {
     //
     // Narrow on purpose. Only for the two directions that mean SOMEBODY WAS
     // ASKED ('colleague', 'someone_else'), and only when the summary carries
-    // no ask of its own — "provides X and asks for Y" keeps its asked_for,
-    // because there really is one.
-    // WIDENED 2026-09-01, and the first version was the wrong abstraction.
-    // I wrote a list of DELIVERY verbs when the real category is broader:
-    // a message that CLOSES a loop rather than opening one. A live chase-up
-    // five days later showed the gap:
-    //
-    //   "RadMetals thanks Geethabose for releasing the booking and container.
-    //    — 5 days ago, 'Accounting Edge' still hasn't answered"
+    // no ask of its own — "provides X and asks fo, 'Accounting Edge' still hasn't answered"
     //
     // A thank-you note. Nobody was asked anything, nothing is owed, and it
     // had been chased every other day for five days. "thanks" was simply not
@@ -1363,7 +1368,7 @@ async function assess(email) {
     const ASK_IN_SUMMARY = /\?|\b(asks?|asked|asking|wants?|needs?|requests?|requested|requires?|requesting|awaiting|chasing|reminder)\b/i;
     if (res.asked_for && (waiting_on === 'colleague' || waiting_on === 'someone_else')) {
         const summary = String(res.summary || '');
-        if (DELIVERY_IN_SUMMARY.test(summary) && !ASK_IN_SUMMARY.test(summary)) {
+        if (closesLoopWithoutAsk(summary)) {
             console.warn(`[REPLYWATCH] summary describes a DELIVERY but asked_for claims a request — dropping "${String(res.asked_for).slice(0, 50)}": "${summary.slice(0, 70)}"`);
             res.asked_for = null;
             res.asked_for_quote = null;
@@ -2035,6 +2040,34 @@ async function collectChaseUps(gmail, myAddress, tracked, repliedSenders = [], c
         const wrote = sheWroteSince(store, t.from, t.firstFlaggedAt);
         const movedOn = threadMovedOn(tail, t.from, t.firstFlaggedAt, myAddress);
         if (answered === true || wrote === true) { repliedSenders.push(t.from || t.fromName); continue; }
+        // ── A STALE VERDICT MUST NOT KEEP PROPAGATING (2026-09-02) ──────
+        // "Yurim sent OBLs and FedEx tracking number 8763 9260 0322.
+        //  — 5 days ago, 'Accounting Edge' still hasn't answered"
+        // Apsara: "nothing to answer here". She is right, and today's code
+        // agrees — closesLoopWithoutAsk() returns true for that sentence, so
+        // assess() would drop the invented ask and the item would never be
+        // tracked. It was classified FIVE DAYS AGO, before that guard existed,
+        // and nothing re-judged it since.
+        //
+        // Every guard added this week only ever applied to mail arriving after
+        // it. The stored verdict is replayed verbatim on every chase, so the
+        // backlog keeps surfacing decisions the current code would not make.
+        // That is the verification-layer rule from the harness reading she
+        // sent: do not let unverified state propagate downstream.
+        //
+        // Cheap on purpose — this is the SAME pure predicate assess() uses,
+        // run over the stored summary. No Gemini call, no re-fetch. It only
+        // ever removes items today's code would not have created, so it cannot
+        // invent a new kind of drop, and it is restricted to the same two
+        // directions assess() restricts it to.
+        if ((t.waiting_on === 'colleague' || t.waiting_on === 'someone_else')
+            && closesLoopWithoutAsk(t.summary)) {
+            console.log(`[REPLYWATCH] dropping "${String(t.summary || '').slice(0, 60)}" — `
+                + `a delivery, not an ask; today's guard would never have tracked it`);
+            repliedSenders.push(t.from || t.fromName);
+            continue;
+        }
+
         if (movedOn === true) {
             // Named, not silent. A wrong drop here means she stops hearing
             // about something real, so it has to be visible in the log.
@@ -3360,7 +3393,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
