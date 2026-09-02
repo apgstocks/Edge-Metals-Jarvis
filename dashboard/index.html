@@ -3949,14 +3949,58 @@ function formatLoadDateHeading(key) {
 // string of id/date/seller/description/weights/amount. Client-side against
 // loadsCache (already fetched for the deck) rather than a server round trip
 // per keystroke — the loads list is small enough that this is instant.
-function filterLoads(loads, query) {
+// Survives a repaint of the Loads tab, so generating a PDF or recording a
+// payment does not silently drop back to showing every load.
+let loadItemFilterValue = '';
+
+function filterLoads(loads, query, itemType) {
   const q = (query || '').trim().toLowerCase();
-  if (!q) return loads;
+  // ── filter by what is ON the load, not just the load's own fields ───────
+  // Apsara, 2026-09-02: "in load tab also, i should filter by item detail."
+  //
+  // The haystack never included the ITEMS. Searching "sealed units" in this
+  // tab found nothing unless those words happened to appear in the load-level
+  // description — while the Inventory tab could group by exactly that. The
+  // material is the thing anyone actually looks for ("which loads had brass in
+  // them"), so it belongs in the search.
+  //
+  // Item descriptions AND per-item prices go in: "0.55" is a real way to ask
+  // "which loads did we pay that rate on". Weights are deliberately left out —
+  // an item weight of 300 would make every load with a 300 anywhere in it
+  // match, and the load-level weights are already searchable.
+  const type = String(itemType || '').trim().toLowerCase();
+  if (!q && !type) return loads;
   return loads.filter(l => {
+    const items = Array.isArray(l.items) ? l.items : [];
+    // The dropdown is an EXACT match on the description, matched the same way
+    // groupItemsByDescription and the Inventory drill-down match — trimmed and
+    // case-insensitive. Anything looser would put loads under a heading they
+    // do not belong to.
+    if (type && !items.some(it => String(it.description || 'Other').trim().toLowerCase() === type)) return false;
+    if (!q) return true;
     const haystack = [l.id, l.date, l.seller, l.description, l.gross_weight, l.tare_weight, l.net_weight, l.amount, l.status]
+      .concat(items.map(it => it.description))
+      .concat(items.map(it => it.price))
       .map(v => String(v ?? '').toLowerCase()).join(' ');
     return haystack.includes(q);
   });
+}
+
+// The item types present in the deck, for the filter dropdown. Built from the
+// loads on screen rather than from /api/item-types on purpose: the catalogue
+// lists everything ever typed, and offering a type that matches nothing here
+// is an option that can only ever return "no loads".
+function loadItemTypes(loads) {
+  const seen = new Map();
+  for (const l of (loads || [])) {
+    for (const it of (Array.isArray(l.items) ? l.items : [])) {
+      const raw = String(it.description || '').trim();
+      if (!raw) continue;
+      const k = raw.toLowerCase();
+      if (!seen.has(k)) seen.set(k, raw);
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
 }
 
 // Builds just the deck markup (date sections + cards), reused by both the
@@ -4722,7 +4766,18 @@ function renderLoads(loads) {
           <button id="btnAddSale" class="btn">+ Sale</button>
         </div>
       </div>
-      <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <!-- Search now also matches ITEM descriptions and per-item prices, per
+           Apsara 2026-09-02 ("in load tab also, i should filter by item
+           detail") — see filterLoads. The placeholder says so, because a
+           search box that quietly got broader is one nobody knows to use. -->
+      <div style="display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
+        <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price, or amount…" style="flex:1; min-width:180px; padding:11px 14px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+        <!-- Exact item-type filter, built from the types actually present in
+             this deck. Sits beside the search rather than replacing it: the
+             box answers "anything containing brass", the dropdown answers
+             "loads that have Brass on them", and those are different questions. -->
+        <select id="loadItemFilter" style="padding:11px 12px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong); max-width:220px;"></select>
+      </div>
       <div id="draftStrip">${draftStripHtml()}</div>
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
@@ -5243,17 +5298,30 @@ function wireLoadsEvents() {
   }
 
   const searchInput = $('loadSearch');
-  if (searchInput) {
-    searchInput.addEventListener('input', () => {
-      const q = String(searchInput.value || '').trim();
-      const filtered = filterLoads(loadsCache, searchInput.value);
-      // flat ONLY while there is something typed. Clearing the box has to put
-      // the date sections back, or the grouping would be gone for good after
-      // the first search until the tab is reloaded.
-      $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.', { flat: !!q });
-      wireDeckEvents();
-    });
+  const itemFilter = $('loadItemFilter');
+  // Options come from the loads on screen, so the dropdown can never offer a
+  // material that would return nothing.
+  if (itemFilter) {
+    const types = loadItemTypes(loadsCache);
+    itemFilter.innerHTML = ['<option value="">All items</option>']
+      .concat(types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`)).join('');
+    itemFilter.value = loadItemFilterValue;
   }
+  const applyLoadFilters = () => {
+    const q = String(searchInput ? searchInput.value : '').trim();
+    loadItemFilterValue = itemFilter ? itemFilter.value : '';
+    const filtered = filterLoads(loadsCache, q, loadItemFilterValue);
+    // flat while EITHER filter is on. Same reasoning as the search: once you
+    // have asked for one material, you are no longer looking for a day, and
+    // splitting six results across five collapsed date headers hides four of
+    // them. Clearing both puts the date sections back.
+    const narrowed = !!q || !!loadItemFilterValue;
+    $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered,
+      narrowed ? 'No loads match that filter.' : 'No loads yet.', { flat: narrowed });
+    wireDeckEvents();
+  };
+  if (searchInput) searchInput.addEventListener('input', applyLoadFilters);
+  if (itemFilter) itemFilter.addEventListener('change', applyLoadFilters);
 
   renderItemRows();
 }
