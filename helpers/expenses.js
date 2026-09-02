@@ -67,7 +67,23 @@ function nextExpenseId(expenses) {
 // The four load modes plus Card and Other, so one vocabulary spans both sides
 // of the report — a load payment and an expense paid the same way land in the
 // same column.
-const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Cheque', 'Card', 'Other'];
+const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Card'];
+
+// Offered until 2026-09-02, when Apsara said "remove other, cheque in paid
+// by". Kept as a list rather than deleted, because EXPENSES ALREADY RECORDED
+// WITH THEM STILL EXIST and there are two ways that could go wrong:
+//
+//   - the spend report groups on its own METHODS list, which still includes
+//     Cheque and Other, so a past cheque expense keeps its column. Nothing is
+//     rewritten and no history moves.
+//   - EDITING one of those expenses would show an empty "Paid by" box and,
+//     on save, silently null the method — turning a recorded cheque into "not
+//     recorded" because someone fixed a typo in the description.
+//
+// So normalizeMethod still ACCEPTS these, and the form offers the record's own
+// retired value back to it while never offering them on anything new. A
+// retired option is not the same as a forbidden one.
+const RETIRED_METHODS = ['Cheque', 'Other'];
 
 // Matches case-insensitively and returns the CANONICAL spelling, or null.
 // Null rather than 'Other' on purpose: an unrecognised legacy value is
@@ -76,7 +92,9 @@ const EXPENSE_METHODS = ['Cash', 'Zelle', 'Wire', 'Cheque', 'Card', 'Other'];
 function normalizeMethod(v) {
     const q = String(v || '').trim().toLowerCase();
     if (!q) return null;
-    return EXPENSE_METHODS.find((m) => m.toLowerCase() === q) || null;
+    // Retired values are accepted, not offered — see RETIRED_METHODS. Without
+    // this, re-saving an old cheque expense would erase how it was paid.
+    return EXPENSE_METHODS.concat(RETIRED_METHODS).find((m) => m.toLowerCase() === q) || null;
 }
 
 // EXISTING ENTRIES ARE NOT MIGRATED — her choice ("fixed dropdown, leave old
@@ -288,6 +306,6 @@ function getExpenseReport(allExpenses, { from, to } = {}) {
 }
 
 module.exports = {
-    EXPENSE_CATEGORIES, EXPENSE_METHODS, normalizeMethod,
+    EXPENSE_CATEGORIES, EXPENSE_METHODS, RETIRED_METHODS, normalizeMethod,
     loadExpenses, addExpense, editExpense, deleteExpense, getExpense, getExpenseReport,
 };

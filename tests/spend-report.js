@@ -55,11 +55,36 @@ console.log('\n─ expenses against the cash box, and the spend report ───
 section('A — how an expense was paid is now one of a known set');
 {
     reset();
-    ck('the list spans both sides of the report',
-       ['Cash', 'Zelle', 'Wire', 'Cheque'].every(m => expenses.EXPENSE_METHODS.includes(m)),
-       'a load payment and an expense paid the same way must land in the same column');
-    ck('  plus Card and Other, which loads do not have',
-       expenses.EXPENSE_METHODS.includes('Card') && expenses.EXPENSE_METHODS.includes('Other'));
+    // Narrowed 2026-09-02: "remove other, cheque in paid by."
+    ck('the offered list is exactly the four she wants',
+       expenses.EXPENSE_METHODS.join('/') === 'Cash/Zelle/Wire/Card');
+    ck('  Cheque and Other are no longer offered',
+       !expenses.EXPENSE_METHODS.includes('Cheque') && !expenses.EXPENSE_METHODS.includes('Other'));
+
+    // ── retired, not forbidden ────────────────────────────────────────────
+    // Expenses already recorded as Cheque or Other still exist. If saving one
+    // nulled its method, editing a typo in the description would erase how the
+    // money moved — a silent data loss triggered by an unrelated edit.
+    ck('a retired value is still ACCEPTED on save', expenses.normalizeMethod('Cheque') === 'Cheque',
+       'otherwise re-saving an old cheque expense erases how it was paid');
+    ck('  including Other', expenses.normalizeMethod('other') === 'Other');
+    ck('  and they are listed as retired, not deleted',
+       expenses.RETIRED_METHODS.join('/') === 'Cheque/Other');
+    ck('genuine nonsense is still refused', expenses.normalizeMethod('cash app') === null);
+
+    // The REPORT keeps its Cheque column, because loads can still be paid by
+    // cheque — PAYMENT_MODES was not touched. Removing it there would push
+    // every past and future cheque payment into Unclassified.
+    const modes = require(path.join(ROOT, 'helpers/payments')).PAYMENT_MODES;
+    ck('loads can still be paid by cheque', modes.includes('Cheque'),
+       'she asked about the expense field, not the load Pay form');
+    const rWithCheque = buildSpendReport({
+        payments: [{ id: 'C1', load_id: 'E1', load_kind: 'purchase', mode: 'Cheque', amount: 500, paid_on: '2026-08-01' }],
+        expenses: [{ id: 'X1', description: 'old', payment_method: 'Cheque', amount: 60, date: '2026-08-02' }],
+        pettyEntries: [],
+    });
+    ck('  so the report still has a Cheque column', rWithCheque.byMethod.Cheque === 560,
+       'a past cheque expense keeps its column — nothing is rewritten and no history moves');
 
     ck('a method is canonicalised', expenses.normalizeMethod('cash') === 'Cash');
     ck('  whatever the case', expenses.normalizeMethod('ZELLE') === 'Zelle');
@@ -299,9 +324,18 @@ section('I — narrowing to just Zelle / just Wire / just Cash');
     ck('the per-method breakdown zeroes the others',
        zelle.byMethod.Zelle === 700 && zelle.byMethod.Cash === 0);
 
-    // The columns stay, so the table keeps its shape and it is obvious the
-    // others are empty BY FILTER rather than by accident.
-    ck('every column is still listed', zelle.columns.length === all.columns.length);
+    // The SERVER still returns every column, so a client can render whichever
+    // it likes and nothing about the data shape changes with the filter.
+    ck('the server still returns every column', zelle.columns.length === all.columns.length);
+    // The CLIENT narrows to one. Apsara, 2026-09-02: "when i choose zelle, only
+    // zelle amount should come not everything." Drawing seven columns of
+    // dashes is technically filtered and reads as unfiltered.
+    for (const [label, src] of [['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
+                                ['website', fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')]]) {
+        ck(`${label}: the table shows only the chosen method's column`,
+           /const cols = rep\.method \? \[rep\.method\] : \(rep\.columns \|\| \[\]\);/.test(src),
+           'six columns of dashes beside the one you asked for looks like nothing was filtered');
+    }
 
     // Petty cash only ever holds cash. Beside a Zelle report it would invite
     // reading a cash balance as though it belonged to those figures.

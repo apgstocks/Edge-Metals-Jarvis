@@ -5024,7 +5024,18 @@ async function renderSpendReportTab() {
     return;
   }
 
-  const cols = rep.columns || [];
+  // ── one method selected means ONE column ────────────────────────────────
+  // Apsara, 2026-09-02: "when i choose zelle, only zelle amount should come
+  // not everything."
+  //
+  // The server already zeroes the other methods, but the table was still
+  // drawing all seven columns — six of them full of dashes. Technically
+  // filtered, and it reads as "everything is still here". Narrowing the
+  // columns is what makes the filter visible rather than merely true.
+  //
+  // The Total column stays: with one method it equals that method, and it is
+  // what the month rows are checked against.
+  const cols = rep.method ? [rep.method] : (rep.columns || []);
   const money = (n) => fmtAmount(Number(n) || 0) || '$0.00';
   // Zero renders as a dash, not $0.00 — a page of $0.00 is hard to read past,
   // and "nothing by Wire in August" is what the dash says.
@@ -5381,13 +5392,24 @@ function openExpenseModal(expense) {
   // Options are built from the SERVER's list (see renderExpensesTab), so the
   // dropdown cannot offer something the server would reject.
   const sel = $('exp_payment');
+  // Cheque and Other were removed on 2026-09-02 ("remove other, cheque in paid
+  // by"). They are RETIRED, not forbidden: an expense already recorded with
+  // one keeps it as an option so that editing the description does not
+  // silently erase how it was paid. It is marked, and it is never offered to
+  // anything else.
+  const retired = expense && expense.payment_method
+    && !(expenseMethods || []).includes(expense.payment_method)
+    ? expense.payment_method : null;
   sel.innerHTML = ['<option value="">— not recorded —</option>']
-    .concat((expenseMethods || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`)).join('');
+    .concat((expenseMethods || []).map(m => `<option value="${esc(m)}">${esc(m)}</option>`))
+    .concat(retired ? [`<option value="${esc(retired)}">${esc(retired)} (no longer offered)</option>`] : [])
+    .join('');
   // A legacy free-text value matches no option, so the box shows "not
   // recorded" — her choice ("leave old entries blank"). The stored string is
   // untouched on the record until she actually saves a new choice, so nothing
   // is destroyed by merely opening the form.
-  sel.value = expense && (expenseMethods || []).includes(expense.payment_method) ? expense.payment_method : '';
+  sel.value = expense && ((expenseMethods || []).includes(expense.payment_method) || retired === expense.payment_method)
+    ? expense.payment_method : '';
   $('exp_amount').value = expense ? (expense.amount ?? '') : '';
   $('expErr').textContent = '';
   $('expenseModal').classList.remove('hidden');
@@ -6255,6 +6277,9 @@ function resetPfWizard() {
     // it's the same on most deals, and a blank required-ish field on a phone
     // is a worse default than a correct one you can overwrite.
     paymentTerm: PF_DEFAULTS.payment_term,
+    // True once she edits the box herself. Gates the pricing-memory prefill
+    // below: memory may replace the house default, never her own typing.
+    paymentTermTouched: false,
     // Made editable at the same time, but for a CORRECTNESS reason rather
     // than a request: trade terms are editable here, and helpers/proformaPdf.js
     // derives the document's short term from trade_terms' first word while
@@ -6342,6 +6367,22 @@ function pfStep2Html() {
       <input id="pfw_containerCount" type="number" min="1" value="${pfw.containerCount}">
     </div>
     <div style="font-size:12px; color:var(--text-muted); margin:-4px 0 16px;">Each container gets the same materials. Container numbers are filled in automatically on the next step.</div>
+
+    <!-- Apsara, 2026-09-02: "mimic this proforma behaviour in docs of mobile
+         app" — matching the dashboard, where payment terms is asked with the
+         material rather than left to the review step.
+         It was already editable here, but only on step 3, ninth in a stack of
+         detail fields. It is not a detail: it is a deal term she is quoting,
+         and since 2026-09-01 it is also what lands in the Terms column of the
+         Edge Metals sheet (helpers/proformaSheetLog.js), so it is no longer a
+         PDF-only field. Asked here, confirmed on step 3. -->
+    <div class="field" style="position:relative;">
+      <label>Payment terms</label>
+      <input id="pfw_paymentTerm2" value="${esc(pfw.paymentTerm)}" placeholder="e.g. LC" autocomplete="off">
+      <div id="pfwPayTermList" class="ac-dropdown hidden"></div>
+    </div>
+    <div style="font-size:12px; color:var(--text-muted); margin:-4px 0 16px;">Prefilled from this customer's last proforma where we have one. Editable, and shown again on the last step.</div>
+
     <div style="display:flex; gap:8px;">
       <button id="btnPfBack2" class="btn" style="flex:1;">Back</button>
       <button id="btnPfNext2" class="btn btn-primary" style="flex:2;">Next</button>
@@ -6406,11 +6447,78 @@ function pfRenderItems() {
     pfRenderItems();
   }));
 }
+// Offered to save typing on a phone keyboard; the box is plain text and
+// anything typed is used as-is. This customer's remembered terms come first
+// and are marked, same idea as the material suggestions above.
+const PF_PAY_TERM_SUGGESTIONS = [
+  'LC',
+  'LC at sight',
+  'T/T 100% Against Shipping Documents',
+  'T/T 30% advance, 70% against shipping documents',
+  'DP (Documents against Payment)',
+  'DA (Documents against Acceptance)',
+];
+function wirePfPayTermField(inputId, listId) {
+  const input = $(inputId), box = $(listId);
+  if (!input || !box) return;
+  const close = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    const seen = new Set();
+    const list = [];
+    const remembered = String(pfMemoryPaymentTerms || '').trim();
+    if (remembered) { list.push({ text: remembered, known: true }); seen.add(remembered.toLowerCase()); }
+    for (const v of PF_PAY_TERM_SUGGESTIONS) {
+      if (seen.has(v.toLowerCase())) continue;
+      seen.add(v.toLowerCase());
+      list.push({ text: v, known: false });
+    }
+    const items = list.filter(x => !q || x.text.toLowerCase().includes(q)).slice(0, 6);
+    if (!items.length || (items.length === 1 && items[0].text.toLowerCase() === q)) return close();
+    box.innerHTML = items.map((it, i) =>
+      `<div class="ac-item" data-i="${i}">${esc(it.text)}${it.known ? ' <span style="color:var(--status-success, #3fae55); font-size:9.5px; font-family:var(--font-mono);">● last used</span>' : ''}</div>`
+    ).join('');
+    box.classList.remove('hidden');
+    // mousedown + preventDefault: blur fires first on a tap and would close
+    // the list before the tap landed. Same fix as the material list.
+    box.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      input.value = items[+el.dataset.i].text;
+      input.dataset.touched = '1';
+      pfw.paymentTermTouched = true;
+      pfw.paymentTerm = input.value;
+      close();
+    }));
+  };
+  input.addEventListener('input', () => {
+    input.dataset.touched = '1';
+    pfw.paymentTermTouched = true;
+    pfw.paymentTerm = input.value;
+    show();
+  });
+  input.addEventListener('focus', show);
+  input.addEventListener('blur', () => setTimeout(close, 150));
+  input.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
+}
+
 function wirePfStep2() {
   pfRenderItems();
+  wirePfPayTermField('pfw_paymentTerm2', 'pfwPayTermList');
+  // The lookup fired on step 1 may already have resolved while this step was
+  // painting — apply it now rather than waiting for another one.
+  pfApplyMemoryPaymentTerm();
   $('btnPfAddItem').addEventListener('click', () => { pfw.items.push({ desc: '', qty: 21, rate: 0 }); pfRenderItems(); });
   $('btnPfBack2').addEventListener('click', () => { pfw.step = 1; renderPfWizard(); });
   $('btnPfNext2').addEventListener('click', async () => {
+    // Read the box directly rather than trusting the input handler — a paste,
+    // an autofill or a suggestion tap that raced the blur would otherwise
+    // carry the previous value onto the document.
+    const payEl = $('pfw_paymentTerm2');
+    if (payEl) {
+      const v = payEl.value.trim();
+      if (v !== String(pfw.paymentTerm || '').trim()) pfw.paymentTermTouched = true;
+      pfw.paymentTerm = v;
+    }
     pfw.items = pfw.items.filter(it => it.desc.trim());
     if (!pfw.items.length) {
       $('pfMsg').style.color = 'var(--status-danger)';
@@ -6447,6 +6555,14 @@ async function pfLoadSuggestions() {
     if (info && info.canonical_name) {
       if (info.trade_terms && !pfw.tradeTerms) pfw.tradeTerms = info.trade_terms;
       if (info.port_discharge && !pfw.portDischarge) pfw.portDischarge = info.port_discharge;
+      // Payment terms was being read from this response and thrown away, so a
+      // customer on LC still arrived on the standard T/T wording. Same
+      // "suggest, never overwrite" rule as the two above: it fills only while
+      // the box is untouched and still on the house default.
+      if (info.payment_terms) {
+        pfMemoryPaymentTerms = info.payment_terms;
+        pfApplyMemoryPaymentTerm();
+      }
     }
   } catch (e) { /* unknown customer — fields stay blank */ }
   // Same hardcoded default the dashboard applies for these three customers.
@@ -6530,7 +6646,10 @@ function pfStep3Html() {
     <div class="field"><label>Container numbers</label><input id="pfw_containerNos" value="${esc(pfw.containerNos.join(', '))}" placeholder="comma separated" autocomplete="off"></div>
     <div class="field"><label>Trade terms</label><input id="pfw_tradeTerms" value="${esc(pfw.tradeTerms)}" placeholder="e.g. CIF Busan, South Korea" autocomplete="off"></div>
     <div class="field"><label>Port of discharge</label><input id="pfw_portDischarge" value="${esc(pfw.portDischarge)}" autocomplete="off"></div>
-    <div class="field"><label>Payment terms</label><input id="pfw_paymentTerm" value="${esc(pfw.paymentTerm)}" autocomplete="off"></div>
+    <div class="field" style="position:relative;"><label>Payment terms</label>
+      <input id="pfw_paymentTerm" value="${esc(pfw.paymentTerm)}" autocomplete="off">
+      <div id="pfwPayTermList3" class="ac-dropdown hidden"></div>
+    </div>
     <div class="field"><label>Freight basis</label>
       <select id="pfw_freightLabel">
         ${['CIF (freight included)', 'FOB (freight excluded)'].map(o => `<option value="${esc(o)}" ${pfw.freightLabel === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
@@ -6610,6 +6729,7 @@ function pfBuildPayload() {
 }
 
 function wirePfStep3() {
+  wirePfPayTermField('pfw_paymentTerm', 'pfwPayTermList3');
   const retotal = () => {
     pfCollectStep3();
     const total = pfw.items.reduce((s, it) => s + (it.qty || 0) * (it.rate || 0), 0) * pfw.containerCount;
@@ -6762,7 +6882,7 @@ function resetInvFlow() {
 //
 // A description in both lists appears ONCE, as history, so the customer's own
 // wording wins over the generic entry.
-let pfGenericDescs = null, pfGenericDescsLoading = null, pfCustomerDescs = [];
+let pfGenericDescs = null, pfGenericDescsLoading = null, pfCustomerDescs = [], pfMemoryPaymentTerms = '';
 
 async function pfLoadGenericDescs() {
   if (pfGenericDescs) return pfGenericDescs;
@@ -6783,11 +6903,34 @@ async function pfLoadGenericDescs() {
 // makes for the same reason.
 async function pfPreloadCustomerDescs(customer) {
   const name = String(customer || '').trim();
-  if (!name) { pfCustomerDescs = []; return; }
+  if (!name) { pfCustomerDescs = []; pfMemoryPaymentTerms = ''; return; }
   try {
     const info = await api('/api/customer-pricing/lookup?customer=' + encodeURIComponent(name));
     pfCustomerDescs = (info && info.items) ? Object.keys(info.items) : [];
-  } catch (e) { pfCustomerDescs = []; }
+    // Payment terms too, now that step 2 asks for them. The same lookup was
+    // already being made and this field was being thrown away.
+    pfMemoryPaymentTerms = (info && info.payment_terms) || '';
+    pfApplyMemoryPaymentTerm();
+  } catch (e) { pfCustomerDescs = []; pfMemoryPaymentTerms = ''; }
+}
+
+// Fills the payment-terms box from what this customer was last invoiced on.
+// Called when the lookup resolves rather than when the step opens, because the
+// lookup is deliberately fire-and-forget (see btnPfNext1) so the material step
+// paints instantly on a phone rather than waiting on the network.
+//
+// Precedence: what she types > this customer's memory > the house default.
+function pfApplyMemoryPaymentTerm() {
+  if (!pfw || !pfMemoryPaymentTerms) return;
+  if (pfw.paymentTermTouched) return;
+  const cur = String(pfw.paymentTerm || '').trim();
+  if (cur && cur !== PF_DEFAULTS.payment_term) return;
+  pfw.paymentTerm = pfMemoryPaymentTerms;
+  // Whichever box is on screen — step 2 asks, step 3 confirms.
+  for (const id of ['pfw_paymentTerm2', 'pfw_paymentTerm']) {
+    const el = $(id);
+    if (el && !el.dataset.touched) el.value = pfMemoryPaymentTerms;
+  }
 }
 
 function pfDescSuggestions(q, customerDescs, genericDescs) {

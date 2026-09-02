@@ -4305,7 +4305,18 @@ async function renderSpendReportTab() {
     return;
   }
 
-  const cols = rep.columns || [];
+  // ── one method selected means ONE column ────────────────────────────────
+  // Apsara, 2026-09-02: "when i choose zelle, only zelle amount should come
+  // not everything."
+  //
+  // The server already zeroes the other methods, but the table was still
+  // drawing all seven columns — six of them full of dashes. Technically
+  // filtered, and it reads as "everything is still here". Narrowing the
+  // columns is what makes the filter visible rather than merely true.
+  //
+  // The Total column stays: with one method it equals that method, and it is
+  // what the month rows are checked against.
+  const cols = rep.method ? [rep.method] : (rep.columns || []);
   const money = (n) => fmtAmount(Number(n) || 0) || '$0.00';
   // Zero renders as a dash, not $0.00 — a page of $0.00 is hard to read past,
   // and "nothing by Wire in August" is what the dash says.
