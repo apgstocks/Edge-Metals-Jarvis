@@ -726,7 +726,7 @@ body { overflow-y:auto; }
     </div>
     <div class="modal-body">
       <div class="ld-grid-2">
-        <div class="field"><label>Date</label><input id="exp_date" type="date"></div>
+        <div class="field"><label>Date</label><input id="exp_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <div class="field"><label>Amount ($)</label><input id="exp_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
       </div>
       <div class="field" style="margin-top:14px;"><label>Category</label><select id="exp_category"></select></div>
@@ -950,6 +950,152 @@ function fmtRate(n) {
 // Safe for the one place that reads a formatted amount back
 // (updateItemTotals) because that already strips non-numeric characters
 // before parsing — checked, not assumed.
+// ── PORTED FROM dashboard/index.html, 2026-09-02 ─────────────────────────
+// The MM/DD/YYYY work landed on the website only; the app still had native
+// <input type="date"> everywhere, which renders in the DEVICE locale — so
+// the same load read 09/02/2026 on the laptop and 02/09/2026 on the phone.
+// Byte-identical to the website copy so tests/form-parity.js can hold the
+// two in step.
+// ── Dates are MM/DD/YYYY everywhere they are SHOWN ──────────────────────────
+// Apsara, 2026-09-01: "wherever date applicable it should be mm/dd/yyyy only."
+//
+// Two separate jobs, deliberately kept apart:
+//   fmtDate/toUsDate — what a PERSON sees. Always MM/DD/YYYY.
+//   toIsoDate        — what goes over the WIRE and into storage. Always
+//                      YYYY-MM-DD, because that is what every API, sheet and
+//                      saved record in this app already expects, and it is
+//                      the only shape that sorts and compares correctly.
+//
+// Native <input type="date"> was replaced wherever it appeared: it renders in
+// the browser/OS locale with no way to force a format, so the same screen
+// could read 2026-09-01 on one machine and 01/09/2026 on another. Fine for a
+// personal app; not for dates that land on invoices.
+function toUsDate(d) {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})/);        // YYYY-MM-DD[...]
+    if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(d.trim())) return d.trim(); // already right
+  }
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}/${dt.getFullYear()}`;
+}
+
+// Display helper for table cells and read-only text: formats when it can,
+// and returns the ORIGINAL string when it cannot. Never blanks a value it
+// does not recognise — a date it fails to parse is still information, and
+// showing "—" in its place would look like missing data.
+function fmtDate(v, fallback = '') {
+  if (v === null || v === undefined || v === '') return fallback;
+  return toUsDate(v) || String(v);
+}
+
+// MM/DD/YYYY (and forgiving variants) -> YYYY-MM-DD. Returns '' rather than
+// guessing — a wrong date is worse than an empty one someone is asked to fix.
+function toIsoDate(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (!m) return '';
+  let [, mm, dd, yy] = m;
+  if (yy.length === 2) yy = String(2000 + Number(yy));
+  const mi = Number(mm), di = Number(dd);
+  // Reject impossible dates rather than letting Date roll them over —
+  // "13/45/2026" must not quietly become a day in the following year.
+  if (mi < 1 || mi > 12 || di < 1 || di > 31) return '';
+  return `${yy}-${String(mi).padStart(2, '0')}-${String(di).padStart(2, '0')}`;
+}
+
+// Tidies what was typed to MM/DD/YYYY on blur, so "9/1/26" settles as
+// "09/01/2026" instead of being silently rejected later.
+function wireUsDateField(id) {
+  const el = typeof id === 'string' ? $(id) : id;
+  if (!el || el.dataset.dpWired) return;
+  el.dataset.dpWired = '1';
+
+  // Tidies what was typed to MM/DD/YYYY on blur, so "9/1/26" settles as
+  // "09/01/2026" instead of being silently rejected later.
+  el.addEventListener('blur', () => {
+    const iso = toIsoDate(el.value);
+    if (!iso) return;
+    const [y, m, d] = iso.split('-');
+    el.value = `${m}/${d}/${y}`;
+  });
+
+  // ── the picker ──────────────────────────────────────────────────────────
+  // Apsara, 2026-09-02: "date picker should be there wherever date used."
+  //
+  // Her two requirements pull against each other, which is why this is not
+  // just <input type="date">:
+  //   "wherever date applicable it should be mm/dd/yyyy only" (2026-09-01)
+  //   "date picker should be there wherever date used"        (2026-09-02)
+  //
+  // A native date input renders in the DEVICE's locale with no way to force a
+  // format. On a phone set to en-IN — which hers is, going by the timezone on
+  // her commits — it shows DD/MM/YYYY, breaking the first rule. That is
+  // exactly why the native inputs were replaced by text boxes, and replacing
+  // them is what took the calendar away.
+  //
+  // So: the VISIBLE field stays text and stays MM/DD/YYYY, guaranteed on every
+  // device. Beside it sits a real <input type="date">, invisible, that exists
+  // only to open the platform calendar. Picking a day writes MM/DD/YYYY back
+  // into the text box. Type it or tap it — both work, and both read the same.
+  //
+  // The wrapper is built HERE rather than in each screen's markup, so a date
+  // field gets a picker by being wired, and no call site can forget one.
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'position:relative; display:block; width:100%;';
+  el.parentNode.insertBefore(wrap, el);
+  wrap.appendChild(el);
+  el.style.paddingRight = '38px';           // room for the button
+
+  const native = document.createElement('input');
+  native.type = 'date';
+  native.tabIndex = -1;
+  native.setAttribute('aria-hidden', 'true');
+  // Not display:none — a hidden input cannot be focused, and showPicker()
+  // throws on one that is not rendered. Zero-size and transparent instead.
+  native.style.cssText = 'position:absolute; right:8px; bottom:0; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none;';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('aria-label', 'Open the calendar');
+  btn.textContent = '📅';
+  btn.style.cssText = 'position:absolute; right:4px; top:50%; transform:translateY(-50%); '
+    + 'background:transparent; border:0; padding:4px 6px; font-size:15px; line-height:1; cursor:pointer;';
+
+  wrap.appendChild(native);
+  wrap.appendChild(btn);
+
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    // Seed the calendar with whatever the box already says, so it opens on
+    // the month being looked at rather than today.
+    native.value = toIsoDate(el.value) || '';
+    // showPicker is the supported way and is what Android's WebView uses;
+    // .click() is the fallback for anything that does not have it. Wrapped
+    // because showPicker throws if it is not called from a user gesture —
+    // which this is, but a future refactor could break that quietly.
+    try {
+      if (typeof native.showPicker === 'function') native.showPicker();
+      else native.click();
+    } catch (e) { native.click(); }
+  });
+
+  native.addEventListener('change', () => {
+    if (!native.value) return;
+    const [y, m, d] = native.value.split('-');
+    el.value = `${m}/${d}/${y}`;
+    // Tell whatever listens to the text box that it changed — the inventory
+    // and report filters read it on their own events, and a picked date that
+    // does not fire input/change would sit there looking applied and not be.
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 function fmtAmount(n) {
   if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
   return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1366,7 +1512,7 @@ function currentDraftPayload() {
   return {
     id: currentDraftId,
     kind: (typeof loadModalMode !== 'undefined' && loadModalMode === 'sale') ? 'sale' : 'purchase',
-    date: $('ld_date') ? $('ld_date').value : '',
+    date: $('ld_date') ? toIsoDate($('ld_date').value) : '',
     seller: $('ld_seller') ? $('ld_seller').value : '',
     seller_address: $('ld_seller_address') ? $('ld_seller_address').value : '',
     seller_phone: $('ld_seller_phone') ? $('ld_seller_phone').value : '',
@@ -1457,7 +1603,7 @@ async function fetchLoadDrafts() {
 function applyLoadDraft(d) {
   if (!d) return;
   currentDraftId = d.id;
-  if ($('ld_date') && d.date) $('ld_date').value = d.date;
+  if ($('ld_date') && d.date) $('ld_date').value = toUsDate(d.date);
   if ($('ld_seller')) $('ld_seller').value = d.seller || '';
   if ($('ld_seller_address')) $('ld_seller_address').value = d.seller_address || '';
   if ($('ld_seller_phone')) $('ld_seller_phone').value = d.seller_phone || '';
@@ -1716,7 +1862,8 @@ function openPayModal(loadId, kind) {
     ? `Load ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This load has no price yet, so there is no balance to work against.</span>`
     : `Load ${esc(l.id)}${esc(who)}<br>Load total ${payMoney(l.amount)} · already paid ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
   $('pay_mode').value = 'Zelle';
-  $('pay_date').value = todayLocalDateStr();
+  $('pay_date').value = toUsDate(todayLocalDateStr());
+  wireUsDateField('pay_date');
   // Pre-filled with what is actually outstanding, since settling the balance
   // is the common case — still fully editable for a part payment.
   $('pay_amount').value = (p.pending != null && p.pending > 0) ? p.pending : '';
@@ -3166,7 +3313,7 @@ function resetLoadModal(mode) {
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
-  if ($('ld_date')) $('ld_date').value = todayLocalDateStr();
+  if ($('ld_date')) { $('ld_date').value = toUsDate(todayLocalDateStr()); wireUsDateField('ld_date'); }
   $('loadModalErr').textContent = '';
   applyLoadModalMode(mode);
   renderItemRows();
@@ -3203,7 +3350,7 @@ function openEditLoadModal(load) {
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
-  if ($('ld_date'))            $('ld_date').value            = load.date || '';
+  if ($('ld_date'))            $('ld_date').value            = toUsDate(load.date) || '';
   // On a sale the deck already mapped buyer -> seller when tagging the record
   // (see renderCurrentMobileTab), so these two lines serve both modes without
   // a branch — the fields are the same inputs, only relabelled.
@@ -3805,7 +3952,7 @@ function renderLoads(loads) {
                 <option value="Cheque">Cheque</option>
               </select>
             </div>
-            <div class="field"><label>Date</label><input id="pay_date" type="date"></div>
+            <div class="field"><label>Date</label><input id="pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
@@ -3850,7 +3997,7 @@ function renderLoads(loads) {
                    its own. The stored field is untouched, so older loads keep
                    theirs and still print it. -->
           <div class="ld-grid-2">
-            <div class="field"><label>Date</label><input id="ld_date" type="date" style="max-width:170px;"></div>
+            <div class="field"><label>Date</label><input id="ld_date" placeholder="MM/DD/YYYY" autocomplete="off" style="max-width:170px;"></div>
             <div class="field" style="position:relative;">
               <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
@@ -3957,7 +4104,7 @@ function wireLoadsEvents() {
     try {
       const body = {
         load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
-        amount, paid_on: $('pay_date').value || null, reference: $('pay_ref').value.trim() || null,
+        amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
       };
       try {
         await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
@@ -4147,7 +4294,7 @@ function wireLoadsEvents() {
           .catch((err) => console.warn('[items] could not save the new description ' + JSON.stringify(d) + ' to the catalogue — it will work this session but may not be offered next time:', err && err.message));
       });
       const payload = {
-        date: $('ld_date').value || null,
+        date: toIsoDate($('ld_date').value) || null,
         buyer: BUYER_FIXED_NAME,
         seller: $('ld_seller').value.trim() || null,
         seller_address: $('ld_seller_address').value.trim() || null,
@@ -4896,12 +5043,37 @@ async function renderSpendReportTab() {
         <div style="font-size:13px; color:var(--text-muted);">Load payments and expenses together, by month and by how they were paid.</div>
       </div>
 
-      <div class="card" style="padding:14px 16px; margin-bottom:18px; display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-        <div class="field" style="margin-bottom:0;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}" style="max-width:150px;"></div>
-        <div class="field" style="margin-bottom:0;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}" style="max-width:150px;"></div>
-        <button id="btnSpendApply" class="btn btn-primary" style="padding:8px 16px;">Apply</button>
-        <span style="flex:1;"></span>
-        ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:6px 11px;">${esc(p[0])}</button>`).join('')}
+      <!-- ── the filter bar ───────────────────────────────────────────────
+           Apsara, 2026-09-02: "report layout is not proper. apply this month
+           coming in one libe why?" — From, To, Apply and four preset buttons
+           were all one flex row with a flex:1 spacer between them. On a phone
+           that spacer eats the line and the presets get pushed into a cramped
+           strip beside Apply.
+           Three stacked rows now, each with a job: the range, then the
+           presets, then the method. Every row wraps on its own. -->
+      <div class="card" style="padding:14px 16px; margin-bottom:18px;">
+        <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}"></div>
+          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}"></div>
+          <button id="btnSpendApply" class="btn btn-primary" style="padding:10px 18px;">Apply</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+          ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:7px 12px;">${esc(p[0])}</button>`).join('')}
+        </div>
+        <!-- ── one method at a time ──────────────────────────────────────
+             Apsara, 2026-09-02: "in reports what if i want to see report
+             wherever just zelle is used/wire/just cash. mimic quickbook
+             report workflow."
+             QuickBooks narrows a report by a column and every figure follows
+             — not just the rows. So picking a method here re-runs the whole
+             report against it: the totals, the month rows and the cash
+             reconciliation all mean "of this method", never "of everything,
+             with some rows hidden". -->
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid by</span>
+          ${['', ...(rep.columns || [])].map(m => `
+            <button class="btn btn-spend-method" data-method="${esc(m)}" style="font-size:11.5px; padding:7px 12px; ${spendMethod === m ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(m || 'All')}</button>`).join('')}
+        </div>
       </div>
 
       <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap;">
@@ -5161,7 +5333,8 @@ async function renderExpensesTab() {
 function openExpenseModal(expense) {
   editingExpenseId = expense ? expense.id : null;
   $('expTitle').textContent = expense ? `Edit ${expense.id}` : 'Add expense';
-  $('exp_date').value = expense ? (expense.date || '') : todayLocalDateStrForExpense();
+  $('exp_date').value = toUsDate(expense ? (expense.date || '') : todayLocalDateStrForExpense());
+  wireUsDateField('exp_date');
   $('exp_category').innerHTML = expenseCategories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
   if (expense && expense.category) {
     // A category typed before this list existed (or edited on the sheet)
@@ -5198,7 +5371,7 @@ function wireExpenseModal() {
   $('expClose').addEventListener('click', closeExpenseModal);
   $('expSave').addEventListener('click', async () => {
     const payload = {
-      date: $('exp_date').value,
+      date: toIsoDate($('exp_date').value),
       category: $('exp_category').value,
       description: $('exp_description').value.trim(),
       vendor: $('exp_vendor').value.trim() || null,
@@ -5475,8 +5648,8 @@ function paintInventory(data, loading) {
         </div>
       </div>
       <div style="display:flex; gap:8px; margin-bottom:14px;">
-        <div class="field" style="flex:1; margin-bottom:0;"><label>From</label><input id="inv_from" type="date" value="${esc(mobInvFrom)}"></div>
-        <div class="field" style="flex:1; margin-bottom:0;"><label>To</label><input id="inv_to" type="date" value="${esc(mobInvTo)}"></div>
+        <div class="field" style="flex:1; margin-bottom:0;"><label>From</label><input id="inv_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(toUsDate(mobInvFrom))}"></div>
+        <div class="field" style="flex:1; margin-bottom:0;"><label>To</label><input id="inv_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(toUsDate(mobInvTo))}"></div>
       </div>
       <div style="display:flex; gap:8px; margin-bottom:18px;">
         <button id="btnInvApply" class="btn btn-primary" style="flex:1;">Apply</button>
@@ -5494,7 +5667,8 @@ function paintInventory(data, loading) {
   // sub-tab body included, so the toggles it draws need wiring here too —
   // not only when a sub-tab is switched.
   wireInvLineToggles(mobInvFrom, mobInvTo);
-  $('btnInvApply').addEventListener('click', () => { mobInvFrom = $('inv_from').value; mobInvTo = $('inv_to').value; renderInventoryTab(); });
+  $('btnInvApply').addEventListener('click', () => { mobInvFrom = toIsoDate($('inv_from').value); mobInvTo = toIsoDate($('inv_to').value); renderInventoryTab(); });
+  wireUsDateField('inv_from'); wireUsDateField('inv_to');
   $('btnInvClear').addEventListener('click', () => { mobInvFrom = ''; mobInvTo = ''; renderInventoryTab(); });
   // Sub-tab switch repaints from data already held — no refetch. All three
   // sub-tabs come back in the same response; see the header comment.
@@ -6078,6 +6252,11 @@ function renderPfWizard() {
     resetPfWizard(); renderPfWizard();
   });
   ({ 1: wirePfStep1, 2: wirePfStep2, 3: wirePfStep3 }[pfw.step])();
+  // Step 3 carries the invoice date. Wired here rather than inside
+  // wirePfStep3 so the picker arrives with the step, whichever step it is —
+  // a paint path without its wiring is how the Inventory drill-down shipped
+  // dead earlier today.
+  wireUsDateField('pfw_invDate');
 }
 
 // Step 1 — who is it for.
@@ -6316,7 +6495,7 @@ function pfStep3Html() {
 
     <div class="field"><label>Invoice No</label><input id="pfw_invNo" value="${esc(pfw.invNo)}" autocomplete="off"></div>
     ${pfw.invNoSuggestion ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--status-success, #3fae55); margin:-6px 0 12px;">● suggested — last was ${esc(pfw.invNoSuggestion.highest)}</div>` : ''}
-    <div class="field"><label>Invoice date</label><input id="pfw_invDate" type="date" value="${esc(pfw.invDate)}"></div>
+    <div class="field"><label>Invoice date</label><input id="pfw_invDate" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(toUsDate(pfw.invDate))}"></div>
     <div class="field"><label>Container numbers</label><input id="pfw_containerNos" value="${esc(pfw.containerNos.join(', '))}" placeholder="comma separated" autocomplete="off"></div>
     <div class="field"><label>Trade terms</label><input id="pfw_tradeTerms" value="${esc(pfw.tradeTerms)}" placeholder="e.g. CIF Busan, South Korea" autocomplete="off"></div>
     <div class="field"><label>Port of discharge</label><input id="pfw_portDischarge" value="${esc(pfw.portDischarge)}" autocomplete="off"></div>
@@ -6346,7 +6525,7 @@ function pfCollectStep3() {
     if (it) it.rate = parseFloat(row.querySelector('.pfw-rate').value) || 0;
   });
   pfw.invNo = $('pfw_invNo').value.trim();
-  pfw.invDate = $('pfw_invDate').value;
+  pfw.invDate = toIsoDate($('pfw_invDate').value);
   pfw.containerNos = $('pfw_containerNos').value.split(',').map(s => s.trim()).filter(Boolean);
   pfw.tradeTerms = $('pfw_tradeTerms').value.trim();
   pfw.portDischarge = $('pfw_portDischarge').value.trim();
@@ -6807,6 +6986,7 @@ function invStep2Html() {
     <button id="btnInvBack2" class="btn" style="width:100%; margin-top:14px;">Back</button>`;
 }
 function wireInvStep2() {
+  wireUsDateField('invw_date');
   $('btnInvBack2').addEventListener('click', () => { invw.step = 1; renderInvFlow(); });
   // Escape hatch. Capping a list without one is how you end up unable to
   // invoice the sixth-newest shipment at all.
@@ -6906,7 +7086,7 @@ function invStep3Html() {
     </div>
 
     <div class="field"><label>Invoice No</label><input id="invw_no" value="${esc(d.inv_no || '')}" autocomplete="off"></div>
-    <div class="field"><label>Invoice date</label><input id="invw_date" value="${esc(d.inv_date || '')}" autocomplete="off"></div>
+    <div class="field"><label>Invoice date</label><input id="invw_date" placeholder="MM/DD/YYYY" value="${esc(toUsDate(d.inv_date || ''))}" autocomplete="off"></div>
     <div class="field"><label>Consignee address</label><textarea id="invw_address" rows="3" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:inherit; font-size:13px; resize:vertical;">${esc(addr)}</textarea></div>
 
     <!-- Full line-items table, added 2026-08-22 per Apsara ("show item table
@@ -7048,7 +7228,7 @@ function invCollectPayload() {
 
   return {
     inv_no: $('invw_no').value.trim(),
-    inv_date: $('invw_date').value.trim(),
+    inv_date: toIsoDate($('invw_date').value) || $('invw_date').value.trim(),
     // Shipment fields aren't editable on the phone — they come from the
     // sheet and are carried straight through. Editing vessel/port/booking
     // is a desk correction, and dropping them would blank real fields on

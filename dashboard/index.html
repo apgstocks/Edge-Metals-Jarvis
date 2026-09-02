@@ -343,8 +343,8 @@ input::placeholder { color:var(--steel-500); }
         <div class="field"><label>Vessel / voyage</label><input id="f_vessel" placeholder="MSC AURORA 226E"></div>
         <div class="field"><label>Port of loading</label><input id="f_pol" placeholder="Los Angeles"></div>
         <div class="field"><label>Port of discharge</label><input id="f_pod" placeholder="Busan"></div>
-        <div class="field"><label>ERD date</label><input id="f_erd" placeholder="YYYY-MM-DD"></div>
-        <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="YYYY-MM-DD"></div>
+        <div class="field"><label>ERD date</label><input id="f_erd" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+        <div class="field"><label>Cutoff date</label><input id="f_cutoff" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <!-- Added 2026-08-06 per Apsara — ERD/Cutoff were already editable
              here, ETD/ETA were display-only (auto-extraction/backfill only,
              no way to type or correct one by hand). Same field/placeholder
@@ -495,12 +495,87 @@ function toIsoDate(v) {
 // "09/01/2026" instead of being silently rejected later.
 function wireUsDateField(id) {
   const el = typeof id === 'string' ? $(id) : id;
-  if (!el) return;
+  if (!el || el.dataset.dpWired) return;
+  el.dataset.dpWired = '1';
+
+  // Tidies what was typed to MM/DD/YYYY on blur, so "9/1/26" settles as
+  // "09/01/2026" instead of being silently rejected later.
   el.addEventListener('blur', () => {
     const iso = toIsoDate(el.value);
     if (!iso) return;
     const [y, m, d] = iso.split('-');
     el.value = `${m}/${d}/${y}`;
+  });
+
+  // ── the picker ──────────────────────────────────────────────────────────
+  // Apsara, 2026-09-02: "date picker should be there wherever date used."
+  //
+  // Her two requirements pull against each other, which is why this is not
+  // just <input type="date">:
+  //   "wherever date applicable it should be mm/dd/yyyy only" (2026-09-01)
+  //   "date picker should be there wherever date used"        (2026-09-02)
+  //
+  // A native date input renders in the DEVICE's locale with no way to force a
+  // format. On a phone set to en-IN — which hers is, going by the timezone on
+  // her commits — it shows DD/MM/YYYY, breaking the first rule. That is
+  // exactly why the native inputs were replaced by text boxes, and replacing
+  // them is what took the calendar away.
+  //
+  // So: the VISIBLE field stays text and stays MM/DD/YYYY, guaranteed on every
+  // device. Beside it sits a real <input type="date">, invisible, that exists
+  // only to open the platform calendar. Picking a day writes MM/DD/YYYY back
+  // into the text box. Type it or tap it — both work, and both read the same.
+  //
+  // The wrapper is built HERE rather than in each screen's markup, so a date
+  // field gets a picker by being wired, and no call site can forget one.
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'position:relative; display:block; width:100%;';
+  el.parentNode.insertBefore(wrap, el);
+  wrap.appendChild(el);
+  el.style.paddingRight = '38px';           // room for the button
+
+  const native = document.createElement('input');
+  native.type = 'date';
+  native.tabIndex = -1;
+  native.setAttribute('aria-hidden', 'true');
+  // Not display:none — a hidden input cannot be focused, and showPicker()
+  // throws on one that is not rendered. Zero-size and transparent instead.
+  native.style.cssText = 'position:absolute; right:8px; bottom:0; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none;';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('aria-label', 'Open the calendar');
+  btn.textContent = '📅';
+  btn.style.cssText = 'position:absolute; right:4px; top:50%; transform:translateY(-50%); '
+    + 'background:transparent; border:0; padding:4px 6px; font-size:15px; line-height:1; cursor:pointer;';
+
+  wrap.appendChild(native);
+  wrap.appendChild(btn);
+
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    // Seed the calendar with whatever the box already says, so it opens on
+    // the month being looked at rather than today.
+    native.value = toIsoDate(el.value) || '';
+    // showPicker is the supported way and is what Android's WebView uses;
+    // .click() is the fallback for anything that does not have it. Wrapped
+    // because showPicker throws if it is not called from a user gesture —
+    // which this is, but a future refactor could break that quietly.
+    try {
+      if (typeof native.showPicker === 'function') native.showPicker();
+      else native.click();
+    } catch (e) { native.click(); }
+  });
+
+  native.addEventListener('change', () => {
+    if (!native.value) return;
+    const [y, m, d] = native.value.split('-');
+    el.value = `${m}/${d}/${y}`;
+    // Tell whatever listens to the text box that it changed — the inventory
+    // and report filters read it on their own events, and a picked date that
+    // does not fire input/change would sit there looking applied and not be.
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
 
@@ -1231,8 +1306,8 @@ $('scanBtn').addEventListener('click', async () => {
     if (f.carrier) $('f_carrier').value = f.carrier;
     if (f.port_of_loading) $('f_pol').value = f.port_of_loading;
     if (f.port_of_discharge) $('f_pod').value = f.port_of_discharge;
-    if (f.erd_date) $('f_erd').value = f.erd_date;
-    if (f.cutoff_date) $('f_cutoff').value = f.cutoff_date;
+    if (f.erd_date) $('f_erd').value = toUsDate(f.erd_date);
+    if (f.cutoff_date) $('f_cutoff').value = toUsDate(f.cutoff_date);
     if (f.etd) $('f_etd').value = f.etd;
     if (f.eta) $('f_eta').value = f.eta;
     if (f.vessel_voyage) $('f_vessel').value = f.vessel_voyage;
@@ -1260,6 +1335,7 @@ $('scanBtn').addEventListener('click', async () => {
 function resetBookingModal() {
   modalPdfBase64 = null; modalPdfFile = null; editingBookingNumber = null;
   ['f_bkg', 'f_carrier', 'f_vessel', 'f_pol', 'f_pod', 'f_erd', 'f_cutoff', 'f_etd', 'f_eta', 'f_buyer'].forEach(id => $(id).value = '');
+  wireUsDateField('f_erd'); wireUsDateField('f_cutoff');
   $('f_bkg').disabled = false;
   modalContainers = [{ seq: 1, size: '40HC', container_number: '', supplier: '', trucker: '', stage: 'not_started' }];
   $('modalError').textContent = '';
@@ -1285,8 +1361,9 @@ async function openBookingModalForEdit(bkg) {
   $('f_carrier').value = b.carrier || '';
   $('f_pol').value = b.port_of_loading || '';
   $('f_pod').value = b.port_of_discharge || '';
-  $('f_erd').value = b.erd_date || '';
-  $('f_cutoff').value = b.cutoff_date || '';
+  $('f_erd').value = toUsDate(b.erd_date) || '';
+  $('f_cutoff').value = toUsDate(b.cutoff_date) || '';
+  wireUsDateField('f_erd'); wireUsDateField('f_cutoff');
   $('f_etd').value = b.etd || '';
   $('f_eta').value = b.eta || '';
   $('f_vessel').value = b.vessel_voyage || '';
@@ -1317,8 +1394,8 @@ $('btnSaveBooking').addEventListener('click', async () => {
       carrier: $('f_carrier').value.trim() || null,
       port_of_loading: $('f_pol').value.trim() || null,
       port_of_discharge: $('f_pod').value.trim() || null,
-      erd_date: $('f_erd').value.trim() || null,
-      cutoff_date: $('f_cutoff').value.trim() || null,
+      erd_date: toIsoDate($('f_erd').value) || null,
+      cutoff_date: toIsoDate($('f_cutoff').value) || null,
       etd: $('f_etd').value.trim() || null,
       eta: $('f_eta').value.trim() || null,
       vessel_voyage: $('f_vessel').value.trim() || null,
@@ -4247,12 +4324,37 @@ async function renderSpendReportTab() {
         <div style="font-size:13px; color:var(--text-muted);">Load payments and expenses together, by month and by how they were paid.</div>
       </div>
 
-      <div class="card" style="padding:14px 16px; margin-bottom:18px; display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-        <div class="field" style="margin-bottom:0;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}" style="max-width:150px;"></div>
-        <div class="field" style="margin-bottom:0;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}" style="max-width:150px;"></div>
-        <button id="btnSpendApply" class="btn btn-primary" style="padding:8px 16px;">Apply</button>
-        <span style="flex:1;"></span>
-        ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:6px 11px;">${esc(p[0])}</button>`).join('')}
+      <!-- ── the filter bar ───────────────────────────────────────────────
+           Apsara, 2026-09-02: "report layout is not proper. apply this month
+           coming in one libe why?" — From, To, Apply and four preset buttons
+           were all one flex row with a flex:1 spacer between them. On a phone
+           that spacer eats the line and the presets get pushed into a cramped
+           strip beside Apply.
+           Three stacked rows now, each with a job: the range, then the
+           presets, then the method. Every row wraps on its own. -->
+      <div class="card" style="padding:14px 16px; margin-bottom:18px;">
+        <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}"></div>
+          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}"></div>
+          <button id="btnSpendApply" class="btn btn-primary" style="padding:10px 18px;">Apply</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+          ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:7px 12px;">${esc(p[0])}</button>`).join('')}
+        </div>
+        <!-- ── one method at a time ──────────────────────────────────────
+             Apsara, 2026-09-02: "in reports what if i want to see report
+             wherever just zelle is used/wire/just cash. mimic quickbook
+             report workflow."
+             QuickBooks narrows a report by a column and every figure follows
+             — not just the rows. So picking a method here re-runs the whole
+             report against it: the totals, the month rows and the cash
+             reconciliation all mean "of this method", never "of everything,
+             with some rows hidden". -->
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid by</span>
+          ${['', ...(rep.columns || [])].map(m => `
+            <button class="btn btn-spend-method" data-method="${esc(m)}" style="font-size:11.5px; padding:7px 12px; ${spendMethod === m ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(m || 'All')}</button>`).join('')}
+        </div>
       </div>
 
       <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap;">
