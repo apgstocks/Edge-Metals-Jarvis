@@ -58,14 +58,34 @@ function collectRows({ payments, expenses, from, to }) {
         if (!p || !inRange(p.paid_on || p.created_at, from, to)) continue;
         const amount = num0(p.amount);
         if (Math.abs(amount) <= CENT) continue;
+
+        // ── UNAPPLIED ADVANCES ARE NOT SPEND ──────────────────────────────
+        // The advance feature was removed on 2026-08-29, but rows written
+        // before that survive in payments.json carrying is_advance: true and
+        // load_id: null. helpers/payments.js's paymentsForLoad filters them
+        // out by load_id so they cannot make a load look part-paid; this
+        // report was not filtering them at all, so an old advance was being
+        // counted as money spent, under a row labelled just "Load".
+        if (!p.load_id || p.is_advance) continue;
+
+        // ── DIRECTION ─────────────────────────────────────────────────────
+        // A payment against a SALE is money a buyer paid US. It lives in the
+        // same file as purchase payments, with load_kind telling them apart —
+        // and this report was ignoring that field entirely, so every rupee
+        // received from a buyer was being added to "where the money went".
+        //
+        // Found 2026-09-02 when Apsara said the report's behaviour did not
+        // look right. She was correct: on any yard that records sales, every
+        // total here was inflated by its income.
         rows.push({
             kind: 'load',
+            direction: p.load_kind === 'sale' ? 'in' : 'out',
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
             method: METHODS.includes(p.mode) ? p.mode : UNCLASSIFIED,
             amount: round2(amount),
-            label: `Load ${p.load_id || ''}`.trim(),
-            ref: p.load_id || null,
+            label: `${p.load_kind === 'sale' ? 'Sale' : 'Load'} ${p.load_id}`.trim(),
+            ref: p.load_id,
         });
     }
 
@@ -75,6 +95,8 @@ function collectRows({ payments, expenses, from, to }) {
         if (Math.abs(amount) <= CENT) continue;
         rows.push({
             kind: 'expense',
+            // An expense is always money out. There is no incoming expense.
+            direction: 'out',
             id: e.id,
             date: e.date,
             // Anything not on the list is Unclassified, INCLUDING the legacy
@@ -111,8 +133,15 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
     // rather than returning nothing — a typo in a query string should not look
     // like "you spent nothing".
     const wanted = columns.includes(String(method || '').trim()) ? String(method).trim() : '';
-    const rows = collectRows({ payments, expenses, from, to })
+    const all = collectRows({ payments, expenses, from, to })
         .filter(r => !wanted || r.method === wanted);
+
+    // The report answers "where did the money GO". Money received from buyers
+    // is a different question and must not be added to that answer — but it is
+    // not dropped either, because silently discarding rows is its own way of
+    // being wrong. It is reported separately, below.
+    const rows = all.filter(r => r.direction !== 'in');
+    const inRows = all.filter(r => r.direction === 'in');
 
     const months = new Map();
     const byMethod = Object.fromEntries(columns.map((m) => [m, 0]));
@@ -184,6 +213,17 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
         count: rows.length,
         cash,
         rows,                      // the drill-down, already sorted newest first
+        // ── money IN, kept apart ──────────────────────────────────────────
+        // Payments against SALES. Shown beside the spend rather than mixed
+        // into it, so "we paid out 12,000 and took in 40,000" is two facts
+        // instead of one wrong one.
+        received: {
+            total: round2(inRows.reduce((a, r) => a + r.amount, 0)) || 0,
+            count: inRows.length,
+            byMethod: Object.fromEntries(columns.map((m) => [m,
+                round2(inRows.filter(r => r.method === m).reduce((a, r) => a + r.amount, 0)) || 0])),
+            rows: inRows,
+        },
     };
 }
 

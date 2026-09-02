@@ -325,6 +325,82 @@ section('I — narrowing to just Zelle / just Wire / just Cash');
     ck('  and a range with none of that method is empty', sepCash.total === 0);
 }
 
+// ── 10. the correctness bug she caught ────────────────────────────────────
+// Apsara, 2026-09-02: "check the reports behaviour. i dont think this is
+// correct."
+//
+// She was right, and it was the worst kind: a money report that was quietly
+// wrong rather than visibly broken.
+//
+//   1. A payment against a SALE is a buyer paying US. It lives in the same
+//      payments.json as purchase payments, with load_kind telling them apart —
+//      and buildSpendReport never looked at that field. So every rupee
+//      received was added to "where the money went". On a yard recording
+//      sales, EVERY total was inflated by its own income.
+//
+//   2. Advance rows written before the feature was removed on 2026-08-29
+//      survive with is_advance:true and load_id:null. helpers/payments.js
+//      filters those out by load_id so they cannot make a load look part-paid.
+//      This report did not, so an old advance counted as spend under a row
+//      labelled just "Load".
+section('J — money IN is not money OUT');
+{
+    const data = {
+        payments: [
+            { id: 'P1', load_id: 'EDGE_01', load_kind: 'purchase', mode: 'Cash',  amount: 300,   paid_on: '2026-08-10' },
+            { id: 'P2', load_id: 'SALE_01', load_kind: 'sale',     mode: 'Wire',  amount: 40000, paid_on: '2026-08-20' },
+            { id: 'P3', load_id: 'SALE_02', load_kind: 'sale',     mode: 'Zelle', amount: 5000,  paid_on: '2026-08-21' },
+            // A legacy advance: no load, never applied.
+            { id: 'P4', load_id: null, is_advance: true, mode: 'Cash', amount: 900, paid_on: '2026-08-05' },
+        ],
+        expenses: [{ id: 'E1', description: 'fuel', payment_method: 'Cash', amount: 100, date: '2026-08-11' }],
+        pettyEntries: [],
+    };
+    const r = buildSpendReport(data);
+
+    ck('a sale payment is NOT counted as spend', r.total === 400,
+       'before this fix the total was 46,300 — the yard\'s own income, plus an old advance');
+    ck('  the load side counts only purchases', r.loadTotal === 300);
+    ck('  expenses are untouched', r.expenseTotal === 100);
+    ck('  and the month table follows', r.months[0].total === 400);
+    ck('  as does the per-method breakdown', r.byMethod.Wire === 0 && r.byMethod.Cash === 400);
+
+    ck('an unapplied advance is not spend either', !r.rows.some(x => x.id === 'P4'),
+       'load_id is null — it was never paid against anything');
+
+    // Dropped from the spend, but NOT dropped. Discarding rows silently is its
+    // own way of being wrong.
+    ck('sales income is reported separately', r.received.total === 45000);
+    ck('  with its own count', r.received.count === 2);
+    ck('  broken down by method too', r.received.byMethod.Wire === 40000 && r.received.byMethod.Zelle === 5000);
+    ck('  and its rows are available', r.received.rows.every(x => x.direction === 'in'));
+    ck('  labelled as sales, not loads', r.received.rows.every(x => /^Sale /.test(x.label)));
+
+    ck('every spend row is direction out', r.rows.every(x => x.direction === 'out'));
+    ck('the two do not overlap', r.rows.every(x => !r.received.rows.some(y => y.id === x.id)));
+
+    // A yard with no sales must be completely unaffected.
+    const noSales = buildSpendReport({
+        payments: [{ id: 'Q1', load_id: 'EDGE_09', load_kind: 'purchase', mode: 'Cash', amount: 250, paid_on: '2026-08-01' }],
+        expenses: [], pettyEntries: [],
+    });
+    ck('a yard with no sales sees no change', noSales.total === 250 && noSales.received.count === 0);
+
+    // A payment with no load_kind at all — everything written before the field
+    // existed — must count as a PURCHASE, not vanish.
+    const legacy = buildSpendReport({
+        payments: [{ id: 'L1', load_id: 'EDGE_05', mode: 'Cash', amount: 700, paid_on: '2026-08-01' }],
+        expenses: [], pettyEntries: [],
+    });
+    ck('a payment with no load_kind is treated as a purchase', legacy.total === 700,
+       'defaulting the other way would erase real spending from before the field existed');
+
+    // And the method filter still applies to both sides consistently.
+    const wire = buildSpendReport({ ...data, method: 'Wire' });
+    ck('filtering by Wire shows no spend', wire.total === 0, 'the only Wire row is a sale');
+    ck('  but still reports the Wire received', wire.received.total === 40000);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

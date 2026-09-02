@@ -5046,7 +5046,7 @@ async function renderSpendReportTab() {
         <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Where the money went</h2>
         <div style="font-size:13px; color:var(--text-muted);">${spendMethod
           ? `Showing <strong style="color:var(--text-strong);">${esc(spendMethod)}</strong> only — every figure below is ${esc(spendMethod)}.`
-          : 'Load payments and expenses together, by month and by how they were paid.'}</div>
+          : 'Money OUT — what you paid sellers and spent on expenses, by month and by how it was paid. Sales income is shown separately.'}</div>
       </div>
 
       <!-- ── the filter bar ───────────────────────────────────────────────
@@ -5088,6 +5088,25 @@ async function renderSpendReportTab() {
         <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Expenses</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.expenseTotal))}</div></div>
         <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(rep.count)}</div></div>
       </div>
+
+      <!-- ── money IN, kept apart from money out ──────────────────────────
+           A payment against a SALE is a buyer paying US. Until 2026-09-02
+           this report added those to "where the money went", so on any yard
+           recording sales every total was inflated by its own income —
+           Apsara: "check the reports behaviour. i dont think this is
+           correct." She was right.
+           Shown here rather than dropped: discarding rows is its own way of
+           being wrong, and "paid out X, took in Y" is two facts. -->
+      ${rep.received && rep.received.count ? `
+      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap; align-items:center;">
+        <div>
+          <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Received from buyers</div>
+          <div style="font-size:22px; font-weight:800; color:var(--leaf-600, #2e7d32);">${esc(money(rep.received.total))}</div>
+        </div>
+        <div style="font-size:12.5px; color:var(--text-muted); flex:1; min-width:180px;">
+          ${esc(rep.received.count)} sale payment${rep.received.count === 1 ? '' : 's'} in this period — <strong>not</strong> counted in the figures above, which are money out only.
+        </div>
+      </div>` : ''}
 
       <!-- The cash box, reconciled over the same window — her "money out, plus
            cash in". Opened with X, took in Y, paid out Z, so it should hold W;
