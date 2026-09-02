@@ -219,15 +219,15 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     // Clearing the box must bring the date sections BACK. Passing flat once
     // and never unsetting it would leave the grouping gone for the rest of
     // the session — a plausible bug, so it gets an assertion.
-    // Rewritten 2026-09-02: the wiring gained an item-type dropdown, so the
-    // flat/grouped decision is now driven by EITHER filter rather than by the
-    // search text alone. The property being protected is unchanged — clearing
-    // everything has to bring the date sections back — so the assertion
-    // follows the code rather than being deleted with it.
-    ck(`${label}: the deck goes flat while EITHER filter is on`, /flat: narrowed/.test(src));
-    ck(`${label}:   and 'narrowed' is false only when both are empty`,
-       /const narrowed = !!q \|\| !!loadItemFilterValue;/.test(src),
+    // This assertion has now followed the code twice in two days: search-only,
+    // then either-filter when the dropdown arrived, then search-only again
+    // when she asked for the dropdown to go. The PROPERTY has never changed —
+    // clearing the box must bring the date sections back — which is why it
+    // keeps getting rewritten instead of deleted.
+    ck(`${label}: the deck goes flat only while something is typed`, /flat: !!q/.test(src),
        'if this ever became "always true", the date grouping would be gone for good');
+    ck(`${label}:   and the query is read from the box each time`,
+       /const q = String\(searchInput\.value \|\| ''\)\.trim\(\);/.test(src));
 }
 
 // ── 6. the amount is on the card ──────────────────────────────────────────
@@ -255,11 +255,18 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
 }
 
 // ── 7. filtering the deck by what is ON the load ──────────────────────────
-// Apsara, 2026-09-02: "in load tab also, i should filter by item detail."
-section('G — search and filter reach the item rows, not just the load');
+// Apsara, 2026-09-02, twice. First: "in load tab also, i should filter by item
+// detail" — which produced a search that reached the items PLUS a dropdown of
+// the item types present. Then, having seen it: "instead of select option of
+// item detail filter, make it as type and match .. add it to search by date,
+// seller, item, price."
+//
+// So the dropdown is gone and there is ONE typed box. These assertions were
+// rewritten rather than deleted: the behaviour being protected — that a
+// material can be found at all — is unchanged, only the control is.
+section('G — one search box, matching the load AND its items');
 for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     const filter = new Function(grab(src, 'filterLoads', label) + '; return filterLoads;')();
-    const types = new Function(grab(src, 'loadItemTypes', label) + '; return loadItemTypes;')();
 
     const LOADS = [
         { id: 'L1', date: '2026-08-10', seller: 'Acme', items: [{ description: 'Sealed Units', price: 0.5 }, { description: 'Copper', price: 2 }] },
@@ -269,47 +276,56 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     ];
     const ids = (r) => r.map(x => x.id).join(',');
 
-    // THE REPORTED GAP. The haystack never included the items, so searching a
-    // material found nothing unless those words happened to be in the load's
-    // own description — while Inventory could group by exactly that.
+    // THE ORIGINAL GAP. The haystack never included the items, so searching a
+    // material found nothing unless those words were in the load's own
+    // description — while Inventory could group by exactly that field.
     ck(`${label}: searching a material finds the loads carrying it`, ids(filter(LOADS, 'sealed')) === 'L1,L2',
-       'this is what did not work — item descriptions were not in the search at all');
+       'item descriptions were not in the search at all before 2026-09-02');
     ck(`${label}: a per-item price is searchable`, ids(filter(LOADS, '0.55')) === 'L2',
        '"which loads did we pay that rate on" is a real question');
 
-    // The dropdown is an EXACT match, and matched the same way Inventory
-    // groups — trimmed, case-insensitive — or a load lands under a heading it
-    // does not belong to.
-    ck(`${label}: the type filter matches exactly`, ids(filter(LOADS, '', 'Sealed Units')) === 'L1,L2');
-    ck(`${label}:   ignoring case and space, like the Inventory grouping`,
-       ids(filter(LOADS, '', 'sealed units')) === 'L1,L2');
-    ck(`${label}:   and does not match on a substring`, ids(filter(LOADS, '', 'Sealed')) === '',
-       'a dropdown is an exact choice; loose matching there would be a different feature wearing its clothes');
+    // TYPE AND MATCH — partial, which is the point of replacing the dropdown.
+    // The dropdown demanded the whole name; typing three letters should work.
+    ck(`${label}: a partial word matches`, ids(filter(LOADS, 'seal')) === 'L1,L2');
+    ck(`${label}: a middle-of-the-word match works too`, ids(filter(LOADS, 'nits')) === 'L1,L2',
+       'substring, not prefix — people type the bit they remember');
+    ck(`${label}: case does not matter`, ids(filter(LOADS, 'SEALED')) === 'L1,L2');
+    ck(`${label}: it matches the trimmed value`, ids(filter(LOADS, 'sealed units')) === 'L1,L2');
 
-    ck(`${label}: the two filters combine`, ids(filter(LOADS, 'vega', 'Sealed Units')) === 'L2');
-    ck(`${label}: neither filter set returns everything`, ids(filter(LOADS, '', '')) === 'L1,L2,L3,L4');
-    ck(`${label}: a load with no items is not matched by a type`,
-       !filter(LOADS, '', 'Brass').some(l => l.id === 'L4'));
-    ck(`${label}: searching what was already searchable still works`,
-       ids(filter(LOADS, 'acme')) === 'L1,L3', 'the seller search must not have regressed');
+    // The four fields she named, in one box.
+    ck(`${label}: by date`, ids(filter(LOADS, '2026-08-10')) === 'L1');
+    ck(`${label}: by seller`, ids(filter(LOADS, 'acme')) === 'L1,L3');
+    ck(`${label}: by item`, ids(filter(LOADS, 'brass')) === 'L3');
+    ck(`${label}: by price`, ids(filter(LOADS, '0.5')) === 'L1,L2',
+       '0.5 is a substring of 0.55 — a load priced at either is a fair answer to typing "0.5"');
 
-    // Options come from the deck, so the dropdown cannot offer a material
-    // that would return nothing.
-    ck(`${label}: the dropdown lists the types actually present`, types(LOADS).join('|') === 'Brass|Copper|Sealed Units');
-    ck(`${label}:   de-duplicated case-insensitively`, types(LOADS).filter(t => /sealed/i.test(t)).length === 1);
-    ck(`${label}:   and sorted`, types(LOADS)[0] === 'Brass');
+    ck(`${label}: an empty box returns everything`, ids(filter(LOADS, '')) === 'L1,L2,L3,L4');
+    ck(`${label}: whitespace counts as empty`, ids(filter(LOADS, '   ')) === 'L1,L2,L3,L4');
+    ck(`${label}: no match is empty, not everything`, ids(filter(LOADS, 'titanium')) === '');
+    ck(`${label}: a load with no items does not throw`, filter(LOADS, 'brass').length === 1);
+    ck(`${label}: a load whose items key is missing does not throw`,
+       filter([{ id: 'X', seller: 'Q' }], 'brass').length === 0);
 
-    // Wiring: the filter has to survive a repaint, and both controls have to
-    // drive the same path.
-    ck(`${label}: the selected type survives a tab repaint`, /let loadItemFilterValue = '';/.test(src),
-       'losing it on repaint would silently show every load again after generating a PDF');
-    ck(`${label}: both controls run the same filter`,
-       /searchInput\.addEventListener\('input', applyLoadFilters\)/.test(src)
-       && /itemFilter\.addEventListener\('change', applyLoadFilters\)/.test(src));
-    ck(`${label}: results go flat while either filter is on`, /flat: narrowed/.test(src));
-    ck(`${label}: the placeholder says items are searchable now`,
-       /Search by date, seller, item, price, or amount/.test(src),
-       'a search box that quietly got broader is one nobody knows to use');
+    // ── the dropdown is really gone ───────────────────────────────────────
+    // Not just unused — removed. A hidden <select> still in the markup would
+    // be dead weight that the next person has to work out the status of.
+    ck(`${label}: no item-type <select> remains`, !/id="loadItemFilter"/.test(src));
+    ck(`${label}: and its helpers went with it`,
+       !/function loadItemTypes\(/.test(src) && !/loadItemFilterValue/.test(src),
+       'leaving them would be dead code that looks load-bearing');
+    ck(`${label}: filterLoads takes just the query now`,
+       /function filterLoads\(loads, query\) \{/.test(src),
+       'an unused third parameter is a promise the function no longer keeps');
+
+    // Item WEIGHTS stay out, deliberately.
+    const weighted = [{ id: 'W1', seller: 'A', items: [{ description: 'Copper', price: 1, net_weight: 300, gross_weight: 300 }] }];
+    ck(`${label}: an item weight is not searchable`, filter(weighted, '300').length === 0,
+       'a weight of 300 would make every load with a 300 anywhere in it match');
+
+    ck(`${label}: the placeholder names what it searches`,
+       /Search by date, seller, item, price…/.test(src),
+       'a box that quietly got broader is one nobody knows to use');
+    ck(`${label}: results go flat while something is typed`, /flat: !!q/.test(src));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
