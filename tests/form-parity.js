@@ -409,5 +409,68 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+// ── Proforma wizard parity — payment terms ─────────────────────────────────
+// Apsara, 2026-09-02: "mimic this proforma behaviour in docs of mobile app",
+// after the dashboard's wizard was changed on 2026-09-01 to ASK for payment
+// terms alongside the material instead of leaving it to the details step.
+//
+// Why this belongs in a parity file rather than a mobile-only one: payment
+// terms stopped being a PDF-only field on 2026-09-01. It is now what
+// helpers/proformaSheetLog.js writes into the Terms column of the Edge Metals
+// sheet. Two screens that ask for it differently would put different things in
+// one financial column depending on which device the proforma was raised from.
+{
+  const dash = fs.readFileSync(R + 'dashboard/documents.html', 'utf8');
+  const mob  = fs.readFileSync(R + 'mobile-app/www/index.html', 'utf8');
+
+  // 1. Both ask on the MATERIAL step, not only on the details/review step.
+  ck('dashboard asks for payment terms on the material step',
+     /id="pfWiz_payment_term"/.test(dash));
+  ck('mobile asks for payment terms on the material step',
+     /id="pfw_paymentTerm2"/.test(mob));
+
+  // 2. Both offer the same suggestions, so the two screens cannot drift into
+  //    different house wordings for the same deal term.
+  const listOf = (src) => {
+    const m = src.match(/PF_PAY_TERM_SUGGESTIONS\s*=\s*\[([\s\S]*?)\]/);
+    if (!m) return null;
+    return (m[1].match(/'([^']+)'/g) || []).map(x => x.slice(1, -1));
+  };
+  const dl = listOf(dash), ml = listOf(mob);
+  ck('dashboard defines a payment-terms suggestion list', Array.isArray(dl) && dl.length > 0);
+  ck('mobile defines one too', Array.isArray(ml) && ml.length > 0);
+  ck('the two suggestion lists are identical', JSON.stringify(dl) === JSON.stringify(ml));
+  ck('LC is offered on both', !!dl && dl.includes('LC') && !!ml && ml.includes('LC'));
+
+  // 3. Both prefill from this customer's pricing memory. The mobile side was
+  //    fetching /api/customer-pricing/lookup, reading trade_terms and
+  //    port_discharge off the response, and DROPPING payment_terms — so a
+  //    customer on LC arrived on the standard T/T wording. That is the bug
+  //    this assertion exists to keep fixed.
+  ck('dashboard applies remembered payment terms', /info\.payment_terms/.test(dash));
+  ck('mobile applies remembered payment terms',    /info\.payment_terms/.test(mob));
+
+  // 4. Neither may overwrite what she typed. Both guard with a touched flag.
+  ck('dashboard guards her typing', /_pfPaymentTermFromWizard/.test(dash));
+  ck('mobile guards her typing',    /paymentTermTouched/.test(mob));
+
+  // 5. Both still send the field the sheet log reads. A rename here produces a
+  //    blank Terms column rather than an error, so it is pinned on both sides.
+  ck('dashboard sends payment_term', /payment_term:/.test(dash));
+  ck('mobile sends payment_term',    /payment_term: pfw\.paymentTerm/.test(mob));
+
+  // 6. Per-container invoice numbering needs item_code sent ALONGSIDE
+  //    container_no on both, or proformaSheetLog.js cannot build
+  //    "<date>_<item>_<container>" and the sheet gets a bare number.
+  ck('mobile sends item_code per container', /item_code: docDeriveItemCode/.test(mob));
+
+  // 7. Dates: MM/DD/YYYY display with a real picker, on both.
+  for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
+    ck(`${label} tidies date fields to MM/DD/YYYY`, /function wireUsDateField/.test(src));
+    ck(`${label} attaches a calendar picker to them`,
+       /type = 'date'|type=\x27date\x27|native\.type = 'date'/.test(src) || /showPicker/.test(src));
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
