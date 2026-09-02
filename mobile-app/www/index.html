@@ -6205,6 +6205,37 @@ const PF_DEFAULTS = {
   qty_unit: 'MT',
 };
 
+// Joins container codes writing the shared prefix ONCE — "26JY95,96,97,98,99"
+// rather than repeating "26JY" five times. Apsara, 2026-09-01.
+//
+// MUST stay byte-identical to helpers/proformaSheetLog.js's function of the
+// same name AND to dashboard/documents.html's copy: one builds the Inv No for
+// the SHEET, one for the website's PDF and this one for the app's, and any two
+// of them disagreeing is the exact bug this pairing exists to avoid.
+// helpers/invoiceSheet.js's invNoTailCodes expands it back so the Inv No
+// search still finds every container.
+//
+// A code with a different alpha prefix (a run crossing a code change, e.g.
+// 26JY99 then 26KA01) is kept whole — shortening it would be ambiguous, and
+// an ambiguous container reference on an invoice is worth the extra
+// characters.
+//
+// PORTED TO THE APP 2026-09-02, per Apsara: "mimic proforma changes on website
+// to docs of app". Until now a three-container proforma raised in the app got
+// an Inv No naming ONE container, while the same proforma on the website named
+// all three — and the Inv No is the key that joins the PDF to the Edge Metals
+// sheet.
+function shortenContainerCodes(codes) {
+  const list = (codes || []).filter(Boolean);
+  if (!list.length) return '';
+  const m = String(list[0]).match(/^(.*?)(\d+)$/);
+  const prefix = m && m[1] ? m[1] : null;
+  return list.map((c, i) => {
+    if (i === 0 || !prefix) return c;
+    return String(c).startsWith(prefix) ? String(c).slice(prefix.length) : c;
+  }).join(',');
+}
+
 function docTodayISO() { return new Date().toISOString().slice(0, 10); }
 
 // ── Tab shell ─────────────────────────────────────────────────────────────
@@ -6579,18 +6610,24 @@ async function pfLoadSuggestions() {
       // where the consignee is often picked before any item is typed and a
       // retrofit pass is needed later. Here the order is fixed, so the
       // retrofit machinery isn't needed at all.
-      pfw.invNo = itemCode ? `${dateStr}_${itemCode}_${sug.code_only}` : sug.inv_no;
       pfw.invNoSuggestion = { highest: sug.highest_existing };
       pfw.containerSeq = {
         yy: sug.year_prefix, letterCode: sug.letter_code, nextNumber: sug.next_number,
         numberDigits: sug.number_digits, numberHadLeadingZero: sug.number_had_leading_zero,
       };
+      pfw.invNoParts = { dateStr, itemCode, codeOnly: sug.code_only, fallback: sug.inv_no };
     }
   } catch (e) { /* no history — invoice number stays manual */ }
 
   // Container numbers: bare "26JY52" with no item code, per Apsara
   // 2026-08-22 on the dashboard. The item code still reaches the Edge
   // Metals sheet, but as its own field (see the payload below).
+  //
+  // GENERATED BEFORE THE INV NO, as of 2026-09-02. The Inv No's tail names
+  // every container on the proforma, so it cannot be built until they exist.
+  // It used to be composed first, from sug.code_only alone — which is the
+  // FIRST container — so a three-container proforma was numbered as though it
+  // had one.
   pfw.containerNos = [];
   for (let i = 0; i < pfw.containerCount; i++) {
     if (!pfw.containerSeq) { pfw.containerNos.push(''); continue; }
@@ -6598,6 +6635,22 @@ async function pfLoadSuggestions() {
     const numStr = pfw.containerSeq.numberHadLeadingZero
       ? String(n).padStart(pfw.containerSeq.numberDigits, '0') : String(n);
     pfw.containerNos.push(`${pfw.containerSeq.yy}${pfw.containerSeq.letterCode}${numStr}`);
+  }
+
+  // ── the Inv No, naming every container ──────────────────────────────────
+  // Matches dashboard/documents.html's retrofitInvNoContainers, which does the
+  // same job the hard way: on the website the consignee is often picked before
+  // any material is typed, so the number has to be rewritten afterwards. Here
+  // the wizard's order is fixed — material, then consignee, then this — so the
+  // number can simply be built correctly the first time and no retrofit pass
+  // is needed.
+  //
+  // One container gives exactly what it gave before, because shortening a
+  // single code returns that code.
+  if (pfw.invNoParts) {
+    const p = pfw.invNoParts;
+    const tail = shortenContainerCodes(pfw.containerNos.filter(Boolean)) || p.codeOnly;
+    pfw.invNo = p.itemCode ? `${p.dateStr}_${p.itemCode}_${tail}` : p.fallback;
   }
 }
 
@@ -6939,15 +6992,16 @@ function pfDescSuggestions(q, customerDescs, genericDescs) {
   const out = [];
   const push = (text, fromHistory) => {
     const key = String(text || '').trim().toLowerCase();
-    if (!key || seen.has(key)) return;
+    if (!key || seen.has(key)) return;   // a description in both lists is shown once, as history
     seen.add(key);
     out.push({ text: String(text).trim(), fromHistory });
   };
-  // An empty box still lists this customer's history — on a blank field the
-  // most useful thing is what they always order.
-  const match = t => !needle || String(t).toLowerCase().includes(needle);
-  (customerDescs || []).filter(match).forEach(t => push(t, true));
-  (genericDescs || []).filter(match).forEach(t => push(t, false));
+  // Empty query still lists this customer's own history — she asked for the
+  // list "as soon as I type", and on an empty box the most useful thing is
+  // what this customer always orders.
+  const match = (t) => !needle || String(t).toLowerCase().includes(needle);
+  (customerDescs || []).filter(match).forEach((t) => push(t, true));
+  (genericDescs || []).filter(match).forEach((t) => push(t, false));
   return out.slice(0, 12);
 }
 

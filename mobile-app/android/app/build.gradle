@@ -24,8 +24,8 @@ android {
         applicationId "com.edgemetals.loads"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 45
-        versionName "6.2"
+        versionCode 46
+        versionName "6.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -44,6 +44,41 @@ android {
         }
     }
     buildTypes {
+        // ── Debug installs alongside the real app, not over it ─────────────
+        // Apsara, 2026-09-02: "package conflicts with existing package".
+        //
+        // That is Android refusing an install, and it is working as intended.
+        // The release APK is signed with edge-yard-release.jks
+        // (CN=Edge Trading); a debug APK is signed with the throwaway Android
+        // debug key (CN=Android Debug). Android will not let an APK replace an
+        // installed one signed by a DIFFERENT key — that check is the whole
+        // reason nobody can push a fake update over your app — and with both
+        // builds sharing applicationId "com.edgemetals.loads" the only way to
+        // sideload a debug build was to uninstall the real app first, taking
+        // its data with it.
+        //
+        // Suffixing the debug applicationId makes them two separate apps, so
+        // both sit on the phone at once and the real one is never at risk.
+        //
+        // Checked before doing this, because an applicationId change breaks
+        // anything that hardcodes the package name:
+        //   • AndroidManifest's FileProvider uses ${applicationId}.fileprovider
+        //     — a placeholder, so it follows this automatically and the two
+        //     apps cannot clash over the provider authority.
+        //   • No google-services.json, so no package-bound Google config.
+        //   • The Java namespace (com.edgemetals.loads) is unaffected —
+        //     applicationId and namespace are separate settings.
+        // The RELEASE build is deliberately untouched: it keeps the exact
+        // applicationId the Play listing and every installed phone expects.
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            // The launcher name is overridden in src/debug/res/values/strings.xml
+            // rather than with resValue here: app_name already exists in the
+            // main source set, and resValue would generate a SECOND definition
+            // of it and fail the build on a duplicate resource. A debug source
+            // set overrides main cleanly, which is what it is for.
+        }
         release {
             // Only attach the signing config when the properties actually
             // exist — referencing an unconfigured one makes the whole Gradle
