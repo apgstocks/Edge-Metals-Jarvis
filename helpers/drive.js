@@ -496,6 +496,57 @@ async function getOrCreateReportsFolder(drive) {
 // upload is an ordinary Drive write. A files.update with new media on an
 // existing Google Sheet replaces its content in place, so the link never
 // changes and anyone who has it keeps working.
+// ── one-time rename of a report file ──────────────────────────────────────
+// Added 2026-09-02, when the monthly loads workbooks were renamed from
+// "Loads-YYYY-MM.xlsx" to "YYYY_MM Loads" (Apsara: "name that as
+// [year]_[month] Loads").
+//
+// A RENAME, not a new file. Drive keeps the same file ID through a rename, so
+// every month's history carries over in place and any link already shared for
+// that workbook keeps working. Creating fresh under the new name would instead
+// leave two files per past month: the old one frozen at today's data and a new
+// one that updates — which is exactly the confusion to avoid when someone goes
+// looking for August next year.
+//
+// Idempotent and safe to run on every sync:
+//   - no old file            -> nothing to do
+//   - new name already there -> leave the old one ALONE rather than merging or
+//                               trashing. Two files with the same name is
+//                               legal on Drive and losing data to a rename
+//                               would be far worse than one stray file, so
+//                               this reports it and lets a person decide.
+// Never throws: a failed rename must not take the whole sync down with it.
+async function renameReportFile(oldName, newName) {
+    try {
+        const drive = getDrive();
+        const parentId = await getOrCreateReportsFolder(drive);
+        const q = (n) => `'${parentId}' in parents and name = '${String(n).replace(/'/g, "\\'")}' and trashed = false`;
+
+        const oldList = await drive.files.list({
+            q: q(oldName), fields: 'files(id, name)', pageSize: 1,
+            supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+        });
+        const old = (oldList.data.files || [])[0];
+        if (!old) return { renamed: false, reason: 'no_old_file' };
+
+        const newList = await drive.files.list({
+            q: q(newName), fields: 'files(id, name)', pageSize: 1,
+            supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+        });
+        if ((newList.data.files || []).length) {
+            console.warn(`[DRIVE] "${newName}" already exists — leaving "${oldName}" in place rather than merging or trashing it`);
+            return { renamed: false, reason: 'target_exists' };
+        }
+
+        await drive.files.update({ fileId: old.id, requestBody: { name: newName }, supportsAllDrives: true });
+        console.log(`[DRIVE] Renamed report "${oldName}" -> "${newName}" (${old.id})`);
+        return { renamed: true, fileId: old.id };
+    } catch (err) {
+        console.warn(`[DRIVE] Could not rename report "${oldName}" -> "${newName}":`, err.message);
+        return { renamed: false, reason: 'error', error: err.message };
+    }
+}
+
 // updateOnly: refresh the file if it is already there, but do NOT bring it
 // into existence. Added 2026-09-02 for the empty monthly expense workbooks —
 // see the call site in helpers/sheetSync.js for why "update but never create"
@@ -643,7 +694,7 @@ async function uploadYardChatLog(day, buffer) {
     return { fileId: created.data.id, name, webViewLink: created.data.webViewLink, replaced: false };
 }
 
-module.exports = { upsertReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
+module.exports = { upsertReportFile, renameReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

@@ -9,8 +9,10 @@
 // a STABLE NAME so their links never change:
 //   1. "Inventory-Overall" — a native Google Sheet, rebuilt from loads.json
 //      on every change. This is the "overall inventory maintenance" sheet.
-//   2. "Loads-<YYYY-MM>.xlsx" — one workbook per calendar month, one tab per
-//      day, one row per line item.
+//   2. "<YYYY>_<MM> Loads" — one workbook per calendar month, one tab per
+//      day that HAS loads, one row per line item. Renamed from
+//      "Loads-<YYYY-MM>.xlsx" on 2026-09-02 per Apsara; existing files are
+//      renamed in place on the next sync, keeping their Drive ID and links.
 //
 // WHY THIS IS A DRIVE UPLOAD AND NOT A SHEETS API WRITE: helpers/sheets.js
 // authenticates with 'spreadsheets.readonly' (it only ever reads the price
@@ -80,7 +82,7 @@ async function runSync(months) {
         monthlyLoadsWorkbookBuffer, inventoryWorkbookBuffer,
         monthlyExpensesWorkbookBuffer, expensesOverallWorkbookBuffer,
     } = require('./inventoryExcel');
-    const { upsertReportFile } = require('./drive');
+    const { upsertReportFile, renameReportFile } = require('./drive');
 
     const allLoads = loadLoads();
     const allExpenses = loadExpenses();
@@ -91,10 +93,45 @@ async function runSync(months) {
     results.sheet = await upsertReportFile('Inventory-Overall', Buffer.from(overallBuf), { asGoogleSheet: true });
 
     // 2. One loads workbook per affected month.
+    //
+    // ── NAMING, per Apsara 2026-09-02 ──────────────────────────────────────
+    // "per month a new sheet should be created. name that as [year]_[month]
+    // Loads." So "2026_09 Loads", not "Loads-2026-09.xlsx".
+    //
+    // Month as a NUMBER, her choice: Drive sorts names alphabetically, so
+    // 2026_09 falls between 2026_08 and 2026_10, while "September" would sort
+    // after "October". It is also the same YYYY-MM shape the rest of the code
+    // already uses, so there is one date format in the system rather than two.
+    //
+    // The extension is dropped from the name because she asked for that name;
+    // the bytes are still a real .xlsx and Drive keeps the MIME type, so it
+    // opens exactly as before.
+    //
+    // Existing files are RENAMED rather than left behind. Drive keeps the same
+    // file ID through a rename, so each month's history carries over in place
+    // and any link already shared keeps working. Starting fresh under the new
+    // name would leave two files per past month — the old one frozen at
+    // today's data and a new one that updates.
+    //
+    // Run on every sync and idempotent: once renamed there is no old file to
+    // find, so this is a single cheap lookup that finds nothing thereafter.
     for (const monthKey of months) {
+        const name = `${monthKey.replace('-', '_')} Loads`;
+        await renameReportFile(`Loads-${monthKey}.xlsx`, name);
+
+        // ── a month with no loads gets no workbook ─────────────────────────
+        // Same rule she set for expenses, and it matters more here:
+        // monthsToSync ALWAYS includes the current month, so on the 1st of
+        // every month this created a "Loads-YYYY-MM.xlsx" whose only content
+        // was one sheet reading "No loads recorded for YYYY-MM yet."
+        //
+        // updateOnly for the same reason as the expenses side: a month whose
+        // loads were all deleted must still be refreshed, or its workbook
+        // freezes showing loads that no longer exist.
+        const hasAny = allLoads.some(l => l && l.date && String(l.date).startsWith(monthKey));
         const buf = await monthlyLoadsWorkbookBuffer(allLoads, monthKey);
-        const file = await upsertReportFile(`Loads-${monthKey}.xlsx`, Buffer.from(buf));
-        results.months.push({ monthKey, file });
+        const file = await upsertReportFile(name, Buffer.from(buf), { updateOnly: !hasAny });
+        if (file) results.months.push({ monthKey, file });
     }
 
     // 3+4. The same pair for expenses (Apsara 2026-08-19). Skipped entirely
