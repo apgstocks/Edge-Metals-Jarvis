@@ -90,6 +90,48 @@ async function addPayment(input = {}) {
     const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
     if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
 
+    // ── CASH COMES OUT OF THE PETTY CASH BOX ──────────────────────────────
+    // Per Apsara 2026-09-02: "If i click pay in load and select cash, the
+    // invoice amount should be adjusted against this."
+    //
+    // THE CASH IS RESERVED BEFORE THE PAYMENT IS WRITTEN, and the reservation
+    // is reversed if that write fails. Two files cannot be updated atomically
+    // here, so the question is which way round to fail, and the two are not
+    // equally bad:
+    //
+    //   cash out, payment missing  -> the box shows less than it holds. Visible
+    //                                 on the tab as a withdrawal with no
+    //                                 payment beside it, and reversible.
+    //   payment in, cash not taken -> the balance is overstated, so the NEXT
+    //                                 payment is allowed to overdraw a box that
+    //                                 is already empty. Nothing on screen says
+    //                                 so, and the error compounds.
+    //
+    // So: reserve first. The reversal below closes the window in the ordinary
+    // case; the ordering is what protects the case where the process dies
+    // between the two writes.
+    //
+    // The cap is NOT applied silently. withdrawForPayment refuses when there is
+    // not enough and returns `available`; the client shows that and asks; only
+    // then does it come back with allow_partial. Her words: "make it as partial
+    // payment and notify user" — the notification is the point, so it is a
+    // precondition rather than an afterthought.
+    let cashEntry = null;
+    let cashTaken = null;
+    if (mode === 'Cash') {
+        const petty = require('./pettyCash');
+        const res = await petty.withdrawForPayment({
+            amount,
+            loadId,
+            paymentId: null,                 // stamped after the payment id exists
+            date: input.paid_on,
+            createdBy: input.created_by || null,
+            allowPartial: input.allow_partial === true,
+        });
+        cashEntry = res.entry;
+        cashTaken = res.taken;
+    }
+
     const record = {
         id: newPaymentId(),
         load_id: loadId,
@@ -97,7 +139,16 @@ async function addPayment(input = {}) {
         // across them, so without this a purchase and a sale could collide.
         load_kind: input.load_kind === 'sale' ? 'sale' : 'purchase',
         mode,
-        amount,
+        // What was ACTUALLY paid. On a capped cash payment this is less than
+        // was asked for, and the rest stays outstanding — which is exactly
+        // what "make it a partial payment" means. Stored as the real figure so
+        // paymentSummary, the card, the ticket and the invoice all agree
+        // without any of them knowing about petty cash.
+        amount: cashTaken != null ? cashTaken : amount,
+        // Set only on a cash payment: the ledger row this drew on. Lets the
+        // Petty cash tab link a withdrawal back to the load it paid, and lets
+        // deletePayment find what to refund without scanning.
+        petty_cash_entry_id: cashEntry ? cashEntry.id : null,
         // Local day, not UTC. toISOString() rolls over at UTC midnight, which is
         // early evening at the yard — an evening payment was being stamped with
         // tomorrow's date. See todayLocal() in helpers/time.js.
@@ -107,35 +158,108 @@ async function addPayment(input = {}) {
         created_at: new Date().toISOString(),
         created_by: input.created_by || null,
     };
-    await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
-        const list = Array.isArray(all) ? all : [];
-        list.push(record);
-        return list;
-    });
+    try {
+        await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
+            const list = Array.isArray(all) ? all : [];
+            list.push(record);
+            return list;
+        }, { strict: true });
+    } catch (err) {
+        // The payment did not land. Put the cash back, or the box would show
+        // money gone for a payment that does not exist — see the ordering note
+        // above. The reversal is stamped against the withdrawal's own id.
+        if (cashEntry) {
+            try {
+                await require('./pettyCash').reverseForPayment(cashEntry.id, { createdBy: input.created_by || null });
+            } catch (e) {
+                // Both writes failed. Say so loudly and in full: this is the
+                // one state a person has to reconcile by hand, and a silent
+                // catch here is how it would be discovered weeks later.
+                console.error(`[PAYMENTS] CASH RESERVED BUT NOT REFUNDED — petty cash entry ${cashEntry.id} took ${cashTaken} for load ${loadId} and the payment write failed. Refund also failed:`, e.message);
+            }
+        }
+        throw err;
+    }
+
+    // Stamp the withdrawal with the payment it belongs to, now that the id
+    // exists. Best-effort and deliberately not fatal: the money has already
+    // moved correctly and the entry still carries load_id, so a failure here
+    // costs a cross-reference, not a cent. Refunds fall back to the entry id.
+    if (cashEntry) {
+        try {
+            await require('./pettyCash').stampPaymentId(cashEntry.id, record.id);
+        } catch (e) {
+            console.warn(`[PAYMENTS] could not link petty cash entry ${cashEntry.id} to payment ${record.id}:`, e.message);
+        }
+    }
     return record;
 }
 
+// Deleting a CASH payment puts the money back in the box. Per Apsara's model
+// the two are the same event seen from two sides, so undoing one has to undo
+// the other — otherwise deleting a mistaken $400 cash payment would leave the
+// box $400 short forever, with nothing on screen explaining why.
+//
+// Refunded as a REVERSAL row rather than by deleting the withdrawal: a ledger
+// you can remove rows from is one nobody can reconcile. The pair stays
+// visible — money out on the 2nd, money back on the 3rd.
+//
+// Order is deliberate and the mirror of addPayment. There the cash moved
+// first, because an overstated balance is the dangerous direction. Here the
+// payment is removed first for the same reason: if the refund then fails, the
+// box reads LOW, which is safe and visible, rather than high.
+//
+// The refund is idempotent by design (see reverseForPayment), so a retry after
+// a partial failure cannot pay the money back twice.
 async function deletePayment(id) {
     let removed = false;
+    const doomed = listPayments().find((p) => p && p.id === id) || null;
     await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
         const next = list.filter((p) => p.id !== id);
         removed = next.length !== list.length;
         return next;
     });
+    if (removed && doomed && doomed.mode === 'Cash') {
+        // By the withdrawal's own id when we have it, else by payment id —
+        // reverseForPayment accepts either, and the entry id is the one that
+        // survives a payment written before the link was stamped.
+        const key = doomed.petty_cash_entry_id || doomed.id;
+        try {
+            await require('./pettyCash').reverseForPayment(key, { createdBy: null });
+        } catch (e) {
+            console.error(`[PAYMENTS] deleted cash payment ${id} but could NOT return ${doomed.amount} to petty cash (${key}):`, e.message);
+        }
+    }
     return removed;
 }
 
 // Removes every payment for a load. Called when a load is deleted, so a
 // deleted load cannot leave orphan receipts summing against nothing.
+// Cascade from deleting a LOAD. Same refund rule — a load being deleted does
+// not mean the cash was really spent, and the box has to come back to what it
+// was. Note this is reachable today only for a load with no payments (the Pay
+// and Delete buttons are mutually exclusive on the card since 2026-09-01), but
+// the route still exists and the yard assistant can reach it, so the refund
+// belongs here rather than in the button.
 async function deletePaymentsForLoad(loadId) {
     let removed = 0;
+    const doomed = listPayments().filter((p) => p && p.load_id === loadId);
     await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
         const next = list.filter((p) => p.load_id !== loadId);
         removed = list.length - next.length;
         return next;
     });
+    for (const p of doomed) {
+        if (p.mode !== 'Cash') continue;
+        const key = p.petty_cash_entry_id || p.id;
+        try {
+            await require('./pettyCash').reverseForPayment(key, { createdBy: null });
+        } catch (e) {
+            console.error(`[PAYMENTS] load ${loadId} deleted but could NOT return ${p.amount} cash to petty cash (${key}):`, e.message);
+        }
+    }
     return removed;
 }
 

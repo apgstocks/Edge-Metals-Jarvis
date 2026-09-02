@@ -378,7 +378,13 @@ function createApi() {
     // at the scale. Carries no financial exposure beyond what '/api/loads'
     // already allows them, since a draft becomes a load through that same
     // endpoint and its same checks.
-    const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/verify-admin-password'];
+    // '/api/petty-cash' added 2026-09-02. Staff SEE the balance, they do not
+// change it — Apsara, asked directly. This list is path-based and cannot
+// distinguish GET from POST, so letting the path through is only half the
+// rule; POST and DELETE /api/petty-cash each carry requireAdmin of their own.
+// Staff cannot record a cash payment either (/api/payments is absent from this
+// list), so the reserve and the thing that draws it down stay behind one door.
+const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/petty-cash', '/api/verify-admin-password'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -1651,13 +1657,70 @@ function createApi() {
             const { addPayment, paymentSummary } = require('./helpers/payments');
             const b = req.body || {};
             const payment = await addPayment({ ...b, created_by: (req.role || null) });
+            // A cash payment short of the asked-for amount has to say so
+            // loudly enough that the client can tell the operator, per Apsara
+            // 2026-09-02 ("make it as partial payment and notify user"). The
+            // client already had to acknowledge the shortfall to get here —
+            // this is the confirmation of what was actually taken.
+            const cashNote = (payment.mode === 'Cash' && Number(payment.amount) < Number(b.amount) - 0.005)
+                ? { capped: true, requested: Number(b.amount), paid: Number(payment.amount) }
+                : null;
             // The fresh summary comes back with the payment so the client can
             // repaint the card without a second round trip, and so the
             // partial/pending figure it shows is the SERVER's arithmetic
             // rather than a second implementation of it in the browser.
             const amount = amountForLoad(b.load_id, b.load_kind);
-            res.json({ ok: true, payment, summary: paymentSummary(b.load_id, amount) });
+            let pettyBalance = null;
+            try { pettyBalance = require('./helpers/pettyCash').balance(); } catch (e) {}
+            res.json({ ok: true, payment, summary: paymentSummary(b.load_id, amount), cash: cashNote, petty_cash_balance: pettyBalance });
+        } catch (e) {
+            // Petty cash refusals carry the numbers the operator needs to
+            // decide, so they are passed through as structured fields rather
+            // than flattened into a message the client would have to parse.
+            // PETTY_CASH_SHORT is the one the Pay form turns into "only $400
+            // in the box — record $400 and leave the rest outstanding?".
+            const body = { error: e.message };
+            if (e.code) body.code = e.code;
+            if (e.available != null) body.available = e.available;
+            if (e.requested != null) body.requested = e.requested;
+            res.status(400).json(body);
+        }
+    });
+
+    // ── Petty cash — the physical cash box ────────────────────────────────
+    // Per Apsara 2026-09-02. A ledger of top-ups and cash withdrawals; the
+    // balance is their sum. See helpers/pettyCash.js for why it is rows rather
+    // than a stored number.
+    //
+    // READ is open to staff, WRITE is admin only — her choice ("staff can see
+    // the balance, admin can top up"). The path is on
+    // STAFF_ALLOWED_PATH_PREFIXES so a staff session can GET it, and the two
+    // mutating routes carry requireAdmin individually. That combination is the
+    // boundary: the prefix list is path-based and cannot distinguish methods,
+    // so the method-level gate has to be on the route itself. Hiding the form
+    // in the client is UX, not security.
+    app.get('/api/petty-cash', (req, res) => {
+        try {
+            const petty = require('./helpers/pettyCash');
+            res.json({ balance: petty.balance(), entries: petty.history(200) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/petty-cash', requireAdmin, async (req, res) => {
+        try {
+            const petty = require('./helpers/pettyCash');
+            const entry = await petty.addTopUp({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, entry, balance: petty.balance() });
         } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    // Top-ups only — a withdrawal is undone by deleting the payment that made
+    // it, which reverses it properly. helpers/pettyCash.js enforces that
+    // rather than this route, so the rule holds however it is reached.
+    app.delete('/api/petty-cash/:id', requireAdmin, async (req, res) => {
+        try {
+            const petty = require('./helpers/pettyCash');
+            const removed = await petty.deleteEntry(String(req.params.id));
+            res.json({ ok: true, removed, balance: petty.balance() });
+        } catch (e) { res.status(400).json({ error: e.message, code: e.code || null }); }
     });
 
     // The three /api/advances routes were removed 2026-08-29 per Apsara

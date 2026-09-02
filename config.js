@@ -179,6 +179,20 @@ const FILES = {
     // typed once becomes a normal selectable option afterward instead of
     // requiring "Others…" every time.
     ITEM_TYPES_FILE: path.join(DATA_DIR, 'item_types.json'),
+    // Petty cash — the physical cash box, per Apsara 2026-09-02: "a new tab
+    // called Petty cash. Date and cash amount needs to be entered here. So it
+    // is like cash reserve. If i click pay in load and select cash, the
+    // invoice amount should be adjusted against this."
+    //
+    // A LEDGER, like payments, not a single balance field. Every top-up and
+    // every cash payment is its own row and the balance is the sum. A stored
+    // balance would be one crashed write away from being wrong with no way to
+    // tell what it should have been — and with cash there is no bank statement
+    // to reconcile against, so the ledger IS the record.
+    //
+    // ITS OWN FILE, for the same reason PAYMENTS_FILE is: it must not live
+    // inside a record that gets rewritten wholesale by an unrelated edit.
+    PETTY_CASH_FILE: path.join(DATA_DIR, 'petty_cash.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────

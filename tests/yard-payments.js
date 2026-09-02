@@ -20,6 +20,21 @@ const section=(t)=>console.log('\n=== '+t+' ===');
 (async()=>{
   const P=require(R+'helpers/payments.js');
   const cfg=require(R+'config.js');
+
+  // ── Cash now comes OUT of petty cash (2026-09-02) ───────────────────────
+  // Apsara: "If i click pay in load and select cash, the invoice amount should
+  // be adjusted against this." So a Cash payment draws on helpers/pettyCash.js
+  // and is REFUSED when the box is empty — which is a real behaviour change,
+  // not a test artefact: on the day this deploys, a cash payment will fail
+  // until a balance has been entered on the Petty cash tab.
+  //
+  // Funded generously here so these tests go on asserting what they were
+  // written for — the payment ledger's own arithmetic — rather than becoming
+  // petty-cash tests by accident. The cash rules have their own suite in
+  // tests/petty-cash.js, including the refusal this deliberately steps past.
+  const PC=require(R+'helpers/pettyCash.js');
+  await PC.addTopUp({ amount: 1000000, note: 'test float' });
+
   section('the ledger');
   const S=(id,amt)=>P.paymentSummary(id,amt);
   ck('a load with no payments is unpaid', S('L1',1000).status==='unpaid' && S('L1',1000).pending===1000);
