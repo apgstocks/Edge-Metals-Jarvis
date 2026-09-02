@@ -89,6 +89,54 @@ section('B — Pay is gone once the load is settled');
     ck('a load the server sent no summary for stays payable', payable({ id: 'L1' }));
 }
 
+// ── 2b. the signature freezes once it has been paid against ───────────────
+section('B2 — re-sign is gone once money is booked, but a FIRST sign is not');
+{
+    // Mobile only — the website has no Sign button (and, since commit
+    // b060298, no payment UI either).
+    const src = MOBILE;
+    const resignable = new Function(grab(src, 'loadIsResignable', 'app') + '; return loadIsResignable;')();
+    const signable = new Function(
+        grab(src, 'loadIsResignable', 'app') + grab(src, 'loadIsSignable', 'app') + '; return loadIsSignable;')();
+
+    const unpaid = { payment: { paid: 0, pending: 500, status: 'unpaid' } };
+    const partial = { payment: { paid: 200, pending: 300, status: 'partial' } };
+    const paid = { payment: { paid: 500, pending: 0, status: 'paid' } };
+    const signed = { seller_signature: 'data:image/png;base64,AAA' };
+
+    ck('an unpaid signed load can still be re-signed', signable({ ...signed, ...unpaid }));
+    ck('a PARTIALLY paid signed load cannot', !signable({ ...signed, ...partial }));
+    ck('a FULLY paid signed load cannot', !signable({ ...signed, ...paid }));
+
+    // THE DISTINCTION SHE CHOSE. Payment by transfer routinely lands before
+    // the seller is back with a pen; blocking the first signature would leave
+    // that load permanently unsignable.
+    ck('a paid but NEVER-signed load can still be signed', signable({ ...paid }),
+       'adding a missing signature is not the same act as replacing one');
+    ck('  ...and partially paid too', signable({ ...partial }));
+    ck('an unsigned unpaid load can be signed', signable({ ...unpaid }));
+
+    // Keyed off `paid`, so money on an unpriced load counts — same reasoning
+    // as loadIsDeletable.
+    ck('money on an unpriced load freezes the signature too',
+       !signable({ ...signed, payment: { paid: 250, total: null, pending: null, status: 'paid_amount_unknown' } }));
+    ck('the predicate itself ignores whether it is signed', !resignable(partial) && resignable(unpaid));
+
+    // The card must actually consult it, and must still SAY it is signed —
+    // dropping the button silently would read as "never signed".
+    const card = grab(src, 'loadCardHtml', 'app');
+    ck('the card gates the Sign button on loadIsSignable', /loadIsSignable\(l\)[\s\S]{0,400}btn-sign-load/.test(card));
+    ck('  and a frozen signature still shows as signed', /✓ Signed<\/span>/.test(card),
+       'a signed+paid load that shows nothing is indistinguishable from an unsigned one');
+
+    // The endpoint is untouched, exactly as with Delete and Pay.
+    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    ck('POST /api/loads/:id/signature still exists', /app\.post\('\/api\/loads\/:id\/signature'/.test(api));
+    // The reason the rule exists at all: signing REBUILDS the documents.
+    ck('signing still regenerates the ticket and receipt', /generateAndStoreLoadPdfs\(signed/.test(api),
+       'if this ever stops being true, the whole justification for freezing re-sign changes');
+}
+
 // ── 3. the card actually consults them ────────────────────────────────────
 section('C — the card wires the rules, it does not just define them');
 {

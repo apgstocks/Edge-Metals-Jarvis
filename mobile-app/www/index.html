@@ -1424,6 +1424,44 @@ function loadIsPayable(l) {
   return p.status !== 'paid' && p.status !== 'overpaid';
 }
 
+// ── the signature is frozen once it has been paid against ─────────────────
+// Per Apsara 2026-09-02: "once payment initiated, signed-resign should not be
+// there."
+//
+// WHY THIS IS THE RE-SIGN AND NOT THE SIGN
+// ----------------------------------------
+// POST /api/loads/:id/signature does two things: it overwrites
+// seller_signature, and it then calls generateAndStoreLoadPdfs, which REBUILDS
+// the ticket and the POS receipt. So re-signing a load that has already been
+// paid rewrites the very document that justified the payment — the old ticket
+// is gone, and nothing records that it changed. That is the hole worth
+// closing, and it is the one she named ("signed-resign", which is the label
+// this button wears only when a signature already exists).
+//
+// The FIRST signature is deliberately still allowed on a paid load. Payment by
+// bank transfer routinely lands before the seller is back at the yard with a
+// pen, and blocking it there would leave a real load permanently unsignable
+// with no way out but deleting the payment. Adding a missing signature is not
+// the same act as replacing one.
+//
+// Escape hatch, same shape as Delete: remove the payment and the button
+// returns. Deliberate — changing a paid ticket should cost a step.
+//
+// UI GUARD, NOT SECURITY: the endpoint is unchanged. If a signature genuinely
+// has to be corrected after payment, that is still possible; it just is not a
+// thing anyone does by tapping the wrong card.
+function loadIsResignable(l) {
+  const p = l && l.payment;
+  return !(p && Number(p.paid) > 0);
+}
+
+// The button is offered when it would either capture a first signature, or
+// legitimately replace an existing one.
+function loadIsSignable(l) {
+  if (!(l && l.seller_signature)) return true;   // never signed — always offer
+  return loadIsResignable(l);
+}
+
 function paymentBadgeHtml(l) {
   const p = l && l.payment;
   if (!p || !p.paid) return '';
@@ -3065,8 +3103,16 @@ function loadCardHtml(l) {
              sign"). Saving a signature regenerates the ticket + receipt
              so it appears above the "Seller signature" line on both.
              Label reflects current state so it's obvious at a glance
-             whether this load has been signed. -->
-        ${l.pdf_link && l._kind !== 'sale' ? `<button class="btn btn-sign-load" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">${l.seller_signature ? '✓ Signed — re-sign' : 'Sign'}</button>` : ''}
+             whether this load has been signed.
+             Per Apsara 2026-09-02 the RE-sign half goes away once money is
+             booked — see loadIsResignable. A signed+paid load shows a plain
+             "✓ Signed" chip instead, so the state is still legible; it just
+             is not a button any more. -->
+        ${l.pdf_link && l._kind !== 'sale' ? (
+          loadIsSignable(l)
+            ? `<button class="btn btn-sign-load" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">${l.seller_signature ? '✓ Signed — re-sign' : 'Sign'}</button>`
+            : `<span class="badge" title="Signed, and locked because a payment has been recorded against this load" style="font-size:12px; padding:6px 12px; background:var(--steel-100); color:var(--steel-700);">✓ Signed</span>`
+        ) : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
