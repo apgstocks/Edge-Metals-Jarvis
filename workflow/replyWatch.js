@@ -1115,6 +1115,17 @@ function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHe
         // Nobody at the company is on the To line at all.
         outsiderOnly: !inTo && !colleagueTo,
         toLabel: label(other),
+        // EVERYONE ELSE ON THE To LINE (2026-09-02). Being on To was treated
+        // as proof the ask was hers, but freight mail is addressed to several
+        // people at once and the ask inside is usually aimed at ONE of them by
+        // name. Two live reports in one morning:
+        //   "Bose needs a PO for 30000 lbs" -> "bose was asking that from
+        //    michael not me"           (To: Michael, Apsara)
+        //   "Matt Whittaker asks if delivery can be reset for 9/2"
+        //    -> "asking someone else"  (To: Tiffany, Apsara)
+        // Carrying the other recipients lets assess() CHECK the model's
+        // asked_of against the header instead of overruling it blindly.
+        toOthers: to.filter((a) => !isMine(a)).map((a) => ({ address: a, label: label(a), internal: atCompany(a) })),
     };
 }
 
@@ -1271,10 +1282,34 @@ async function assess(email) {
             // model produced is a guess.
             asked_of = addr.toLabel || cleanLabel(asked_of);
         } else if (addr.inTo) {
-            // She IS on the To line. Whatever the model thought about someone
-            // else being asked, this one is addressed here.
-            if (waiting_on === 'someone_else') waiting_on = 'her';
-            asked_of = null;
+            // She IS on the To line — but so, often, is the person actually
+            // being asked. Headers still beat the model on WHETHER anyone here
+            // was addressed; they cannot settle WHICH of several addressees
+            // the question is aimed at, and that is what the body says.
+            //
+            // So the override now requires evidence to be lifted: the model
+            // must have NAMED someone, and that someone must verifiably be on
+            // the To line too. A name it invented, or a name nobody addressed,
+            // still loses to the header exactly as before.
+            const namedOther = (waiting_on === 'someone_else' && asked_of)
+                ? (addr.toOthers || []).find((o) => {
+                    const want = String(asked_of).trim().toLowerCase();
+                    if (!want) return false;
+                    const first = want.split(/[\s,<]/)[0];
+                    if (first.length < 3) return false;
+                    const hay = `${o.label || ''} ${o.address || ''}`.toLowerCase();
+                    return hay.includes(first);
+                })
+                : null;
+            if (namedOther) {
+                // Her own team being asked is a COLLEAGUE, not an outsider —
+                // the company is still on the hook and she runs the company.
+                waiting_on = namedOther.internal ? 'colleague' : 'someone_else';
+                asked_of = namedOther.label || asked_of;
+            } else {
+                if (waiting_on === 'someone_else') waiting_on = 'her';
+                asked_of = null;
+            }
         }
     } else if (waiting_on === 'someone_else' && !asked_of) {
         // A 'someone_else' with nobody named is unusable in a digest line and

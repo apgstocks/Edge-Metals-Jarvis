@@ -1929,6 +1929,75 @@ section('Y1 — a courtesy note carries no outstanding ask');
     ck('and stays a team item', rw.isColleagueItem(still) === true);
 }
 
+// ══ Z. addressed ALONGSIDE the person actually being asked ═════════════════
+// Two live reports, 2 Sep, minutes apart:
+//   "Bose needs a PO for 30000 lbs"  -> "bose was asking that from michael not me"
+//   "Matt Whittaker asks if delivery can be reset for 9/2" -> "asking someone else"
+// In both, Apsara IS on the To line — and so is the person the question is
+// aimed at. Headers settle WHETHER anyone here was addressed; they cannot
+// settle WHICH of several addressees the ask is for. Only the body can, so
+// the model's asked_of is allowed to win when the header CONFIRMS the name.
+const ALONG = {
+    myAddress: 'bose@edgemetals.com', managerAddress: 'apsara@edgemetals.com',
+    subject: 'PO for Houston/Oklahoma', cc: '',
+    body: 'Michael, can you raise a PO for 30000 lbs for Houston and Oklahoma? '.repeat(3),
+    thread: '- Bose: asking Michael for the PO\n- Michael: looking\n', attachments: [],
+};
+const NAMED = (who) => ({ waiting_on: 'someone_else', needs_reply: false, confidence: 1,
+    urgency: 'normal', summary: 'Bose asks Michael for a PO for 30000 lbs.',
+    asked_of: who, asked_for: 'a PO for 30000 lbs',
+    asked_for_quote: 'can you raise a PO for 30000 lbs', key_figures: [], deadline: null });
+
+section('Z1 — the named person is on the To line, so it is NOT hers');
+{
+    AI = NAMED('Michael');
+    const a = await rw.assess({ ...ALONG,
+        to: 'Michael Horowitz <michael@eccomelt.com>, Apsara <apsara@edgemetals.com>',
+        from: 'Bose <bose@edgemetals.com>' });
+    ck('stays someone_else even though she is on To', a.waiting_on === 'someone_else', a.waiting_on);
+    ck('and it is not presented as needing her reply', a.needs_reply === false, String(a.needs_reply));
+    ck('naming who was actually asked', /michael/i.test(a.asked_of || ''), String(a.asked_of));
+}
+
+section('Z2 — her own team being asked is a COLLEAGUE, not an outsider');
+{
+    // The company is still on the hook and she runs the company. Calling this
+    // "someone else" would tell her to ignore her own firm's obligation.
+    AI = NAMED('Bose');
+    const a = await rw.assess({ ...ALONG,
+        to: 'Bose <bose@edgemetals.com>, Apsara <apsara@edgemetals.com>',
+        from: 'Zimex <yurim@zimex.com>' });
+    ck('a colleague on the To line reads as colleague', a.waiting_on === 'colleague', a.waiting_on);
+}
+
+section('Z3 — the header still beats an unsupported name');
+{
+    // The whole point of HEADERS BEAT THE MODEL. A name nobody addressed, or
+    // one the model invented, must still lose — otherwise this fix reopens
+    // the bug it was built on top of.
+    AI = NAMED('Priya');
+    const a = await rw.assess({ ...ALONG,
+        to: 'Michael Horowitz <michael@eccomelt.com>, Apsara <apsara@edgemetals.com>',
+        from: 'Bose <bose@edgemetals.com>' });
+    ck('a name NOT on the To line is overruled, as before', a.waiting_on === 'her', a.waiting_on);
+
+    AI = { ...NAMED('Michael'), asked_of: null };
+    const b = await rw.assess({ ...ALONG,
+        to: 'Michael Horowitz <michael@eccomelt.com>, Apsara <apsara@edgemetals.com>',
+        from: 'Bose <bose@edgemetals.com>' });
+    ck('and someone_else with nobody named is still overruled', b.waiting_on === 'her', b.waiting_on);
+}
+
+section('Z4 — addressed to her ALONE is untouched');
+{
+    // The common case must not move. If she is the only addressee, nothing
+    // the model says about a third party can take it off her desk.
+    AI = NAMED('Michael');
+    const a = await rw.assess({ ...ALONG,
+        to: 'Apsara <apsara@edgemetals.com>', from: 'Bose <bose@edgemetals.com>' });
+    ck('sole addressee stays hers', a.waiting_on === 'her', a.waiting_on);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
