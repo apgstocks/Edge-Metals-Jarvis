@@ -1145,6 +1145,144 @@ section('Proforma → Edge Metals sheet — per-container rows, payment terms');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+section('Zimex verification — the year/month period actually does something');
+// Apsara, 2026-09-01: "right now its not filtering based on month".
+//
+// Two real bugs, neither covered by any test before today:
+//   1. parseSheetDate accepted ONLY M/D/YYYY. Callers do `if (!parsed)
+//      continue`, so an ISO-dated sheet had EVERY row dropped from the
+//      period index — the period list came back empty, indistinguishable
+//      from "the filter does nothing".
+//   2. The period scoped only the reverse sheet_only list. The main results
+//      table ignored the dropdowns entirely.
+{
+    const iv = require(R('helpers/invoiceVerify'));
+
+    // ── 1. date tolerance ──
+    ck('M/D/YYYY',            iv.parseSheetDate('9/1/2026'),             { month: 9, year: 2026 });
+    ck('MM/DD/YYYY',          iv.parseSheetDate('09/01/2026'),           { month: 9, year: 2026 });
+    ck('ISO YYYY-MM-DD',      iv.parseSheetDate('2026-09-01'),           { month: 9, year: 2026 });
+    ck('ISO unpadded',        iv.parseSheetDate('2026-9-1'),             { month: 9, year: 2026 });
+    ck('2-digit year',        iv.parseSheetDate('9/1/26'),               { month: 9, year: 2026 });
+    ck('trailing time',       iv.parseSheetDate('9/1/2026 0:00:00'),     { month: 9, year: 2026 });
+    ck('ISO datetime',        iv.parseSheetDate('2026-09-01T00:00:00Z'), { month: 9, year: 2026 });
+    // Must stay null rather than guess — a wrong month moves money between
+    // periods on a reconciliation screen.
+    ck('blank is null',       iv.parseSheetDate(''),          null);
+    ck('junk is null',        iv.parseSheetDate('garbage'),   null);
+    ck('impossible month',    iv.parseSheetDate('13/1/2026'), null);
+    ck('null input',          iv.parseSheetDate(null),        null);
+
+    // ── 2. period classification ──
+    const P = { year: 2026, month: 9 };
+    const sheetRow = (d) => ({ inv_date: d });
+    ck('same month+year is in period',   iv.inSelectedPeriod(sheetRow('9/15/2026'), P), true);
+    ck('different month is out',         iv.inSelectedPeriod(sheetRow('8/31/2026'), P), false);
+    ck('different year is out',          iv.inSelectedPeriod(sheetRow('9/15/2025'), P), false);
+    ck('ISO date classifies correctly',  iv.inSelectedPeriod(sheetRow('2026-09-15'), P), true);
+    // null, never a guess — these are the rows that most need her eyes.
+    ck('unreadable date is unclassified', iv.inSelectedPeriod(sheetRow('n/a'), P), null);
+    ck('no sheet row is unclassified',    iv.inSelectedPeriod(null, P), null);
+    ck('no period chosen is unclassified', iv.inSelectedPeriod(sheetRow('9/15/2026'), null), null);
+    ck('empty period object is unclassified', iv.inSelectedPeriod(sheetRow('9/15/2026'), {}), null);
+    // Month-only and year-only selections must each still work on their own.
+    ck('month-only selection matches',   iv.inSelectedPeriod(sheetRow('9/15/2025'), { month: 9 }), true);
+    ck('year-only selection matches',    iv.inSelectedPeriod(sheetRow('3/15/2026'), { year: 2026 }), true);
+    ck('string period values coerce',    iv.inSelectedPeriod(sheetRow('9/15/2026'), { year: '2026', month: '9' }), true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+section('Verification chips act as row filters');
+// Apsara, 2026-09-01: "when i click on these, only corresponding rows should
+// appear. make em act like filter".
+//
+// Pulls the REAL helpers out of dashboard/documents.html rather than
+// re-implementing them here — a test that asserts against its own copy of the
+// logic proves nothing about the page she actually loads.
+{
+    const fs = require('fs');
+    const html = fs.readFileSync(R('dashboard/documents.html'), 'utf8');
+    const js = (html.match(/<script[^>]*>([\s\S]*?)<\/script>/) || [])[1] || '';
+    const start = js.indexOf('const VERIFY_FILTER = {}');
+    const end = js.indexOf('function zimexBadge');
+    ckTrue('filter helpers found in the dashboard', start !== -1 && end > start);
+    const mod = new Function(
+        'const esc = (v) => String(v == null ? "" : v);\n' +
+        'const document = { addEventListener(){} };\n' +
+        js.slice(start, end) +
+        'return { verifyActive, verifyApply, verifyRowKeys, verifyStatusChips, verifyFilterNote, verifyEmptyRow };')();
+    const ROWS = [
+      { id: 1, status: 'match' }, { id: 2, status: 'match' },
+      { id: 3, status: 'mismatch' },
+      { id: 4, status: 'not_in_sheet' },
+      { id: 5, status: 'sheet_freight_blank' },          // NOT in the curated chip list
+      { id: 6, status: 'match', in_period: false },       // out-of-period
+    ];
+    const ids = (rs) => rs.map((r) => r.id);
+    const A = () => mod.verifyActive('t');
+
+
+    A().clear();
+    ck('no filter shows everything', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5,6]);
+
+    A().clear(); A().add('match');
+    ck('one chip shows only that status', ids(mod.verifyApply('t', ROWS)), [1,2,6]);
+
+    A().add('mismatch');
+    ck('two chips union, not intersect', ids(mod.verifyApply('t', ROWS)), [1,2,3,6]);
+
+    A().delete('match');
+    ck('clicking an active chip deselects it', ids(mod.verifyApply('t', ROWS)), [3]);
+
+    A().clear();
+    ck('All clears back to everything', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5,6]);
+
+    // The safety rule: a status with no curated chip must still be reachable.
+    A().clear(); A().add('sheet_freight_blank');
+    ck('an uncurated status is still filterable', ids(mod.verifyApply('t', ROWS)), [5]);
+    const chips = mod.verifyStatusChips('t', ROWS, [
+      { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
+      { key: 'not_in_sheet', label: 'Not on sheet' },
+    ]);
+    ck('every status present gets a chip — no unreachable rows',
+       ['match','mismatch','not_in_sheet','sheet_freight_blank'].every((k) => chips.includes(`data-key="${k}"`)), true);
+    ck('uncurated status gets a readable label', chips.includes('sheet freight blank'), true);
+
+    // Zimex's out-of-period pseudo-filter
+    A().clear(); A().add('__outside_period');
+    ck('out-of-period chip isolates those rows', ids(mod.verifyApply('t', ROWS)), [6]);
+    ck('an out-of-period row still carries its status key',
+       mod.verifyRowKeys({ status: 'match', in_period: false }), ['match','__outside_period']);
+
+    // Counts must never come from the filtered view.
+    A().clear(); A().add('mismatch');
+    const countedWhileFiltered = (mod.verifyStatusChips('t', ROWS, [{ key: 'match', label: 'Match' }]).match(/<strong[^>]*>(\d+)</) || [])[1];
+    ck('counts stay computed from the FULL result while filtered', countedWhileFiltered, '3');
+
+    // Filtered-but-empty must say so, not look like a broken/empty result.
+    A().clear(); A().add('nothing_matches_this');
+    ck('a filter matching nothing yields no rows', ids(mod.verifyApply('t', ROWS)), []);
+    ck('...and says it is filtered, not empty',
+       mod.verifyEmptyRow('t', 8, 'No line items extracted.').includes('No rows match the selected filter'), true);
+    A().clear();
+    ck('unfiltered empty keeps the original message',
+       mod.verifyEmptyRow('t', 8, 'No line items extracted.').includes('No line items extracted.'), true);
+
+    // The "showing X of Y" note
+    A().clear();
+    ck('no note when unfiltered', mod.verifyFilterNote('t', 6, 6), '');
+    A().add('match');
+    ck('note appears when filtered', mod.verifyFilterNote('t', 3, 6).includes('Showing <strong style="color:var(--text-body);">3</strong> of 6'), true);
+
+    // Panels must not share state.
+    mod.verifyActive('zimex').clear(); mod.verifyActive('jio').clear();
+    mod.verifyActive('zimex').add('match');
+    ck('filters are per-tab, not global', ids(mod.verifyApply('jio', ROWS)), [1,2,3,4,5,6]);
+
+
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Leave nothing behind. Best-effort: a leftover temp dir is harmless, and
 // failing the run over a cleanup hiccup would be worse than the mess.
 try { fsBoot.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch (e) { /* tmp reaper gets it */ }

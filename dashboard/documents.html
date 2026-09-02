@@ -430,10 +430,11 @@ body[data-theme="light"] {
       <div id="zimexSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
       <div id="zimexResultsWrap" class="hidden" style="margin-top:14px;">
         <div class="section-label">PDF line items vs. Invoice sheet</div>
+        <div id="zimexFilterNote"></div>
         <div class="inv-line-table-wrap">
           <table class="inv-line-table" id="zimexResultsTable">
             <thead>
-              <tr><th>Source File</th><th>HBL #</th><th>Description</th><th>PDF Amount</th><th>Sheet Freight</th><th>Difference</th><th>Status</th></tr>
+              <tr><th>Source File</th><th>HBL #</th><th>Description</th><th>PDF Amount</th><th>Sheet Freight</th><th>Difference</th><th>Period</th><th>Status</th></tr>
             </thead>
             <tbody id="zimexResultsBody"></tbody>
           </table>
@@ -487,6 +488,7 @@ body[data-theme="light"] {
         <div id="ajSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
         <div id="ajResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">AJ Transport invoices vs. Invoice sheet</div>
+          <div id="ajFilterNote"></div>
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="ajResultsTable">
               <thead>
@@ -520,6 +522,7 @@ body[data-theme="light"] {
         <div id="sherSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
         <div id="sherResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">Sher invoices vs. Invoice sheet</div>
+          <div id="sherFilterNote"></div>
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="sherResultsTable">
               <thead>
@@ -566,6 +569,7 @@ body[data-theme="light"] {
         <div id="jioSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
         <div id="jioResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">Jio invoices vs. Invoice sheet</div>
+          <div id="jioFilterNote"></div>
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="jioResultsTable">
               <thead>
@@ -645,6 +649,7 @@ body[data-theme="light"] {
         <div id="panMetalSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
         <div id="panMetalResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">Debit note orders vs. Invoice sheet</div>
+          <div id="panMetalFilterNote"></div>
           <div class="inv-line-table-wrap">
             <table class="inv-line-table" id="panMetalResultsTable">
               <thead>
@@ -944,34 +949,192 @@ const ZIMEX_STATUS_BADGE = {
   pdf_amount_unreadable: { label: 'PDF amount unreadable', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
   extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
 };
+// ── Clickable status chips → row filter ───────────────────────────────────
+// Apsara, 2026-09-01: "after verification its filtering like match,mismatched,
+// not on sheet right? when i click on these, only corresponding rows should
+// appear. make em act like filter".
+//
+// The chips were read-only counters on all five verification tabs. They now
+// filter the table under them. Written ONCE and shared by Zimex, Pan Metal,
+// Jio, Sher and AJ rather than five near-identical copies — the per-carrier
+// duplication in this file is already the reason a fix in one tab keeps
+// having to be made five times.
+//
+// Behaviour:
+//   • click a chip      → only those rows show
+//   • click more chips  → union (Match + Mismatch shows both)
+//   • click it again    → deselects it
+//   • "All" chip        → clears the filter; always present so there is
+//                         never a way to get stuck in a filtered view
+//
+// TWO DELIBERATE SAFETY RULES, because this is a money screen:
+//
+// 1. Counts are ALWAYS computed from the full result, never from what is
+//    currently visible. A filtered view must never make the headline numbers
+//    look better than reality.
+// 2. Every status actually present in the results gets a chip, even ones not
+//    in the curated list (`sheet_freight_blank`, `pdf_amount_unreadable`,
+//    `no_hbl_on_pdf`). Without this a filtered table could hide rows the chip
+//    row gave no way to reach — an invoice line that is invisible in both the
+//    summary and the table is exactly the one that goes unchecked.
+const VERIFY_FILTER = {};   // panel -> Set of active keys ('' = show all)
+const VERIFY_RENDER = {};   // panel -> () => void, re-runs that tab's renderer
+
+function verifyActive(panel) {
+  if (!VERIFY_FILTER[panel]) VERIFY_FILTER[panel] = new Set();
+  return VERIFY_FILTER[panel];
+}
+// Rows carry `status`; Zimex additionally offers an out-of-period pseudo-key.
+function verifyRowKeys(r) {
+  const keys = [r.status];
+  if (r.in_period === false) keys.push('__outside_period');
+  return keys;
+}
+function verifyApply(panel, rows) {
+  const active = verifyActive(panel);
+  if (!active.size) return rows;
+  return rows.filter((r) => verifyRowKeys(r).some((k) => active.has(k)));
+}
+function verifyChip(panel, key, label, count, tone) {
+  const on = verifyActive(panel).has(key);
+  const bg = on ? (tone || 'var(--accent-soft)') : 'var(--surface-sunken)';
+  const bd = on ? 'var(--accent)' : 'var(--border-default)';
+  const col = on ? 'var(--text-strong)' : 'var(--text-body)';
+  return `<span class="verify-chip" data-panel="${esc(panel)}" data-key="${esc(key)}" role="button" tabindex="0" title="Click to show only these rows"
+    style="cursor:pointer; user-select:none; font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:${bg}; border:1px solid ${bd}; color:${col}; font-weight:${on ? '700' : '400'};"
+    >${label}: <strong style="color:var(--text-strong);">${count}</strong></span>`;
+}
+// Non-clickable chip, for things that are not row filters (sheet-log result,
+// the other table's count, the period heading).
+function verifyStaticChip(text, style) {
+  return `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);${style || ''}">${text}</span>`;
+}
+function verifyAllChip(panel, total) {
+  const on = !verifyActive(panel).size;
+  return `<span class="verify-chip" data-panel="${esc(panel)}" data-key="__all" role="button" tabindex="0" title="Show every row"
+    style="cursor:pointer; user-select:none; font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:${on ? 'var(--accent-soft)' : 'var(--surface-sunken)'}; border:1px solid ${on ? 'var(--accent)' : 'var(--border-default)'}; color:var(--text-strong); font-weight:${on ? '700' : '400'};"
+    >All: <strong>${total}</strong></span>`;
+}
+// Builds the status chips for a panel: the curated ones in their intended
+// order, then any OTHER status the data actually contains (see safety rule 2).
+function verifyStatusChips(panel, matched, curated, labelFor) {
+  const counts = matched.reduce((a, r) => { a[r.status] = (a[r.status] || 0) + 1; return a; }, {});
+  const shown = new Set(curated.map((c) => c.key));
+  const extras = Object.keys(counts).filter((k) => !shown.has(k)).sort()
+    .map((k) => ({ key: k, label: (labelFor && labelFor(k)) || String(k).replace(/_/g, ' ') }));
+  return [...curated, ...extras]
+    .map((c) => verifyChip(panel, c.key, c.label, counts[c.key] || 0))
+    .join('');
+}
+// Delegated once at document level — every summary bar is re-rendered via
+// innerHTML on each run, so per-element listeners would be lost each time.
+document.addEventListener('click', (e) => {
+  const chip = e.target.closest && e.target.closest('.verify-chip');
+  if (!chip) return;
+  const panel = chip.dataset.panel, key = chip.dataset.key;
+  const active = verifyActive(panel);
+  if (key === '__all') active.clear();
+  else if (active.has(key)) active.delete(key);
+  else active.add(key);
+  if (VERIFY_RENDER[panel]) VERIFY_RENDER[panel]();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const chip = e.target.closest && e.target.closest('.verify-chip');
+  if (!chip) return;
+  e.preventDefault();
+  chip.click();
+});
+// "showing 3 of 17" line, so a filtered table can never be mistaken for the
+// whole result set.
+function verifyFilterNote(panel, shownCount, totalCount) {
+  const active = verifyActive(panel);
+  if (!active.size) return '';
+  return `<div style="font-size:11px; color:var(--text-faint); margin:6px 0 -4px;">Showing <strong style="color:var(--text-body);">${shownCount}</strong> of ${totalCount} rows — filtered. Click <em>All</em> to clear.</div>`;
+}
+// A filtered table that matches nothing must say so, not look empty/broken.
+function verifyEmptyRow(panel, cols, emptyText) {
+  const msg = verifyActive(panel).size ? 'No rows match the selected filter.' : emptyText;
+  return `<tr><td colspan="${cols}" style="text-align:center; color:var(--text-faint);">${msg}</td></tr>`;
+}
+
 function zimexBadge(status) {
   const b = ZIMEX_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
   return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
 }
 function fmtMoney(n) { return n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+const ZIMEX_MONTHS = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+function zimexPeriodLabel(p) {
+  if (!p) return '';
+  if (p.month && p.year) return `${ZIMEX_MONTHS[p.month]} ${p.year}`;
+  return String(p.year || ZIMEX_MONTHS[p.month] || '');
+}
+
+// Period cell. Apsara, 2026-09-01: "right now its not filtering based on
+// month" — the dropdowns previously changed nothing in this table.
+//
+// Deliberately marks rather than hides. This screen exists to answer "did
+// Zimex bill us correctly", so dropping a billed line because its sheet date
+// sits the wrong side of a month boundary would remove a charge from the one
+// place it gets checked. Out-of-period rows are shown, dimmed and labelled
+// with the period the SHEET says they belong to.
+function zimexPeriodCell(r) {
+  if (r.in_period === true) {
+    return `<span style="font-size:10px; color:var(--leaf-400);">✓ in period</span>`;
+  }
+  if (r.in_period === false) {
+    const d = r.sheet && r.sheet.inv_date ? fmtDate(r.sheet.inv_date) : '';
+    return `<span style="display:inline-block; padding:3px 8px; border-radius:999px; font-size:10px; font-weight:700; background:rgba(217,119,6,.15); color:#f0b429;">OTHER PERIOD</span>${d ? `<div style="font-size:10px; color:var(--text-faint); margin-top:2px;">${esc(d)}</div>` : ''}`;
+  }
+  return `<span style="font-size:10px; color:var(--text-faint);">—</span>`;
+}
+
 function renderZimexResults(result) {
+  // Stashed so a chip click can re-render this tab without re-uploading or
+  // re-running the Gemini extraction — filtering is a view concern.
+  VERIFY_RENDER.zimex = () => renderZimexResults(result);
   const matched = result.matched || [];
   const sheetOnly = result.sheet_only || [];
+  const period = result.period || null;
+  const label = zimexPeriodLabel(period);
 
-  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
-  const summaryChips = [
+  // Headline counts answer "how did THIS period go", so they exclude rows the
+  // sheet places in another period. Those get their own chip instead of being
+  // quietly folded into the match count, which is what used to happen.
+  // Counts come from the FULL result, never from the filtered view.
+  const inScope = period ? matched.filter((r) => r.in_period !== false) : matched;
+  const summaryChips = verifyStatusChips('zimex', inScope, [
     { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
-  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  $('zimexSummary').innerHTML = summaryChips + `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Billed, no matching PDF: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  ]);
+
+  const outside = result.outside_period || 0;
+  const extra = [
+    verifyStaticChip(`Billed, no matching PDF: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`),
+    // Also a filter — clicking it isolates the rows the sheet puts in another period.
+    period ? verifyChip('zimex', '__outside_period', `Outside ${esc(label)}`, outside) : '',
+  ].join('');
+  const heading = period
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--accent-soft, var(--surface-sunken)); border:1px solid var(--border-default); color:var(--text-strong); font-weight:700;">${esc(label)}</span>`
+    : '';
+  $('zimexSummary').innerHTML = heading + verifyAllChip('zimex', matched.length) + summaryChips + extra;
   $('zimexSummary').classList.remove('hidden');
 
-  $('zimexResultsBody').innerHTML = matched.map((r) => `
-    <tr>
+  const rows = verifyApply('zimex', matched);
+  $('zimexFilterNote').innerHTML = verifyFilterNote('zimex', rows.length, matched.length);
+  $('zimexResultsBody').innerHTML = rows.map((r) => `
+    <tr${r.in_period === false ? ' style="opacity:.55;"' : ''}>
       <td>${esc(r.source_file || '')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.hbl_no || '—')}</td>
       <td>${esc(r.description || '')}</td>
       <td>${fmtMoney(r.amount)}</td>
       <td>${r.sheet ? fmtMoney(r.sheet.freight_amt) : '—'}</td>
       <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
+      <td>${zimexPeriodCell(r)}</td>
       <td>${zimexBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="7" style="text-align:center; color:var(--text-faint);">No line items extracted.</td></tr>`;
+    </tr>`).join('') || verifyEmptyRow('zimex', 8, 'No line items extracted.');
   $('zimexResultsWrap').classList.remove('hidden');
 
   $('zimexSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
@@ -987,6 +1150,11 @@ function renderZimexResults(result) {
 }
 
 $('btnZimexVerify').addEventListener('click', async () => {
+  // Clear any chip filter left over from the previous run. A stale filter
+  // silently hiding rows of a NEW result set is the one way this feature
+  // could cost her money — re-applying it is one click, missing an
+  // invoice line is not.
+  verifyActive('zimex').clear();
   if (!zimexFiles.length) { alert('Drop at least one Zimex freight invoice PDF first.'); return; }
   const btn = $('btnZimexVerify');
   setButtonLoading(btn, true, 'Running…');
@@ -1062,15 +1230,19 @@ function panMetalBadge(status) {
 }
 
 function renderPanMetalResults(result) {
+  // Stashed so a chip click re-renders from the SAME result — filtering
+  // is a view concern, never a reason to re-upload or re-run extraction.
+  VERIFY_RENDER.panMetal = () => renderPanMetalResults(result);
   const matched = result.matched || [];
   const sheetOnly = result.sheet_only || [];
 
-  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
-  const summaryChips = [
+  // Counts from the FULL result — a filtered view must never make the
+  // headline numbers look better than reality.
+  const summaryChips = verifyAllChip('panMetal', matched.length) + verifyStatusChips('panMetal', matched, [
     { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
-  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not on this debit note: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  ]);
+  const sheetOnlyChip = verifyStaticChip(`On sheet, not on this debit note: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`);
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
@@ -1078,7 +1250,9 @@ function renderPanMetalResults(result) {
   $('panMetalSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('panMetalSummary').classList.remove('hidden');
 
-  $('panMetalResultsBody').innerHTML = matched.map((r) => `
+  const rows = verifyApply('panMetal', matched);
+  $('panMetalFilterNote').innerHTML = verifyFilterNote('panMetal', rows.length, matched.length);
+  $('panMetalResultsBody').innerHTML = rows.map((r) => `
     <tr>
       <td style="font-family:var(--font-mono);">${esc(r.order_no || '—')}</td>
       <td style="font-family:var(--font-mono);">${esc(r.sheet ? r.sheet.inv_no : '')}</td>
@@ -1089,7 +1263,7 @@ function renderPanMetalResults(result) {
       <td>${fmtMoney(r.commission)}</td>
       <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
       <td>${panMetalBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="9" style="text-align:center; color:var(--text-faint);">No orders extracted.</td></tr>`;
+    </tr>`).join('') || verifyEmptyRow('panMetal', 9, 'No orders extracted.');
   $('panMetalResultsWrap').classList.remove('hidden');
 
   $('panMetalSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
@@ -1105,6 +1279,11 @@ function renderPanMetalResults(result) {
 }
 
 $('btnPanMetalVerify').addEventListener('click', async () => {
+  // Clear any chip filter left over from the previous run. A stale filter
+  // silently hiding rows of a NEW result set is the one way this feature
+  // could cost her money — re-applying it is one click, missing an
+  // invoice line is not.
+  verifyActive('panMetal').clear();
   if (!panMetalFiles.length) { alert('Drop at least one Pan Metal commission debit note PDF first.'); return; }
   const btn = $('btnPanMetalVerify');
   setButtonLoading(btn, true, 'Running…');
@@ -1169,14 +1348,18 @@ function jioBadge(status) {
 }
 
 function renderJioResults(result) {
+  // Stashed so a chip click re-renders from the SAME result — filtering
+  // is a view concern, never a reason to re-upload or re-run extraction.
+  VERIFY_RENDER.jio = () => renderJioResults(result);
   const matched = result.matched || [];
   const sheetOnly = result.sheet_only || [];
 
-  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
-  const summaryChips = [
+  // Counts from the FULL result — a filtered view must never make the
+  // headline numbers look better than reality.
+  const summaryChips = verifyAllChip('jio', matched.length) + verifyStatusChips('jio', matched, [
     { key: 'verified', label: 'Verified' }, { key: 'not_in_sheet', label: 'Not on sheet' },
-  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  ]);
+  const sheetOnlyChip = verifyStaticChip(`On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`);
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
@@ -1184,7 +1367,9 @@ function renderJioResults(result) {
   $('jioSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('jioSummary').classList.remove('hidden');
 
-  $('jioResultsBody').innerHTML = matched.map((r) => `
+  const rows = verifyApply('jio', matched);
+  $('jioFilterNote').innerHTML = verifyFilterNote('jio', rows.length, matched.length);
+  $('jioResultsBody').innerHTML = rows.map((r) => `
     <tr>
       <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td>${esc(r.invoice_no || '—')}</td>
@@ -1196,7 +1381,7 @@ function renderJioResults(result) {
       <td>${fmtMoney(r.others)}</td>
       <td>${fmtMoney(r.net_amount)}</td>
       <td>${jioBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="10" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || verifyEmptyRow('jio', 10, 'No invoices extracted.');
   $('jioResultsWrap').classList.remove('hidden');
 
   $('jioSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
@@ -1209,6 +1394,11 @@ function renderJioResults(result) {
 }
 
 $('btnJioVerify').addEventListener('click', async () => {
+  // Clear any chip filter left over from the previous run. A stale filter
+  // silently hiding rows of a NEW result set is the one way this feature
+  // could cost her money — re-applying it is one click, missing an
+  // invoice line is not.
+  verifyActive('jio').clear();
   if (!jioFiles.length) { alert('Drop at least one Jio Transport invoice PDF first.'); return; }
   const btn = $('btnJioVerify');
   setButtonLoading(btn, true, 'Running…');
@@ -1273,15 +1463,19 @@ function sherBadge(status) {
 }
 
 function renderSherResults(result) {
+  // Stashed so a chip click re-renders from the SAME result — filtering
+  // is a view concern, never a reason to re-upload or re-run extraction.
+  VERIFY_RENDER.sher = () => renderSherResults(result);
   const matched = result.matched || [];
   const sheetOnly = result.sheet_only || [];
 
-  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
-  const summaryChips = [
+  // Counts from the FULL result — a filtered view must never make the
+  // headline numbers look better than reality.
+  const summaryChips = verifyAllChip('sher', matched.length) + verifyStatusChips('sher', matched, [
     { key: 'verified', label: 'Verified' }, { key: 'quantity_mismatch', label: 'Quantity mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
-  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
-  const sheetOnlyChip = `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong></span>`;
+  ]);
+  const sheetOnlyChip = verifyStaticChip(`On sheet, not this run: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`);
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
@@ -1289,7 +1483,9 @@ function renderSherResults(result) {
   $('sherSummary').innerHTML = summaryChips + sheetOnlyChip + logChip;
   $('sherSummary').classList.remove('hidden');
 
-  $('sherResultsBody').innerHTML = matched.map((r) => `
+  const rows = verifyApply('sher', matched);
+  $('sherFilterNote').innerHTML = verifyFilterNote('sher', rows.length, matched.length);
+  $('sherResultsBody').innerHTML = rows.map((r) => `
     <tr>
       <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
@@ -1299,7 +1495,7 @@ function renderSherResults(result) {
       <td>${fmtMoney(r.others)}</td>
       <td>${fmtMoney(r.amount)}</td>
       <td>${sherBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="8" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || verifyEmptyRow('sher', 8, 'No invoices extracted.');
   $('sherResultsWrap').classList.remove('hidden');
 
   $('sherSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
@@ -1313,6 +1509,11 @@ function renderSherResults(result) {
 }
 
 $('btnSherVerify').addEventListener('click', async () => {
+  // Clear any chip filter left over from the previous run. A stale filter
+  // silently hiding rows of a NEW result set is the one way this feature
+  // could cost her money — re-applying it is one click, missing an
+  // invoice line is not.
+  verifyActive('sher').clear();
   if (!sherFiles.length) { alert('Drop at least one Sher Trucking invoice PDF first.'); return; }
   const btn = $('btnSherVerify');
   setButtonLoading(btn, true, 'Running…');
@@ -1377,13 +1578,17 @@ function ajBadge(status) {
 }
 
 function renderAjResults(result) {
+  // Stashed so a chip click re-renders from the SAME result — filtering
+  // is a view concern, never a reason to re-upload or re-run extraction.
+  VERIFY_RENDER.aj = () => renderAjResults(result);
   const matched = result.matched || [];
 
-  const counts = matched.reduce((acc, r) => { acc[r.status] = (acc[r.status] || 0) + 1; return acc; }, {});
-  const summaryChips = [
+  // Counts from the FULL result — a filtered view must never make the
+  // headline numbers look better than reality.
+  const summaryChips = verifyAllChip('aj', matched.length) + verifyStatusChips('aj', matched, [
     { key: 'verified', label: 'Verified' }, { key: 'booking_mismatch', label: 'Booking mismatch' },
     { key: 'not_in_sheet', label: 'Not on sheet' },
-  ].map((s) => `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">${s.label}: <strong style="color:var(--text-strong);">${counts[s.key] || 0}</strong></span>`).join('');
+  ]);
   const log = result.sheet_log || {};
   const logChip = log.error
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
@@ -1391,7 +1596,9 @@ function renderAjResults(result) {
   $('ajSummary').innerHTML = summaryChips + logChip;
   $('ajSummary').classList.remove('hidden');
 
-  $('ajResultsBody').innerHTML = matched.map((r) => `
+  const rows = verifyApply('aj', matched);
+  $('ajFilterNote').innerHTML = verifyFilterNote('aj', rows.length, matched.length);
+  $('ajResultsBody').innerHTML = rows.map((r) => `
     <tr>
       <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
       <td>${esc(r.invoice_no || '—')}</td>
@@ -1406,11 +1613,16 @@ function renderAjResults(result) {
       <td>${r.extra_scale_charge ? fmtMoney(r.extra_scale_charge) : '—'}</td>
       <td>${fmtMoney(r.total_amount)}</td>
       <td>${ajBadge(r.status)}</td>
-    </tr>`).join('') || `<tr><td colspan="13" style="text-align:center; color:var(--text-faint);">No invoices extracted.</td></tr>`;
+    </tr>`).join('') || verifyEmptyRow('aj', 13, 'No invoices extracted.');
   $('ajResultsWrap').classList.remove('hidden');
 }
 
 $('btnAjVerify').addEventListener('click', async () => {
+  // Clear any chip filter left over from the previous run. A stale filter
+  // silently hiding rows of a NEW result set is the one way this feature
+  // could cost her money — re-applying it is one click, missing an
+  // invoice line is not.
+  verifyActive('aj').clear();
   if (!ajFiles.length) { alert('Drop at least one AJ Transport invoice PDF first.'); return; }
   const btn = $('btnAjVerify');
   setButtonLoading(btn, true, 'Running…');

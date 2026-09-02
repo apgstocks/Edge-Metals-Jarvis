@@ -40,10 +40,44 @@ function safeMoney(v) {
 
 // M/D/YYYY (confirmed live format, e.g. "12/1/2025") — same loose parse as
 // every other date field in this codebase, no external date library.
+// BUG FIXED 2026-09-01 (Apsara: "right now its not filtering based on month").
+//
+// This used to accept ONE shape — M/D/YYYY — and return null for anything
+// else. Callers do `if (!parsed) continue;`, so a date this failed to read
+// meant the row was DROPPED from the period-scoped index entirely, silently.
+// Every row in an ISO-dated sheet therefore vanished and the period list came
+// back empty, which looks identical to "the filter does nothing".
+//
+// The rest of this codebase already knew the Inv Date column holds more than
+// one shape — helpers/proformaPdf.js's formatDate has handled YYYY-MM-DD and
+// MM/DD/YYYY since it was written. This is now at least as tolerant, plus
+// 2-digit years and a trailing time component (what Sheets emits when a cell
+// is a real datetime rather than text).
+//
+// Deliberately still returns null for anything genuinely unreadable rather
+// than guessing a month. A wrong month here silently moves money between
+// periods on a reconciliation screen; a null is visible as an unclassified
+// row. Ambiguity is NOT resolved by guessing: D/M/YYYY and M/D/YYYY cannot be
+// told apart for days 1-12, and this reads the sheet as US-format because
+// that is what every other date path in this codebase writes and reads.
 function parseSheetDate(s) {
-    const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!m) return null;
-    return { month: Number(m[1]), year: Number(m[3]) };
+    const raw = String(s || '').trim();
+    if (!raw) return null;
+    // Drop a trailing time ("9/1/2026 0:00:00", "2026-09-01T00:00:00Z").
+    const t = raw.split(/[T ]/)[0];
+
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);           // YYYY-MM-DD
+    if (m) return { month: Number(m[2]), year: Number(m[1]) };
+
+    m = t.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);   // M/D/YYYY or M/D/YY
+    if (m) {
+        const month = Number(m[1]);
+        let year = Number(m[3]);
+        if (m[3].length === 2) year += 2000;
+        if (month < 1 || month > 12) return null;
+        return { month, year };
+    }
+    return null;
 }
 
 // One entry per distinct HBL on the sheet — freight/commission are
@@ -99,40 +133,81 @@ async function buildSheetFreightIndex(period) {
 // $1 tolerance absorbs rounding, not a real discrepancy worth flagging.
 const AMOUNT_TOLERANCE = 1.0;
 
-// period ({year, month}) scopes ONLY the reverse "sheet_only" list — see
-// buildSheetFreightIndex's comment. Forward match/mismatch/not_in_sheet
-// always checks a PDF's HBL against the FULL sheet, unscoped, since an
-// uploaded PDF might legitimately reference an HBL invoiced in an earlier
-// period and that's still worth catching, not hiding.
+// period ({year, month}) — Apsara, 2026-09-01: "right now its not filtering
+// based on month".
+//
+// She was right, and the old comment here described the bug as if it were a
+// feature: the period scoped ONLY the reverse "sheet_only" list. The main
+// results table — the one she actually reads — matched every uploaded PDF
+// line against the WHOLE sheet and ignored the dropdowns completely. Picking
+// September changed nothing visible.
+//
+// WHAT IT DOES NOW, and why it is not a plain filter:
+//
+// Every uploaded PDF line stays in the table. Always. Hiding a row on a
+// screen whose job is "did Zimex bill us correctly" is the one genuinely
+// dangerous option — an invoice line that quietly disappears because its
+// sheet date sits a day either side of a month boundary is a charge nobody
+// checks. So instead each row is CLASSIFIED against the period:
+//
+//   in_period: true   — the sheet row this PDF line matched is in the
+//                       selected month/year.
+//   in_period: false  — it matched, but the sheet says a different period.
+//                       Shown, and marked, so a September upload that
+//                       contains an August HBL is obvious rather than
+//                       silently counted as a clean September match.
+//   in_period: null   — cannot be judged: no sheet row (not_in_sheet /
+//                       no_hbl_on_pdf), or a sheet date this cannot read.
+//                       Never guessed at; these are exactly the rows that
+//                       most need her eyes.
+//
+// The summary counts are scoped to the period, with out-of-period broken out
+// as its own number, so the headline figures answer "how did September go"
+// while the table still shows everything that was billed.
+// null when the period cannot be judged — no sheet row, or a date this
+// cannot read. Never guesses.
+function inSelectedPeriod(sheetRow, period) {
+    if (!period || (!period.year && !period.month)) return null; // no period chosen
+    if (!sheetRow) return null;
+    const parsed = parseSheetDate(sheetRow.inv_date);
+    if (!parsed) return null;
+    if (period.year && parsed.year !== Number(period.year)) return false;
+    if (period.month && parsed.month !== Number(period.month)) return false;
+    return true;
+}
+
 async function crossCheckZimexRecords(pdfRecords, period) {
+    const hasPeriod = !!(period && (period.year || period.month));
     const sheetIndex = await buildSheetFreightIndex();
-    const scopedIndex = period && (period.year || period.month) ? await buildSheetFreightIndex(period) : sheetIndex;
+    const scopedIndex = hasPeriod ? await buildSheetFreightIndex(period) : sheetIndex;
     const seenHbls = new Set();
+
+    const tag = (row) => ({ ...row, in_period: inSelectedPeriod(row.sheet, period) });
 
     const matched = (pdfRecords || []).map((rec) => {
         const hbl = normHbl(rec.hbl_no);
         const pdfAmount = safeMoney(rec.amount);
         if (!hbl) {
-            return { ...rec, status: 'no_hbl_on_pdf', sheet: null, delta: null };
+            return tag({ ...rec, status: 'no_hbl_on_pdf', sheet: null, delta: null });
         }
         const sheetRow = sheetIndex.get(hbl);
         if (!sheetRow) {
-            return { ...rec, status: 'not_in_sheet', sheet: null, delta: null };
+            return tag({ ...rec, status: 'not_in_sheet', sheet: null, delta: null });
         }
         seenHbls.add(hbl);
         if (sheetRow.freight_amt == null) {
-            return { ...rec, status: 'sheet_freight_blank', sheet: sheetRow, delta: null };
+            return tag({ ...rec, status: 'sheet_freight_blank', sheet: sheetRow, delta: null });
         }
         if (pdfAmount == null) {
-            return { ...rec, status: 'pdf_amount_unreadable', sheet: sheetRow, delta: null };
+            return tag({ ...rec, status: 'pdf_amount_unreadable', sheet: sheetRow, delta: null });
         }
         const delta = Math.round((pdfAmount - sheetRow.freight_amt) * 100) / 100;
-        return {
+        return tag({
             ...rec,
             status: Math.abs(delta) <= AMOUNT_TOLERANCE ? 'match' : 'mismatch',
             sheet: sheetRow,
             delta,
-        };
+        });
     });
 
     // Reverse direction — sheet HBLs with a real freight amount that no
@@ -146,7 +221,16 @@ async function crossCheckZimexRecords(pdfRecords, period) {
         sheetOnly.push(row);
     }
 
-    return { matched, sheet_only: sheetOnly };
+    // Echo the period back so the dashboard can label what it is showing
+    // rather than assuming the dropdowns still read the same as when the run
+    // started, and report how many rows fell outside it.
+    return {
+        matched,
+        sheet_only: sheetOnly,
+        period: hasPeriod ? { year: period.year ? Number(period.year) : null, month: period.month ? Number(period.month) : null } : null,
+        outside_period: matched.filter((r) => r.in_period === false).length,
+        unclassified_period: hasPeriod ? matched.filter((r) => r.in_period === null).length : 0,
+    };
 }
 
 // ── Commission → Pan Metal ────────────────────────────────────────────────
@@ -534,7 +618,7 @@ async function crossCheckAjTransportRecords(pdfRecords) {
 }
 
 module.exports = {
-    buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE,
+    buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE, parseSheetDate, inSelectedPeriod,
     buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
     buildSheetContainerIndex, crossCheckJioRecords,
     buildSheetBookingIndex, crossCheckSherRecords,
