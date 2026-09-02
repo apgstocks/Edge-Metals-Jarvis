@@ -176,7 +176,71 @@ input::placeholder { color:var(--steel-500); }
 #hamburgerBtn.open .hamburger-line:nth-child(1) { transform:translateY(7px) rotate(45deg); }
 #hamburgerBtn.open .hamburger-line:nth-child(2) { opacity:0; }
 #hamburgerBtn.open .hamburger-line:nth-child(3) { transform:translateY(-7px) rotate(-45deg); }
-</style>
+
+      /* ── Wide tables become stacked cards on a phone ──────────────────
+         Apsara, 2026-09-02: "layout of this app is bad. it is not adjusted
+         to mobile."
+
+         She is right, and this is a repeat of a mistake she already
+         corrected once. The item-row redesign a fortnight ago replaced a
+         horizontally-scrolling grid because on a real phone "you could only
+         ever see 2-3 columns at a time — clumsy". Then today I added three
+         new screens — Petty cash, the Spend Report, the Inventory
+         drill-down — as 560-600px tables inside overflow-x:auto, on a
+         screen about 370px wide. The same mistake, in the same app, the
+         same day it was being read on a phone.
+
+         .stack-table is the fix, and it follows the pattern already
+         established by .ld-item-* rather than inventing a third one: below
+         600px each row becomes a card, each cell carries its column name
+         from data-label, and nothing scrolls sideways. Above 600px it is an
+         ordinary table and the desktop is untouched. */
+      @media (max-width: 600px) {
+        .stack-table, .stack-table tbody, .stack-table tr, .stack-table td { display:block; width:100%; }
+        .stack-table { min-width:0 !important; }
+        .stack-table thead { display:none; }          /* the labels move into the cells */
+        .stack-table tr {
+          border:1px solid var(--border-subtle);
+          border-radius:var(--radius-sm, 8px);
+          padding:10px 12px;
+          margin-bottom:10px;
+          background:var(--surface-sunken, rgba(255,255,255,.02));
+        }
+        /* One line per field: name on the left, value on the right, so a
+           column of figures still reads as a column. */
+        .stack-table td {
+          display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+          padding:4px 0 !important; text-align:right !important; border:none !important;
+        }
+        .stack-table td::before {
+          content:attr(data-label);
+          font-family:var(--font-mono); font-size:10px; letter-spacing:.08em;
+          text-transform:uppercase; color:var(--text-muted);
+          text-align:left; flex:0 0 auto;
+        }
+        /* A cell with nothing in it is noise on a card — it only existed to
+           hold a column open. */
+        .stack-table td:empty { display:none; }
+        /* The first cell is the card's heading, not a labelled field. */
+        .stack-table td.st-head { justify-content:flex-start; text-align:left !important;
+          font-weight:700; padding-bottom:8px !important; }
+        .stack-table td.st-head::before { content:none; }
+        /* Totals row: same card, but marked out so it does not read as one
+           more entry. */
+        .stack-table tr.st-total { background:var(--surface-raised, rgba(255,255,255,.05));
+          border-color:var(--border-default); }
+        .stack-table .st-wrap { overflow-x:visible !important; }
+
+        /* The tab bar holds six tabs since Petty cash and Report were added.
+           Six do not fit across a phone, and a non-wrapping flex row either
+           squashes them to unreadable or pushes the last ones off-screen.
+           Scrolls sideways instead, with each tab keeping its full width. */
+        #mobileTabBar { overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+        #mobileTabBar::-webkit-scrollbar { display:none; }
+        #mobileTabBar > button { flex:0 0 auto; }
+      }
+
+    </style>
 </head>
 <body>
 
@@ -4040,7 +4104,7 @@ function invLinesHtml(key) {
   const t = d.totals || {};
   return `
     <div style="overflow-x:auto;">
-    <table style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
+    <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
       <thead><tr style="background:var(--surface-sunken); text-align:right;">
         <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Load</th>
         <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Seller</th>
@@ -4051,21 +4115,21 @@ function invLinesHtml(key) {
         <tr class="inv-line-row" data-pdf="${esc(r.pdf_link || '')}" data-load="${esc(r.load_id)}"
             title="${r.pdf_link ? 'Open this load ticket' : 'No ticket generated for this load yet'}"
             style="border-top:1px solid var(--border-subtle); text-align:right; cursor:${r.pdf_link ? 'pointer' : 'default'};">
-          <td style="padding:8px 10px; text-align:left; font-family:var(--font-mono); color:${r.pdf_link ? 'var(--accent)' : 'var(--text-strong)'};">${esc(r.load_id)}${r.pdf_link ? '' : ' <span style="color:var(--text-faint); font-size:10px;">(no ticket)</span>'}</td>
-          <td style="padding:8px 10px; text-align:left;">${esc(r.seller || '—')}<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : (r.date || ''))}</div></td>
-          <td style="padding:8px 10px; font-family:var(--font-mono);">${n(r.gross_weight)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono);">${n(r.tare_weight)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(r.net_weight)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono);">${r.price == null ? '—' : esc(fmtRate ? fmtRate(r.price) : r.price)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${r.amount == null ? '—' : esc(fmtAmount(r.amount))}</td>
+          <td class="st-head" style="padding:8px 10px; text-align:left; font-family:var(--font-mono); color:${r.pdf_link ? 'var(--accent)' : 'var(--text-strong)'};">${esc(r.load_id)}${r.pdf_link ? '' : ' <span style="color:var(--text-faint); font-size:10px;">(no ticket)</span>'}</td>
+          <td data-label="Seller" style="padding:8px 10px; text-align:left;">${esc(r.seller || '—')}<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : (r.date || ''))}</div></td>
+          <td data-label="Gross" style="padding:8px 10px; font-family:var(--font-mono);">${n(r.gross_weight)}</td>
+          <td data-label="Tare" style="padding:8px 10px; font-family:var(--font-mono);">${n(r.tare_weight)}</td>
+          <td data-label="Net" style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(r.net_weight)}</td>
+          <td data-label="Price" style="padding:8px 10px; font-family:var(--font-mono);">${r.price == null ? '—' : esc(fmtRate ? fmtRate(r.price) : r.price)}</td>
+          <td data-label="Amount" style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${r.amount == null ? '—' : esc(fmtAmount(r.amount))}</td>
         </tr>`).join('')}
-        <tr style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
-          <td colspan="2" style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-weight:700;">${esc(d.count)} line${d.count === 1 ? '' : 's'}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.gross)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.tare)}</td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${n(t.net)}</td>
-          <td style="padding:8px 10px;"></td>
-          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${t.amount == null ? '—' : esc(fmtAmount(t.amount))}</td>
+        <tr class="st-total" style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
+          <td class="st-head" colspan="2" style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-weight:700;">${esc(d.count)} line${d.count === 1 ? '' : 's'}</td>
+          <td data-label="Gross" style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.gross)}</td>
+          <td data-label="Tare" style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.tare)}</td>
+          <td data-label="Net" style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${n(t.net)}</td>
+          <td class="st-spacer" style="padding:8px 10px;"></td>
+          <td data-label="Amount" style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${t.amount == null ? '—' : esc(fmtAmount(t.amount))}</td>
         </tr>
       </tbody>
     </table></div>`;
@@ -4171,7 +4235,7 @@ async function renderSpendReportTab() {
 
       ${(rep.months || []).length ? `
       <div class="card" style="padding:0; overflow-x:auto; margin-bottom:18px;">
-        <table style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
+        <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
           <thead><tr style="background:var(--surface-sunken); text-align:right;">
             <th style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Month</th>
             ${cols.map(c => `<th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c)}</th>`).join('')}
@@ -4180,14 +4244,14 @@ async function renderSpendReportTab() {
           <tbody>
             ${rep.months.map(m => `
             <tr style="border-top:1px solid var(--border-subtle); text-align:right;">
-              <td style="padding:10px 12px; text-align:left; font-family:var(--font-mono); color:var(--text-strong);">${esc(m.month)}</td>
-              ${cols.map(c => `<td style="padding:10px 12px; font-family:var(--font-mono);">${cell(m[c])}</td>`).join('')}
-              <td style="padding:10px 12px; font-family:var(--font-mono); font-weight:700; color:var(--text-strong);">${esc(money(m.total))}</td>
+              <td class="st-head" style="padding:10px 12px; text-align:left; font-family:var(--font-mono); color:var(--text-strong);">${esc(m.month)}</td>
+              ${cols.map(c => `<td data-label="${esc(c)}" style="padding:10px 12px; font-family:var(--font-mono);">${cell(m[c])}</td>`).join('')}
+              <td data-label="Total" style="padding:10px 12px; font-family:var(--font-mono); font-weight:700; color:var(--text-strong);">${esc(money(m.total))}</td>
             </tr>`).join('')}
-            <tr style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
-              <td style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-weight:700;">All</td>
-              ${cols.map(c => `<td style="padding:10px 12px; font-family:var(--font-mono); font-weight:700;">${cell(rep.byMethod[c])}</td>`).join('')}
-              <td style="padding:10px 12px; font-family:var(--font-mono); font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</td>
+            <tr class="st-total" style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
+              <td class="st-head" style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-weight:700;">All months</td>
+              ${cols.map(c => `<td data-label="${esc(c)}" style="padding:10px 12px; font-family:var(--font-mono); font-weight:700;">${cell(rep.byMethod[c])}</td>`).join('')}
+              <td data-label="Total" style="padding:10px 12px; font-family:var(--font-mono); font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</td>
             </tr>
           </tbody>
         </table>
@@ -4196,14 +4260,14 @@ async function renderSpendReportTab() {
       <details>
         <summary style="cursor:pointer; font-family:var(--font-mono); font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); padding:8px 0;">Every entry behind these figures (${esc(rep.rows.length)})</summary>
         <div class="card" style="padding:0; overflow:hidden; margin-top:10px;">
-          <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+          <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px;">
             <tbody>
               ${rep.rows.map(r => `
               <tr style="border-top:1px solid var(--border-subtle);">
-                <td style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap;">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : r.date)}</td>
-                <td style="padding:8px 12px;"><span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(r.kind === 'load' ? 'LOAD' : 'EXP')}</span> ${esc(r.label)}</td>
-                <td style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(r.method)}</td>
-                <td style="padding:8px 12px; text-align:right; font-family:var(--font-mono); font-weight:700;">${esc(money(r.amount))}</td>
+                <td class="st-head" style="padding:8px 12px;"><span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(r.kind === 'load' ? 'LOAD' : 'EXP')}</span> ${esc(r.label)}</td>
+                <td data-label="Date" style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap;">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : r.date)}</td>
+                <td data-label="Paid by" style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(r.method)}</td>
+                <td data-label="Amount" style="padding:8px 12px; text-align:right; font-family:var(--font-mono); font-weight:700;">${esc(money(r.amount))}</td>
               </tr>`).join('')}
             </tbody>
           </table>
@@ -4283,7 +4347,7 @@ async function renderPettyCashTab() {
 
       ${rows.length ? `
       <div class="card" style="padding:0; overflow:hidden;">
-        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px;">
           <thead><tr style="background:var(--surface-sunken); text-align:left;">
             <th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Date</th>
             <th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">What</th>
@@ -4293,9 +4357,9 @@ async function renderPettyCashTab() {
           <tbody>
             ${rows.map(e => `
             <tr style="border-top:1px solid var(--border-subtle);">
-              <td style="padding:10px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(typeof fmtDate === 'function' ? fmtDate(e.date) : (e.date || ''))}</td>
-              <td style="padding:10px 12px;">${esc(kindLabel(e))}${e.note ? ` <span style="color:var(--text-faint);">— ${esc(e.note)}</span>` : ''}</td>
-              <td style="padding:10px 12px; text-align:right; font-family:var(--font-mono); font-weight:700; color:${Number(e.amount) < 0 ? 'var(--status-danger, #c53030)' : 'var(--leaf-600, #2e7d32)'};">${Number(e.amount) < 0 ? '-' : '+'}${esc(fmtAmount(Math.abs(Number(e.amount) || 0)))}</td>
+              <td data-label="Date" style="padding:10px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(typeof fmtDate === 'function' ? fmtDate(e.date) : (e.date || ''))}</td>
+              <td class="st-head" style="padding:10px 12px;">${esc(kindLabel(e))}${e.note ? ` <span style="color:var(--text-faint);">— ${esc(e.note)}</span>` : ''}</td>
+              <td data-label="Amount" style="padding:10px 12px; text-align:right; font-family:var(--font-mono); font-weight:700; color:${Number(e.amount) < 0 ? 'var(--status-danger, #c53030)' : 'var(--leaf-600, #2e7d32)'};">${Number(e.amount) < 0 ? '-' : '+'}${esc(fmtAmount(Math.abs(Number(e.amount) || 0)))}</td>
               ${isAdmin ? `<td style="padding:10px 12px; text-align:right;">${e.kind === 'topup' ? `<button class="btn btn-danger btn-del-petty" data-id="${esc(e.id)}" style="font-size:11px; padding:4px 9px;">Delete</button>` : ''}</td>` : ''}
             </tr>`).join('')}
           </tbody>
