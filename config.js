@@ -193,6 +193,18 @@ const FILES = {
     // ITS OWN FILE, for the same reason PAYMENTS_FILE is: it must not live
     // inside a record that gets rewritten wholesale by an unrelated edit.
     PETTY_CASH_FILE: path.join(DATA_DIR, 'petty_cash.json'),
+
+    // ── what the top-level profile did ────────────────────────────────────
+    // Every time a Jarvis session walks past a lock that stops everyone else,
+    // a row lands here. It is APPEND-ONLY and nothing in the codebase deletes
+    // from it — not even the profile it records, which is the entire point: a
+    // profile that can erase a paid load can erase the evidence that money
+    // moved, and this is the only trace left once the record is gone.
+    //
+    // Under DATA_DIR on purpose, so helpers/backup.js sweeps it up with
+    // everything else and a copy leaves the machine nightly. A log that only
+    // exists on the disk it is meant to outlive is not a log.
+    AUDIT_LOG_FILE: path.join(DATA_DIR, 'audit_log.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
@@ -205,6 +217,26 @@ const STAFF_PASSWORD = process.env.STAFF_PASSWORD || '';   // separate, LOWER-pr
 const SUPABASE_URL   = process.env.SUPABASE_URL || '';     // semantic memory store — Project Settings > API
 const SUPABASE_KEY   = process.env.SUPABASE_KEY || '';     // service_role key (server-side only, never expose to browser)
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';   // separate, stronger password — gates WhatsApp QR + Facts admin panel
+// ── the top-level profile ─────────────────────────────────────────────────
+// Apsara 2026-09-03: "create another profile as jarvis with delete option
+// enabled even after payments. this is in addition to admin privileges. this
+// is like top level profile."
+//
+// A session logging in with THIS password gets role 'admin' — not a fourth
+// role — plus a `super` flag. Deliberate: 'admin' is checked in fourteen
+// places across two clients and the server, and a genuinely separate role
+// string would have had to be added to every one of them, where missing a
+// single check means the TOP-level profile silently sees LESS than admin.
+// admin + a flag means every existing check keeps working untouched and only
+// the four locks she asked to lift consult the flag.
+//
+// UNSET BY DEFAULT, and when unset the profile does not exist: no password
+// matches it and nothing changes. Set it in .env on the VM, to something
+// different from ADMIN_PASSWORD — if the two are equal, the admin password
+// would silently grant the ability to erase paid loads, which is precisely
+// the separation this profile exists to create. api.js refuses to accept it
+// in that case rather than trusting the operator to notice.
+const JARVIS_PASSWORD = process.env.JARVIS_PASSWORD || '';
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
@@ -486,7 +518,7 @@ module.exports = {
     COMPANY_NAME,
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
-    API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, SESSION_PATH,
+    API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,

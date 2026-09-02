@@ -51,7 +51,15 @@ console.log('\n─ load card: Delete, Pay, Amount, and flat search results ─')
 // ── 1. Delete disappears once money has been booked against a load ────────
 section('A — a load with a payment cannot be deleted from either client');
 for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
-    const deletable = new Function(grab(src, 'loadIsDeletable', label) + '; return loadIsDeletable;')();
+    // IS_SUPER is injected rather than left to the global scope, and it is a
+    // PARAMETER so each call can choose it. Added 2026-09-03 with the Jarvis
+    // profile: before that this function read no globals at all, and running
+    // it in a bare `new Function` was enough. It now closes over IS_SUPER, so
+    // an isolated eval throws ReferenceError — which is how this file caught
+    // the change rather than silently testing a stale copy.
+    const build = (isSuper) => new Function('IS_SUPER',
+        grab(src, 'loadIsDeletable', label) + '; return loadIsDeletable;')(isSuper);
+    const deletable = build(false);
 
     ck(`${label}: an unpaid load is deletable`, deletable({ id: 'L1', payment: { paid: 0, pending: 500, status: 'unpaid' } }));
     ck(`${label}: a load with NO payment record at all is deletable`, deletable({ id: 'L1' }));
@@ -69,6 +77,26 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     // would get wrong, which is why the function keys off `paid` instead.
     ck(`${label}: money on an unpriced load blocks the delete`,
        !deletable({ id: 'L1', payment: { paid: 250, total: null, pending: null, status: 'paid_amount_unknown' } }));
+
+    // ── and the one profile that is allowed past it ───────────────────────
+    // Apsara 2026-09-03: "create another profile as jarvis with delete option
+    // enabled even after payments." Asserted here, beside the rule it lifts,
+    // so the two can never drift — the exception and the rule are one
+    // decision. The full profile (server guard, audit log, what it must not
+    // change) is tests/jarvis-profile.js.
+    const superDeletable = build(true);
+    ck(`${label}: the Jarvis profile can delete a fully paid load`,
+       superDeletable({ id: 'L1', payment: { paid: 500, pending: 0, status: 'paid' } }));
+    ck(`${label}:   and a partially paid one`,
+       superDeletable({ id: 'L1', payment: { paid: 200, pending: 300, status: 'partial' } }));
+    ck(`${label}:   and an unpaid one, obviously`,
+       superDeletable({ id: 'L1', payment: { paid: 0, pending: 500, status: 'unpaid' } }));
+
+    // UI ONLY. Worth stating in the test as well as the code: this function
+    // decides whether a button is drawn. DELETE /api/loads/:id re-checks the
+    // session, so a client that lies about IS_SUPER gets a 409, not a
+    // deletion. Until 2026-09-03 there was no such re-check and this function
+    // WAS the whole rule — see tests/jarvis-profile.js section C.
 }
 
 // ── 2. Pay disappears once there is nothing left to pay ───────────────────
@@ -95,9 +123,13 @@ section('B2 — re-sign is gone once money is booked, but a FIRST sign is not');
     // Mobile only — the website has no Sign button (and, since commit
     // b060298, no payment UI either).
     const src = MOBILE;
-    const resignable = new Function(grab(src, 'loadIsResignable', 'app') + '; return loadIsResignable;')();
-    const signable = new Function(
-        grab(src, 'loadIsResignable', 'app') + grab(src, 'loadIsSignable', 'app') + '; return loadIsSignable;')();
+    // IS_SUPER injected as a parameter — see section A for why.
+    const buildResign = (isSuper) => new Function('IS_SUPER',
+        grab(src, 'loadIsResignable', 'app') + '; return loadIsResignable;')(isSuper);
+    const buildSign = (isSuper) => new Function('IS_SUPER',
+        grab(src, 'loadIsResignable', 'app') + grab(src, 'loadIsSignable', 'app') + '; return loadIsSignable;')(isSuper);
+    const resignable = buildResign(false);
+    const signable = buildSign(false);
 
     const unpaid = { payment: { paid: 0, pending: 500, status: 'unpaid' } };
     const partial = { payment: { paid: 200, pending: 300, status: 'partial' } };
@@ -121,6 +153,17 @@ section('B2 — re-sign is gone once money is booked, but a FIRST sign is not');
     ck('money on an unpriced load freezes the signature too',
        !signable({ ...signed, payment: { paid: 250, total: null, pending: null, status: 'paid_amount_unknown' } }));
     ck('the predicate itself ignores whether it is signed', !resignable(partial) && resignable(unpaid));
+
+    // ── and the Jarvis profile is allowed past it ─────────────────────────
+    // Apsara 2026-09-03, asked which locks the top-level profile should lift:
+    // all four, this one included. It is the most expensive of them — see the
+    // note below on documents being rebuilt — so it is worth being explicit
+    // that the exception exists and that it is deliberate.
+    const superSignable = buildSign(true);
+    ck('the Jarvis profile can re-sign a paid load', superSignable({ ...signed, ...paid }));
+    ck('  and a partially paid one', superSignable({ ...signed, ...partial }));
+    ck('  while everyone else still cannot', !signable({ ...signed, ...paid }),
+       'the exception must not be the rule');
 
     // The card must actually consult it, and must still SAY it is signed —
     // dropping the button silently would read as "never signed".

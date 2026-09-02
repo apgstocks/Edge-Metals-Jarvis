@@ -917,6 +917,19 @@ function getToken() { return localStorage.getItem(TOKEN_KEY); }
 function setToken(t) { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); }
 
 let ROLE = 'user';
+// ── the Jarvis top-level profile ──────────────────────────────────────────
+// Apsara 2026-09-03: "create another profile as jarvis with delete option
+// enabled even after payments ... this is like top level profile."
+//
+// A Jarvis session's ROLE is 'admin' — deliberately, so every one of the
+// admin checks in this file keeps working without being touched — and this
+// flag is what lifts the four payment locks on top of that.
+//
+// IT DECIDES WHICH BUTTONS ARE DRAWN, NOTHING MORE. Setting it by hand in the
+// console gets you a Delete button and a 403 when you press it: the server
+// re-checks the session on every one of these routes and does not consult
+// anything the client sends.
+let IS_SUPER = false;
 
 // ── Lifted verbatim from dashboard/index.html ───────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -1740,6 +1753,12 @@ async function resumeDraft(id) {
 // becomes deletable again. Money entered against a load has to be
 // unwound before the load itself can go — which is the correct order anyway.
 function loadIsDeletable(l) {
+  // The Jarvis profile deletes regardless — Apsara 2026-09-03, "delete option
+  // enabled even after payments". The payments go with the load and any cash
+  // among them is returned to petty cash, and the server writes an audit row
+  // naming the load, the seller, the amount and every payment before the
+  // record stops existing.
+  if (IS_SUPER) return true;
   const p = l && l.payment;
   return !(p && Number(p.paid) > 0);
 }
@@ -1785,6 +1804,12 @@ function loadIsPayable(l) {
 // has to be corrected after payment, that is still possible; it just is not a
 // thing anyone does by tapping the wrong card.
 function loadIsResignable(l) {
+  // Lifted for the Jarvis profile — Apsara 2026-09-03. Worth being clear what
+  // this one costs: re-signing regenerates the ticket and the POS receipt, so
+  // the document that justified the payment is replaced and the original is
+  // gone. The audit row keeps the previous signing timestamp, which is the
+  // only part of the old ticket that survives.
+  if (IS_SUPER) return true;
   const p = l && l.payment;
   return !(p && Number(p.paid) > 0);
 }
@@ -4648,9 +4673,35 @@ function wireDeckEvents() {
     // material back on hand — that's the rollback she asked for, and it
     // happens simply because inventory nets purchases against sales rather
     // than storing a separate balance to unwind.
+    // ── the ordinary confirm ──────────────────────────────────────────────
+    // Reworded 2026-09-03 (Apsara: "ask Are you sure you want to delete
+    // etc..something similar"). It now opens with the question instead of
+    // burying it after the consequences — on a phone the old text wrapped to
+    // three lines and the actual decision was in the middle of them.
+    //
+    // Same prompt for every role. Delete on an UNPAID load is deliberately NOT
+    // role-gated: staff record loads, so staff must be able to remove one they
+    // just entered wrong, which is the case this button exists for. Confirmed
+    // 2026-09-03 ("for staff — show delete option before payment").
     if (!confirm(isSale
-      ? `Delete sale ${btn.dataset.id}? The material goes back into inventory as on hand.`
-      : `Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+      ? `Are you sure you want to delete sale ${btn.dataset.id}?\n\nThe material goes back into inventory as on hand.`
+      : `Are you sure you want to delete load ${btn.dataset.id}?\n\nIt is removed from Loads, and its photos and ticket PDFs are trashed in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+    // ── a SECOND prompt when money is involved ────────────────────────────
+    // Only the Jarvis profile ever reaches this, because nobody else is shown
+    // the button on a paid load (loadIsDeletable) and the server refuses it
+    // anyway. The first prompt talks about photos and PDFs; this one names the
+    // amount, because "delete this load" and "erase the record of $12,000
+    // having been paid" deserve different moments of attention, and the whole
+    // point of the profile is that it does not stop you.
+    if (!isSale) {
+      const paid = rec && rec.payment && Number(rec.payment.paid);
+      if (paid > 0 && !confirm(
+        `${btn.dataset.id} has ${payMoney(paid)} recorded as paid.\n\n`
+        + `Deleting it removes those payment records too. Any CASH among them goes back into petty cash.\n\n`
+        + `This is logged against the Jarvis profile. Continue?`)) {
+        return;
+      }
+    }
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       await api(`${isSale ? '/api/outbound-loads/' : '/api/loads/'}${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
@@ -4838,6 +4889,7 @@ async function doLogin() {
     if (!res.ok) throw new Error(data.error || 'Sign-in failed');
     setToken(data.sid);
     ROLE = data.role || 'user';
+    IS_SUPER = data.super === true;
     await bootLoads();
   } catch (err) {
     $('loginErr').textContent = err.message;
@@ -5894,7 +5946,12 @@ async function deliverExportedFile(blob, filename, ext) {
 
 async function bootLoads() {
   showAppShell();
-  $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : ROLE === 'staff' ? 'Staff access' : 'Standard access';
+  // Jarvis is checked first: its ROLE is 'admin', so the admin branch would
+  // otherwise swallow it and the label would give no sign that this session
+  // can erase a paid load. A profile with powers nobody can see is how you
+  // stay signed in as it by accident.
+  $('roleLabel').textContent = IS_SUPER ? 'Jarvis access'
+    : ROLE === 'admin' ? 'Admin access' : ROLE === 'staff' ? 'Staff access' : 'Standard access';
   // Gear icon only for admin — per Apsara 2026-08-15. This is UI convenience
   // only, not the real boundary: /api/settings is already requireAdmin-gated
   // server-side in api.js, so a non-admin session can't actually use what's
@@ -9132,6 +9189,7 @@ function wireVoiceUI() {
   try {
     const me = await api('/api/me');
     ROLE = me.role || 'user';
+    IS_SUPER = me.super === true;
     await bootLoads();
   } catch (err) {
     showLoginScreen();

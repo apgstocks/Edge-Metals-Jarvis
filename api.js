@@ -34,9 +34,14 @@ const cfg = require('./config');
 const sessions = new Map(); // sid → { issued: ms, ip, role: 'user' | 'admin' }
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 
-function issueSession(ip, role) {
+// `opts.super` marks a session logged in with JARVIS_PASSWORD. It is stored on
+// the SESSION, never derived from anything the client sends: the flag is the
+// only thing standing between a normal admin and the ability to erase a paid
+// load, so it must not be reachable by any request body, header or cookie the
+// caller controls.
+function issueSession(ip, role, opts = {}) {
     const sid = crypto.randomBytes(32).toString('hex');
-    sessions.set(sid, { issued: Date.now(), ip, role });
+    sessions.set(sid, { issued: Date.now(), ip, role, super: !!opts.super });
     return sid;
 }
 function getSession(sid) {
@@ -121,6 +126,30 @@ function decorateBooking(b, wf) {
 // ── App ───────────────────────────────────────────────────────────────────────
 function createApi() {
     const app = express();
+
+    // ── say out loud whether the top-level profile is live ────────────────
+    // A misconfigured JARVIS_PASSWORD fails SILENTLY at the login form: the
+    // password is simply not recognised, which looks exactly like a typo. This
+    // is the one place that can tell the difference, so it says so at boot
+    // rather than leaving her to guess at a password prompt. Never prints the
+    // password or any part of it.
+    {
+        const j = cfg.JARVIS_PASSWORD;
+        if (!j) {
+            console.log('[AUTH] Jarvis profile: not configured (set JARVIS_PASSWORD to enable it)');
+        } else if (j === cfg.ADMIN_PASSWORD || j === cfg.APP_PASSWORD || j === cfg.STAFF_PASSWORD) {
+            console.error('[AUTH] Jarvis profile DISABLED: JARVIS_PASSWORD is identical to another tier\'s password. '
+                + 'Sharing it would silently promote that tier to top-level access. Set it to something distinct.');
+        } else if (j.length < 12) {
+            // Not refused — her server, her call — but this password's whole
+            // job is to be the last thing between someone and a deleted
+            // payment record, so a short one should not pass unremarked.
+            console.warn('[AUTH] Jarvis profile enabled, but JARVIS_PASSWORD is under 12 characters. '
+                + 'It gates deleting paid loads; consider something longer.');
+        } else {
+            console.log('[AUTH] Jarvis profile enabled (top-level, audited to data/audit_log.json)');
+        }
+    }
     // Changed 2026-08-11: this GLOBAL parser used to cap every request body
     // at 2mb, registered before any route runs. Several routes below
     // (largeJson, defined at line ~491) were built to override that with a
@@ -273,6 +302,7 @@ function createApi() {
         const userPw  = cfg.APP_PASSWORD;
         const staffPw  = cfg.STAFF_PASSWORD; // lower-privileged tier — see requireStaffOrAbove below
         const adminPw = cfg.ADMIN_PASSWORD;
+        const jarvisPw = cfg.JARVIS_PASSWORD; // top-level profile — see config.js
         if (!userPw) {
             return res.status(500).json({ error: 'APP_PASSWORD not configured on the server' });
         }
@@ -282,13 +312,29 @@ function createApi() {
         const eq = (a, b) => { const A = Buffer.from(a), B = Buffer.from(b); return A.length === B.length && crypto.timingSafeEqual(A, B); };
         // Checked most-privileged first (admin), then user, then staff last —
         // staff is scoped to the Loads tab only (see requireStaffOrAbove).
-        let role = null;
-        if (adminPw && eq(pw, adminPw))      role = 'admin';
-        else if (eq(pw, userPw))             role = 'user';
-        else if (staffPw && eq(pw, staffPw)) role = 'staff';
+        //
+        // Jarvis is checked FIRST, above admin, and mints an ADMIN session
+        // carrying a super flag rather than a fourth role — see config.js's
+        // JARVIS_PASSWORD for why role stays 'admin'.
+        //
+        // usable() refuses a Jarvis password that equals another tier's. If
+        // JARVIS_PASSWORD were set to the same string as ADMIN_PASSWORD, the
+        // check order would silently promote every admin login to super and
+        // the separation this profile exists for would be gone — with nothing
+        // on screen to show it, because an admin session that can suddenly
+        // delete paid loads looks exactly like a working admin session. Set to
+        // a duplicate, the profile simply does not activate and the server
+        // says so in the log at boot.
+        const jarvisUsable = !!jarvisPw
+            && jarvisPw !== adminPw && jarvisPw !== userPw && jarvisPw !== staffPw;
+        let role = null, isSuper = false;
+        if (jarvisUsable && eq(pw, jarvisPw))     { role = 'admin'; isSuper = true; }
+        else if (adminPw && eq(pw, adminPw))      role = 'admin';
+        else if (eq(pw, userPw))                  role = 'user';
+        else if (staffPw && eq(pw, staffPw))      role = 'staff';
         if (!role) return res.status(401).json({ error: 'wrong password' });
 
-        const sid = issueSession(req.ip, role);
+        const sid = issueSession(req.ip, role, { super: isSuper });
         res.setHeader('Set-Cookie',
             `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
         // sid is ALSO returned in the JSON body now, not just the cookie —
@@ -301,7 +347,7 @@ function createApi() {
         // same sessions Map, same TTL, same role — just a second way to
         // carry the same session id. Existing cookie-based browser clients
         // simply ignore this extra field.
-        res.json({ ok: true, role, sid });
+        res.json({ ok: true, role, super: isSuper, profile: isSuper ? 'jarvis' : role, sid });
     });
 
     app.post('/logout', (req, res) => {
@@ -327,11 +373,15 @@ function createApi() {
             const bearer = req.headers.authorization.replace('Bearer ', '');
             session = getSession(bearer);
         }
-        if (session) { req.role = session.role; return next(); }
+        if (session) { req.role = session.role; req.isSuper = !!session.super; return next(); }
 
         if (cfg.API_TOKEN) {
             const got = (req.headers.authorization || '').replace('Bearer ', '');
-            if (got === cfg.API_TOKEN) { req.role = 'admin'; return next(); } // trusted machine credential = full access
+            // Admin, NOT super. The machine token is a long-lived shared
+            // secret that sits in config on other hosts; handing it the power
+            // to erase paid loads would put that power behind the weakest
+            // credential in the system. A human types the Jarvis password.
+            if (got === cfg.API_TOKEN) { req.role = 'admin'; req.isSuper = false; return next(); }
         }
 
         // Browser: redirect to /login. API: return 401 JSON.
@@ -400,7 +450,25 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         return res.status(403).json({ error: 'admin access required' });
     }
 
-    app.get('/api/me', (req, res) => res.json({ role: req.role || 'user' }));
+    // The top-level profile. NOT a middleware on any whole route — every route
+    // a Jarvis session can reach, an admin can reach too. What this answers is
+    // narrower: may this session walk past a lock that stops everyone else.
+    const isSuper = (req) => req.isSuper === true;
+
+    // Who to write into the audit log. The session is the only source — a
+    // client-supplied name would let the caller sign someone else's name to a
+    // deletion, which is worse than no name at all.
+    const actorOf = (req) => (isSuper(req) ? 'jarvis' : (req.role || 'unknown'));
+
+    app.get('/api/me', (req, res) => res.json({
+        role: req.role || 'user',
+        // Both clients read `super` to decide whether to show the lifted
+        // buttons. That is UX only — every one of those buttons hits a route
+        // that checks the session flag again, so a client that lies about this
+        // gets a 403, not a deletion.
+        super: isSuper(req),
+        profile: isSuper(req) ? 'jarvis' : (req.role || 'user'),
+    }));
 
     // ── Health check ────────────────────────────────────────────────────────
     // Per Apsara 2026-08-20. There was previously NO way to answer "is Drive
@@ -457,12 +525,27 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // uses the same constant-time compare.
     app.post('/api/verify-admin-password', (req, res) => {
         const adminPw = cfg.ADMIN_PASSWORD;
+        const jarvisPw = cfg.JARVIS_PASSWORD;
         const supplied = String((req.body && req.body.password) || '');
         if (!adminPw) return res.status(403).json({ ok: false, error: 'No admin password is configured on the server.' });
         if (!supplied) return res.status(403).json({ ok: false, error: 'Password is required.' });
         const eq = (a, b) => { const A = Buffer.from(a), B = Buffer.from(b); return A.length === B.length && crypto.timingSafeEqual(A, B); };
-        if (!eq(supplied, adminPw)) return res.status(403).json({ ok: false, error: 'Wrong admin password.' });
-        res.json({ ok: true });
+        // The Jarvis password satisfies this prompt too, added 2026-09-03 —
+        // "in addition to admin privileges" means the top-level profile cannot
+        // be the one credential that fails at the edit-unlock box.
+        //
+        // BOTH comparisons run before either result is used, so the response
+        // time does not reveal which password was tried. Written the long way
+        // for that reason; `||` would short-circuit and leak it.
+        const okAdmin  = eq(supplied, adminPw);
+        const okJarvis = !!jarvisPw && eq(supplied, jarvisPw);
+        if (!okAdmin && !okJarvis) return res.status(403).json({ ok: false, error: 'Wrong admin password.' });
+        // The route still grants nothing — it answers yes/no and the client
+        // unlocks a form. `super` is reported so the client can label what it
+        // unlocked with, NOT so it can decide what it is allowed to do; that
+        // is decided by the session on every write, and a typed password does
+        // not change the session.
+        res.json({ ok: true, super: okJarvis });
     });
 
     // ── Dashboard payload ─────────────────────────────────────────────────────
@@ -1433,12 +1516,66 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // and there's no way to know which month's workbook to rebuild.
             const doomed = getLoad(req.params.id);
             const doomedMonth = doomed && doomed.date;
+
+            // ── the payment lock, ON THE SERVER ───────────────────────────
+            // Added 2026-09-03, and it is new. "A load cannot be deleted once
+            // it has been paid against" has been a rule since the load card
+            // was built, and until now it was enforced by NOT RENDERING THE
+            // BUTTON — in both clients, and nowhere else. Any request that
+            // reached this route deleted the load and its payments no matter
+            // what had been paid, and this route is not even behind
+            // requireAdmin: it sits under /api/loads, which staff can reach.
+            // The rule was a suggestion made of HTML.
+            //
+            // So this guard is not scaffolding for the Jarvis profile. It is
+            // the rule finally being enforced, and the profile is the reason
+            // it got looked at.
+            const audit = require('./helpers/audit');
+            const paidRows = require('./helpers/payments').paymentsForLoad(req.params.id);
+            const paidTotal = paidRows.reduce((a, p) => a + (Number(p.amount) || 0), 0);
+            if (paidTotal > 0 && !isSuper(req)) {
+                await audit.refused({
+                    action: 'delete-paid-load', subject: req.params.id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: { paid: paidTotal, payments: paidRows.length },
+                    reason: 'load has payments against it',
+                });
+                return res.status(409).json({
+                    error: 'This load has payments recorded against it. Remove the payments first, or sign in with the Jarvis profile.',
+                    code: 'LOAD_HAS_PAYMENTS', paid: paidTotal,
+                });
+            }
+
+            // Everything worth knowing is captured BEFORE the delete, because
+            // in a moment none of it will exist anywhere else. Written first
+            // and stamped after, so a crash mid-delete still leaves a trace of
+            // who asked — see helpers/audit.js.
+            let entry = null;
+            if (paidTotal > 0) {
+                entry = await audit.record({
+                    action: 'delete-paid-load', subject: req.params.id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: {
+                        seller: doomed && doomed.seller, date: doomedMonth,
+                        amount: doomed && doomed.amount, paid: paidTotal,
+                        payments: paidRows.map((p) => ({ id: p.id, mode: p.mode, amount: p.amount, paid_on: p.paid_on })),
+                    },
+                });
+            }
+
             const found = await deleteLoad(req.params.id);
-            if (!found) return res.status(404).json({ error: 'not found' });
+            if (!found) {
+                if (entry) await audit.complete(entry, 'failed', { reason: 'load not found' });
+                return res.status(404).json({ error: 'not found' });
+            }
             // Payments follow the load. A deleted load leaving its
             // receipts behind would sum against nothing and quietly inflate
-            // any future "what have we paid" figure.
-            await require('./helpers/payments').deletePaymentsForLoad(req.params.id);
+            // any future "what have we paid" figure. Cash payments are
+            // refunded to petty cash on the way out — see
+            // deletePaymentsForLoad — so erasing a paid load does not silently
+            // leave the drawer reading low.
+            const removedPayments = await require('./helpers/payments').deletePaymentsForLoad(req.params.id);
+            if (entry) await audit.complete(entry, 'done', { payments_removed: removedPayments });
 
             // Live sheet sync — this is the "if load deleted, modify
             // accordingly" half of the requirement. Works with no delete
@@ -1836,10 +1973,32 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // The three /api/advances routes were removed 2026-08-29 per Apsara
     // ("remove that advance concept"). Payments against a load are unchanged.
 
+    // Removing a payment is how an admin corrects a mistyped amount, so this
+    // is NOT locked behind the Jarvis profile — it never was, and making it so
+    // would turn a routine correction into a privileged act. What is new is
+    // that when the top-level profile does it, the row is recorded, because
+    // that is the one case where the deletion might be covering something
+    // rather than fixing it. Logged either way when super; silent for admin,
+    // as before.
     app.delete('/api/payments/:id', async (req, res) => {
         try {
-            const { deletePayment } = require('./helpers/payments');
-            res.json({ ok: true, removed: await deletePayment(String(req.params.id)) });
+            const { deletePayment, listPayments } = require('./helpers/payments');
+            const audit = require('./helpers/audit');
+            const doomed = listPayments().find((p) => p && String(p.id) === String(req.params.id)) || null;
+            let entry = null;
+            if (isSuper(req)) {
+                entry = await audit.record({
+                    action: 'delete-payment', subject: String(req.params.id),
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: doomed ? {
+                        load_id: doomed.load_id, mode: doomed.mode,
+                        amount: doomed.amount, paid_on: doomed.paid_on,
+                    } : { note: 'no matching payment found' },
+                });
+            }
+            const removed = await deletePayment(String(req.params.id));
+            if (entry) await audit.complete(entry, removed ? 'done' : 'failed', { removed });
+            res.json({ ok: true, removed });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -2274,6 +2433,47 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (sig.length > 2 * 1024 * 1024) {
                 return res.status(400).json({ error: 'signature image is too large' });
             }
+
+            // ── the signature freeze, ON THE SERVER ───────────────────────
+            // Apsara 2026-09-02: "once payment initiated, signed-resign should
+            // not be there." Like the delete rule, that was enforced by hiding
+            // a button and nowhere else — this route would happily overwrite a
+            // signature on a load that had been paid in full, and regenerate
+            // the PDF around it.
+            //
+            // It only bites on a RE-sign. Signing a load that has been paid
+            // but never signed is not the thing she was protecting against; a
+            // seller signing late is ordinary, and refusing it would strand a
+            // real load with no way to get a signature onto its ticket.
+            const audit = require('./helpers/audit');
+            const alreadySigned = !!load.seller_signature;
+            const paidTotal = require('./helpers/payments')
+                .paymentsForLoad(req.params.id)
+                .reduce((a, p) => a + (Number(p.amount) || 0), 0);
+            if (alreadySigned && paidTotal > 0 && !isSuper(req)) {
+                await audit.refused({
+                    action: 'resign-paid-load', subject: req.params.id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: { paid: paidTotal, signed_at: load.seller_signed_at },
+                    reason: 'signature is frozen once the load has been paid against',
+                });
+                return res.status(409).json({
+                    error: 'This load was signed and has since been paid. Sign in with the Jarvis profile to replace the signature.',
+                    code: 'SIGNATURE_FROZEN',
+                });
+            }
+            // Replacing a signature on a paid load changes what the seller is
+            // recorded as having agreed to, after the money moved. The old
+            // timestamp is kept in the log because the load will not have it.
+            if (alreadySigned && paidTotal > 0) {
+                const entry = await audit.record({
+                    action: 'resign-paid-load', subject: req.params.id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: { paid: paidTotal, previous_signed_at: load.seller_signed_at },
+                });
+                await audit.complete(entry, 'done');
+            }
+
             await updateLoad(req.params.id, { seller_signature: sig, seller_signed_at: new Date().toISOString() });
 
             // Re-read so the regeneration sees the signature we just stored.

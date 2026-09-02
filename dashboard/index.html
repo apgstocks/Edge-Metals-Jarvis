@@ -677,6 +677,19 @@ function localityMatchesPort(loc, port) {
   return l.includes(p) || p.includes(l);
 }
 let ROLE = 'user';
+// ── the Jarvis top-level profile ──────────────────────────────────────────
+// Apsara 2026-09-03: "create another profile as jarvis with delete option
+// enabled even after payments ... this is like top level profile."
+//
+// A Jarvis session's ROLE is 'admin' — deliberately, so every admin check in
+// this file keeps working untouched — and this flag lifts the payment locks
+// on top of that. Mirrors mobile-app/www/index.html; tests/jarvis-profile.js
+// asserts both clients, because the last time a rule was added to one client
+// and not the other it shipped broken to the one nobody tested.
+//
+// DECIDES WHICH BUTTONS ARE DRAWN, NOTHING MORE. The server re-checks the
+// session on every route these buttons hit.
+let IS_SUPER = false;
 let CURRENT_TAB = 'board';
 let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pending — WA rotates the QR string every ~20-30s until scanned
 
@@ -4703,6 +4716,12 @@ function renderPayHistory() {
 // Mirrors mobile-app/www/index.html exactly — tests/load-card-actions.js
 // asserts both clients.
 function loadIsDeletable(l) {
+  // The Jarvis profile deletes regardless — Apsara 2026-09-03, "delete option
+  // enabled even after payments". The payments go with the load and any cash
+  // among them is returned to petty cash, and the server writes an audit row
+  // naming the load, the seller, the amount and every payment before the
+  // record stops existing.
+  if (IS_SUPER) return true;
   const p = l && l.payment;
   return !(p && Number(p.paid) > 0);
 }
@@ -5742,9 +5761,34 @@ function wireDeckEvents() {
     // Different consequences, different wording. Deleting a SALE puts the
     // material back on hand — the rollback, which happens because inventory
     // nets purchases against sales rather than storing a balance to unwind.
+    // ── the ordinary confirm ──────────────────────────────────────────────
+    // Reworded 2026-09-03 (Apsara: "ask Are you sure you want to delete
+    // etc..something similar"). Opens with the question instead of burying it
+    // after the consequences.
+    //
+    // Same prompt for every role. Delete on an UNPAID load is deliberately NOT
+    // role-gated: staff record loads, so staff must be able to remove one they
+    // just entered wrong, which is the case this button exists for. Confirmed
+    // 2026-09-03 ("for staff — show delete option before payment").
     if (!confirm(isSale
-      ? `Delete sale ${btn.dataset.id}? The material goes back into inventory as on hand.`
-      : `Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+      ? `Are you sure you want to delete sale ${btn.dataset.id}?\n\nThe material goes back into inventory as on hand.`
+      : `Are you sure you want to delete load ${btn.dataset.id}?\n\nIt is removed from Loads, and its photos and ticket PDFs are trashed in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+    // ── a SECOND prompt when money is involved ────────────────────────────
+    // Only the Jarvis profile ever reaches this, because nobody else is shown
+    // the button on a paid load (loadIsDeletable) and the server refuses it
+    // anyway. The first prompt talks about photos and PDFs; this one names the
+    // amount, because "delete this load" and "erase the record of $12,000
+    // having been paid" deserve different moments of attention, and the whole
+    // point of the profile is that it does not stop you.
+    if (!isSale) {
+      const paid = rec && rec.payment && Number(rec.payment.paid);
+      if (paid > 0 && !confirm(
+        `${btn.dataset.id} has ${payMoney(paid)} recorded as paid.\n\n`
+        + `Deleting it removes those payment records too. Any CASH among them goes back into petty cash.\n\n`
+        + `This is logged against the Jarvis profile. Continue?`)) {
+        return;
+      }
+    }
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       await api(`${isSale ? '/api/outbound-loads/' : '/api/loads/'}${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
@@ -5986,8 +6030,11 @@ document.addEventListener('click', (e) => {
 // ── Boot ──────────────────────────────────────────────────────────────────
 async function boot() {
   $('todayLabel').textContent = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric' });
-  try { const me = await api('/api/me'); ROLE = me.role || 'user'; } catch {}
-  $('roleLabel').textContent = ROLE === 'admin' ? 'Admin access' : 'Standard access';
+  try { const me = await api('/api/me'); ROLE = me.role || 'user'; IS_SUPER = me.super === true; } catch {}
+  // Jarvis first — its ROLE is 'admin', so the admin branch would otherwise
+  // swallow it and nothing on screen would say this session can erase a paid
+  // load.
+  $('roleLabel').textContent = IS_SUPER ? 'Jarvis access' : ROLE === 'admin' ? 'Admin access' : 'Standard access';
   // Staff is scoped to the Loads tab only (see STAFF_ALLOWED_PATH_PREFIXES /
   // nav filtering in api.js and renderNav above) — landing them on 'board'
   // (the default CURRENT_TAB) would show a tab they can't use, or a nav with
