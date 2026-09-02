@@ -557,6 +557,11 @@ const NAV_ITEMS = [
   // next to Email Contacts/WhatsApp, where "Contacts" alone was ambiguous.
   { id: 'loads',     label: 'Loads',       group: 'Yard' },
   { id: 'inventory', label: 'Inventory',   group: 'Yard' },
+  // Petty cash — the physical cash box, per Apsara 2026-09-02. NOT adminOnly:
+  // staff see the balance ("staff can see the balance, admin can top up"),
+  // and the page renders read-only for them. The write routes are
+  // requireAdmin server-side, so the boundary does not depend on this flag.
+  { id: 'petty',     label: 'Petty Cash',  group: 'Yard' },
   { id: 'contacts',  label: 'Price Lists', group: 'Yard', adminOnly: true },
   // Outbound loads (sales to buyers, e.g. Eccomelt) — mirror of Loads
   // above, but a separate standalone page (dashboard/outbound-loads.html),
@@ -657,14 +662,21 @@ async function api(path, opts = {}) {
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    // Carry the server's structured fields onto the Error. Endpoints now
-    // return a machine-readable `reason` (and sometimes `currentHead`) so a
-    // caller can offer a real choice; flattening everything to a message
-    // string threw that away and left only "request failed (409)".
+    // Carry the server's structured fields onto the Error. Endpoints return
+    // machine-readable extras — `reason`/`currentHead` on a conflict, and as
+    // of 2026-09-02 `code`/`available`/`requested` from petty cash so the Pay
+    // form can offer "only $400 in the box — record that and leave $1,100
+    // outstanding?". Flattening everything to a message string threw that
+    // away and left the caller parsing English to decide what to do.
+    //
+    // Copies EVERY key except `error`, rather than naming them one at a time:
+    // the previous version listed reason and currentHead explicitly, so petty
+    // cash's fields would have been dropped and the prompt would never have
+    // fired. A new route adding a field should not need this line changed.
+    // Mirrors mobile-app/www/index.html.
     const e = new Error(data.error || `request failed (${res.status})`);
     e.status = res.status;
-    if (data.reason) e.reason = data.reason;
-    if (data.currentHead) e.currentHead = data.currentHead;
+    for (const k of Object.keys(data || {})) { if (k !== 'error') e[k] = data[k]; }
     throw e;
   }
   return data;
@@ -672,7 +684,11 @@ async function api(path, opts = {}) {
 
 function renderNav() {
   const nav = $('sideNav');
-  const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin') && (ROLE !== 'staff' || n.id === 'loads'));
+  // Staff see Loads and Petty Cash only. The petty-cash entry was added
+  // 2026-09-02 — without it here the tab exists but is filtered out for
+  // exactly the role she asked to be able to see the balance, which is the
+  // sort of half-applied change that looks like it shipped and did not.
+  const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin') && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty'));
   let lastGroup = null;
   nav.innerHTML = visible.map(n => {
     const header = n.group !== lastGroup
@@ -734,6 +750,7 @@ async function loadTab(tab) {
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
+    if (tab === 'petty') return renderPettyCashTab();
     if (tab === 'loads') {
       // Purchases and sales in one deck — a sale she can't see is a sale she
       // can't delete, and deletion is what rolls inventory back. _kind tells
@@ -3231,7 +3248,12 @@ function renderItemRows() {
       <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span><input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}"></div>
       <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="text" inputmode="decimal" disabled title="Amount" value="${amount != null ? fmtAmount(amount) : ''}"></div>
       <div class="ld-item-actions">
-        <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert item below">+</button>
+        <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert a blank item below">+</button>
+        <!-- Duplicate, per Apsara 2026-09-02. Distinct from "+": that adds an
+             EMPTY row, this copies this one. Several lines of the same
+             material at the same price is the common case on a big load, and
+             retyping the description and rate for each was the tedious part. -->
+        <button type="button" class="btn btn-dup-item" data-row="${i}" title="Duplicate this item below">⧉</button>
         <button type="button" class="btn btn-danger btn-remove-item" data-row="${i}" title="Remove item">✕</button>
       </div>
       <!-- Two file inputs per role (camera-forced vs library/files) instead
@@ -3372,6 +3394,33 @@ function renderItemRows() {
     syncItemsFromDom();
     const idx = parseInt(btn.dataset.row, 10);
     currentLoadItems.splice(idx + 1, 0, blankLoadItem());
+    renderItemRows();
+  }));
+  // ── Duplicate a row (Apsara 2026-09-02) ─────────────────────────────────
+  // Copies what was TYPED — description, gross, tare, price, unit — into a new
+  // row directly below.
+  //
+  // PHOTOS ARE DELIBERATELY NOT COPIED. A gross/tare photo is a picture of the
+  // scale for one specific weighing. Cloning it onto a second item would put a
+  // photograph of a different load's weight against that item and it would
+  // look, on the ticket and in Drive, exactly like real evidence. That is a
+  // fabricated audit trail, which is worse than no photo at all — so the
+  // duplicate starts with none and the operator photographs the real weight.
+  //
+  // Weights ARE copied, because they are typed values the operator is about to
+  // correct anyway, and because several identical drums genuinely do weigh the
+  // same. The photo is what makes a weight evidence, and that is not cloned.
+  box.querySelectorAll('.btn-dup-item').forEach(btn => btn.addEventListener('click', () => {
+    syncItemsFromDom();
+    const idx = parseInt(btn.dataset.row, 10);
+    const src = currentLoadItems[idx] || blankLoadItem();
+    currentLoadItems.splice(idx + 1, 0, Object.assign(blankLoadItem(), {
+      description : src.description || '',
+      gross_weight: src.gross_weight ?? '',
+      tare_weight : src.tare_weight ?? '0',
+      price       : src.price ?? '',
+      unit        : src.unit || '',
+    }));
     renderItemRows();
   }));
 }
@@ -3905,6 +3954,106 @@ function filterLoads(loads, query) {
 //
 // The unfiltered deck keeps its date sections — that view genuinely is
 // "what happened when". Mirrors mobile-app/www/index.html.
+// ── Petty cash ─────────────────────────────────────────────────────────────
+// Apsara, 2026-09-02: "a new tab called Petty cash. Date and cash amount needs
+// to be entered here. So it is like cash reserve."
+//
+// The balance is SERVER-COMPUTED (helpers/pettyCash.js sums the ledger). This
+// screen never adds the rows up itself — one place owns the arithmetic, and a
+// cash balance that two screens disagree about is worse than no screen at all.
+//
+// Staff SEE it, admin CHANGES it — her choice. Hiding the form for staff is UX
+// only: POST/DELETE /api/petty-cash are requireAdmin server-side, so a staff
+// session that reached them another way gets a 403.
+let pettyCash = { balance: 0, entries: [] };
+
+async function refreshPettyCash() {
+  try {
+    const d = await api('/api/petty-cash');
+    pettyCash = { balance: Number(d.balance) || 0, entries: Array.isArray(d.entries) ? d.entries : [] };
+  } catch (e) {
+    // Keep the last known figure rather than showing $0.00, which would read
+    // as "the box is empty" — a false statement about money. Same lesson as
+    // the description catalogue emptying itself on a failed request.
+    console.warn('[petty] could not refresh the balance:', e && e.message);
+  }
+  return pettyCash;
+}
+
+async function renderPettyCashTab() {
+  await refreshPettyCash();
+  const isAdmin = ROLE === 'admin';
+  const bal = pettyCash.balance;
+  const rows = pettyCash.entries || [];
+
+  const kindLabel = (e) => e.kind === 'topup' ? 'Cash added'
+    : e.kind === 'reversal' ? 'Payment reversed'
+    : `Paid${e.load_id ? ' — ' + e.load_id : ''}`;
+
+  $('viewRoot').innerHTML = `
+    <section style="max-width:900px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">// Petty cash</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Cash reserve</h2>
+          <div style="font-size:13px; color:var(--text-muted);">${isAdmin ? 'Cash paid against a load comes out of this balance.' : 'Read only — ask an admin to add cash.'}</div>
+        </div>
+        ${isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : ''}
+      </div>
+
+      <div class="card" style="padding:20px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">In the box</div>
+        <div style="font-size:32px; font-weight:800; color:${bal > 0 ? 'var(--text-strong)' : 'var(--status-warning, #d69e2e)'};">${esc(fmtAmount(bal) || '$0.00')}</div>
+        ${bal <= 0 ? `<div style="margin-top:8px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
+      </div>
+
+      ${rows.length ? `
+      <div class="card" style="padding:0; overflow:hidden;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead><tr style="background:var(--surface-sunken); text-align:left;">
+            <th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Date</th>
+            <th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">What</th>
+            <th style="padding:10px 12px; text-align:right; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Amount</th>
+            ${isAdmin ? '<th style="padding:10px 12px;"></th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${rows.map(e => `
+            <tr style="border-top:1px solid var(--border-subtle);">
+              <td style="padding:10px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(typeof fmtDate === 'function' ? fmtDate(e.date) : (e.date || ''))}</td>
+              <td style="padding:10px 12px;">${esc(kindLabel(e))}${e.note ? ` <span style="color:var(--text-faint);">— ${esc(e.note)}</span>` : ''}</td>
+              <td style="padding:10px 12px; text-align:right; font-family:var(--font-mono); font-weight:700; color:${Number(e.amount) < 0 ? 'var(--status-danger, #c53030)' : 'var(--leaf-600, #2e7d32)'};">${Number(e.amount) < 0 ? '-' : '+'}${esc(fmtAmount(Math.abs(Number(e.amount) || 0)))}</td>
+              ${isAdmin ? `<td style="padding:10px 12px; text-align:right;">${e.kind === 'topup' ? `<button class="btn btn-danger btn-del-petty" data-id="${esc(e.id)}" style="font-size:11px; padding:4px 9px;">Delete</button>` : ''}</td>` : ''}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : `<div style="padding:50px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing recorded yet.</div>`}
+    </section>`;
+
+  if (isAdmin) {
+    const add = $('btnAddPetty');
+    if (add) add.addEventListener('click', async () => {
+      const amount = prompt('How much cash is going into the box?');
+      if (amount === null) return;
+      const n = Number(String(amount).replace(/[^0-9.\-]/g, ''));
+      if (!isFinite(n) || n <= 0) { alert('Enter an amount greater than zero.'); return; }
+      try {
+        await api('/api/petty-cash', { method: 'POST', body: JSON.stringify({ amount: n }) });
+        await renderPettyCashTab();
+      } catch (err) { alert('Could not add cash: ' + err.message); }
+    });
+    // Only top-ups carry this button (see the row markup). A withdrawal is
+    // undone by deleting the PAYMENT, which reverses it properly — the server
+    // refuses it here too, so this is not the only thing holding that rule.
+    document.querySelectorAll('.btn-del-petty').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm('Delete this cash entry? The balance will drop by that amount.')) return;
+      try {
+        await api('/api/petty-cash/' + encodeURIComponent(btn.dataset.id), { method: 'DELETE' });
+        await renderPettyCashTab();
+      } catch (err) { alert('Could not delete: ' + err.message); }
+    }));
+  }
+}
+
 function loadDeckSectionsHtml(loads, emptyMsg, opts) {
   const flat = !!(opts && opts.flat);
   const empty = `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
@@ -4167,7 +4316,7 @@ function renderLoads(loads) {
       .ld-item-cap .btn-photo-item { flex:none; padding:4px 6px; font-size:12px; line-height:1; }
       .item-row input, .item-row select { font-size:12px; padding:5px 6px; }
       .ld-item-actions { display:flex; gap:3px; min-width:0; }
-      .item-row .btn-remove-item, .item-row .btn-insert-item { padding:4px 6px; font-size:11px; flex:1; min-width:0; }
+      .item-row .btn-remove-item, .item-row .btn-insert-item, .item-row .btn-dup-item { padding:4px 6px; font-size:11px; flex:1; min-width:0; }
       .item-row .btn-insert-item { color:var(--leaf-600, #2e7d32); }
       /* Every direct grid child of a row/header MUST be able to shrink below
          its own natural (min-content) size — otherwise a cell with content
@@ -4261,7 +4410,7 @@ function renderLoads(loads) {
         .ld-item-cap { flex-direction:column; align-items:stretch; }
         .ld-item-net-wrap input, .ld-item-price-wrap input, .ld-item-amount-wrap input { width:100%; }
         .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
-        .item-row .btn-remove-item, .item-row .btn-insert-item { padding:10px 4px; font-size:12px; flex:1; }
+        .item-row .btn-remove-item, .item-row .btn-insert-item, .item-row .btn-dup-item { padding:10px 4px; font-size:12px; flex:1; }
         /* On a phone the item rows become stacked cards, so a 7-column
            totals grid would be unreadable and mostly empty. Same numbers,
            laid out as labelled pairs that wrap. */
@@ -4514,10 +4663,41 @@ function wireLoadsEvents() {
     const btn = $('btnSavePay');
     btn.disabled = true; btn.textContent = 'Recording…';
     try {
-      await api('/api/payments', { method: 'POST', body: JSON.stringify({
+      const body = {
         load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
-      }) });
+      };
+      try {
+        await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
+      } catch (err) {
+        // ── not enough in the petty cash box ──────────────────────────────
+        // Apsara 2026-09-02: "If cash is low while invoice amount is high -->
+        // Make it as partial payment and notify user."
+        //
+        // The server REFUSES the first attempt and hands back how much there
+        // is; this turns that into a decision the operator makes explicitly,
+        // then retries with allow_partial. Handing a supplier less than the
+        // ticket says is worth one deliberate confirmation — a message shown
+        // afterwards could be missed, and they would leave thinking they had
+        // been paid in full.
+        //
+        // The retry is the ONLY place allow_partial is sent, so the cap
+        // cannot be reached without this prompt having been answered.
+        // Mirrors mobile-app/www/index.html.
+        const short = err && (err.code === 'PETTY_CASH_SHORT' || /petty cash/i.test(err.message || ''));
+        const avail = err && err.available;
+        if (!short || avail == null || avail <= 0) throw err;
+        const ok = confirm(
+          `Only ${fmtAmount(avail)} in petty cash — not enough for ${fmtAmount(amount)}.\n\n` +
+          `Record ${fmtAmount(avail)} now and leave ${fmtAmount(Math.round((amount - avail) * 100) / 100)} outstanding?`);
+        if (!ok) { btn.disabled = false; btn.textContent = 'Record payment'; $('payErr').textContent = 'Nothing was recorded.'; return; }
+        // The amount is NOT resent as `avail`. The server re-reads the balance
+        // under its own lock and caps to whatever is there at that moment,
+        // which may be less again if someone else paid in between. Sending
+        // the number this browser saw would reintroduce the race the lock
+        // exists to close.
+        await api('/api/payments', { method: 'POST', body: JSON.stringify({ ...body, allow_partial: true }) });
+      }
       closePayModal();
       // Reload rather than patching the card in place: the badge, the pending
       // figure and the ticket all read from the server's arithmetic, and
