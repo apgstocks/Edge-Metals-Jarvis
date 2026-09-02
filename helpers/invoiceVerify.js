@@ -179,8 +179,6 @@ function inSelectedPeriod(sheetRow, period) {
 async function crossCheckZimexRecords(pdfRecords, period) {
     const hasPeriod = !!(period && (period.year || period.month));
     const sheetIndex = await buildSheetFreightIndex();
-    const scopedIndex = hasPeriod ? await buildSheetFreightIndex(period) : sheetIndex;
-    const seenHbls = new Set();
 
     const tag = (row) => ({ ...row, in_period: inSelectedPeriod(row.sheet, period) });
 
@@ -194,7 +192,6 @@ async function crossCheckZimexRecords(pdfRecords, period) {
         if (!sheetRow) {
             return tag({ ...rec, status: 'not_in_sheet', sheet: null, delta: null });
         }
-        seenHbls.add(hbl);
         if (sheetRow.freight_amt == null) {
             return tag({ ...rec, status: 'sheet_freight_blank', sheet: sheetRow, delta: null });
         }
@@ -210,23 +207,30 @@ async function crossCheckZimexRecords(pdfRecords, period) {
         });
     });
 
-    // Reverse direction — sheet HBLs with a real freight amount that no
-    // uploaded PDF this run ever claimed. Only meaningful if she uploaded
-    // ALL of Zimex's invoices for the period she's checking; a partial
-    // upload will show plenty of these, so this is a hint, not an alarm.
-    const sheetOnly = [];
-    for (const [hbl, row] of scopedIndex.entries()) {
-        if (row.freight_amt == null) continue;
-        if (seenHbls.has(hbl)) continue;
-        sheetOnly.push(row);
-    }
+    // REMOVED 2026-09-01 — Apsara: "ON THE SHEET FOR THIS PERIOD, BUT NO
+    // MATCHING PDF UPLOADED ---> remove this".
+    //
+    // This built a reverse list of sheet HBLs no uploaded PDF claimed. It was
+    // only ever meaningful if she had uploaded EVERY Zimex invoice for the
+    // period — any partial upload filled it with rows that were not missing at
+    // all, which is why its own comment called it "a hint, not an alarm". A
+    // panel that cries wolf on a reconciliation screen trains you to ignore
+    // it, and an ignored panel is worse than no panel.
+    //
+    // Removing it also removes a cost that was easy to miss: it needed a
+    // SECOND period-scoped index, and buildSheetFreightIndex calls
+    // fetchRawSheet(true) — forceRefresh, deliberately bypassing the cache.
+    // Every Zimex run therefore downloaded and parsed the entire invoice sheet
+    // TWICE. Now once.
+    //
+    // To restore: rebuild `scopedIndex` from buildSheetFreightIndex(period),
+    // re-add the seenHbls set in the match loop above, and diff the two.
 
     // Echo the period back so the dashboard can label what it is showing
     // rather than assuming the dropdowns still read the same as when the run
     // started, and report how many rows fell outside it.
     return {
         matched,
-        sheet_only: sheetOnly,
         period: hasPeriod ? { year: period.year ? Number(period.year) : null, month: period.month ? Number(period.month) : null } : null,
         outside_period: matched.filter((r) => r.in_period === false).length,
         unclassified_period: hasPeriod ? matched.filter((r) => r.in_period === null).length : 0,

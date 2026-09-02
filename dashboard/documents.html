@@ -417,11 +417,13 @@ body[data-theme="light"] {
         </div>
         <button id="btnZimexVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
       </div>
-      <!-- Year/month only scope the "on the sheet but no matching PDF"
-           section below — a PDF's own HBL is always checked against the
-           full sheet regardless of period. See
+      <!-- Year/Month scope what the results table SHOWS. Uploaded PDFs are
+           still matched against the whole sheet, so an HBL invoiced in
+           another month is recognised correctly rather than reported as
+           missing — it is just filed under the "Outside <month>" chip
+           instead of cluttering the month she is checking. See
            helpers/invoiceVerify.js's crossCheckZimexRecords() comment. -->
-      <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Year/Month only scope the "billed but no matching PDF" list below — every uploaded PDF is always checked against the full sheet.</div>
+      <div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Results are scoped to the selected Year/Month. Anything the sheet dates to another period is counted separately under "Outside &lt;month&gt;".</div>
 
       <div id="zimexLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
         <span class="btn-spinner"></span> Analyzing PDFs and cross-checking against the Invoice sheet…
@@ -441,17 +443,6 @@ body[data-theme="light"] {
         </div>
       </div>
 
-      <div id="zimexSheetOnlyWrap" class="hidden" style="margin-top:18px;">
-        <div class="section-label">On the sheet for this period, but no matching PDF uploaded</div>
-        <div class="inv-line-table-wrap">
-          <table class="inv-line-table" id="zimexSheetOnlyTable">
-            <thead>
-              <tr><th>HBL #</th><th>Container #</th><th>Consignee</th><th>Invoice #</th><th>Invoice Date</th><th>Sheet Freight</th></tr>
-            </thead>
-            <tbody id="zimexSheetOnlyBody"></tbody>
-          </table>
-        </div>
-      </div>
     </div>
     </div>
 
@@ -990,10 +981,33 @@ function verifyRowKeys(r) {
   if (r.in_period === false) keys.push('__outside_period');
   return keys;
 }
+// Period scope comes FIRST, before any status filter.
+//
+// Apsara, 2026-09-01: "Why other period is showing. If i am filtering for
+// July, only July should be matched in pdf against sheet."
+//
+// The first cut of this dimmed out-of-period rows and left them in the table.
+// That was me hedging on a decision she had already made: she picks a month
+// because she is checking that month, and rows from another one are noise on
+// the screen she is trying to read. They are now OUT of the default view.
+//
+// They are not discarded, though, and that distinction matters — the "Outside
+// <month>" chip still carries their count and clicking it brings them up. A
+// billed line that vanishes with no trace is the failure mode worth avoiding;
+// one that is a labelled click away is not.
+//
+// CRITICAL: only `in_period === false` — rows the sheet DEFINITIVELY places in
+// another period — are scoped out. `in_period === null` is never hidden. That
+// bucket is "cannot be judged": not_in_sheet, no_hbl_on_pdf, and unreadable
+// sheet dates. Those are the rows most likely to be a real problem, and
+// hiding them because their period could not be determined would be the exact
+// opposite of what this screen is for.
 function verifyApply(panel, rows) {
   const active = verifyActive(panel);
-  if (!active.size) return rows;
-  return rows.filter((r) => verifyRowKeys(r).some((k) => active.has(k)));
+  const wantsOutside = active.has('__outside_period');
+  const scoped = wantsOutside ? rows : rows.filter((r) => r.in_period !== false);
+  if (!active.size) return scoped;
+  return scoped.filter((r) => verifyRowKeys(r).some((k) => active.has(k)));
 }
 function verifyChip(panel, key, label, count, tone) {
   const on = verifyActive(panel).has(key);
@@ -1009,11 +1023,13 @@ function verifyChip(panel, key, label, count, tone) {
 function verifyStaticChip(text, style) {
   return `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);${style || ''}">${text}</span>`;
 }
-function verifyAllChip(panel, total) {
+// `label` lets a period-scoped tab say "All in July" rather than a bare "All",
+// which would overstate what the table is showing.
+function verifyAllChip(panel, total, label) {
   const on = !verifyActive(panel).size;
   return `<span class="verify-chip" data-panel="${esc(panel)}" data-key="__all" role="button" tabindex="0" title="Show every row"
     style="cursor:pointer; user-select:none; font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:${on ? 'var(--accent-soft)' : 'var(--surface-sunken)'}; border:1px solid ${on ? 'var(--accent)' : 'var(--border-default)'}; color:var(--text-strong); font-weight:${on ? '700' : '400'};"
-    >All: <strong>${total}</strong></span>`;
+    >${label || 'All'}: <strong>${total}</strong></span>`;
 }
 // Builds the status chips for a panel: the curated ones in their intended
 // order, then any OTHER status the data actually contains (see safety rule 2).
@@ -1091,12 +1107,21 @@ function zimexPeriodCell(r) {
   return `<span style="font-size:10px; color:var(--text-faint);">—</span>`;
 }
 
+// An empty table must say WHY it is empty. "No line items extracted" when the
+// real reason is "all 12 rows belong to August" would send her looking for an
+// extraction fault that isn't there.
+function zimexEmptyMessage({ period, label, outside, total }) {
+  if (total > 0 && period && outside > 0) {
+    return `Nothing in ${label}. ${outside} row${outside === 1 ? '' : 's'} belong${outside === 1 ? 's' : ''} to another period — click "Outside ${label}" to see ${outside === 1 ? 'it' : 'them'}.`;
+  }
+  return 'No line items extracted.';
+}
+
 function renderZimexResults(result) {
   // Stashed so a chip click can re-render this tab without re-uploading or
   // re-running the Gemini extraction — filtering is a view concern.
   VERIFY_RENDER.zimex = () => renderZimexResults(result);
   const matched = result.matched || [];
-  const sheetOnly = result.sheet_only || [];
   const period = result.period || null;
   const label = zimexPeriodLabel(period);
 
@@ -1111,19 +1136,27 @@ function renderZimexResults(result) {
   ]);
 
   const outside = result.outside_period || 0;
-  const extra = [
-    verifyStaticChip(`Billed, no matching PDF: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`),
-    // Also a filter — clicking it isolates the rows the sheet puts in another period.
-    period ? verifyChip('zimex', '__outside_period', `Outside ${esc(label)}`, outside) : '',
-  ].join('');
+  // Out-of-period rows are OUT of the default table. This chip is how they
+  // stay reachable — it carries their count and clicking it shows them.
+  //
+  // The "Billed, no matching PDF" chip and its table were removed on
+  // 2026-09-01 at Apsara's request. See helpers/invoiceVerify.js for why the
+  // list was a weak signal in the first place and what it cost to compute.
+  const extra = period && outside
+    ? verifyChip('zimex', '__outside_period', `Outside ${esc(label)}`, outside)
+    : '';
   const heading = period
     ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--accent-soft, var(--surface-sunken)); border:1px solid var(--border-default); color:var(--text-strong); font-weight:700;">${esc(label)}</span>`
     : '';
-  $('zimexSummary').innerHTML = heading + verifyAllChip('zimex', matched.length) + summaryChips + extra;
+  // "All" here means all of the SELECTED PERIOD, and says so — a bare "All"
+  // next to a table that excludes other months would overstate it.
+  $('zimexSummary').innerHTML = heading
+    + verifyAllChip('zimex', inScope.length, period ? `All in ${esc(label)}` : 'All')
+    + summaryChips + extra;
   $('zimexSummary').classList.remove('hidden');
 
   const rows = verifyApply('zimex', matched);
-  $('zimexFilterNote').innerHTML = verifyFilterNote('zimex', rows.length, matched.length);
+  $('zimexFilterNote').innerHTML = verifyFilterNote('zimex', rows.length, inScope.length);
   $('zimexResultsBody').innerHTML = rows.map((r) => `
     <tr${r.in_period === false ? ' style="opacity:.55;"' : ''}>
       <td>${esc(r.source_file || '')}</td>
@@ -1134,19 +1167,9 @@ function renderZimexResults(result) {
       <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
       <td>${zimexPeriodCell(r)}</td>
       <td>${zimexBadge(r.status)}</td>
-    </tr>`).join('') || verifyEmptyRow('zimex', 8, 'No line items extracted.');
+    </tr>`).join('') || verifyEmptyRow('zimex', 8, zimexEmptyMessage({ period, label, outside, total: matched.length }));
   $('zimexResultsWrap').classList.remove('hidden');
 
-  $('zimexSheetOnlyBody').innerHTML = sheetOnly.map((r) => `
-    <tr>
-      <td style="font-family:var(--font-mono);">${esc(r.hbl_no || '')}</td>
-      <td>${esc(r.container_no || '')}</td>
-      <td>${esc(r.consignee || '')}</td>
-      <td>${esc(r.inv_no || '')}</td>
-      <td>${esc(fmtDate(r.inv_date))}</td>
-      <td>${fmtMoney(r.freight_amt)}</td>
-    </tr>`).join('') || `<tr><td colspan="6" style="text-align:center; color:var(--text-faint);">Nothing outstanding for this period.</td></tr>`;
-  $('zimexSheetOnlyWrap').classList.remove('hidden');
 }
 
 $('btnZimexVerify').addEventListener('click', async () => {
@@ -1161,7 +1184,6 @@ $('btnZimexVerify').addEventListener('click', async () => {
   $('zimexLoading').classList.remove('hidden');
   $('zimexSummary').classList.add('hidden');
   $('zimexResultsWrap').classList.add('hidden');
-  $('zimexSheetOnlyWrap').classList.add('hidden');
   try {
     const body = { pdfs: zimexFiles, year: $('zimexYear').value || undefined, month: $('zimexMonth').value || undefined };
     const result = await api('/api/verify/zimex', { method: 'POST', body: JSON.stringify(body) });

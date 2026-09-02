@@ -1222,24 +1222,47 @@ section('Verification chips act as row filters');
     const A = () => mod.verifyActive('t');
 
 
+    // Apsara, 2026-09-01: "If i am filtering for July, only July should be
+    // matched in pdf against sheet." Row 6 is in_period:false and must be OUT
+    // of every default view.
     A().clear();
-    ck('no filter shows everything', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5,6]);
+    ck('default view excludes rows the sheet puts in another period', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5]);
 
     A().clear(); A().add('match');
-    ck('one chip shows only that status', ids(mod.verifyApply('t', ROWS)), [1,2,6]);
+    ck('one chip shows only that status, still period-scoped', ids(mod.verifyApply('t', ROWS)), [1,2]);
 
     A().add('mismatch');
-    ck('two chips union, not intersect', ids(mod.verifyApply('t', ROWS)), [1,2,3,6]);
+    ck('two chips union, not intersect', ids(mod.verifyApply('t', ROWS)), [1,2,3]);
 
     A().delete('match');
     ck('clicking an active chip deselects it', ids(mod.verifyApply('t', ROWS)), [3]);
 
     A().clear();
-    ck('All clears back to everything', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5,6]);
+    ck('All means all IN PERIOD, not all rows', ids(mod.verifyApply('t', ROWS)), [1,2,3,4,5]);
+
+    // THE RULE THAT MUST NOT REGRESS: only in_period === false is scoped out.
+    // in_period === null means "cannot be judged" — not_in_sheet,
+    // no_hbl_on_pdf, unreadable sheet date. Those are the rows most likely to
+    // be a real problem and must never be hidden by a period selection.
+    const UNJUDGED = [
+      { id: 7, status: 'not_in_sheet', in_period: null },
+      { id: 8, status: 'no_hbl_on_pdf', in_period: null },
+      { id: 9, status: 'match', in_period: undefined },
+    ];
+    A().clear();
+    ck('rows whose period cannot be judged are NEVER hidden', ids(mod.verifyApply('t', UNJUDGED)), [7,8,9]);
+    A().clear(); A().add('not_in_sheet');
+    ck('...and stay filterable by status', ids(mod.verifyApply('t', UNJUDGED)), [7]);
+
+    // Tabs with no period at all (Jio, Sher, AJ, Pan Metal) are untouched.
+    A().clear();
+    ck('a tab with no period concept shows every row',
+       ids(mod.verifyApply('t', [{ id: 1, status: 'verified' }, { id: 2, status: 'not_in_sheet' }])), [1,2]);
 
     // The safety rule: a status with no curated chip must still be reachable.
     A().clear(); A().add('sheet_freight_blank');
     ck('an uncurated status is still filterable', ids(mod.verifyApply('t', ROWS)), [5]);
+    A().clear();
     const chips = mod.verifyStatusChips('t', ROWS, [
       { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' },
       { key: 'not_in_sheet', label: 'Not on sheet' },
@@ -1248,9 +1271,12 @@ section('Verification chips act as row filters');
        ['match','mismatch','not_in_sheet','sheet_freight_blank'].every((k) => chips.includes(`data-key="${k}"`)), true);
     ck('uncurated status gets a readable label', chips.includes('sheet freight blank'), true);
 
-    // Zimex's out-of-period pseudo-filter
+    // Out-of-period rows are excluded, NOT discarded — this chip is the only
+    // way back to them, so it has to work.
     A().clear(); A().add('__outside_period');
-    ck('out-of-period chip isolates those rows', ids(mod.verifyApply('t', ROWS)), [6]);
+    ck('the Outside chip brings the hidden rows back', ids(mod.verifyApply('t', ROWS)), [6]);
+    A().add('mismatch');
+    ck('Outside + a status shows both', ids(mod.verifyApply('t', ROWS)), [3,6]);
     ck('an out-of-period row still carries its status key',
        mod.verifyRowKeys({ status: 'match', in_period: false }), ['match','__outside_period']);
 
@@ -1274,10 +1300,15 @@ section('Verification chips act as row filters');
     A().add('match');
     ck('note appears when filtered', mod.verifyFilterNote('t', 3, 6).includes('Showing <strong style="color:var(--text-body);">3</strong> of 6'), true);
 
-    // Panels must not share state.
+    // Panels must not share filter state. Uses period-free rows on purpose:
+    // period scoping is driven by the ROW data, not by which tab is open, so
+    // mixing the two would test two things at once and assert the wrong one.
+    const PLAIN = [{ id: 1, status: 'match' }, { id: 2, status: 'mismatch' }];
     mod.verifyActive('zimex').clear(); mod.verifyActive('jio').clear();
     mod.verifyActive('zimex').add('match');
-    ck('filters are per-tab, not global', ids(mod.verifyApply('jio', ROWS)), [1,2,3,4,5,6]);
+    ck('filters are per-tab, not global', ids(mod.verifyApply('jio', PLAIN)), [1,2]);
+    ck('...and the filtered tab is still filtered', ids(mod.verifyApply('zimex', PLAIN)), [1]);
+    mod.verifyActive('zimex').clear();
 
 
 }
