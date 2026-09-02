@@ -1227,6 +1227,76 @@ function closesLoopWithoutAsk(summary) {
     return DELIVERY_IN_SUMMARY.test(t) && !ASK_IN_SUMMARY.test(t);
 }
 
+// ── "ITS ALREADY PAID WHILE IT IS SHOWING AS PENDING" (2026-09-02) ─────────
+// LIVE: "AJ Transport Inc. requests payment of $1,200.00 for invoice 6403,
+// stating it is overdue."  ...  "balance due: $1,200.00"
+//
+// It was paid. Apsara: "ITS THERE IN BOSE EMAIL".
+//
+// My first answer was that Jarvis could not have known — payments.json is
+// keyed by load_id, the AJ sheet by invoice/container/booking, and nothing
+// joins vendor invoice to payment. All true, and all beside the point: the
+// evidence was never in a database. It was in the mailbox this watcher
+// already reads.
+//
+// WHAT THIS DOES NOT DO IS HIDE THE ITEM. A vendor insisting on money we
+// have already sent is not noise — it is work, and the reply is proof of
+// payment. Suppressing it would swap a wrong nag for a silent dispute, which
+// is worse. So the evidence is ATTACHED, and the digest line changes from an
+// assertion about her books into the two facts side by side:
+//
+//   "AJ Transport says invoice 6403 is overdue — our mail of 28 Aug says it
+//    was paid. Confirm and send proof."
+//
+// Narrow triggers on purpose, because this costs one extra Gmail search:
+// only when the mail reads as a payment demand AND an invoice number can be
+// pulled out of it. Everything else skips it entirely.
+const PAYMENT_DEMAND = /\b(overdue|past due|outstanding|unpaid|payment (?:is )?(?:due|pending|required)|please (?:remit|pay|settle)|kindly (?:remit|pay|settle)|balance due|awaiting payment)\b/i;
+const PAYMENT_MADE = /\b(paid|payment (?:sent|made|released|processed)|remitted|remittance|wire(?:d)?|transferred|transaction (?:id|order)|receipt|proof of payment|ach|cheque|check no)\b/i;
+const INVOICE_NO = /\b(?:invoice|inv|bill)\s*(?:no\.?|number|#)?\s*[:#]?\s*([A-Z]{0,4}-?\d{3,10})\b/i;
+
+function invoiceNumberIn(text) {
+    const m = String(text || '').match(INVOICE_NO);
+    return m ? m[1].trim() : null;
+}
+function looksLikePaymentDemand(text) {
+    return PAYMENT_DEMAND.test(String(text || ''));
+}
+
+// Returns evidence that WE already paid, or null. Deliberately requires the
+// message to come from our own domain: the vendor's own "please pay" mail
+// mentions the invoice number too, and matching on the number alone would
+// find the demand itself and call it proof.
+async function findPaymentEvidence(gmail, invoiceNo, myAddress, demandDateISO) {
+    if (!gmail || !invoiceNo || !myAddress) return null;
+    const domain = String(myAddress).split('@')[1];
+    if (!domain) return null;
+    try {
+        const hits = await listMessages(gmail, `in:anywhere "${invoiceNo}" from:@${domain}`, 10);
+        for (const ref of (hits || [])) {
+            const m = await getMessage(gmail, ref.id);
+            const hs = (m && m.payload && m.payload.headers) || [];
+            const pick = (n) => (hs.find((x) => (x.name || '').toLowerCase() === n) || {}).value || '';
+            const when = Date.parse(parseEmailDate(pick('date')) || pick('date'));
+            // Older than the demand proves nothing — they are chasing us
+            // BECAUSE of what came before. Only later mail is evidence.
+            const since = Date.parse(demandDateISO || '');
+            if (Number.isFinite(since) && Number.isFinite(when) && when < since) continue;
+            const text = `${pick('subject')} ${(m && m.snippet) || ''}`;
+            if (!PAYMENT_MADE.test(text)) continue;
+            return {
+                at: Number.isFinite(when) ? new Date(when).toISOString().slice(0, 10) : null,
+                from: senderLabel(pick('from')), subject: pick('subject').slice(0, 80),
+            };
+        }
+    } catch (err) {
+        // Never let this break the scan. No evidence found is the safe answer:
+        // the item stays exactly as it was.
+        console.warn('[REPLYWATCH] payment-evidence lookup failed (non-fatal):', err.message);
+    }
+    return null;
+}
+
 async function assess(email) {
     const res = await callGeminiJSON(buildPrompt(email), 2, AssessmentSchema);
     if (!res || typeof res.needs_reply === 'undefined') return null;
@@ -2458,6 +2528,13 @@ function buildDigest(matters, emailCount) {
         // buildChaseMessage; three lists of the same shape should not read
         // three different ways.
         lines.push(`${i + 1}. ${urgencyMark(f.urgency)} *${f.summary || f.subject}*${due}`);
+        // Two facts side by side, never one asserted over the other. The
+        // vendor says overdue; our own mailbox says paid. Both are true
+        // statements about who said what, and the useful reply is the proof.
+        if (f.paidEvidence) {
+            lines.push(`   ⚠ our mail of ${f.paidEvidence.at} says invoice ${f.paidEvidence.invoiceNo} was PAID`
+                + ` (${f.paidEvidence.from}: "${f.paidEvidence.subject}") — check before paying again.`);
+        }
         // THE LINE APSARA READ AS BACKWARDS: "Andy Park — wants: EDO #", when
         // Andy owed her that EDO. The word is now chosen by direction.
         // Three readings of the same slot, chosen by direction. "wants" was
@@ -2955,7 +3032,31 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         }
         if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem) {
             recordSenderEvent(store, from, 'flagged');
+            // ── ALREADY PAID? (2026-09-02) ──────────────────────────────
+            // Only for mail that reads as a payment demand and names an
+            // invoice, so the extra Gmail search is rare. See
+            // findPaymentEvidence for why the item is annotated rather than
+            // hidden: a vendor chasing money we already sent is real work,
+            // and the reply is the proof.
+            let paidEvidence = null;
+            try {
+                const demandText = `${a.summary || ''} ${subject || ''} ${visible || ''}`;
+                if (looksLikePaymentDemand(demandText)) {
+                    const invNo = invoiceNumberIn(demandText);
+                    if (invNo) {
+                        paidEvidence = await findPaymentEvidence(
+                            gmail, invNo, me, parseEmailDate(header(msg, 'Date')));
+                        if (paidEvidence) {
+                            console.log(`[REPLYWATCH] invoice ${invNo} looks ALREADY PAID — `
+                                + `${paidEvidence.from} on ${paidEvidence.at}: "${paidEvidence.subject}"`);
+                            paidEvidence.invoiceNo = invNo;
+                        }
+                    }
+                }
+            } catch (e) { /* never break the scan over an enrichment */ }
+
             flagged.push({
+                paidEvidence,
                 // replyTo honours the Reply-To header when present — see
                 // helpers/gmail.js's preferredReplyAddress for why From is
                 // often the wrong place to answer.
@@ -3428,7 +3529,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,

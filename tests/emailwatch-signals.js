@@ -2098,6 +2098,89 @@ section('AB4 — an ordinary action is untouched');
     ck('no qualifier, no interference', /which of the two/i.test(a.action_needed || ''), String(a.action_needed));
 }
 
+// ══ AC. already paid, still showing as pending ═════════════════════════════
+// LIVE: "AJ Transport Inc. requests payment of $1,200.00 for invoice 6403,
+// stating it is overdue." / "balance due: $1,200.00". It was paid.
+// Apsara: "ITS THERE IN BOSE EMAIL".
+//
+// My first answer was that Jarvis could not have known — payments.json is
+// keyed by load_id and nothing joins vendor invoice to payment. True, and
+// beside the point: the evidence was never in a database, it was in the
+// mailbox this watcher already reads.
+section('AC1 — spotting a payment demand and its invoice number');
+{
+    ck('an overdue demand is recognised',
+        rw.looksLikePaymentDemand('requests payment of $1,200.00 for invoice 6403, stating it is overdue') === true);
+    ck('so is "please remit"', rw.looksLikePaymentDemand('Please remit payment for Invoice #6403') === true);
+    ck('a Bill of Lading is not a payment demand',
+        rw.looksLikePaymentDemand('Rajkumar sends a draft Bill of Lading for review') === false);
+    ck('the invoice number comes out', rw.invoiceNumberIn('for invoice 6403, stating') === '6403');
+    ck('and out of "inv no" too', rw.invoiceNumberIn('balance due on inv no 6403') === '6403');
+    ck('no invoice, no number', rw.invoiceNumberIn('please pay the balance') === null);
+}
+
+section('AC2 — evidence must come from US, and must post-date the demand');
+{
+    const demand = 'Mon, 01 Sep 2026 10:00:00 -0700';
+    const mk = (from, date, subject, snippet) => ({ users: { messages: {
+        list: async () => ({ data: { messages: [{ id: 'm1' }] } }),
+        get: async () => ({ data: { snippet, payload: { headers: [
+            { name: 'From', value: from }, { name: 'Date', value: date },
+            { name: 'Subject', value: subject }] } } }),
+    } } });
+
+    const good = await rw.findPaymentEvidence(
+        mk('Edge Metals Bose <bose@edgemetals.com>', 'Tue, 02 Sep 2026 09:00:00 -0700',
+           'Payment sent - AJ Transport inv 6403', 'wire transfer completed'),
+        '6403', 'bose@edgemetals.com', demand);
+    ck('our own later mail saying "payment sent" IS evidence', !!good, JSON.stringify(good));
+
+    // THE TRAP: the vendor's own demand names the invoice too. Matching on
+    // the number alone would find the demand and call it proof of payment.
+    const theirs = await rw.findPaymentEvidence(
+        mk('AJ Transport <billing@ajtransport.com>', 'Tue, 02 Sep 2026 09:00:00 -0700',
+           'Invoice 6403 overdue', 'payment is overdue'),
+        '6403', 'bose@edgemetals.com', demand);
+    ck('the vendor chasing us is NOT evidence we paid', theirs === null, JSON.stringify(theirs));
+
+    // Older mail proves nothing — they are chasing us because of what
+    // came before.
+    const old = await rw.findPaymentEvidence(
+        mk('Edge Metals Bose <bose@edgemetals.com>', 'Fri, 01 Aug 2026 09:00:00 -0700',
+           'Payment sent inv 6403', 'wire transfer completed'),
+        '6403', 'bose@edgemetals.com', demand);
+    ck('mail OLDER than the demand is not evidence', old === null, JSON.stringify(old));
+
+    // And our own mail that says nothing about paying.
+    const chat = await rw.findPaymentEvidence(
+        mk('Edge Metals Bose <bose@edgemetals.com>', 'Tue, 02 Sep 2026 09:00:00 -0700',
+           'Re: invoice 6403', 'can you resend the copy'),
+        '6403', 'bose@edgemetals.com', demand);
+    ck('our mail with no payment language is not evidence', chat === null, JSON.stringify(chat));
+}
+
+section('AC3 — the digest shows both facts, and does NOT hide the item');
+{
+    // A vendor insisting on money we already sent is WORK — the reply is the
+    // proof. Suppressing it would trade a wrong nag for a silent dispute.
+    const msg = rw.buildDigest([{
+        fromName: 'AJ Transport', subject: 'inv 6403', needs_reply: true, waiting_on: 'her',
+        confidence: 1, urgency: 'high',
+        summary: 'AJ Transport requests payment of $1,200.00 for invoice 6403, stating it is overdue.',
+        paidEvidence: { at: '2026-08-28', invoiceNo: '6403', from: 'Edge Metals Bose',
+                        subject: 'Payment sent - AJ Transport inv 6403' },
+    }]);
+    ck('the item is still listed', /AJ Transport requests payment/.test(msg), msg.slice(0, 120));
+    ck('and carries the contradicting evidence', /was PAID/.test(msg) && /2026-08-28/.test(msg), msg);
+    ck('naming where it came from', /Edge Metals Bose/.test(msg), msg);
+    ck('with a warning before paying twice', /check before paying again/i.test(msg), msg);
+
+    const plain = rw.buildDigest([{
+        fromName: 'Zimex', subject: 's', needs_reply: true, waiting_on: 'her',
+        confidence: 1, urgency: 'normal', summary: 'Zimex needs the HBL confirmed.' }]);
+    ck('an item with no evidence gets no extra line', !/was PAID/.test(plain), plain.slice(0, 120));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
