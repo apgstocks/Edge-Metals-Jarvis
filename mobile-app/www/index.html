@@ -1002,9 +1002,43 @@ function stopCamera() {}
 // Custom descriptions typed via "Others…" on a previous load — mirrors
 // dashboard/index.html, see its comment (Apsara 2026-08-15).
 let customItemTypes = [];
+// ── a failed refresh must NOT empty the catalogue ─────────────────────────
+// Bose, 2026-09-02: "sometimes newly added items not coming."
+//
+// THE BUG. This used to be `catch { customItemTypes = []; }`. One failed GET
+// — a dropped bar of signal in the yard, the phone waking from sleep, the
+// server restarting mid-deploy — and the description catalogue was WIPED for
+// that whole modal session. Silently: no error, no retry, just an empty
+// type-ahead where a full one had been a minute earlier.
+//
+// The old comment claimed the dropdown "falls back to the base list". It does
+// not. itemDescOptions() returns customItemTypes.slice() and nothing else —
+// the base presets were folded into the server list back on 2026-08-20, so
+// emptying this array empties the dropdown outright. The comment described
+// behaviour that had stopped existing.
+//
+// "Sometimes" is the tell of a network-dependent failure, and this is the
+// only place the list can vanish.
+//
+// NOW: keep whatever was last loaded. A stale list can only ever cost a
+// suggestion that is slightly out of date — descriptions are free text, so
+// nothing is blocked by an entry being missing or lingering. An EMPTY list
+// costs the operator the entire catalogue, which is the actual complaint.
+let itemTypesStale = false;
 async function refreshCustomItemTypes() {
-  try { customItemTypes = await api('/api/item-types'); }
-  catch (err) { customItemTypes = []; }
+  try {
+    const next = await api('/api/item-types');
+    // Only replace on a well-formed answer. A 200 carrying something that is
+    // not an array (a proxy's HTML error page, say) must not become the
+    // catalogue either.
+    if (Array.isArray(next)) { customItemTypes = next; itemTypesStale = false; }
+    else { itemTypesStale = true; }
+  } catch (err) {
+    // Keep the previous list. Flagged so the UI can say the list may be out
+    // of date rather than quietly lying about what is in it.
+    itemTypesStale = true;
+    console.warn('[items] could not refresh the description list — keeping the last known ' + customItemTypes.length + ' entries:', err && err.message);
+  }
 }
 // Sorted A-Z, per Apsara 2026-08-19 ("rearrange the description list based
 // on asc"). Previously the built-in options came out in hand-written order
@@ -3786,10 +3820,28 @@ function wireLoadsEvents() {
       const knownDescs = itemDescOptions().map(d => d.toLowerCase());
       const newDescs = [...new Set(items.map(it => it.description).filter(Boolean))]
         .filter(d => !knownDescs.includes(d.toLowerCase()));
+      // Registered with the server, and added LOCALLY FIRST — Bose,
+      // 2026-09-02: "sometimes newly added items not coming."
+      //
+      // It used to push onto customItemTypes only inside .then(), so if the
+      // POST failed the description was never offered again, and the failure
+      // was swallowed whole by .catch(() => {}). Two silent ways to lose it.
+      //
+      // Pushing first means the description is available for the rest of this
+      // session no matter what the network does; the POST is what makes it
+      // survive to the next one. One retry, because this fires at the same
+      // moment as the load save and the two compete for a thin yard
+      // connection — a single transient failure should not cost the entry.
+      //
+      // STILL fire-and-forget on the load itself: the load is already saved
+      // and must never fail because a catalogue entry did not stick. But it
+      // now LOGS rather than swallowing, so "it's not remembering my item
+      // names" is diagnosable from the console instead of invisible.
       newDescs.forEach(d => {
-        api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: d }) })
-          .then(() => { customItemTypes.push(d); })
-          .catch(() => {});
+        if (!itemDescOptions().some(x => String(x).toLowerCase() === d.toLowerCase())) customItemTypes.push(d);
+        const post = () => api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: d }) });
+        post().catch(() => new Promise(r => setTimeout(r, 1200)).then(post))
+          .catch((err) => console.warn('[items] could not save the new description ' + JSON.stringify(d) + ' to the catalogue — it will work this session but may not be offered next time:', err && err.message));
       });
       const payload = {
         date: $('ld_date').value || null,
