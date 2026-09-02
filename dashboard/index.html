@@ -113,6 +113,29 @@ input::placeholder { color:var(--steel-500); }
    should get matched and show all possible matches"). */
 .ac-dropdown { position:absolute; top:100%; left:0; right:0; z-index:50; margin-top:4px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); max-height:260px; overflow-y:auto; box-shadow:0 6px 16px rgba(0,0,0,.22); }
 .ac-dropdown.hidden { display:none; }
+#draftBar { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px;
+  background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400);
+  border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12px; color:var(--text-muted); }
+#draftBar.hidden { display:none; }
+/* Draft status — per Apsara 2026-08-28 ("how do i know that it is getting
+   autosaved?"). A silent autosave is indistinguishable from no autosave, so
+   it has to say so. Muted rather than loud: this is a reassurance, not an
+   alert, and it is on screen the whole time a load is being typed. */
+#draftStatus { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; align-items:center; gap:6px; }
+#draftStatus .dot { width:6px; height:6px; border-radius:50%; background:var(--status-good, #4ade80); flex:none; }
+#draftStatus.saving .dot { background:var(--copper-400); }
+#draftStatus.idle { color:var(--text-faint); }
+/* Floating variant — per Apsara 2026-08-28 ("the item list is going down,
+   when i scroll down only i can see. i dont like this behaviour").
+   .modal-body is max-height:62vh with overflow-y:auto, so an absolutely
+   positioned dropdown inside it is CLIPPED by that scroll box: the
+   suggestions were being drawn below the fold of the modal's own scroll
+   area, and the only way to see them was to scroll the form. position:fixed
+   takes the menu out of that container entirely so it floats over the modal,
+   which is what a suggestion list is supposed to do. Coordinates are set in
+   JS from the input's own rect (see positionAcMenu) because fixed elements
+   cannot inherit them from a parent. */
+.ac-dropdown.ac-floating { position:fixed; top:auto; left:auto; right:auto; margin-top:0; z-index:120; }
 .ac-item { padding:9px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--border-subtle); white-space:pre-line; }
 .ac-item:last-child { border-bottom:none; }
 .ac-item:hover { background:var(--surface-sunken); }
@@ -417,7 +440,6 @@ function wireUsDateField(id) {
   });
 }
 
-
 // ══════════════════════════════════════════════════════════════════════════
 // Jarvis dashboard — plain HTML/vanilla JS, no build step, no framework.
 // Rebuilt twice this pass: (1) to match the "Jarvis Ops" visual mockup, then
@@ -452,9 +474,23 @@ function fmtRate(n) {
   const d = s.includes('.') ? s.split('.')[1].length : 0;
   return d >= 2 ? s : Number(n).toFixed(2);
 }
+// Per Apsara 2026-08-29: "for amount in app/website, always use $ before."
+//
+// The $ lives HERE rather than at each call site, because it was already at
+// SOME call sites and not others — five places prefixed it by hand and the
+// rest did not, which is exactly how a screen ends up showing "8,822.00" next
+// to "$8,822.00" for the same kind of figure. One function owns it now and
+// the manual prefixes are gone.
+//
+// Still returns EMPTY for a null/blank amount, deliberately: a bare "$" in an
+// empty cell reads as zero dollars when it actually means "no price yet".
+//
+// Safe for the one place that reads a formatted amount back
+// (updateItemTotals) because that already strips non-numeric characters
+// before parsing — checked, not assumed.
 function fmtAmount(n) {
   if (n === null || n === undefined || n === '' || !isFinite(Number(n))) return '';
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Mirrors helpers/loads.js's normalizeSellerPhone / mobile-app/www/index.html's
@@ -566,11 +602,71 @@ const NAV_ITEMS = [
   { id: 'settings',  label: 'Settings', group: 'System', adminOnly: true },
 ];
 
+// Accepts whatever an endpoint hands back and guarantees an array.
+// Exists because `x || []` does NOT protect a .map call: an object is
+// truthy, so a { loads: [...] } response sailed past the guard and threw
+// "sales.map is not a function", blanking the entire Loads list the moment
+// a sale existed. Shape mismatches between a client and an endpoint are a
+// recurring class of bug here, and they should degrade to an empty list
+// rather than to a blank screen.
+function asArray(x) {
+  if (Array.isArray(x)) return x;
+  if (x && Array.isArray(x.loads)) return x.loads;
+  return [];
+}
+
+// Pins an autocomplete menu directly under its input, in viewport
+// coordinates, so it floats ABOVE the modal instead of being clipped inside
+// the modal's scroll box. Flips above the input when there isn't room below,
+// so a row near the bottom of the form still shows its suggestions on screen
+// rather than off it — the whole complaint was having to scroll to see them.
+function positionAcMenu(input, menu) {
+  const r = input.getBoundingClientRect();
+  menu.classList.add('ac-floating');
+  menu.style.width = r.width + 'px';
+  menu.style.left = r.left + 'px';
+  // Measure only after width is applied, or the height is wrong for a list
+  // that wraps differently at its real width.
+  const spaceBelow = window.innerHeight - r.bottom - 8;
+  const spaceAbove = r.top - 8;
+  const h = Math.min(menu.scrollHeight, 260);
+  if (spaceBelow < h && spaceAbove > spaceBelow) {
+    menu.style.top = Math.max(8, r.top - Math.min(h, spaceAbove) - 4) + 'px';
+    menu.style.maxHeight = Math.min(260, spaceAbove) + 'px';
+  } else {
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.maxHeight = Math.min(260, Math.max(120, spaceBelow)) + 'px';
+  }
+}
+
+// A fixed menu does not travel with its input, so it has to be re-pinned
+// while the form scrolls behind it. Capture phase catches scrolling inside
+// .modal-body, which does not bubble.
+function trackAcMenu(input, menu) {
+  const reposition = () => {
+    if (menu.classList.contains('hidden')) return;
+    if (!document.body.contains(input)) return;
+    positionAcMenu(input, menu);
+  };
+  window.addEventListener('scroll', reposition, true);
+  window.addEventListener('resize', reposition);
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  if (!res.ok) {
+    // Carry the server's structured fields onto the Error. Endpoints now
+    // return a machine-readable `reason` (and sometimes `currentHead`) so a
+    // caller can offer a real choice; flattening everything to a message
+    // string threw that away and left only "request failed (409)".
+    const e = new Error(data.error || `request failed (${res.status})`);
+    e.status = res.status;
+    if (data.reason) e.reason = data.reason;
+    if (data.currentHead) e.currentHead = data.currentHead;
+    throw e;
+  }
   return data;
 }
 
@@ -637,8 +733,31 @@ async function loadTab(tab) {
     if (tab === 'settings') return renderSettings(await api('/api/settings'));
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
-    if (tab === 'facts') return renderFacts(await api('/api/facts'));
-    if (tab === 'loads') return renderLoads(await api('/api/loads'));
+    if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
+    if (tab === 'loads') {
+      // Purchases and sales in one deck — a sale she can't see is a sale she
+      // can't delete, and deletion is what rolls inventory back. _kind tells
+      // the card, the edit handler and the delete handler which store the
+      // record lives in. Mirrors the app exactly.
+      const [inbound, sales, drafts] = await Promise.all([
+        api('/api/loads'),
+        api('/api/outbound-loads').catch(() => []),
+        // Unfinished loads, so "edited later" means from anywhere rather than
+        // only from the tab they were started in. Fetched alongside rather
+        // than merged INTO the deck: a draft is not a load, must not appear in
+        // any total, and gets its own strip above the list.
+        api('/api/load-drafts').catch(() => []),
+      ]);
+      pendingDrafts = asArray(drafts);
+      return renderLoads([
+        ...asArray(inbound).map(l => ({ ...l, _kind: 'purchase' })),
+        // asArray: the endpoint returns a bare array, but a non-array here
+        // must never blank the whole Loads list again. `|| []` did not
+        // protect this — an OBJECT is truthy, so it passed the guard and
+        // then died on .map.
+        ...asArray(sales).map(l => ({ ...l, _kind: 'sale', seller: l.buyer, seller_address: l.buyer_address })),
+      ].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))));
+    }
     // Deliberately NOT fetched anywhere during boot/init — loadTab() only
     // runs this when the Inventory nav button is actually clicked, same
     // lazy-per-tab pattern every tab above already uses. That's what
@@ -673,10 +792,13 @@ const INV_SUBTABS = [
 let invFrom = '', invTo = '', invSubTab = 'byType';
 
 function invByTypeHtml(data) {
+  // See mobInvByTypeHtml in the app for why On hand is absent under a date
+  // filter — same rule, same reason, both clients.
   return data.byType.length ? `
+    ${data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net</th><th style="padding:8px 6px;">Amount</th>
+        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${data.onHandAvailable ? '<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">On hand</th>' : ''}<th style="padding:8px 6px;">Amount</th>
       </tr></thead>
       <tbody>
         ${data.byType.map(g => `<tr style="border-bottom:1px solid var(--border-subtle);">
@@ -685,7 +807,9 @@ function invByTypeHtml(data) {
           <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
-          <td style="padding:8px 6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+          ${data.onHandAvailable ? `<td style="padding:8px 6px; color:var(--text-muted);">${g.shipped || 0} ${esc(data.unit)}</td>
+          <td style="padding:8px 6px; font-weight:700; color:${g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${g.onHand} ${esc(data.unit)}${g.onHand < 0 ? ' ⚠' : ''}</td>` : ''}
+          <td style="padding:8px 6px;">${g.amount != null ? fmtAmount(g.amount) : '—'}</td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -715,7 +839,7 @@ function invBySellerHtml(data) {
     <details class="card" style="margin-bottom:8px; padding:0;">
       <summary style="cursor:pointer; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:13px; list-style:none;">
         <span style="font-weight:600;">${esc(s.seller)}</span>
-        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? '$' + s.amount : '—'}</span>
+        <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${s.loadCount} load${s.loadCount === 1 ? '' : 's'} · ${s.net} ${esc(data.unit)} · ${s.amount != null ? fmtAmount(s.amount) : '—'}</span>
       </summary>
       <div style="padding:0 16px 14px;">
         ${s.byType.length ? `
@@ -728,11 +852,28 @@ function invBySellerHtml(data) {
                 <td style="padding:6px;">${esc(g.description)}</td>
                 <td style="padding:6px;">${g.count}</td>
                 <td style="padding:6px;">${g.net} ${esc(data.unit)}</td>
-                <td style="padding:6px;">${g.amount != null ? '$' + g.amount : '—'}</td>
+                <td style="padding:6px;">${g.amount != null ? fmtAmount(g.amount) : '—'}</td>
               </tr>`).join('')}
             </tbody>
           </table>
         ` : ''}
+        <!-- The loads behind those totals, per Apsara 2026-08-24: "when i
+             click it, it should open my load ticket". A seller row was a dead
+             end before — it told you Ramesh brought 7,110 lb and gave you no
+             way to reach the tickets that made it up. -->
+        ${(s.loads || []).length ? `
+          <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--border-subtle);">
+            <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:6px;">Load tickets</div>
+            ${s.loads.map(l => l.pdf_link
+              ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; text-decoration:none; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--accent);">${esc(l.id)} →</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''}</span>
+                 </a>`
+              : `<div style="display:flex; justify-content:space-between; padding:7px 0; font-size:12.5px; border-bottom:1px solid var(--border-subtle);">
+                   <span style="color:var(--text-muted);">${esc(l.id)}</span>
+                   <span style="color:var(--text-faint); font-family:var(--font-mono);">${esc(l.date || '')}${l.amount != null ? ' · ' + fmtAmount(l.amount) : ''} · no PDF yet</span>
+                 </div>`).join('')}
+          </div>` : ''}
       </div>
     </details>
   `).join('') : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No sellers in this range.</div>`;
@@ -2553,6 +2694,10 @@ function renderTasks(data) {
 // plain file upload fallback (works over plain http:// too, and covers phones
 // where the user would rather pick an existing photo).
 let loadsCache = [];
+// Unfinished loads shown above the deck. Held separately from loadsCache on
+// purpose — every total, filter and export in this tab reads loadsCache, and
+// a draft must not reach any of them.
+let pendingDrafts = [];
 // Gross/tare/net/price/unit/amount live PER ITEM now (moved off the load
 // level — a load can be several items each weighed separately), so each
 // entry here also carries grossPhoto/tarePhoto ({ base64, mime } | null)
@@ -2562,6 +2707,244 @@ let currentLoadItems = [];
 // editing an existing one (see openEditLoadModal) — Save then PUTs instead of
 // POSTing, and resetLoadModal() clears it back to null on close/new.
 let editingLoadId = null;
+// The load-level description input was removed from the form on 2026-08-28,
+// but the FIELD still exists on records saved before that. Held here so
+// editing an old load preserves its description instead of silently blanking
+// it on save — removing a box from a form must not delete data it can no
+// longer show.
+let editingLoadDescription = '';
+
+// ── Draft autosave — per Apsara 2026-08-28 ────────────────────────────────
+// "as soon as i type 2 item details, it should get autosaved", clarified as a
+// draft to come back to rather than a real load record.
+//
+// Deliberately LOCAL and invisible. No load number is assigned, nothing
+// appears in the Loads list, nothing lands in a report, and nobody else sees
+// it. A half-finished load that becomes a real record the moment a second
+// item is typed would show up in the day's figures and in the yard report,
+// which is a worse problem than the one this solves.
+//
+// Only starts once TWO item rows carry real data, which is the point at which
+// enough has been typed to be worth losing.
+// Drafts live on the SERVER (data/load_drafts.json, see helpers/loadDrafts.js).
+//
+// They were in localStorage first, which answered "don't lose my typing" but
+// not what was actually asked: a draft you can come back to has to survive a
+// closed tab, a flat phone, and being picked up on a different device.
+// Browser storage cannot do any of that.
+//
+// Photos ride along. A draft that keeps the descriptions but loses the weight
+// photos has lost the expensive half — re-typing a description takes seconds,
+// re-weighing a truck does not.
+const DRAFT_DEBOUNCE_MS = 900;
+let draftTimer = null;
+let currentDraftId = null;     // round-trips so autosave updates ONE record
+let draftSaveInFlight = false;
+
+// An item counts once it has a description or any weight — an untouched blank
+// row must not make the form look like work in progress. Mirrors
+// isWorthSaving() in helpers/loadDrafts.js; the server has the final say.
+function itemHasContent(it) {
+  if (!it) return false;
+  return !!(String(it.description || '').trim()
+    || Number(it.gross_weight) || Number(it.tare_weight) || Number(it.net_weight));
+}
+
+// Says on screen what the draft is doing. A silent autosave is
+// indistinguishable from a broken one.
+function setDraftStatus(state, detail) {
+  const el = $('draftStatus');
+  if (!el) return;
+  el.className = state === 'saving' ? 'saving' : (state === 'saved' ? '' : 'idle');
+  if (state === 'saved') {
+    el.innerHTML = `<span class="dot"></span><span>Draft saved ${detail}</span>`;
+  } else if (state === 'saving') {
+    el.innerHTML = '<span class="dot"></span><span>Saving draft…</span>';
+  } else if (state === 'waiting') {
+    el.innerHTML = '<span>Autosaves as soon as you enter an item</span>';
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function currentDraftPayload() {
+  syncItemsFromDom();
+  return {
+    id: currentDraftId,
+    kind: (typeof loadModalMode !== 'undefined' && loadModalMode === 'sale') ? 'sale' : 'purchase',
+    date: $('ld_date') ? toIsoDate($('ld_date').value) : '',
+    seller: $('ld_seller') ? $('ld_seller').value : '',
+    seller_address: $('ld_seller_address') ? $('ld_seller_address').value : '',
+    seller_phone: $('ld_seller_phone') ? $('ld_seller_phone').value : '',
+    description: editingLoadDescription || '',
+    items: (currentLoadItems || []).filter(itemHasContent),
+  };
+}
+
+async function saveLoadDraft() {
+  // Drafts are only for NEW loads. An edit already has a saved record behind
+  // it, and a stale draft restored over one is a way to silently revert a
+  // correction someone else made.
+  if (editingLoadId) { setDraftStatus('none'); return; }
+  const payload = currentDraftPayload();
+  if (payload.items.length < 2) { setDraftStatus('waiting'); return; }
+  if (draftSaveInFlight) { queueLoadDraftSave(); return; }  // coalesce, never overlap
+  draftSaveInFlight = true;
+  try {
+    const r = await api('/api/load-drafts', { method: 'POST', body: JSON.stringify(payload) });
+    if (r && r.saved && r.id) {
+      currentDraftId = r.id;
+      setDraftStatus('saved', new Date(r.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } else {
+      currentDraftId = null;
+      setDraftStatus('waiting');
+    }
+  } catch (e) {
+    // Never blocks the form, and never claims a save it did not get. If the
+    // safety net is not there, the person relying on it needs to know.
+    const el = $('draftStatus');
+    if (el) { el.className = 'idle'; el.innerHTML = '<span style="color:var(--status-danger);">Draft not saved — check connection</span>'; }
+  } finally {
+    draftSaveInFlight = false;
+  }
+}
+
+function queueLoadDraftSave() {
+  if (draftTimer) clearTimeout(draftTimer);
+  if (!editingLoadId) {
+    // ONE item is enough — per Apsara, and matching isWorthSaving() in
+    // helpers/loadDrafts.js. The two must agree or the badge says "Saving…"
+    // for something the server then refuses to save, which is worse than no
+    // badge at all.
+    const filled = (currentLoadItems || []).filter(itemHasContent).length;
+    if (filled >= 1) setDraftStatus('saving');
+  }
+  draftTimer = setTimeout(saveLoadDraft, DRAFT_DEBOUNCE_MS);
+}
+
+// Called after a real load is saved. DELETES the draft rather than converting
+// it — a record that is both a draft and a load at the same moment is exactly
+// the ambiguity the separate store exists to prevent.
+async function clearLoadDraft() {
+  if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+  const id = currentDraftId;
+  currentDraftId = null;
+  setDraftStatus('none');
+  if (!id) return;
+  try { await api(`/api/load-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
+}
+
+// Repaints the Unfinished strip from the server.
+//
+// THE BUG THIS FIXES (Apsara 2026-08-29: "it is showing that autosaved but
+// nowhere the draft is showing in app"): autosaving writes the draft and the
+// footer correctly says so, but nothing told the Loads screen behind the
+// modal. The strip was rendered when the tab loaded — before the draft
+// existed — so it stayed empty until you navigated away and back. The draft
+// was never lost; it was just invisible, which for a safety net is nearly as
+// bad.
+//
+// Repaints ONLY the strip rather than reloading the whole tab: a full reload
+// would refetch every load and throw away scroll position for a change that
+// affects one row of the page.
+async function refreshDraftStrip() {
+  const el = document.getElementById('draftStrip');
+  if (!el) return;
+  pendingDrafts = await fetchLoadDrafts();
+  el.innerHTML = draftStripHtml();
+}
+
+async function fetchLoadDrafts() {
+  try { return asArray(await api('/api/load-drafts')); } catch (e) { return []; }
+}
+
+// Fills the form from a draft and ADOPTS its id, so continuing to type keeps
+// updating the same record instead of spawning a second one.
+function applyLoadDraft(d) {
+  if (!d) return;
+  currentDraftId = d.id;
+  if ($('ld_date') && d.date) $('ld_date').value = toUsDate(d.date);
+  if ($('ld_seller')) $('ld_seller').value = d.seller || '';
+  if ($('ld_seller_address')) $('ld_seller_address').value = d.seller_address || '';
+  if ($('ld_seller_phone')) $('ld_seller_phone').value = d.seller_phone || '';
+  editingLoadDescription = d.description || '';
+  currentLoadItems = Array.isArray(d.items) && d.items.length ? d.items.slice() : [blankLoadItem()];
+  renderItemRows();
+  const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
+  setDraftStatus('saved', new Date(d.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+}
+
+// Offered on a blank form, never applied on its own — silently replacing what
+// is on screen with something typed hours ago turns a safety net into a
+// hazard.
+async function offerLoadDraft() {
+  const bar = $('draftBar');
+  if (!bar) return;
+  bar.classList.add('hidden');
+  if (editingLoadId) return;
+  const drafts = await fetchLoadDrafts();
+  if (!drafts.length) return;
+  const d = drafts[0];   // server returns newest first
+  const mins = Math.round((Date.now() - new Date(d.updated_at).getTime()) / 60000);
+  const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago`
+    : new Date(d.updated_at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+  const more = drafts.length > 1 ? ` (${drafts.length - 1} more below)` : '';
+  $('draftBarText').textContent = `Unfinished load from ${ago} — ${(d.items || []).length} items${d.seller ? `, ${d.seller}` : ''}.${more}`;
+  bar.dataset.draftId = d.id;
+  bar.classList.remove('hidden');
+}
+
+// The strip above the Loads deck. This is what "can be edited later" means in
+// practice — an unfinished load is visible from the list, not only from the
+// moment you happen to open a blank form.
+function draftStripHtml() {
+  if (!pendingDrafts.length) return '';
+  const card = (d) => {
+    const items = Array.isArray(d.items) ? d.items : [];
+    const names = items.map(i => String(i.description || '').trim()).filter(Boolean);
+    const when = d.updated_at ? new Date(d.updated_at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
+    return `
+      <div class="draft-card">
+        <div class="d-main">
+          <div class="d-title">${esc(d.seller || 'Unnamed load')}${d.kind === 'sale' ? ' — sale' : ''}</div>
+          <div class="d-sub">${items.length} item${items.length === 1 ? '' : 's'}${names.length ? ' · ' + esc(names.slice(0, 3).join(', ')) : ''} · last edited ${esc(when)}</div>
+        </div>
+        <button class="btn btn-resume-draft" data-id="${esc(d.id)}" style="padding:7px 14px; font-size:12px;">Continue</button>
+        <button class="btn btn-drop-draft" data-id="${esc(d.id)}" style="padding:7px 12px; font-size:12px;">Delete</button>
+      </div>`;
+  };
+  return `<div class="draft-strip">
+      <div class="draft-strip-head">Unfinished — not saved as loads yet (${pendingDrafts.length})</div>
+      ${pendingDrafts.map(card).join('')}
+    </div>`;
+}
+
+// Reopens a draft in the load modal. Adopts its id, so finishing it updates
+// the same draft and then deletes it on save rather than leaving a twin.
+async function resumeDraft(id) {
+  const d = pendingDrafts.find(x => x.id === id) || (await fetchLoadDrafts()).find(x => x.id === id);
+  if (!d) return;
+  resetLoadModal(d.kind === 'sale' ? 'sale' : 'purchase');
+  $('loadModal').classList.remove('hidden');
+  applyLoadDraft(d);
+}
+
+async function restoreLoadDraft() {
+  const bar = $('draftBar');
+  const id = bar && bar.dataset.draftId;
+  const drafts = await fetchLoadDrafts();
+  applyLoadDraft(drafts.find((x) => x.id === id) || drafts[0]);
+}
+
+// Discards from the bar: removes the RECORD, not just the notice.
+async function discardOfferedDraft() {
+  const bar = $('draftBar');
+  const id = bar && bar.dataset.draftId;
+  if (bar) bar.classList.add('hidden');
+  if (!id) return;
+  try { await api(`/api/load-drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch (e) {}
+  if (currentDraftId === id) { currentDraftId = null; setDraftStatus('waiting'); }
+}
 
 // No-op kept so loadTab()'s unconditional cleanup call has something to call —
 // the getUserMedia camera overlay was removed (see the "Add photo" button's
@@ -2649,6 +3032,48 @@ function recomputeRowTotals(row) {
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);
+  // Totals refresh here rather than at each call site. recomputeRowTotals is
+  // called from typing, from a scanner read filling a weight in, and from a
+  // photo-derived weight — putting it at the source means a new caller cannot
+  // forget it and leave a stale total sitting under the rows.
+  updateItemTotals();
+}
+
+// Sums every item row and paints the totals line. Called after any edit, and
+// after add/remove/insert, so the figure at the bottom is never one keystroke
+// out of date.
+//
+// Reads the DOM rather than currentLoadItems on purpose: the inputs are the
+// live truth while someone is typing, and currentLoadItems only catches up on
+// the next syncItemsFromDom(). Summing the model would show a total one
+// character behind, which on a weight is worse than showing none.
+function updateItemTotals() {
+  const el = document.getElementById('ld_item_totals');
+  if (!el) return;
+  const rows = document.querySelectorAll('#ld_items .item-row');
+  let g = 0, t = 0, n = 0, amt = 0, any = false;
+  rows.forEach((row) => {
+    const gv = parseFloat(row.querySelector('.ld-item-gross')?.value);
+    const tv = parseFloat(row.querySelector('.ld-item-tare')?.value);
+    const nv = parseFloat(row.querySelector('.ld-item-net')?.value);
+    // Amount is a formatted string (fmtAmount), so strip anything that is
+    // not part of a number before adding it up.
+    const av = parseFloat(String(row.querySelector('.ld-item-amount')?.value || '').replace(/[^0-9.\-]/g, ''));
+    if (isFinite(gv)) { g += gv; any = true; }
+    if (isFinite(tv)) { t += tv; any = true; }
+    if (isFinite(nv)) { n += nv; any = true; }
+    if (isFinite(av)) { amt += av; }
+  });
+  if (!any) { el.innerHTML = ''; return; }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  el.innerHTML = `
+    <span class="tl-label">Total (${rows.length} item${rows.length === 1 ? '' : 's'})</span>
+    <span class="tl-num" data-label="Gross">${r2(g).toLocaleString()}</span>
+    <span class="tl-num" data-label="Tare">${r2(t).toLocaleString()}</span>
+    <span class="tl-num tl-strong" data-label="Net">${r2(n).toLocaleString()}</span>
+    <span></span>
+    <span class="tl-num tl-strong" data-label="Amount">${amt ? fmtAmount(r2(amt)) : ''}</span>
+    <span></span>`;
 }
 
 function renderItemRows() {
@@ -2727,7 +3152,14 @@ function renderItemRows() {
     <div class="ld-item-header">
       <span>Description</span><span>Gross</span><span>Tare</span><span>Net</span><span>Price</span><span>Amount</span><span></span>
     </div>
-    ${rowsHtml}`;
+    ${rowsHtml}
+    <!-- Running totals, per Apsara 2026-08-28. Shares .item-row's grid so
+         each figure sits directly under the column it sums, which is the
+         only way a total is checkable at a glance against the scale
+         tickets. Rendered here rather than as a fake item row so it can
+         never be picked up by syncItemsFromDom(). -->
+    <div class="ld-item-totals" id="ld_item_totals"></div>`;
+  updateItemTotals();
 
   box.querySelectorAll('.item-row').forEach(row => {
     row.querySelectorAll('input:not([type=file])').forEach(inp => inp.addEventListener('input', () => {
@@ -2788,6 +3220,9 @@ function renderItemRows() {
       if (!matches.length || (matches.length === 1 && String(matches[0]).toLowerCase() === q)) return close();
       menu.innerHTML = matches.map(o => `<div class="ac-item" data-val="${esc(o)}">${esc(o)}</div>`).join('');
       menu.classList.remove('hidden');
+      // Float it over the modal rather than inside its scroll box, so the
+      // list is visible the moment it opens instead of below the fold.
+      positionAcMenu(input, menu);
       menu.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', (ev) => {
         // mousedown, not click: blur fires first on a click and would close
         // the menu before the click ever landed. preventDefault keeps focus
@@ -2802,6 +3237,7 @@ function renderItemRows() {
 
     input.addEventListener('focus', openMatches);
     input.addEventListener('input', openMatches);
+    trackAcMenu(input, menu);
     input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') { close(); return; }
       // Enter accepts the only remaining match — the common case after
@@ -3092,20 +3528,69 @@ function todayLocalDateStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function resetLoadModal() {
+// ── Purchase vs sale ──────────────────────────────────────────────────────
+// Apsara, 2026-08-24: "next to create invoice, i want another button as sales
+// replicating the same template — only change is: i want buyer and buyer
+// address instead of seller. on save, inventory to be updated. on deletion,
+// inventory roll back."
+//
+// ONE modal, two modes. Deliberately not a second copy of the form: the item
+// rows carry the scale scanner, per-item photos, the description type-ahead,
+// last-price fill and the totals maths, and a duplicate would have started
+// identical and drifted within a week — this file has already been through
+// that with the two clients.
+//
+// What actually differs is small and lives in applyLoadModalMode(): which
+// party is editable, what the fields are called, and where the save goes.
+//
+// Inventory movement needs no special handling either way. A purchase writes
+// an inbound load and a sale writes an outbound one, and getInventoryReport
+// nets the two by item type — so a sale reduces on-hand on save and deleting
+// it puts the material back, with no rollback code anywhere. That is exactly
+// why sales are stored as outbound loads rather than as negative purchases.
+let loadModalMode = 'purchase'; // 'purchase' | 'sale'
+
+function applyLoadModalMode(mode) {
+  loadModalMode = mode === 'sale' ? 'sale' : 'purchase';
+  const sale = loadModalMode === 'sale';
+  const t = sale ? 'Record sale' : 'Create invoice';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : t;
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = editingLoadId ? 'Save changes' : t;
+  // The counterparty swaps sides: on a purchase Edge Trading is the buyer and
+  // the seller is typed; on a sale Edge Trading is the seller and the buyer is
+  // typed. Same two inputs, relabelled, so every downstream handler keeps
+  // working on the same element ids.
+  if ($('ld_party_label')) $('ld_party_label').textContent = sale ? 'Buyer' : 'Seller';
+  if ($('ld_party_addr_label')) $('ld_party_addr_label').textContent = sale ? 'Buyer address' : 'Seller address';
+  if ($('ld_seller')) $('ld_seller').placeholder = sale ? 'Buyer name' : 'Seller name';
+  // Phone is a purchase-side convenience (the "send ticket to seller" button)
+  // and has no meaning on a sale — hidden rather than left to collect a
+  // number nothing will ever use.
+  const phoneWrap = $('ld_seller_phone') && $('ld_seller_phone').closest('.field');
+  if (phoneWrap) phoneWrap.style.display = sale ? 'none' : '';
+  // Phone now shares a row with the address, so hiding it on a sale would
+  // leave the address in a half-width column with a gap beside it. Collapse
+  // the row to one column so the address simply takes the space.
+  const row2 = $('ld_party_row2');
+  if (row2) row2.style.gridTemplateColumns = sale ? '1fr' : '';
+}
+
+function resetLoadModal(mode) {
   editingLoadId = null;
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  editingLoadDescription = '';
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
   // always "today." Still fully editable for a load being entered late.
   if ($('ld_date')) { $('ld_date').value = toUsDate(todayLocalDateStr()); wireUsDateField('ld_date'); }
-  if ($('ld_buyer')) $('ld_buyer').value = BUYER_FIXED_NAME;
   $('loadModalErr').textContent = '';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = 'Create invoice';
-  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Create invoice';
+  applyLoadModalMode(mode);
   renderItemRows();
   stopCamera();
+  // A new blank form is exactly where an unfinished one is worth offering.
+  offerLoadDraft();
+  setDraftStatus(editingLoadId ? 'none' : 'waiting');
   refreshAddressBookCache();
   // Re-render after the fetch lands so any description typed via "Others…"
   // on a previous load shows up as a real option, not just the base list —
@@ -3141,13 +3626,15 @@ function openEditLoadModal(load) {
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,
   }));
   if ($('ld_date'))            $('ld_date').value            = toUsDate(load.date) || '';
-  if ($('ld_buyer'))           $('ld_buyer').value           = BUYER_FIXED_NAME;
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
+  editingLoadDescription = load.description || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
   $('loadModalErr').textContent = '';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = `Edit load — ${load.id}`;
+  // Set AFTER editingLoadId is assigned — applyLoadModalMode runs before this
+  // while it is still null, so its title is the create-mode one.
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = `${loadModalMode === 'sale' ? 'Edit sale' : 'Edit load'} — ${load.id}`;
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = 'Save changes';
   renderItemRows();
   stopCamera();
@@ -3166,7 +3653,9 @@ function loadCardHtml(l) {
           <div style="font-size:14px; font-weight:700; color:var(--text-strong);">${esc(l.seller || 'Unnamed seller')}</div>
           <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:2px;">${esc(fmtDate(l.date, '—'))} · ${esc(l.id)}</div>
         </div>
-        <span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>
+        ${l._kind === 'sale'
+          ? `<span class="badge" style="background:var(--status-warning, #d69e2e); color:#fff; white-space:nowrap;">SALE</span>`
+          : `<span class="badge" style="background:${l.status === 'pdf_generated' ? 'var(--accent)' : 'var(--steel-100)'}; color:${l.status === 'pdf_generated' ? '#fff' : 'var(--steel-700)'}; white-space:nowrap;">${l.status === 'pdf_generated' ? 'PDF ready' : 'Open'}</span>`}
       </div>
       ${(l.warnings && l.warnings.length) ? `
       <!-- Warning banner — per Apsara 2026-08-20. Photo/PDF/Drive failures
@@ -3193,24 +3682,31 @@ function loadCardHtml(l) {
         <span style="font-weight:700; color:var(--text-strong);">Net weight: ${l.net_weight ?? '—'} ${esc(l.weight_unit || '')}</span>
         <!-- Amount — per Apsara 2026-09-01 ("add invoice amount in grid box
              in addition to gross,tare,net"). Same server-computed total the
-             ticket uses (l.amount, summed from priced items in
-             helpers/loads.js), formatted by the shared fmtAmount so it
-             carries the $ and two decimals like everywhere else.
+             ticket uses, formatted by the shared fmtAmount so it carries the
+             $ and two decimals like everywhere else.
              An em-dash when there is no total, NOT $0.00: a load whose items
-             have no price yet is worth "not priced", and printing $0.00
-             would read as "worth nothing", which is a different claim.
+             have no price yet is worth "not priced", and printing $0.00 would
+             read as "worth nothing", which is a different claim.
              Mirrors mobile-app/www/index.html. -->
         <span style="font-weight:700; color:var(--text-strong);">Amount: ${l.amount != null && fmtAmount(l.amount) ? esc(fmtAmount(l.amount)) : '—'}</span>
       </div>
+      ${paymentBadgeHtml(l)}
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
         ${l.pdf_link ? `<a href="${esc(l.pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View PDF →</a>` : ''}
         ${l.weights_pdf_link ? `<a href="${esc(l.weights_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">View weights PDF →</a>` : ''}
         <!-- POS receipt PDF (80mm width) — per Apsara 2026-08-17. Mirrors
              mobile-app/www/index.html's identical link. -->
         ${l.receipt_pdf_link ? `<a href="${esc(l.receipt_pdf_link)}" target="_blank" rel="noopener" style="font-size:12px;">Print (POS receipt) →</a>` : ''}
+        <!-- Ticket actions are purchase-only: a sale has no yard ticket to
+             generate, no seller to send one to and nothing to sign. Hidden
+             rather than shown-and-failing. Mirrors the app. -->
+        <!-- Sales get a ticket too — Apsara 2026-08-24 ("what if i want to
+             have ticket actions"). data-kind tells the handler which route to
+             call; the document itself says "SALE TICKET / Buyer:" and carries
+             no signature line, per "no sign needed". -->
         ${!l.pdf_link
-          ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
-          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
+          ? `<button class="btn btn-primary btn-gen-pdf" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:12px; padding:6px 12px;">Generate PDF</button>`
+          : `<button class="btn btn-gen-pdf" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Regenerate PDF</button>`}
         <!-- No stale-ticket warning here, deliberately. It was built and then
              removed the same day per Apsara 2026-08-20 ("don't do that. user
              will get irritated"), and she's right: on first deploy EVERY
@@ -3226,7 +3722,7 @@ function loadCardHtml(l) {
              phone on file so the click handler can surface that as a
              clear error rather than the option just silently not being
              there — per Apsara 2026-08-17. Mirrors mobile-app/www/index.html. -->
-        ${l.pdf_link ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
+        ${l.pdf_link && l._kind !== 'sale' ? `<button class="btn btn-send-seller" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">Send to seller (WhatsApp)</button>` : ''}
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
@@ -3239,36 +3735,11 @@ function loadCardHtml(l) {
              removing a route is a breaking API change and nothing calls
              it anymore anyway. -->
         ${loadIsDeletable(l) ? `<button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>` : ''}
+        <!-- Pay, per Apsara 2026-08-28. Sits with Edit/Delete because it is a
+             thing done TO an existing load, not part of creating one. -->
+        ${loadIsPayable(l) ? `<button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Pay</button>` : ''}
       </div>
     </div>`;
-}
-
-// ── a load with money against it is not deletable ─────────────────────────
-// Per Apsara 2026-09-01: "delete should not be there for partial and full
-// payment."
-//
-// Reads the SERVER's payment summary (GET /api/loads attaches `payment`
-// from helpers/payments.paymentSummary) rather than recomputing paid/pending
-// here. One place owns the arithmetic.
-//
-// Applied on the WEBSITE too, even though payments are only *recorded* in
-// the mobile app. If it were mobile-only, a desktop admin could delete a
-// load the phone refuses to — the same record, two answers. The rule belongs
-// to the load, not to the client that happens to be showing it.
-//
-// THIS IS A UI GUARD, NOT SECURITY. DELETE /api/loads/:id still works
-// exactly as before and still cascades deletePaymentsForLoad — deliberately:
-// hiding a button is the right way to stop a mistake, removing a route is a
-// breaking API change.
-//
-// Escape hatch, by design: remove the PAYMENT first (in the app's Pay sheet)
-// and the load becomes deletable again. Money has to be unwound before the
-// record it was booked against can go.
-//
-// Mirrors loadIsDeletable in mobile-app/www/index.html.
-function loadIsDeletable(l) {
-  const p = l && l.payment;
-  return !(p && Number(p.paid) > 0);
 }
 
 // Groups loads by their `date` field (the date picked in the modal, not
@@ -3326,10 +3797,9 @@ function filterLoads(loads, query) {
 // Per Apsara 2026-09-01: "on filtering of load by say, seller - it should not
 // group by date." The date sections exist to make a particular day findable
 // in a long deck — but once you have searched for a seller you are no longer
-// looking for a day, you are looking at that seller's loads, and splitting
-// six results across five collapsed date headers hides four of them behind a
-// disclosure triangle. (Only the FIRST section renders open.) So a search
-// result is a flat, newest-first list.
+// looking for a day, and splitting six results across five collapsed date
+// headers hides four of them behind a disclosure triangle. (Only the FIRST
+// section renders open.) So a search result is a flat, newest-first list.
 //
 // The unfiltered deck keeps its date sections — that view genuinely is
 // "what happened when". Mirrors mobile-app/www/index.html.
@@ -3361,6 +3831,165 @@ function loadDeckSectionsHtml(loads, emptyMsg, opts) {
       <summary class="load-date-heading">${esc(g.label)}<span class="load-date-count">${g.loads.length} load${g.loads.length === 1 ? '' : 's'}</span></summary>
       <div class="load-deck-grid">${g.loads.map(loadCardHtml).join('')}</div>
     </details>`).join('');
+}
+
+
+// Payment badge for a load card. Silent when nothing has been paid — an
+// "UNPAID" tag on every load is noise, and a badge that appears on everything
+// is one people stop reading.
+// ── Recording a payment ────────────────────────────────────────────────────
+let payingLoad = null;   // { id, kind, amount, seller, payment }
+
+// Same rule as fmtAmount — every amount on screen carries its $.
+const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function openPayModal(loadId, kind) {
+  const l = loadsCache.find(x => x.id === loadId);
+  if (!l) return;
+  payingLoad = { id: l.id, kind: kind || l._kind || 'purchase', amount: l.amount, seller: l.seller, payment: l.payment };
+  const p = l.payment || { paid: 0, pending: l.amount, status: 'unpaid' };
+  const who = l.seller ? ` · ${l.seller}` : '';
+  $('payLoadSummary').innerHTML = l.amount == null
+    // A load with no priced items has nothing to settle against. Say so
+    // plainly rather than showing "0.00 pending", which reads as "nothing
+    // owed" when it actually means "we don't know yet".
+    ? `Load ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This load has no price yet, so there is no balance to work against.</span>`
+    : `Load ${esc(l.id)}${esc(who)}<br>Load total ${payMoney(l.amount)} · already paid ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
+  $('pay_mode').value = 'Zelle';
+  $('pay_date').value = toUsDate(todayLocalDateStr()); wireUsDateField('pay_date');
+  // Pre-filled with what is actually outstanding, since settling the balance
+  // is the common case — still fully editable for a part payment.
+  $('pay_amount').value = (p.pending != null && p.pending > 0) ? p.pending : '';
+  $('pay_ref').value = '';
+  $('payErr').textContent = '';
+  renderPayHistory();
+  updatePayPreview();
+  $('payModal').classList.remove('hidden');
+}
+
+function closePayModal() { $('payModal').classList.add('hidden'); payingLoad = null; }
+
+// Says what this payment will leave outstanding, before it is recorded.
+function updatePayPreview() {
+  const el = $('payPreview');
+  if (!el || !payingLoad) return;
+  const amt = parseFloat($('pay_amount').value);
+  if (!isFinite(amt) || amt <= 0) { el.innerHTML = ''; return; }
+  if (payingLoad.amount == null) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Will record ${payMoney(amt)}. No load total, so no balance can be shown.</span>`;
+    return;
+  }
+  const alreadyPaid = (payingLoad.payment && payingLoad.payment.paid) || 0;
+  const after = Math.round((payingLoad.amount - alreadyPaid - amt) * 100) / 100;
+  if (Math.abs(after) < 0.005) {
+    el.innerHTML = `<span style="color:var(--status-good, #4ade80);">This settles the load in full.</span>`;
+  } else if (after > 0) {
+    el.innerHTML = `<span style="color:var(--status-warning, #d99a2b);">PARTIAL — ${payMoney(after)} will still be pending.</span>`;
+  } else {
+    el.innerHTML = `<span style="color:#d95a2b;">This is ${payMoney(-after)} MORE than the load total.</span>`;
+  }
+}
+
+function renderPayHistory() {
+  const el = $('payHistory');
+  if (!el || !payingLoad) return;
+  const rows = (payingLoad.payment && payingLoad.payment.payments) || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <div style="font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Already recorded</div>
+    ${rows.map(r => `
+      <div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:12px;">
+        <span style="color:var(--text-muted);">${esc(fmtDate(r.paid_on))}</span>
+        <span>${esc(r.mode)}</span>
+        ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
+        <span style="flex:1;"></span>
+        <span style="font-weight:700;">${payMoney(r.amount)}</span>
+        <button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>
+      </div>`).join('')}`;
+}
+
+// ── which of Delete / Pay a load still deserves ───────────────────────────
+// Per Apsara 2026-09-01: "delete should not be there for partial and full
+// payment ... once full payment is done - remove pay option."
+//
+// Both read the SERVER's payment summary (GET /api/loads attaches `payment`
+// from helpers/payments.paymentSummary) rather than recomputing paid/pending
+// here. One place owns the arithmetic; a card cannot disagree with a ticket
+// about whether something is settled.
+//
+// THESE ARE UI GUARDS, NOT SECURITY. DELETE /api/loads/:id and
+// POST /api/payments both still work exactly as before — hiding a button is
+// the right way to stop a mistake, removing a route is a breaking API change.
+//
+// Escape hatch, by design: remove the PAYMENT first and the load becomes
+// deletable again. Money is unwound before the record it was booked against.
+//
+// Mirrors mobile-app/www/index.html exactly — tests/load-card-actions.js
+// asserts both clients.
+function loadIsDeletable(l) {
+  const p = l && l.payment;
+  return !(p && Number(p.paid) > 0);
+}
+
+// Payable while anything is outstanding. Two edge cases:
+//   - `overpaid` — already more than settled, so no Pay. Correcting an
+//     overpayment means removing the wrong payment, not adding another.
+//   - `paid_amount_unknown` — a load with no priced items has no total to
+//     settle against, so "is it fully paid" has no answer. Pay stays, since
+//     hiding it would strand a real load with no way to record money.
+function loadIsPayable(l) {
+  const p = l && l.payment;
+  if (!p) return true;
+  return p.status !== 'paid' && p.status !== 'overpaid';
+}
+
+function paymentBadgeHtml(l) {
+  const p = l && l.payment;
+  if (!p || !p.paid) return '';
+  // Shows WHEN, not just how much — per Apsara 2026-08-29 ("record payment
+  // date as well"). The date was already captured, stored, listed in the Pay
+  // form's history and printed on the ticket; the load card was the one place
+  // it never reached, which is the place she actually looks while working.
+  //
+  // The LAST payment's date, since with instalments "when did this last move"
+  // is the useful fact — the full sequence is in the Pay form.
+  //
+  // Parsed by splitting the string rather than new Date('2026-08-22'), which
+  // JavaScript reads as UTC midnight and then renders in local time: west of
+  // Greenwich that prints the day BEFORE. A payment dated the 22nd showing as
+  // the 21st on a ticket is exactly the sort of small wrongness nobody
+  // notices until it matters.
+  const payDate = (ymd) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''));
+    if (!m) return '';
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+  };
+  const rows = (p.payments || []).filter((r) => r && r.paid_on);
+  const lastOn = rows.length ? payDate(rows[rows.length - 1].paid_on) : '';
+  const on = lastOn ? ` · ${lastOn}` : '';
+
+  // Uses payMoney rather than a local formatter of its own.
+  //
+  // This badge had its OWN copy that did not add the $, which is how it ended
+  // up printing "PART PAID 12,000.00" after every other amount on the screen
+  // had one. Worse, my patch for that targeted a variable name this function
+  // no longer used — the two hosts had been aligned in between and the local
+  // was renamed — so it silently changed nothing, and the test I wrote checked
+  // fmtAmount and payMoney without ever rendering the badge. Deleting the
+  // duplicate is the fix; there is now one money formatter in the payments UI
+  // and nothing to keep in step.
+  const money = payMoney;
+  if (p.status === 'paid') {
+    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}${on}</span>`;
+  }
+  if (p.status === 'overpaid') {
+    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}${on}</span>`;
+  }
+  if (p.status === 'paid_amount_unknown') {
+    return `<span class="pay-badge pay-part">PAID ${money(p.paid)}${on} · load has no price yet</span>`;
+  }
+  return `<span class="pay-badge pay-part">PART PAID ${money(p.paid)}${on} · ${money(p.pending)} pending</span>`;
 }
 
 function renderLoads(loads) {
@@ -3398,6 +4027,25 @@ function renderLoads(loads) {
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
+      /* Payment badge. Shown only once something has been paid — see
+         paymentBadgeHtml. Green reads as settled, amber as still owed; the
+         amber one carries the pending figure because that is the number
+         anyone looking at a part-paid load actually wants. */
+      .pay-badge { display:inline-block; margin-top:10px; padding:4px 10px; border-radius:999px;
+        font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.04em; }
+      .pay-full { background:rgba(74,222,128,.13); color:var(--status-good, #4ade80); border:1px solid rgba(74,222,128,.35); }
+      .pay-part { background:rgba(217,154,43,.13); color:var(--status-warning, #d99a2b); border:1px solid rgba(217,154,43,.4); }
+      .pay-over { background:rgba(217,90,43,.13); color:#d95a2b; border:1px solid rgba(217,90,43,.4); }
+      /* Totals line — same grid as .item-row so each figure sits under the
+         column it sums. A total in a different layout from the numbers it
+         adds up is a total nobody checks. */
+      .ld-item-totals:empty { display:none; }
+      .ld-item-totals { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px;
+        align-items:center; min-width:620px; margin-top:8px; padding-top:9px;
+        border-top:1px solid var(--border-default); font-family:var(--font-mono); font-size:12px; }
+      .ld-item-totals .tl-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
+      .ld-item-totals .tl-num { text-align:right; padding-right:10px; color:var(--text-muted); }
+      .ld-item-totals .tl-strong { color:var(--text-strong); font-weight:700; }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
@@ -3512,6 +4160,20 @@ function renderLoads(loads) {
         .ld-item-net-wrap input, .ld-item-price-wrap input, .ld-item-amount-wrap input { width:100%; }
         .ld-item-cap .btn-photo-item { padding:10px; font-size:14px; }
         .item-row .btn-remove-item, .item-row .btn-insert-item { padding:10px 4px; font-size:12px; flex:1; }
+        /* On a phone the item rows become stacked cards, so a 7-column
+           totals grid would be unreadable and mostly empty. Same numbers,
+           laid out as labelled pairs that wrap. */
+        .ld-item-totals { display:flex; flex-wrap:wrap; gap:6px 18px; min-width:0;
+          padding:12px; margin-top:0; background:var(--surface-sunken, rgba(255,255,255,.03));
+          border:1px solid var(--border-default); border-top:1px solid var(--border-default);
+          border-radius:var(--radius-sm); }
+        .ld-item-totals .tl-label { width:100%; }
+        .ld-item-totals .tl-num { text-align:left; padding-right:0; }
+        /* The empty spacer cells carry no meaning once this is a flex list. */
+        .ld-item-totals > span:empty { display:none; }
+        /* Without labels the bare numbers are ambiguous when stacked, so
+           name them here rather than duplicating markup for one breakpoint. */
+        .ld-item-totals .tl-num::before { content:attr(data-label) ' '; color:var(--text-faint); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
 
         /* Load-deck card buttons (Edit/Delete/Generate PDF) — same
            too-small-to-thumb-tap problem as the item-row buttons above. */
@@ -3525,6 +4187,17 @@ function renderLoads(loads) {
         #loadModal .modal-foot .btn { width:100%; padding:13px 18px; font-size:12.5px; }
         #loadModal #btnCloseLoadModal { padding:9px 14px; font-size:15px; }
       }
+      /* Unfinished loads, above the deck. Visually distinct from load cards
+         because a draft is NOT a load: no number, no ticket, in no total.
+         Copper edge rather than a status colour - this is "come back to
+         this", not a warning. */
+      .draft-strip { margin-bottom:22px; }
+      .draft-strip-head { font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px; }
+      .draft-card { display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:8px;
+        background:var(--surface-sunken); border:1px solid var(--border-default); border-left:3px solid var(--copper-400); border-radius:var(--radius-sm); }
+      .draft-card .d-main { flex:1; min-width:0; }
+      .draft-card .d-title { font-size:13px; color:var(--text-strong); font-weight:600; }
+      .draft-card .d-sub { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px; }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
@@ -3533,11 +4206,63 @@ function renderLoads(loads) {
           <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
           <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
         </div>
-        <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+        <div style="display:flex; gap:8px;">
+          <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+          <!-- Visible to every role. Recording material leaving the yard is
+               yard work, same as recording it arriving — Apsara, 2026-08-24,
+               asked directly whether sales should be denied to staff: "no".
+               /api/outbound-loads is on the staff allowlist to match. -->
+          <button id="btnAddSale" class="btn">+ Sale</button>
+        </div>
       </div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, description, or amount…" style="width:100%; padding:11px 14px; margin-bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <div id="draftStrip">${draftStripHtml()}</div>
       <div id="loadDeck">${loadDeckSectionsHtml(loadsCache, 'No loads yet.')}</div>
     </section>
+
+    <!-- Record a payment against a load, per Apsara 2026-08-28. Deliberately
+         a small, separate modal rather than a section of the load form: a
+         payment is recorded against a load that already exists, and mixing it
+         into the edit form would mean saving a load to record money. -->
+    <div id="payModal" class="hidden modal-overlay">
+      <div class="modal-shell" style="max-width:460px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>
+          <button id="btnClosePay" class="btn" style="padding:4px 10px;">✕</button>
+        </div>
+        <div class="modal-body">
+          <div id="payLoadSummary" style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); margin-bottom:16px;"></div>
+          <div class="ld-grid-2">
+            <div class="field">
+              <label>Payment mode</label>
+              <select id="pay_mode">
+                <option value="Zelle">Zelle</option>
+                <option value="Wire">Wire</option>
+                <option value="Cash">Cash</option>
+                <option value="Cheque">Cheque</option>
+              </select>
+            </div>
+            <div class="field"><label>Date</label><input id="pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+          </div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"></div>
+            <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
+          </div>
+          <!-- Live, before anything is saved: type an amount and this says
+               what it leaves outstanding. The whole point of the feature is
+               the pending figure, so it should be visible while deciding what
+               to pay, not only afterwards. -->
+          <div id="payPreview" style="margin-top:14px; font-family:var(--font-mono); font-size:12px;"></div>
+          <div id="payHistory" style="margin-top:16px;"></div>
+          <div style="margin-top:10px;"><span id="payErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
+        </div>
+        <div class="modal-foot">
+          <button id="btnCancelPay" class="btn">Cancel</button>
+          <button id="btnSavePay" class="btn btn-primary">Record payment</button>
+        </div>
+      </div>
+    </div>
 
     <div id="loadModal" class="hidden modal-overlay">
       <div class="modal-shell">
@@ -3547,23 +4272,47 @@ function renderLoads(loads) {
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
-          <div class="ld-grid-2">
-            <div class="field"><label>Date</label><input id="ld_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
-            <div class="field"><label>Buyer</label><input id="ld_buyer" placeholder="Buyer name" disabled></div>
+          <!-- Offered, not applied. Restoring automatically would overwrite
+               whatever is on screen with something typed hours ago. -->
+          <div id="draftBar" class="hidden">
+            <span id="draftBarText"></span>
+            <span style="flex:1;"></span>
+            <button id="btnRestoreDraft" class="btn" style="padding:6px 12px; font-size:12px;">Restore</button>
+            <button id="btnDiscardDraft" class="btn" style="padding:6px 12px; font-size:12px;">Discard</button>
           </div>
-          <div class="ld-grid-2" style="margin-top:14px;">
+          <!-- Buyer field removed 2026-08-28 per Apsara: "by default buyer is
+               Edge Trading, hence remove that from form". It was disabled and
+               always showed the same constant, so it occupied half a row to
+               tell her something she already knew. Nothing downstream is
+               affected — the save payload has always sent BUYER_FIXED_NAME
+               directly rather than reading this input, so the field was
+               decorative. On a SALE it was showing "Edge Trading" as the
+               seller, which is equally implied.
+
+               Layout is now Date | Seller, then Address | Phone, so the
+               counterparty leads instead of sitting on the second row. -->
+          <div class="ld-grid-2">
+            <div class="field"><label>Date</label><input id="ld_date" placeholder="MM/DD/YYYY" autocomplete="off" style="max-width:170px;"></div>
             <div class="field" style="position:relative;">
-              <label>Seller</label>
+              <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
-            <div class="field"><label>Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
           </div>
-          <!-- Optional — per Apsara 2026-08-17. Only used to build the
-               WhatsApp chat id for the "Send to seller" button once a PDF
-               exists; not required to save a load. -->
-          <div class="field" style="margin-top:14px;"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
-          <div class="field" style="margin-top:14px;"><label>Load description</label><input id="ld_desc" placeholder="e.g. Mixed scrap steel"></div>
+          <div class="ld-grid-2" id="ld_party_row2" style="margin-top:14px;">
+            <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
+            <div class="field"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
+          </div>
+          <!-- Phone moved up beside the address (2026-08-28). Optional, per
+               Apsara 2026-08-17: only used to build the WhatsApp chat id for
+               the "Send to seller" button once a PDF exists; never required
+               to save a load. -->
+          <!-- "Load description" removed 2026-08-28 per Apsara. Every item row
+               already carries its own description, so this was a second,
+               vaguer name for the same load and one more box to tab through.
+               The stored field is NOT removed: loads saved before today keep
+               their description and still print it (helpers/pdf.js only draws
+               that row when it has a value). -->
 
           <div style="margin-top:18px;">
             <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">Item detail</div>
@@ -3581,6 +4330,10 @@ function renderLoads(loads) {
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
         </div>
         <div class="modal-foot">
+          <!-- Sits in the footer, beside Save, because that is where the eye
+               already goes when wondering whether work is safe. -->
+          <span id="draftStatus"></span>
+          <span style="flex:1;"></span>
           <button id="btnCancelLoad" class="btn">Cancel</button>
           <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
         </div>
@@ -3614,10 +4367,69 @@ function validateItemsBeforeSave(items) {
 
 function wireLoadsEvents() {
   $('btnAddLoad').addEventListener('click', () => {
-    resetLoadModal();
+    resetLoadModal('purchase');
     $('loadModal').classList.remove('hidden');
   });
-  const closeLoadModal = () => { stopCamera(); $('loadModal').classList.add('hidden'); };
+  if ($('btnAddSale')) $('btnAddSale').addEventListener('click', () => {
+    resetLoadModal('sale');
+    $('loadModal').classList.remove('hidden');
+  });
+  const closeLoadModal = () => {
+    stopCamera();
+    $('loadModal').classList.add('hidden');
+    // Show what was just autosaved. Without this the draft exists but
+    // nothing on screen says so until the tab is reloaded.
+    refreshDraftStrip();
+  };
+
+  // Autosave the draft on any edit inside the load form. One delegated
+  // listener rather than per-field wiring, because item rows are re-rendered
+  // constantly and individually-bound handlers would be lost on every
+  // renderItemRows(). Debounced, so typing a description is one write and not
+  // one per keystroke.
+  $('loadModal').addEventListener('input', queueLoadDraftSave);
+  $('loadModal').addEventListener('change', queueLoadDraftSave);
+  $('btnClosePay').addEventListener('click', closePayModal);
+  $('btnCancelPay').addEventListener('click', closePayModal);
+  $('pay_amount').addEventListener('input', updatePayPreview);
+  // Delegated: the history list is re-rendered after every change, so
+  // per-button handlers would be lost.
+  $('payHistory').addEventListener('click', async (ev) => {
+    const del = ev.target.closest('.btn-del-pay');
+    if (!del) return;
+    if (!confirm('Delete this payment?\n\nThe load balance will go back up by that amount.')) return;
+    try {
+      await api(`/api/payments/${encodeURIComponent(del.dataset.id)}`, { method: 'DELETE' });
+      closePayModal();
+      loadTab('loads');
+    } catch (e) { $('payErr').textContent = e.message || 'Could not delete that payment.'; }
+  });
+  $('btnSavePay').addEventListener('click', async () => {
+    if (!payingLoad) return;
+    const amount = parseFloat($('pay_amount').value);
+    $('payErr').textContent = '';
+    if (!isFinite(amount) || amount <= 0) { $('payErr').textContent = 'Enter an amount greater than zero.'; return; }
+    const btn = $('btnSavePay');
+    btn.disabled = true; btn.textContent = 'Recording…';
+    try {
+      await api('/api/payments', { method: 'POST', body: JSON.stringify({
+        load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
+        amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
+      }) });
+      closePayModal();
+      // Reload rather than patching the card in place: the badge, the pending
+      // figure and the ticket all read from the server's arithmetic, and
+      // recomputing any of it here would be a second implementation waiting
+      // to disagree with the first.
+      loadTab('loads');
+    } catch (e) {
+      $('payErr').textContent = e.message || 'Could not record that payment.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Record payment';
+    }
+  });
+  $('btnRestoreDraft').addEventListener('click', restoreLoadDraft);
+  $('btnDiscardDraft').addEventListener('click', discardOfferedDraft);
   $('btnCloseLoadModal').addEventListener('click', closeLoadModal);
   $('btnCancelLoad').addEventListener('click', closeLoadModal);
 
@@ -3647,6 +4459,10 @@ function wireLoadsEvents() {
     if (!matches.length) { closeAc(); return; }
     acBox.innerHTML = matches.map((e, i) => `<div class="ac-item" data-idx="${i}">${esc(e.aliases.join(' / '))}</div>`).join('');
     acBox.classList.remove('hidden');
+    // Same clipping problem as the item-description menu: .modal-body
+    // scrolls, so an absolutely positioned list is drawn inside that box and
+    // can land below the fold. Float it over the modal instead.
+    positionAcMenu($('ld_seller'), acBox);
     acBox.querySelectorAll('.ac-item').forEach((el, i) => {
       el.addEventListener('mousedown', (ev) => { // mousedown (not click) fires BEFORE the input's blur, so blur's setTimeout close below can't race this selection
         ev.preventDefault();
@@ -3667,6 +4483,7 @@ function wireLoadsEvents() {
       });
     });
   });
+  trackAcMenu($('ld_seller'), acBox);
   $('ld_seller').addEventListener('blur', () => {
     setTimeout(closeAc, 150);
     // Typing the name out in full never fired the tap-to-pick handler above,
@@ -3687,7 +4504,9 @@ function wireLoadsEvents() {
 
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
-    const desc = $('ld_desc').value.trim();
+    // The load-level description box is gone; an edit of an older load
+    // must not wipe the description it already has, so reuse it.
+    const desc = ($('ld_desc') ? $('ld_desc').value.trim() : (editingLoadDescription || ''));
     $('loadModalErr').textContent = '';
 
     const validationError = validateItemsBeforeSave(currentLoadItems);
@@ -3752,11 +4571,28 @@ function wireLoadsEvents() {
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
       };
-      if (isEdit) {
+      if (loadModalMode === 'sale') {
+        // Outbound: the party in the seller field IS the buyer here. Its own
+        // record type, not a negative purchase — see applyLoadModalMode.
+        const salePayload = {
+          date: payload.date, buyer: payload.seller, buyer_address: payload.seller_address,
+          description: payload.description, weight_unit: payload.weight_unit, items: payload.items,
+        };
+        if (isEdit) {
+          await api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(salePayload) });
+        } else {
+          await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(salePayload) });
+        }
+      } else if (isEdit) {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
         await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
       }
+      // The work is committed, so the draft has done its job. Cleared only
+      // AFTER the request resolves — clearing before it would throw the
+      // recovery copy away at the exact moment a failed save makes it most
+      // valuable.
+      clearLoadDraft();
       // Address Book auto-grow/backfill — per Apsara 2026-08-17: "when i
       // type a new name if it is not there in address book, it should be
       // created as new contact with name, address(optional), phone
@@ -3831,14 +4667,32 @@ function wireLoadsEvents() {
   // Search re-renders JUST #loadDeck (not the whole tab via loadTab/renderLoads)
   // so it can filter loadsCache client-side on every keystroke without a
   // server round trip and without losing focus on the search box itself.
+  // Draft strip actions. Delegated on the strip itself so a re-render (which
+  // happens after every resume or delete) does not leave dead handlers behind.
+
+  const strip = $('draftStrip');
+  if (strip) {
+    strip.addEventListener('click', async (ev) => {
+      const resume = ev.target.closest('.btn-resume-draft');
+      if (resume) { resumeDraft(resume.dataset.id); return; }
+      const drop = ev.target.closest('.btn-drop-draft');
+      if (drop) {
+        if (!confirm('Delete this unfinished load?\n\nIt has not been saved as a load, so nothing else is affected.')) return;
+        try { await api(`/api/load-drafts/${encodeURIComponent(drop.dataset.id)}`, { method: 'DELETE' }); } catch (e) {}
+        pendingDrafts = pendingDrafts.filter(x => x.id !== drop.dataset.id);
+        strip.innerHTML = draftStripHtml();
+      }
+    });
+  }
+
   const searchInput = $('loadSearch');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
       const q = String(searchInput.value || '').trim();
       const filtered = filterLoads(loadsCache, searchInput.value);
-      // flat ONLY while there is something typed. Clearing the box has to
-      // put the date sections back, or the grouping would be gone for good
-      // after the first search until the tab is reloaded.
+      // flat ONLY while there is something typed. Clearing the box has to put
+      // the date sections back, or the grouping would be gone for good after
+      // the first search until the tab is reloaded.
       $('loadDeck').innerHTML = loadDeckSectionsHtml(filtered, 'No loads match your search.', { flat: !!q });
       wireDeckEvents();
     });
@@ -3859,7 +4713,10 @@ function wireDeckEvents() {
     const originalLabel = btn.textContent;
     btn.disabled = true; btn.textContent = 'Generating…';
     try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
+      // Routed by kind — a sale's ticket is generated from the outbound
+      // store and prints as a SALE TICKET naming the buyer.
+      const base = btn.dataset.kind === 'sale' ? '/api/outbound-loads/' : '/api/loads/';
+      await api(`${base}${encodeURIComponent(btn.dataset.id)}/generate-pdf`, { method: 'POST', body: JSON.stringify({ includeSummary }) });
       loadTab('loads');
     } catch (err) {
       alert('PDF generation failed: ' + err.message);
@@ -3869,10 +4726,18 @@ function wireDeckEvents() {
       btn.disabled = false; btn.textContent = originalLabel;
     }
   }));
+  document.querySelectorAll('.btn-pay-load').forEach(btn => btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openPayModal(btn.dataset.id, btn.dataset.kind);
+  }));
+
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
     if (!load) return;
+    // Reopen in the mode this record belongs to, so a sale edits as a sale
+    // and saves back to the outbound store rather than becoming a purchase.
+    applyLoadModalMode(load._kind === 'sale' ? 'sale' : 'purchase');
     // NO EDIT LOCK — removed 2026-08-20 per Apsara ("remove the admin
     // password asking for editing even for staff access"). The lock, the
     // prompt and the admin-only carve-out are all gone; any authorised user
@@ -3912,10 +4777,17 @@ function wireDeckEvents() {
     // the opposite of what it said before (api.js's DELETE route now trashes
     // the load's whole Drive subfolder — recoverable for 30 days, not gone
     // forever, but very much not "kept" either).
-    if (!confirm(`Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
+    const rec = loadsCache.find(l => l.id === btn.dataset.id);
+    const isSale = rec && rec._kind === 'sale';
+    // Different consequences, different wording. Deleting a SALE puts the
+    // material back on hand — the rollback, which happens because inventory
+    // nets purchases against sales rather than storing a balance to unwind.
+    if (!confirm(isSale
+      ? `Delete sale ${btn.dataset.id}? The material goes back into inventory as on hand.`
+      : `Delete load ${btn.dataset.id}? This removes it from the dashboard AND trashes its photos/PDFs in Drive (recoverable from Drive's Trash for 30 days).`)) return;
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
-      await api(`/api/loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+      await api(`${isSale ? '/api/outbound-loads/' : '/api/loads/'}${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
       loadTab('loads');
     } catch (err) {
       alert('Delete failed: ' + err.message);
@@ -3941,16 +4813,44 @@ function wireDeckEvents() {
 // call, permanently, until someone unpins or deletes it here.
 function renderFacts(data) {
   const facts = data.facts || [];
-  const pinned = facts.map((f, i) => ({ ...f, i })).filter((f) => f.pinned);
-  const unpinned = facts.map((f, i) => ({ ...f, i })).filter((f) => !f.pinned).reverse();
+  // Facts are addressed by their stable server id (2026-08-25), never by
+  // position in this array — an eviction server-side shifts positions, so a
+  // rendered index could delete a different fact than the one clicked.
+  // Phase 2: the store now also holds superseded and retracted records. The
+  // main lists show only what Jarvis CURRENTLY believes; the rest goes to a
+  // Retired panel so nothing is hidden but nothing stale looks live either.
+  const active = facts.filter((f) => (f.status || 'active') === 'active');
+  const retired = facts.filter((f) => (f.status || 'active') !== 'active').reverse();
+  const pinned = active.filter((f) => f.pinned);
+  const unpinned = active.filter((f) => !f.pinned).reverse();
   const factRow = (f) => `
     <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs); ${f.pinned ? 'border:1px solid var(--accent);' : ''}">
       <span style="font-size:13px;">${f.pinned ? '<span title="Pinned — always included, never ages out" style="margin-right:6px;">📌</span>' : ''}${esc(f.text)}</span>
       <span style="display:flex; gap:6px; flex-shrink:0;">
-        <button class="btn btn-secondary btn-pin-fact" data-idx="${f.i}" data-pinned="${f.pinned ? '1' : '0'}" style="padding:5px 10px; font-size:10px;">${f.pinned ? 'Unpin' : 'Pin'}</button>
-        <button class="btn btn-danger btn-del-fact" data-idx="${f.i}" style="padding:5px 10px; font-size:10px;">Del</button>
+        <button class="btn btn-secondary btn-correct-fact" data-id="${esc(f.id)}" data-text="${esc(f.text)}" style="padding:5px 10px; font-size:10px;">Correct</button>
+        <button class="btn btn-secondary btn-pin-fact" data-id="${esc(f.id)}" data-pinned="${f.pinned ? '1' : '0'}" style="padding:5px 10px; font-size:10px;">${f.pinned ? 'Unpin' : 'Pin'}</button>
+        <button class="btn btn-danger btn-del-fact" data-id="${esc(f.id)}" style="padding:5px 10px; font-size:10px;">Forget</button>
       </span>
     </div>`;
+  const byId = Object.fromEntries(facts.map((f) => [f.id, f]));
+  const when = (iso) => { try { return new Date(iso).toLocaleDateString(); } catch { return ''; } };
+  const retiredRow = (f) => {
+    const superseded = f.status === 'superseded';
+    const replacement = superseded && f.superseded_by ? byId[f.superseded_by] : null;
+    return `
+    <div style="padding:10px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs); opacity:.85;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div style="min-width:0;">
+          <div style="font-size:13px; text-decoration:line-through; color:var(--text-muted);">${esc(f.text)}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); margin-top:4px;">
+            ${superseded ? `Replaced ${when(f.valid_until)}` : `Forgotten ${when(f.retracted_at)}`}${f.change_reason ? ` · ${esc(f.change_reason)}` : ''}
+          </div>
+          ${replacement ? `<div style="font-size:12px; margin-top:6px; color:var(--text-muted);">→ now: ${esc(replacement.text)}</div>` : ''}
+        </div>
+        ${superseded ? '' : `<button class="btn btn-secondary btn-restore-fact" data-id="${esc(f.id)}" style="padding:5px 10px; font-size:10px; flex-shrink:0;">Restore</button>`}
+      </div>
+    </div>`;
+  };
   $('viewRoot').innerHTML = `
     <section style="max-width:800px; margin:0 auto; padding:38px 40px 80px;">
       <div class="eyebrow">// Facts</div>
@@ -3977,6 +4877,12 @@ function renderFacts(data) {
           ${unpinned.length ? unpinned.map(factRow).join('') : '<div style="font-family:var(--font-mono); font-size:12px; color:var(--text-faint); padding:10px 0; text-align:center;">No facts yet.</div>'}
         </div>
       </div>
+      ${retired.length ? `
+      <div class="card" style="padding:18px 20px; margin-top:16px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Retired — kept on record, not applied</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Nothing here reaches the AI. Corrected facts show what replaced them; forgotten ones can be restored.</div>
+        <div style="display:flex; flex-direction:column; gap:8px;">${retired.map(retiredRow).join('')}</div>
+      </div>` : ''}
     </section>`;
   $('btnAddFact').addEventListener('click', async () => {
     const text = $('f_new_text').value.trim();
@@ -3985,14 +4891,57 @@ function renderFacts(data) {
     try { await api('/api/facts', { method: 'POST', body: JSON.stringify({ text, pinned: $('f_new_pinned').checked }) }); loadTab('facts'); }
     catch (e) { $('factAddErr').textContent = e.message; }
   });
+  // "Forget" is a RETRACTION, not a deletion (2026-08-25) — the fact stops
+  // being believed and leaves every prompt, but is kept on record and can be
+  // restored. The wording says so, because "Delete" would imply the record is
+  // destroyed, and it isn't.
   document.querySelectorAll('.btn-del-fact').forEach(btn => btn.addEventListener('click', async () => {
-    if (!confirm('Delete this fact?')) return;
-    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'DELETE' });
+    if (!confirm('Stop applying this fact?\n\nJarvis will stop using it immediately. It stays on record and you can restore it from Retired below.')) return;
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+    loadTab('facts');
+  }));
+  // Correcting records the change instead of hiding it — the old version is
+  // kept, marked superseded, so "what did Jarvis believe back then" stays
+  // answerable.
+  document.querySelectorAll('.btn-correct-fact').forEach(btn => btn.addEventListener('click', async () => {
+    const next = prompt('What should Jarvis go by instead?\n\nThe old version is kept on record, marked as replaced.', btn.dataset.text);
+    if (next === null) return;
+    const text = next.trim();
+    if (!text || text === btn.dataset.text) return;
+    const send = (followChain) => api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/supersede`, {
+      method: 'POST', body: JSON.stringify({ text, reason: 'corrected from dashboard', followChain }),
+    });
+    try {
+      await send(false);
+    } catch (err) {
+      // The fact changed between this list being rendered and Correct being
+      // clicked — she corrected it on WhatsApp, or the nightly review replaced
+      // it. The server refuses by default and hands back what it collided
+      // with, precisely so this can be a question rather than a lost edit.
+      // Silently stacking her change on a version she has not seen is how two
+      // people disagreeing turns into last-writer-wins with no trace.
+      const head = err.currentHead;
+      if (err.reason === 'already_superseded' && head) {
+        const ok = confirm(
+          `This fact changed since the page loaded.\n\nIt now reads:\n"${head.text}"\n\n` +
+          `Apply your correction on top of that instead?\n\nYour text:\n"${text}"`);
+        if (!ok) { loadTab('facts'); return; }
+        await send(true);
+      } else {
+        alert(err.message || 'Could not apply that correction.');
+        loadTab('facts');
+        return;
+      }
+    }
+    loadTab('facts');
+  }));
+  document.querySelectorAll('.btn-restore-fact').forEach(btn => btn.addEventListener('click', async () => {
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}/unretract`, { method: 'POST', body: '{}' });
     loadTab('facts');
   }));
   document.querySelectorAll('.btn-pin-fact').forEach(btn => btn.addEventListener('click', async () => {
     const nowPinned = btn.dataset.pinned !== '1';
-    await api(`/api/facts/${encodeURIComponent(btn.dataset.idx)}`, { method: 'PATCH', body: JSON.stringify({ pinned: nowPinned }) });
+    await api(`/api/facts/${encodeURIComponent(btn.dataset.id)}`, { method: 'PATCH', body: JSON.stringify({ pinned: nowPinned }) });
     loadTab('facts');
   }));
 }
@@ -4104,5 +5053,10 @@ async function boot() {
 }
 boot();
 </script>
+  <!-- Floating Edge Yard assistant. Same file in both hosts (see
+       dashboard/yard-bot.js) so the two cannot drift the way the load
+       form did. Self-contained: injects its own markup and styles, and
+       reuses whatever api() the host already defines. -->
+  <script src="yard-bot.js"></script>
 </body>
 </html>

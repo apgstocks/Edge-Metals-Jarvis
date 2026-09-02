@@ -164,10 +164,105 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
     return null;
   };
   const strip = (t) => String(t).replace(/\s+/g,' ').trim();
-  for (const fn of ['itemHasContent','setDraftStatus','currentDraftPayload','saveLoadDraft',
-                    'queueLoadDraftSave','clearLoadDraft','applyLoadDraft','offerLoadDraft',
+  for (const fn of ['itemHasContent','setDraftStatus','saveLoadDraft',
+                    'queueLoadDraftSave','clearLoadDraft','offerLoadDraft',
                     'restoreLoadDraft','discardOfferedDraft','draftStripHtml','resumeDraft']) {
     ck(`draft: ${fn} is identical in both`, !!grabFn(web,fn) && strip(grabFn(web,fn)) === strip(grabFn(app,fn)));
+  }
+
+  // ── currentDraftPayload / applyLoadDraft: a DELIBERATE divergence ───────
+  //
+  // These two were byte-compared with the ten above until 2026-09-02. They no
+  // longer match, and that is correct rather than drift:
+  //
+  //   website  <input id="ld_date"> holds MM/DD/YYYY text, so it converts —
+  //            toIsoDate on the way out, toUsDate on the way back in.
+  //   app      <input type="date"> is a native picker whose .value is ALREADY
+  //            YYYY-MM-DD, so there is nothing to convert.
+  //
+  // Two different input widgets cannot have identical read/write code. But
+  // byte-identity was only ever a proxy for the thing that matters: a draft
+  // saved on the phone has to open on the laptop and vice versa, and that
+  // requires both to put the SAME shape on the wire.
+  //
+  // So this asserts the invariant directly instead of the proxy. It is a
+  // stronger check, not a weaker one — the old comparison would have passed
+  // two identical functions that both wrote the wrong format.
+  {
+    const stubs = (dateValue, whichFile) => {
+      const el = { value: dateValue };
+      const src = whichFile;
+      const helpers = ['toIsoDate','toUsDate'].map((h) => grabFn(src,h)).filter(Boolean).join('\n');
+      return { el, helpers };
+    };
+
+    // OUT: what each client sends to the server, given a date entered in that
+    // client's own field format.
+    const outOf = (src, fieldValue) => {
+      const helpers = ['toIsoDate','toUsDate'].map((h) => grabFn(src,h)).filter(Boolean).join('\n');
+      const fn = new Function('$','syncItemsFromDom','currentDraftId','currentLoadItems',
+                              'itemHasContent','editingLoadDescription',
+        helpers + '\n' + grabFn(src,'currentDraftPayload') + '; return currentDraftPayload;')(
+        (id) => (id === 'ld_date' ? { value: fieldValue } : { value: '' }),
+        () => {}, null, [], () => false, '');
+      return fn().date;
+    };
+    ck('draft: the website sends ISO to the server', outOf(web, '09/02/2026') === '2026-09-02');
+    ck('draft: the app sends ISO to the server', outOf(app, '2026-09-02') === '2026-09-02');
+    ck('draft: both clients put the SAME date on the wire',
+       outOf(web, '09/02/2026') === outOf(app, '2026-09-02'));
+
+    // IN: a draft written by EITHER client (always ISO) must load into each
+    // client's field in the format that field expects.
+    const inTo = (src, stored) => {
+      const helpers = ['toIsoDate','toUsDate'].map((h) => grabFn(src,h)).filter(Boolean).join('\n');
+      const seen = {};
+      const fn = new Function('$','currentLoadItems','renderItemRows','setDraftStatus',
+                              'currentDraftId','editingLoadDescription','loadModalMode',
+                              'blankLoadItem','applyLoadModalMode','fmtRate',
+        helpers + '\n' + grabFn(src,'applyLoadDraft') + '; return applyLoadDraft;')(
+        (id) => (seen[id] = seen[id] || { value: '' }),
+        [], () => {}, () => {}, null, '', 'purchase',
+        () => ({}), () => {}, (v) => v);
+      // The date is written near the top of the function; anything further in
+      // that still needs a stub is not what is under test here, so a later
+      // throw does not invalidate the field we came to read. It is reported
+      // rather than swallowed so a genuinely broken function is visible.
+      let threw = '';
+      try { fn({ date: stored, items: [] }); } catch (e) { threw = e.message; }
+      const got = seen['ld_date'] ? seen['ld_date'].value : '(not set)';
+      if (!got && threw) return 'THREW before setting the date: ' + threw;
+      return got;
+    };
+    ck('draft: an ISO draft opens as MM/DD/YYYY on the website', inTo(web, '2026-09-02') === '09/02/2026');
+    ck('draft: an ISO draft opens as ISO in the app (native picker)', inTo(app, '2026-09-02') === '2026-09-02');
+
+    // The divergence must stay EXACTLY this narrow. If the two functions ever
+    // differ by more than the date conversion, that is drift again and this
+    // catches it.
+    // Unwraps toIsoDate(...) / toUsDate(...) by finding the MATCHING close
+    // paren. A regex cannot do this: [^)]* stops at the first ')', so
+    // toIsoDate($('ld_date').value) came out as $('ld_date'.value) and the
+    // comparison failed against correct code. Caught while writing this.
+    const unwrap = (t, name) => {
+      let out = t, i;
+      while ((i = out.indexOf(name + '(')) !== -1) {
+        const open = i + name.length;
+        let depth = 0, close = -1;
+        for (let k = open; k < out.length; k++) {
+          if (out[k] === '(') depth++;
+          else if (out[k] === ')') { depth--; if (!depth) { close = k; break; } }
+        }
+        if (close === -1) break;
+        out = out.slice(0, i) + out.slice(open + 1, close) + out.slice(close + 1);
+      }
+      return out;
+    };
+    const norm = (t) => unwrap(unwrap(strip(t), 'toIsoDate'), 'toUsDate');
+    for (const fn of ['currentDraftPayload','applyLoadDraft']) {
+      ck(`draft: ${fn} differs ONLY by the date conversion`,
+         !!grabFn(web,fn) && norm(grabFn(web,fn)) === norm(grabFn(app,fn)));
+    }
   }
 }
 
