@@ -496,6 +496,95 @@ async function getOrCreateReportsFolder(drive) {
 // upload is an ordinary Drive write. A files.update with new media on an
 // existing Google Sheet replaces its content in place, so the link never
 // changes and anyone who has it keeps working.
+// ── the nightly data backup ───────────────────────────────────────────────
+// Its own folder, NOT Reports/. Reports holds things people open and share —
+// the inventory sheet, the monthly workbooks. These are raw internal stores,
+// and mixing them in invites someone to share a folder link and hand over the
+// whole payment ledger with it.
+let backupsFolderId = null;
+async function getOrCreateBackupsFolder(drive) {
+    if (backupsFolderId) return backupsFolderId;
+    const parentId = cfg.GDRIVE_SCALE_TICKETS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_SCALE_TICKETS_FOLDER_ID) not configured');
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and name = 'Backups' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'files(id, name)', pageSize: 1,
+        supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+    });
+    if (list.data.files && list.data.files.length > 0) {
+        backupsFolderId = list.data.files[0].id;
+    } else {
+        const created = await drive.files.create({
+            requestBody: { name: 'Backups', mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+            fields: 'id', supportsAllDrives: true,
+        });
+        backupsFolderId = created.data.id;
+        console.log(`[DRIVE] Created Backups folder (${backupsFolderId})`);
+    }
+    return backupsFolderId;
+}
+
+// One dated archive per night. CREATE, never update-in-place: if a bad write
+// corrupts a store, a single rolling file is corrupt by the next night too.
+// Dated copies mean there is always a version from before the damage.
+async function uploadBackupJson(name, buffer) {
+    if (!buffer) throw new Error('backup buffer required');
+    const drive = getDrive();
+    const parentId = await getOrCreateBackupsFolder(drive);
+    const { Readable } = require('stream');
+    // Re-running on the same day replaces that day's file rather than making a
+    // second one — a manual run after fixing something should not leave two
+    // archives for one date with no way to tell which is later.
+    const safe = String(name).replace(/'/g, "\\'");
+    const existing = await drive.files.list({
+        q: `'${parentId}' in parents and name = '${safe}' and trashed = false`,
+        fields: 'files(id)', pageSize: 1,
+        supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+    });
+    const media = { mimeType: 'application/json', body: Readable.from(buffer) };
+    if (existing.data.files && existing.data.files.length) {
+        const up = await drive.files.update({
+            fileId: existing.data.files[0].id, media,
+            fields: 'id, name, webViewLink', supportsAllDrives: true,
+        });
+        return up.data;
+    }
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] }, media,
+        fields: 'id, name, webViewLink', supportsAllDrives: true,
+    });
+    return created.data;
+}
+
+// Keeps the newest `keep` archives and TRASHES the rest — recoverable from
+// Drive's own trash for 30 days, same as everything else this app removes.
+// A backup routine that hard-deletes is one bad sort away from deleting the
+// wrong thing permanently.
+async function trimBackups(keep = 30) {
+    const drive = getDrive();
+    const parentId = await getOrCreateBackupsFolder(drive);
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and trashed = false and name contains 'jarvis-data-'`,
+        fields: 'files(id, name)', pageSize: 200,
+        orderBy: 'name desc',
+        supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+    });
+    const files = list.data.files || [];
+    // Sorted by NAME, which is jarvis-data-YYYY-MM-DD and therefore sorts
+    // chronologically. Deliberately not by modifiedTime: re-uploading an old
+    // archive would make it look like the newest and push a genuinely recent
+    // one out of the window.
+    const doomed = files.slice(Math.max(0, keep));
+    for (const f of doomed) {
+        try {
+            await drive.files.update({ fileId: f.id, requestBody: { trashed: true }, supportsAllDrives: true });
+        } catch (e) {
+            console.warn(`[DRIVE] could not trim backup ${f.name}:`, e.message);
+        }
+    }
+    return doomed.length;
+}
+
 // ── one-time rename of a report file ──────────────────────────────────────
 // Added 2026-09-02, when the monthly loads workbooks were renamed from
 // "Loads-YYYY-MM.xlsx" to "YYYY_MM Loads" (Apsara: "name that as
@@ -694,7 +783,7 @@ async function uploadYardChatLog(day, buffer) {
     return { fileId: created.data.id, name, webViewLink: created.data.webViewLink, replaced: false };
 }
 
-module.exports = { upsertReportFile, renameReportFile, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
+module.exports = { upsertReportFile, renameReportFile, uploadBackupJson, trimBackups, getOrCreateBackupsFolder, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

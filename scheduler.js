@@ -1103,10 +1103,27 @@ function start() {
             .catch(e => console.error('[SCHED] fact-replica sync:', e.message));
     }, TZ);
 
+    // ── nightly data backup ───────────────────────────────────────────────
+    // Apsara, 2026-09-02: "What if some day this app goes down?"
+    //
+    // Everything else that reaches Drive is a DERIVED report. payments.json
+    // and petty_cash.json — who was paid what, and the cash ledger — existed
+    // in one file on one machine and could not be rebuilt from a spreadsheet
+    // of weights. This is the raw stores, dated, kept 30 days.
+    //
+    // 02:00, chosen to sit in the quiet window: after the 23:45 learning
+    // review and the 23:00 archive, before the 03:30 fact replica. Nothing
+    // else is writing, so the archive is a clean point-in-time copy rather
+    // than a set of files caught mid-change.
+    cron.schedule('0 2 * * *', () => {
+        require('./helpers/backup').runBackup()
+            .catch(e => console.error('[SCHED] nightly data backup FAILED:', e.message));
+    }, TZ);
+
     // Own timezone — America/New_York, not the shared LA `TZ` — see
     // eodYardReport's comment for why.
     cron.schedule('0 20 * * *', () => eodYardReport().catch(e => console.error('[SCHED] eod-yard-report:', e)), { timezone: 'America/New_York' });
-    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 3:30AM fact backup, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
+    console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 2AM data backup, 3:30AM fact backup, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
 }
 
 module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText };
