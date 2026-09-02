@@ -1790,6 +1790,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 pettyEntries: listEntries(),
                 from: ymd(req.query.from),
                 to: ymd(req.query.to),
+                // "just Zelle" / "just Wire" / "just Cash" — narrows every
+                // figure, not only the rows. See helpers/spendReport.js.
+                method: req.query.method,
             }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

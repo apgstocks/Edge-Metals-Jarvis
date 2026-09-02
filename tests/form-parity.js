@@ -164,9 +164,17 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
     return null;
   };
   const strip = (t) => String(t).replace(/\s+/g,' ').trim();
-  for (const fn of ['itemHasContent','setDraftStatus','saveLoadDraft',
-                    'queueLoadDraftSave','clearLoadDraft','offerLoadDraft',
-                    'restoreLoadDraft','discardOfferedDraft','draftStripHtml','resumeDraft']) {
+  // currentDraftPayload and applyLoadDraft are BACK in this list as of
+  // 2026-09-02. They were pulled out yesterday when the MM/DD/YYYY work landed
+  // on the website only, leaving the app with native date inputs — two
+  // different widgets cannot share one read/write path. Today the app got the
+  // same text-plus-picker fields, so the divergence closed and byte-identity
+  // is true again. Restored rather than left relaxed: a weaker check that is
+  // no longer needed is a weaker check nobody remembers to tighten.
+  for (const fn of ['itemHasContent','setDraftStatus','currentDraftPayload','saveLoadDraft',
+                    'queueLoadDraftSave','clearLoadDraft','applyLoadDraft','offerLoadDraft',
+                    'restoreLoadDraft','discardOfferedDraft','draftStripHtml','resumeDraft',
+                    'toUsDate','toIsoDate','fmtDate','wireUsDateField']) {
     ck(`draft: ${fn} is identical in both`, !!grabFn(web,fn) && strip(grabFn(web,fn)) === strip(grabFn(app,fn)));
   }
 
@@ -208,9 +216,11 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
       return fn().date;
     };
     ck('draft: the website sends ISO to the server', outOf(web, '09/02/2026') === '2026-09-02');
-    ck('draft: the app sends ISO to the server', outOf(app, '2026-09-02') === '2026-09-02');
+    ck('draft: the app sends ISO to the server', outOf(app, '09/02/2026') === '2026-09-02');
+    // Same INPUT now, not just the same output — the two fields hold the same
+    // format, so this compares like with like.
     ck('draft: both clients put the SAME date on the wire',
-       outOf(web, '09/02/2026') === outOf(app, '2026-09-02'));
+       outOf(web, '09/02/2026') === outOf(app, '09/02/2026'));
 
     // IN: a draft written by EITHER client (always ISO) must load into each
     // client's field in the format that field expects.
@@ -235,7 +245,10 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
       return got;
     };
     ck('draft: an ISO draft opens as MM/DD/YYYY on the website', inTo(web, '2026-09-02') === '09/02/2026');
-    ck('draft: an ISO draft opens as ISO in the app (native picker)', inTo(app, '2026-09-02') === '2026-09-02');
+    // Was '2026-09-02' until 2026-09-02, when the app stopped using native
+    // date inputs. Both clients now show the same thing on the same draft,
+    // which is what this file exists to be able to say.
+    ck('draft: and the same in the app, now that it converts too', inTo(app, '2026-09-02') === '09/02/2026');
 
     // The divergence must stay EXACTLY this narrow. If the two functions ever
     // differ by more than the date conversion, that is drift again and this

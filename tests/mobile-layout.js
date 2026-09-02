@@ -24,6 +24,12 @@ const ck = (n, c, extra) => {
 };
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
+// Strips line comments before matching. This trap has caught me three times
+// today: a comment that DESCRIBES the thing being asserted contains the exact
+// string being searched for, so the assertion passes (or fails) on prose
+// rather than on code. Every source-matching check below goes through this.
+const nocomment = (t) => String(t).split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
+
 const ROOT = path.join(__dirname, '..');
 const CLIENTS = [
     ['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
@@ -157,6 +163,72 @@ for (const [label, src] of CLIENTS) {
     const outside = (stripMediaBlocks(src).match(/\.stack-table[^{;]*\{/g) || []);
     ck(`${label}: no .stack-table rule outside the phone breakpoint`, outside.length === 0,
        `found: ${outside.slice(0, 2).join(' ')}`);
+}
+
+// ── 6. a date field without a picker ──────────────────────────────────────
+// Apsara, 2026-09-02: "date picker should be there wherever date used."
+//
+// Her two rules pull against each other, and that tension is the whole story:
+//   "wherever date applicable it should be mm/dd/yyyy only"  (09-01)
+//   "date picker should be there wherever date used"         (09-02)
+// A native <input type="date"> renders in the DEVICE locale, so on an en-IN
+// phone it shows DD/MM/YYYY and breaks the first rule. Replacing those inputs
+// with text boxes is what satisfied the first rule and took the calendar away.
+//
+// The answer is both: a text box that always reads MM/DD/YYYY, with a hidden
+// native date input beside it purely to open the platform calendar.
+section('F — every date field can be typed AND picked');
+for (const [label, src] of CLIENTS) {
+    ck(`${label}: the date helpers exist`,
+       /function toUsDate\(/.test(src) && /function toIsoDate\(/.test(src) && /function wireUsDateField\(/.test(src),
+       'the app had none of these until 2026-09-02 — dates were native inputs in device locale');
+
+    const wire = (() => {
+        const i = src.indexOf('function wireUsDateField(');
+        let d = 0, k = src.indexOf('{', src.indexOf(')', i));
+        for (; k < src.length; k++) {
+            if (src[k] === '{') d++;
+            else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+        }
+        return '';
+    })();
+
+    ck(`${label}: wiring a field builds a picker`, /native\.type = 'date'/.test(wire),
+       'the calendar comes from a real date input — nothing else opens the platform picker');
+    ck(`${label}:   opened by a visible button`, /aria-label', 'Open the calendar'/.test(wire));
+    ck(`${label}:   via showPicker, with a click fallback`,
+       /native\.showPicker\(\)/.test(wire) && /native\.click\(\)/.test(wire));
+    // display:none cannot be focused and showPicker throws on an unrendered
+    // input — the hidden input has to be rendered but invisible.
+    ck(`${label}:   the native input is invisible, NOT display:none`,
+       /opacity:0/.test(wire) && !/display:none/.test(nocomment(wire)),
+       'showPicker() throws on an input that is not rendered');
+    ck(`${label}: picking writes MM/DD/YYYY back`, /el\.value = `\$\{m\}\/\$\{d\}\/\$\{y\}`/.test(wire));
+    // A picked date that fires no event sits there looking applied and is not
+    // — the inventory and report filters listen on the text box.
+    ck(`${label}:   and fires input+change so filters notice`,
+       /dispatchEvent\(new Event\('input'/.test(wire) && /dispatchEvent\(new Event\('change'/.test(wire),
+       'a picked date that fires nothing looks applied and is not');
+    ck(`${label}: wiring twice does not stack two pickers`, /dataset\.dpWired/.test(wire));
+
+    // No native date input may remain in the MARKUP — that is the one that
+    // renders in device locale.
+    // Comments quote <input type="date"> while explaining why it is gone, so
+    // the raw source always "contains" one.
+    const markupDates = (nocomment(src).match(/<input[^>]*type="date"/g) || []);
+    ck(`${label}: no bare <input type="date"> is left in the markup`, markupDates.length === 0,
+       `${markupDates.length} left — those render DD/MM/YYYY on an en-IN phone`);
+
+    // Every date-looking field must be wired, or it is a text box with no
+    // calendar — which is the state she complained about.
+    const wired = new Set((src.match(/wireUsDateField\('([a-zA-Z_]+)'\)/g) || [])
+        .map(m => /'([a-zA-Z_]+)'/.exec(m)[1]));
+    const fields = (src.match(/<input id="([a-zA-Z_]*(?:date|Date|from|to|From|To|erd|cutoff)[a-zA-Z_]*)"/g) || [])
+        .map(m => /id="([^"]+)"/.exec(m)[1])
+        .filter(id => !/^(inv_from|inv_to)$/.test(id) || true);
+    const missing = fields.filter(id => !wired.has(id));
+    ck(`${label}: every date field is wired`, missing.length === 0,
+       `unwired: ${missing.join(', ')}`);
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

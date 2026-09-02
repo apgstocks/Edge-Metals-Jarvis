@@ -4288,11 +4288,15 @@ function renderInvLines() {
 // claims to describe — and here the two ledgers are money.
 let spendFrom = '';
 let spendTo = '';
+// '' means every method. Held here so it survives a repaint, like the date
+// range — a filter that resets itself when you tap Apply is worse than none.
+let spendMethod = '';
 
 async function renderSpendReportTab() {
   const qs = [];
   if (spendFrom) qs.push('from=' + encodeURIComponent(spendFrom));
   if (spendTo) qs.push('to=' + encodeURIComponent(spendTo));
+  if (spendMethod) qs.push('method=' + encodeURIComponent(spendMethod));
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -4321,7 +4325,9 @@ async function renderSpendReportTab() {
       <div style="margin-bottom:18px;">
         <div class="eyebrow">// Reports</div>
         <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Where the money went</h2>
-        <div style="font-size:13px; color:var(--text-muted);">Load payments and expenses together, by month and by how they were paid.</div>
+        <div style="font-size:13px; color:var(--text-muted);">${spendMethod
+          ? `Showing <strong style="color:var(--text-strong);">${esc(spendMethod)}</strong> only — every figure below is ${esc(spendMethod)}.`
+          : 'Load payments and expenses together, by month and by how they were paid.'}</div>
       </div>
 
       <!-- ── the filter bar ───────────────────────────────────────────────
@@ -4433,6 +4439,12 @@ async function renderSpendReportTab() {
   document.querySelectorAll('.btn-spend-preset').forEach(b => b.addEventListener('click', () => {
     const [f, t] = presets[Number(b.dataset.i)][1]();
     spendFrom = f; spendTo = t;
+    renderSpendReportTab();
+  }));
+  // One method at a time. Re-runs the whole report rather than hiding rows —
+  // see helpers/spendReport.js for why every figure has to follow the filter.
+  document.querySelectorAll('.btn-spend-method').forEach(b => b.addEventListener('click', () => {
+    spendMethod = b.dataset.method || '';
     renderSpendReportTab();
   }));
 }

@@ -93,9 +93,26 @@ function collectRows({ payments, expenses, from, to }) {
 // month -> { method -> amount }, plus per-month and per-method totals.
 // The shape a table renders from directly, so no client has to pivot it and
 // get a different answer.
-function buildSpendReport({ payments, expenses, pettyEntries, from, to } = {}) {
-    const rows = collectRows({ payments, expenses, from, to });
+// `method` narrows the WHOLE report to one payment method — "just Zelle",
+// "just Cash" — per Apsara 2026-09-02: "what if i want to see report wherever
+// just zelle is used/wire/just cash. mimic quickbook report workflow."
+//
+// QuickBooks narrows a report by a column and every figure follows. So this
+// filters the ROWS and computes everything from what is left: the totals, the
+// month table, the load/expense split all mean "of this method". A version
+// that hid rows but kept the old totals would put a number at the bottom that
+// the rows above do not add up to — the one thing a report must never do.
+//
+// The COLUMNS still list every method, so the table keeps its shape and it is
+// obvious the others are empty by filter rather than by accident.
+function buildSpendReport({ payments, expenses, pettyEntries, from, to, method } = {}) {
     const columns = METHODS.concat([UNCLASSIFIED]);
+    // Only a method the report actually reports in. Anything else is ignored
+    // rather than returning nothing — a typo in a query string should not look
+    // like "you spent nothing".
+    const wanted = columns.includes(String(method || '').trim()) ? String(method).trim() : '';
+    const rows = collectRows({ payments, expenses, from, to })
+        .filter(r => !wanted || r.method === wanted);
 
     const months = new Map();
     const byMethod = Object.fromEntries(columns.map((m) => [m, 0]));
@@ -127,7 +144,13 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to } = {}) {
     // add up. A report that showed movement without an opening balance would
     // leave "should hold" unanswerable, which is the only question the cash
     // box is really asked.
-    const entries = Array.isArray(pettyEntries) ? pettyEntries : [];
+    // ── the cash box, under a method filter ───────────────────────────────
+    // Petty cash only ever holds cash, so it is meaningless beside a Zelle or
+    // Wire report — showing it there invites reading a cash balance as though
+    // it belonged to those figures. Under "Cash" or "All" it is as relevant as
+    // before.
+    const cashRelevant = !wanted || wanted === 'Cash';
+    const entries = (cashRelevant && Array.isArray(pettyEntries)) ? pettyEntries : [];
     const before = entries.filter((e) => e && e.date && from && String(e.date) < from);
     const within = entries.filter((e) => e && inRange(e.date, from, to));
     const sum = (list, pick) => round2(list.reduce((a, e) => {
@@ -149,6 +172,9 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to } = {}) {
     return {
         from: from || null,
         to: to || null,
+        // Echoed back so the client shows the active button from the SERVER's
+        // answer rather than from what it thinks it asked for.
+        method: wanted || null,
         columns,
         months: monthRows,
         byMethod,

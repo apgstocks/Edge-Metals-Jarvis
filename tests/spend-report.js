@@ -261,6 +261,70 @@ section('H — computed live, never cached');
     ck('  the refund shows as cash back in', build().cash.closing === 5000);
 }
 
+// ── 9. one method at a time ───────────────────────────────────────────────
+section('I — narrowing to just Zelle / just Wire / just Cash');
+{
+    const data = {
+        payments: [
+            { id: 'P1', load_id: 'A', mode: 'Cash',  amount: 300, paid_on: '2026-08-10' },
+            { id: 'P2', load_id: 'B', mode: 'Zelle', amount: 700, paid_on: '2026-08-20' },
+            { id: 'P3', load_id: 'C', mode: 'Wire',  amount: 500, paid_on: '2026-09-02' },
+        ],
+        expenses: [{ id: 'E1', description: 'fuel', payment_method: 'Cash', amount: 100, date: '2026-08-11' }],
+        pettyEntries: [
+            { id: 'a', kind: 'topup',   date: '2026-08-01', amount: 1000 },
+            { id: 'b', kind: 'payment', date: '2026-08-10', amount: -300 },
+        ],
+    };
+    const all = buildSpendReport(data);
+    const zelle = buildSpendReport({ ...data, method: 'Zelle' });
+    const cash = buildSpendReport({ ...data, method: 'Cash' });
+
+    ck('unfiltered still totals everything', all.total === 1600);
+    ck('Zelle narrows the total', zelle.total === 700);
+    ck('Cash narrows the total', cash.total === 400, 'a 300 payment and a 100 expense');
+
+    // QuickBooks narrows a report by a column and EVERY figure follows. A
+    // version that hid rows but kept the old totals would print a number the
+    // rows above it do not add up to.
+    ck('the rows follow', zelle.count === 1 && cash.count === 2);
+    ck('the load/expense split follows',
+       zelle.loadTotal === 700 && zelle.expenseTotal === 0
+       && cash.loadTotal === 300 && cash.expenseTotal === 100);
+    ck('the month table follows',
+       zelle.months.every(m => m.Cash === 0 && m.Wire === 0),
+       'a month row still showing Cash under a Zelle filter is a total nobody can reconcile');
+    ck('  and the month totals still equal the grand total',
+       zelle.months.reduce((a, m) => a + m.total, 0) === zelle.total);
+    ck('the per-method breakdown zeroes the others',
+       zelle.byMethod.Zelle === 700 && zelle.byMethod.Cash === 0);
+
+    // The columns stay, so the table keeps its shape and it is obvious the
+    // others are empty BY FILTER rather than by accident.
+    ck('every column is still listed', zelle.columns.length === all.columns.length);
+
+    // Petty cash only ever holds cash. Beside a Zelle report it would invite
+    // reading a cash balance as though it belonged to those figures.
+    ck('the cash box is shown under Cash', cash.cash.closing === 700);
+    ck('  and under no filter', all.cash.closing === 700);
+    ck('  but NOT under Zelle', zelle.cash.closing === 0 && zelle.cash.out === 0,
+       'a cash balance beside a Zelle total is a number that means nothing there');
+
+    ck('the method is echoed back', zelle.method === 'Zelle' && all.method === null,
+       'so the client shows the active button from the server, not from what it thinks it asked');
+
+    // A typo must not read as "you spent nothing".
+    const junk = buildSpendReport({ ...data, method: 'Nonsense' });
+    ck('an unknown method is ignored, not applied', junk.total === 1600 && junk.method === null);
+    ck('an empty method is ignored', buildSpendReport({ ...data, method: '  ' }).total === 1600);
+
+    // And it composes with the date range.
+    const augCash = buildSpendReport({ ...data, method: 'Cash', from: '2026-08-01', to: '2026-08-31' });
+    ck('method and date range compose', augCash.total === 400 && augCash.count === 2);
+    const sepCash = buildSpendReport({ ...data, method: 'Cash', from: '2026-09-01' });
+    ck('  and a range with none of that method is empty', sepCash.total === 0);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}
