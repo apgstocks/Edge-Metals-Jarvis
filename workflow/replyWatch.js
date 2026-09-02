@@ -2298,8 +2298,26 @@ function buildDeadlineMessage(due) {
         // daysToDeadline is already resolved against the RECEIVED date by
         // applyDeadlineUrgency, so use it and print a real date. The sender's
         // own words are only echoed when they name something absolute.
-        const RELATIVE = /^(today|tomorrow|tonight|asap|eod|eow|cob|now|urgent|immediately|soon|shortly|this (morning|afternoon|evening|week)|next week|end of (day|week|month))$/i;
-        const absolute = d.deadline && !RELATIVE.test(String(d.deadline).trim()) ? ` (${d.deadline})` : '';
+        // LIVE AGAIN, 2026-09-02: "TOMORROW (after tomorrow morning) — release
+        // timing for shipment". Apsara: "What is this?"
+        //
+        // The regex below used to be ANCHORED (^...$), so it only recognised a
+        // deadline that was EXACTLY a relative word. "after tomorrow morning"
+        // has three, sailed through as if it were an absolute date, and got
+        // printed verbatim next to the label that already said TOMORROW.
+        //
+        // Anchoring was the wrong instinct twice over, because stripping is
+        // the wrong remedy: the sender's own words are the useful part
+        // ("after tomorrow MORNING" is not the same instruction as "tomorrow"),
+        // and resolveRelativeDates already turns a relative word into the day
+        // it meant, anchored on when the mail arrived. So resolve first, and
+        // only drop the text if a relative word SURVIVES — which now means we
+        // genuinely could not date it, and echoing it would be a lie on a
+        // timer.
+        const resolvedDeadline = resolveRelativeDates(d.deadline, d.receivedAt || d.firstFlaggedAt);
+        const STILL_RELATIVE = /\b(today|tomorrow|tonight|asap|eod|eow|cob|now|urgent|immediately|soon|shortly|next week|end of (day|week|month))\b/i;
+        const absolute = resolvedDeadline && !STILL_RELATIVE.test(resolvedDeadline)
+            ? ` (${resolvedDeadline})` : '';
         const when = d.daysToDeadline < 0
             ? `OVERDUE by ${Math.abs(d.daysToDeadline)}d${absolute}`
             : d.daysToDeadline === 0 ? `TODAY${absolute}`

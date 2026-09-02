@@ -2181,6 +2181,56 @@ section('AC3 — the digest shows both facts, and does NOT hide the item');
     ck('an item with no evidence gets no extra line', !/was PAID/.test(plain), plain.slice(0, 120));
 }
 
+
+section('AD — a deadline line never prints a relative word twice');
+{
+    // LIVE, 2026-09-02 21:55. Apsara, reading her own reminder:
+    //   "• TOMORROW (after tomorrow morning) — release timing for shipment"
+    //   "What is this?"
+    // The label says TOMORROW because daysToDeadline is 1 — that part is
+    // computed and correct. The parenthetical echoed the sender's raw words,
+    // which contained "tomorrow" as well. Two tomorrows, one of them dated
+    // from a mail that arrived days ago and therefore no longer true.
+    const base = {
+        fromName: 'Tiffany Furleigh', subject: 'release timing',
+        asked_for: 'release timing for shipment',
+        receivedAt: '2026-09-02T16:00:00-07:00', firstFlaggedAt: '2026-09-02T16:00:00-07:00',
+    };
+    const line = (over) => rw.buildDeadlineMessage([{ ...base, ...over }])
+        .split('\n').find((l) => l.startsWith('•')) || '';
+
+    // 1. A relative word inside the sender's phrase is RESOLVED, not echoed.
+    //    "after tomorrow morning" is not the same instruction as "tomorrow" —
+    //    the MORNING is the part worth keeping — so we date it rather than
+    //    strip it.
+    const l1 = line({ deadline: 'after tomorrow morning', daysToDeadline: 1 });
+    ck('AD1 the sender\'s "tomorrow" is dated from when the mail arrived',
+        /after September 3 morning/.test(l1), l1);
+    ck('AD1 and the word "tomorrow" appears only in the computed label',
+        (l1.match(/tomorrow/gi) || []).length === 1, l1);
+
+    // 2. An absolute deadline is echoed verbatim — this is the case the
+    //    parenthetical exists for, and the fix must not cost it.
+    const l2 = line({ deadline: 'Monday 9/8 at 1600', daysToDeadline: 6 });
+    ck('AD2 an absolute deadline still shows beside the countdown',
+        /in 6d \(Monday 9\/8 at 1600\)/.test(l2), l2);
+
+    // 3. A word we cannot date at all is DROPPED. "ASAP" resolves to nothing;
+    //    printing it beside TODAY adds no information and ages badly.
+    const l3 = line({ deadline: 'ASAP', daysToDeadline: 0 });
+    ck('AD3 an undatable urgency word is dropped, not echoed',
+        /^• \*TODAY\* —/.test(l3), l3);
+
+    // 4. No anchor date means resolveRelativeDates honestly refuses to
+    //    convert — and an unconverted relative word must not be printed.
+    const l4 = rw.buildDeadlineMessage([{
+        fromName: 'X', subject: 's', asked_for: 'the thing',
+        deadline: 'tomorrow', daysToDeadline: 1 }])
+        .split('\n').find((l) => l.startsWith('•')) || '';
+    ck('AD4 with no receivedAt the unresolvable word is dropped',
+        /^• \*TOMORROW\* —/.test(l4), l4);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
