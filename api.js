@@ -1072,6 +1072,25 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // ?to=YYYY-MM-DD (inclusive) narrow the range; omitted = all-time.
     // Visible to every role (staff included) — same as the rest of
     // /api/loads/* under STAFF_ALLOWED_PATH_PREFIXES, no extra gate needed.
+    // Every line of ONE material, across every load — the detail behind an
+    // Inventory row. Per Apsara 2026-09-02. Same optional from/to as the
+    // report above, so opening a type while a date filter is applied shows
+    // the lines from that window rather than silently all of them.
+    //
+    // Sits under /api/loads, so it is on the staff allowlist like the rest of
+    // the yard screens — it exposes nothing a staff user cannot already see
+    // on the load itself.
+    app.get('/api/loads/inventory/items', (req, res) => {
+        try {
+            const { loadLoads, getItemLines } = require('./helpers/loads');
+            const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : undefined);
+            res.json(getItemLines(loadLoads(), {
+                description: req.query.description,
+                from: ymd(req.query.from),
+                to: ymd(req.query.to),
+            }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     app.get('/api/loads/inventory', (req, res) => {
         try {
             const { loadLoads, getInventoryReport } = require('./helpers/loads');
@@ -1137,6 +1156,66 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── REGISTRATION ORDER MATTERS HERE ───────────────────────────────────
+    // Moved above /api/loads/:id on 2026-09-02. Express matches routes in the
+    // order they are registered, and ':id' matches ANY single segment — so
+    // with these declared afterwards, GET /api/loads/lookup was being served
+    // by the :id handler, which looked for a load called "lookup", failed, and
+    // returned 404. Same for /api/loads/stock and /api/loads/stock/suggest.
+    //
+    // NOT THEORETICAL: dashboard/outbound-loads.html calls /api/loads/lookup
+    // to search loads when building a sale, and that search has been returning
+    // 404 in production. tests/yard-stock.js stayed green because it asserts
+    // the staff ALLOWLIST contains the path, not that the route resolves.
+    //
+    // Any future /api/loads/<literal> route must go above the :id line too.
+    // Lightweight lookup for the outbound-load form's "link inbound loads"
+    // picker — id/date/seller/net/amount only, not the full record (items,
+    // photo links, etc.), since all this needs is enough to let Apsara pick
+    // which purchase(s) this sale's material came from.
+    app.get('/api/loads/lookup', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const q = String(req.query.q || '').trim().toLowerCase();
+            const rows = loadLoads()
+                .filter((l) => !q || (l.id || '').toLowerCase().includes(q) || (l.seller || '').toLowerCase().includes(q))
+                .slice(0, 50)
+                .map((l) => ({ id: l.id, date: l.date, seller: l.seller, net_weight: l.net_weight, amount: l.amount, weight_unit: l.weight_unit }));
+            res.json({ loads: rows });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    // FIFO proposal for drawing a quantity of one material — the client shows
+    // it pre-filled and she adjusts when reality differs (a specific pile went
+    // into a specific container).
+    app.get('/api/loads/stock/suggest', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const { loadOutboundLoads } = require('./helpers/outboundLoads');
+            const { suggestDraws } = require('./helpers/stock');
+            res.json(suggestDraws(loadLoads(), loadOutboundLoads(), req.query.description || '', req.query.weight));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    // ── Stock — what is still in the yard ───────────────────────────────────
+    // Per Apsara 2026-08-24. Kept OFF /api/loads/inventory deliberately: she
+    // asked for these to stay separate, so the Inventory tab remains the
+    // purchase log it has always been and this is its own view. Same staff
+    // visibility as the rest of /api/loads/*.
+    app.get('/api/loads/stock', (req, res) => {
+        try {
+            const { loadLoads } = require('./helpers/loads');
+            const { loadOutboundLoads } = require('./helpers/outboundLoads');
+            const { stockReport, lotReport } = require('./helpers/stock');
+            const inbound = loadLoads(), outbound = loadOutboundLoads();
+            // unitCost is NOT hidden from staff, and briefly was — that was
+            // wrong. Staff type the purchase price into every load they
+            // create, so a per-lot cost derived from those same figures is
+            // nothing they haven't already entered by hand. Hiding it here
+            // while showing it on the form it came from is theatre, and
+            // theatre in an access check is worse than none: it reads as a
+            // boundary that isn't one.
+            res.json({ byType: stockReport(inbound, outbound), lots: lotReport(inbound, outbound) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     app.get('/api/loads/:id', (req, res) => {
         try {
             const { getLoad } = require('./helpers/loads');
@@ -1926,21 +2005,6 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
-    // Lightweight lookup for the outbound-load form's "link inbound loads"
-    // picker — id/date/seller/net/amount only, not the full record (items,
-    // photo links, etc.), since all this needs is enough to let Apsara pick
-    // which purchase(s) this sale's material came from.
-    app.get('/api/loads/lookup', (req, res) => {
-        try {
-            const { loadLoads } = require('./helpers/loads');
-            const q = String(req.query.q || '').trim().toLowerCase();
-            const rows = loadLoads()
-                .filter((l) => !q || (l.id || '').toLowerCase().includes(q) || (l.seller || '').toLowerCase().includes(q))
-                .slice(0, 50)
-                .map((l) => ({ id: l.id, date: l.date, seller: l.seller, net_weight: l.net_weight, amount: l.amount, weight_unit: l.weight_unit }));
-            res.json({ loads: rows });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
 
     app.delete('/api/outbound-loads/:id', async (req, res) => {
         try {
@@ -2741,39 +2805,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // ── Stock — what is still in the yard ───────────────────────────────────
-    // Per Apsara 2026-08-24. Kept OFF /api/loads/inventory deliberately: she
-    // asked for these to stay separate, so the Inventory tab remains the
-    // purchase log it has always been and this is its own view. Same staff
-    // visibility as the rest of /api/loads/*.
-    app.get('/api/loads/stock', (req, res) => {
-        try {
-            const { loadLoads } = require('./helpers/loads');
-            const { loadOutboundLoads } = require('./helpers/outboundLoads');
-            const { stockReport, lotReport } = require('./helpers/stock');
-            const inbound = loadLoads(), outbound = loadOutboundLoads();
-            // unitCost is NOT hidden from staff, and briefly was — that was
-            // wrong. Staff type the purchase price into every load they
-            // create, so a per-lot cost derived from those same figures is
-            // nothing they haven't already entered by hand. Hiding it here
-            // while showing it on the form it came from is theatre, and
-            // theatre in an access check is worse than none: it reads as a
-            // boundary that isn't one.
-            res.json({ byType: stockReport(inbound, outbound), lots: lotReport(inbound, outbound) });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
 
-    // FIFO proposal for drawing a quantity of one material — the client shows
-    // it pre-filled and she adjusts when reality differs (a specific pile went
-    // into a specific container).
-    app.get('/api/loads/stock/suggest', (req, res) => {
-        try {
-            const { loadLoads } = require('./helpers/loads');
-            const { loadOutboundLoads } = require('./helpers/outboundLoads');
-            const { suggestDraws } = require('./helpers/stock');
-            res.json(suggestDraws(loadLoads(), loadOutboundLoads(), req.query.description || '', req.query.weight));
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
 
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────
     // Read-only — every mutation (send/reminder/escalation/reply) happens

@@ -464,4 +464,78 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     };
 }
 
-module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad, getInventoryReport };
+// ── every line of one material, across every load ─────────────────────────
+//
+// Per Apsara 2026-09-02: "in inventory say if i select sealed units, i want
+// the matching loads that contain sealed units to be displayed .. matching
+// sealed units from every load in rows with gross tare net price amount. on
+// clicking that row, that load ticket should open."
+//
+// The Inventory tab already GROUPS by description; this is the layer beneath
+// it — the individual weighings that add up to that group's total. "We have
+// 12,400 lb of sealed units" is only useful if you can then ask which loads
+// it came in on and what each was paid at.
+//
+// A SEPARATE CALL, not folded into getInventoryReport. That report is fetched
+// on every visit to the tab, and it exists to summarise: attaching every item
+// line to every group would ship the whole item history to draw a summary. One
+// yard-year is tens of thousands of lines. So the summary stays a summary and
+// the detail is fetched when a type is actually opened.
+//
+// MATCHED THE SAME WAY THE GROUPING MATCHES — trimmed and case-insensitive,
+// exactly as groupItemsByDescription does. If these two ever disagreed, a
+// group would show a total with no rows to explain it, or rows that do not add
+// up to their own heading, which is worse than either alone.
+function getItemLines(allLoads, { description, from, to } = {}) {
+    const want = String(description || '').trim().toLowerCase();
+    if (!want) return { description: null, lines: [], count: 0, totals: null };
+
+    const filtered = (from || to)
+        ? (allLoads || []).filter(l => l.date && (!from || l.date >= from) && (!to || l.date <= to))
+        : (allLoads || []);
+
+    const lines = [];
+    for (const l of filtered) {
+        for (const it of (Array.isArray(l.items) ? l.items : [])) {
+            if (String(it.description || 'Other').trim().toLowerCase() !== want) continue;
+            lines.push({
+                load_id: l.id,
+                date: l.date || null,
+                seller: l.seller || null,
+                // pdf_link is what makes the row clickable. Sent as-is —
+                // null when the ticket has not been generated yet, which the
+                // clients show rather than hide, so "no PDF" is visibly
+                // different from "nothing here".
+                pdf_link: l.pdf_link || null,
+                description: it.description || 'Other',
+                gross_weight: it.gross_weight ?? null,
+                tare_weight: it.tare_weight ?? null,
+                net_weight: it.net_weight ?? null,
+                price: it.price ?? null,
+                amount: it.amount ?? null,
+                unit: it.unit || l.weight_unit || null,
+            });
+        }
+    }
+    // Newest first, matching the Loads deck and every other list here.
+    lines.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))
+        || String(b.load_id || '').localeCompare(String(a.load_id || '')));
+
+    const sum = (k) => round2(lines.reduce((a, r) => a + (Number(r[k]) || 0), 0)) || 0;
+    return {
+        description: lines.length ? lines[0].description : String(description).trim(),
+        count: lines.length,
+        // Totals computed HERE rather than trusting the caller to re-add the
+        // rows: the figure under a column must be the sum of the column above
+        // it, and two places adding the same numbers is how that stops being
+        // true.
+        totals: {
+            gross: sum('gross_weight'), tare: sum('tare_weight'),
+            net: sum('net_weight'), amount: sum('amount'),
+            unit: lines.find(r => r.unit)?.unit || 'lb',
+        },
+        lines,
+    };
+}
+
+module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad, getInventoryReport, getItemLines };

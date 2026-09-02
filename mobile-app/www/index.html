@@ -4500,6 +4500,104 @@ function todayLocalDateStrForExpense() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// ── the lines behind an Inventory row ──────────────────────────────────────
+// Apsara, 2026-09-02: "if i select sealed units, i want the matching loads
+// that contain sealed units to be displayed .. matching sealed units from
+// every load in rows with gross tare net price amount. on clicking that row,
+// that load ticket should open."
+//
+// FETCHED ON OPEN, not shipped with the summary. The Inventory report is
+// requested every time the tab is visited and exists to summarise; attaching
+// every item line to every group would send the whole item history to draw a
+// summary — tens of thousands of lines over a yard-year.
+//
+// The date filter currently on screen is passed through, so opening a type
+// while a range is applied shows that range's lines and not silently all of
+// them.
+const invLinesCache = {};        // description -> payload, per render
+let invLinesOpen = null;         // which type is expanded
+
+async function toggleInvLines(description, from, to) {
+  const key = String(description || '');
+  invLinesOpen = (invLinesOpen === key) ? null : key;
+  if (invLinesOpen && !invLinesCache[key]) {
+    const qs = ['description=' + encodeURIComponent(key)];
+    if (from) qs.push('from=' + encodeURIComponent(from));
+    if (to) qs.push('to=' + encodeURIComponent(to));
+    try {
+      invLinesCache[key] = await api('/api/loads/inventory/items?' + qs.join('&'));
+    } catch (e) {
+      // An error, not an empty list. A failed fetch that renders as "no rows"
+      // says the material does not exist, which is a different and wrong
+      // statement — the same mistake the description catalogue was making.
+      invLinesCache[key] = { error: e.message || 'could not load', lines: [], count: 0 };
+    }
+  }
+  renderInvLines();
+}
+
+function invLinesHtml(key) {
+  const d = invLinesCache[key];
+  if (!d) return '<div style="padding:14px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div>';
+  if (d.error) return `<div style="padding:14px; font-size:12.5px; color:var(--status-danger);">Could not load these lines: ${esc(d.error)}</div>`;
+  if (!d.count) return '<div style="padding:14px; font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">No lines in this range.</div>';
+  const n = (v) => (v == null || v === '' ? '—' : esc(v));
+  const t = d.totals || {};
+  return `
+    <div style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
+      <thead><tr style="background:var(--surface-sunken); text-align:right;">
+        <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Load</th>
+        <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Seller</th>
+        ${['Gross','Tare','Net','Price','Amount'].map(h => `<th style="padding:8px 10px; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
+      </tr></thead>
+      <tbody>
+        ${d.lines.map(r => `
+        <tr class="inv-line-row" data-pdf="${esc(r.pdf_link || '')}" data-load="${esc(r.load_id)}"
+            title="${r.pdf_link ? 'Open this load ticket' : 'No ticket generated for this load yet'}"
+            style="border-top:1px solid var(--border-subtle); text-align:right; cursor:${r.pdf_link ? 'pointer' : 'default'};">
+          <td style="padding:8px 10px; text-align:left; font-family:var(--font-mono); color:${r.pdf_link ? 'var(--accent)' : 'var(--text-strong)'};">${esc(r.load_id)}${r.pdf_link ? '' : ' <span style="color:var(--text-faint); font-size:10px;">(no ticket)</span>'}</td>
+          <td style="padding:8px 10px; text-align:left;">${esc(r.seller || '—')}<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : (r.date || ''))}</div></td>
+          <td style="padding:8px 10px; font-family:var(--font-mono);">${n(r.gross_weight)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono);">${n(r.tare_weight)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(r.net_weight)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono);">${r.price == null ? '—' : esc(fmtRate ? fmtRate(r.price) : r.price)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${r.amount == null ? '—' : esc(fmtAmount(r.amount))}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid var(--border-default); text-align:right; background:var(--surface-sunken);">
+          <td colspan="2" style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-weight:700;">${esc(d.count)} line${d.count === 1 ? '' : 's'}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.gross)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:700;">${n(t.tare)}</td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${n(t.net)}</td>
+          <td style="padding:8px 10px;"></td>
+          <td style="padding:8px 10px; font-family:var(--font-mono); font-weight:800;">${t.amount == null ? '—' : esc(fmtAmount(t.amount))}</td>
+        </tr>
+      </tbody>
+    </table></div>`;
+}
+
+// Paints the open panel and wires the row clicks. Delegated per render rather
+// than bound once, because the panel is rebuilt on every toggle.
+function renderInvLines() {
+  document.querySelectorAll('[data-inv-lines]').forEach((el) => {
+    const key = el.getAttribute('data-inv-lines');
+    const on = invLinesOpen === key;
+    el.innerHTML = on ? invLinesHtml(key) : '';
+    el.style.display = on ? 'block' : 'none';
+  });
+  document.querySelectorAll('[data-inv-toggle]').forEach((el) => {
+    el.setAttribute('aria-expanded', invLinesOpen === el.getAttribute('data-inv-toggle') ? 'true' : 'false');
+  });
+  document.querySelectorAll('.inv-line-row').forEach((row) => row.addEventListener('click', () => {
+    const pdf = row.dataset.pdf;
+    // A row with no ticket yet does nothing rather than opening a broken tab.
+    // The row already says "(no ticket)", so the click having no effect is
+    // consistent with what it shows.
+    if (!pdf) return;
+    window.open(pdf, '_blank', 'noopener');
+  }));
+}
+
 // ── Spend report ───────────────────────────────────────────────────────────
 // Apsara, 2026-09-02: "A report needs to be there.. where i can track the
 // monthly spent of cash/zelle/wire. date wise filter can also be there like
@@ -4954,8 +5052,8 @@ function mobInvByTypeHtml(data) {
     ${oh ? '' : '<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); padding-bottom:7px;">Showing what came IN for this range — clear the dates to see what\'s on hand.</div>'}
     ${data.byType.map(g => `
     <div style="padding:9px 0; border-bottom:1px solid var(--border-subtle);">
-      <div style="display:flex; justify-content:space-between; font-size:13px;">
-        <span style="color:var(--text-strong);">${esc(g.description)}</span>
+      <div class="inv-type-row" data-inv-toggle="${esc(g.description)}" style="display:flex; justify-content:space-between; font-size:13px; cursor:pointer;">
+        <span style="color:var(--accent);">▸ ${esc(g.description)}</span>
         <span style="font-family:var(--font-mono); font-size:12px; color:${oh && g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${oh ? `${g.onHand} ${esc(data.unit)}` : `${g.net} ${esc(data.unit)}`}</span>
       </div>
       ${oh ? `<div style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:3px;">
@@ -4963,6 +5061,8 @@ function mobInvByTypeHtml(data) {
         <span>${g.net} bought</span>
       </div>` : `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); margin-top:3px;">${g.count} item${g.count === 1 ? '' : 's'}</div>`}
       ${oh && g.onHand < 0 ? '<div style="font-size:10.5px; color:var(--status-danger); margin-top:3px;">More shipped than recorded as bought — a load may be missing.</div>' : ''}
+      <!-- The lines behind this row, per Apsara 2026-09-02. -->
+      <div data-inv-lines="${esc(g.description)}" style="display:none; margin-top:8px;"></div>
     </div>`).join('')}` : `<div style="padding:14px 0; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
 }
 function mobInvByDayHtml(data) {
@@ -5043,6 +5143,16 @@ function paintInvSubtab() {
   if (!mobInvData) return;
   const body = $('invSubtabBody');
   if (body) body.innerHTML = MOB_INV_SUBTAB_RENDER[mobInvSubTab](mobInvData);
+  // ── wire the item-type drill-down ───────────────────────────────────────
+  // Re-run after EVERY repaint of this body, because switching sub-tab or
+  // applying a date filter rebuilds the rows and would otherwise leave the
+  // toggles dead. The panel state (invLinesOpen) survives the repaint, so a
+  // type that was open stays open.
+  document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
+    toggleInvLines(el.getAttribute('data-inv-toggle'), mobInvFrom, mobInvTo);
+  }));
+  renderInvLines();
+
   $('viewRoot').querySelectorAll('.inv-subtab-btn').forEach(btn => {
     const on = btn.dataset.subtab === mobInvSubTab;
     btn.style.borderBottom = `2px solid ${on ? 'var(--accent)' : 'transparent'}`;
