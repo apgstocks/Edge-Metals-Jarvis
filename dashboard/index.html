@@ -2989,13 +2989,47 @@ let customItemTypes = [];
 // whole catalogue, which is the actual complaint.
 // Mirrors mobile-app/www/index.html.
 let itemTypesStale = false;
+
+// Descriptions added HERE that the server has not confirmed back yet.
+//
+// Second half of Bose's report, 2026-09-02: saving a load POSTs any new
+// description fire-and-forget, and the very next thing that happens is the
+// modal closing and reopening, which calls refreshCustomItemTypes(). That GET
+// routinely wins the race against the POST, comes back WITHOUT the new
+// description, and — because the refresh REPLACES the array — deletes the
+// local copy that was added a moment earlier. The description then vanishes
+// until some later refresh happens to run after the write landed.
+//
+// Held here and merged back in after every refresh, so a description survives
+// however long the server takes. An entry leaves this set the moment the
+// server's own list contains it, so it cannot mask a description that was
+// genuinely deleted in Settings.
+const pendingItemTypes = new Set();
+
+function rememberNewItemType(d) {
+  const v = String(d || '').trim();
+  if (!v) return;
+  if (!customItemTypes.some(x => String(x).toLowerCase() === v.toLowerCase())) customItemTypes.push(v);
+  pendingItemTypes.add(v);
+}
+
 async function refreshCustomItemTypes() {
   try {
     const next = await api('/api/item-types');
     // Only replace on a well-formed answer. A 200 carrying something that is
     // not an array (a proxy's HTML error page, say) must not become the
     // catalogue either.
-    if (Array.isArray(next)) { customItemTypes = next; itemTypesStale = false; }
+    if (Array.isArray(next)) {
+      customItemTypes = next;
+      itemTypesStale = false;
+      // Re-apply anything still in flight. Confirmed entries are dropped from
+      // the pending set rather than merged forever — otherwise deleting a
+      // description in Settings would never take effect on this client.
+      for (const d of Array.from(pendingItemTypes)) {
+        if (customItemTypes.some(x => String(x).toLowerCase() === d.toLowerCase())) pendingItemTypes.delete(d);
+        else customItemTypes.push(d);
+      }
+    }
     else { itemTypesStale = true; }
   } catch (err) {
     itemTypesStale = true;
@@ -3045,6 +3079,44 @@ function lastPriceForDescription(desc) {
 // change if the list ever needs filtering again.
 function itemDescOptions() {
   return customItemTypes.slice();
+}
+
+// ── what the type-ahead OFFERS, which is more than the saved catalogue ────
+// Bose, via Apsara, 2026-09-02: "new item stored -> immediately if we try
+// adding in next line, it is not displaying."
+//
+// A description typed on row 1 was not offered on row 2. It could not be:
+// itemDescOptions() is the SAVED catalogue, and a new description is only
+// registered with the server when the whole load is saved. So for the entire
+// time the form is open — which is when someone is most likely to be entering
+// three lines of the same material — the thing they just typed was invisible
+// to every other row.
+//
+// This unions the catalogue with whatever is currently typed in the form.
+// Nothing is persisted by it; it only affects what the dropdown shows.
+//
+// SEPARATE FUNCTION, deliberately. itemDescOptions() is ALSO what the save
+// handler diffs against to work out which descriptions are new and need
+// POSTing (see knownDescs). Folding the in-form values into that would make
+// every new description look already-known, and it would never be sent to the
+// server at all — trading a display bug for a silent data-loss one.
+function itemDescSuggestions() {
+  const seen = new Set();
+  const out = [];
+  const add = (d) => {
+    const v = String(d || '').trim();
+    if (!v) return;
+    const k = v.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k); out.push(v);
+  };
+  itemDescOptions().forEach(add);
+  // Read from the DOM rather than currentLoadItems: the inputs are the live
+  // truth while someone is typing and the model only catches up on the next
+  // syncItemsFromDom(), which is one keystroke behind. Same reasoning as
+  // updateItemTotals.
+  document.querySelectorAll('#ld_items .ld-item-desc-input').forEach((el) => add(el.value));
+  return out;
 }
 
 // Live-recomputes ONE row's net weight (gross - tare) and amount (net *
@@ -3243,7 +3315,7 @@ function renderItemRows() {
       // Empty box shows the WHOLE catalog rather than nothing — the field is
       // empty by default now, so a blank dropdown on first tap would leave
       // someone who doesn't remember the exact wording with no way in.
-      const all = itemDescOptions();
+      const all = itemDescSuggestions();
       const matches = q ? all.filter(o => String(o).toLowerCase().includes(q)) : all;
       // An exact, complete match is not worth a dropdown showing only the
       // thing already typed — it just covers the fields below it.
@@ -4603,9 +4675,10 @@ function wireLoadsEvents() {
       // now LOGS rather than swallowing, so "it's not remembering my item
       // names" is diagnosable from the console instead of invisible.
       newDescs.forEach(d => {
-        if (!itemDescOptions().some(x => String(x).toLowerCase() === d.toLowerCase())) customItemTypes.push(d);
+        rememberNewItemType(d);
         const post = () => api('/api/item-types', { method: 'POST', body: JSON.stringify({ description: d }) });
-        post().catch(() => new Promise(r => setTimeout(r, 1200)).then(post))
+        post()
+          .catch(() => new Promise(r => setTimeout(r, 1200)).then(post))
           .catch((err) => console.warn('[items] could not save the new description ' + JSON.stringify(d) + ' to the catalogue — it will work this session but may not be offered next time:', err && err.message));
       });
       const payload = {

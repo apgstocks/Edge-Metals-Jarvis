@@ -61,6 +61,11 @@ for (const [label, src] of CLIENTS) {
         const host = { customItemTypes: ['Copper', 'Brass', 'Aluminium'], itemTypesStale: false };
         const fn = new Function('api', 'console', 'host',
             'let customItemTypes = host.customItemTypes; let itemTypesStale = host.itemTypesStale;\n' +
+            // refreshCustomItemTypes now re-applies anything the server has
+            // not confirmed yet (see section B3). Section A does not exercise
+            // that, but the binding has to exist or the function throws and
+            // every assertion here fails for the wrong reason.
+            'const pendingItemTypes = new Set();\n' +
             grab(src, 'refreshCustomItemTypes', label) +
             '\nreturn async () => { await refreshCustomItemTypes(); host.customItemTypes = customItemTypes; host.itemTypesStale = itemTypesStale; };'
         )(apiImpl, { warn: () => {} }, host);
@@ -123,10 +128,15 @@ for (const [label, src] of CLIENTS) {
     const block = withComments.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
     ck(`${label}: the description is added locally BEFORE the POST`,
-       /customItemTypes\.push\(d\);[\s\S]{0,200}api\('\/api\/item-types'/.test(block),
+       /rememberNewItemType\(d\);[\s\S]{0,200}api\('\/api\/item-types'/.test(block),
        'pushing only inside .then() loses the entry entirely when the POST fails');
-    ck(`${label}: pushing does not duplicate one already on the list`,
-       /!itemDescOptions\(\)\.some\(/.test(block));
+    // The dedupe moved into rememberNewItemType when the pending-set was
+    // added, so assert it where it now lives rather than in the save block.
+    const remember = grab(src, 'rememberNewItemType', label);
+    ck(`${label}: adding does not duplicate one already on the list`,
+       /!customItemTypes\.some\(x => String\(x\)\.toLowerCase\(\) === v\.toLowerCase\(\)\)/.test(remember));
+    ck(`${label}: and it is recorded as pending until the server confirms`,
+       /pendingItemTypes\.add\(v\)/.test(remember));
     ck(`${label}: a failed POST is retried once`, /setTimeout\(r, \d+\)\)\.then\(post\)/.test(block));
     ck(`${label}: and a final failure is logged, not swallowed`,
        /console\.warn\('\[items\] could not save the new description/.test(block));
@@ -137,6 +147,108 @@ for (const [label, src] of CLIENTS) {
     // and must never fail because a catalogue entry did not stick.
     ck(`${label}: the load save does not await the catalogue write`,
        !/await api\('\/api\/item-types'/.test(block));
+}
+
+// ── 2b. a description typed on row 1 is offered on row 2 ──────────────────
+section('B2 — the type-ahead offers what is typed elsewhere in THIS form');
+for (const [label, src] of CLIENTS) {
+    // Bose, 2026-09-02: "new item stored -> immediately if we try adding in
+    // next line, it is not displaying."
+    //
+    // The real function, against a fake #ld_items holding two rows.
+    const rows = [{ value: 'Radiators' }, { value: '' }];
+    const suggest = new Function('itemDescOptions', 'document',
+        grab(src, 'itemDescSuggestions', label) + '; return itemDescSuggestions;')(
+        () => ['Copper', 'Brass'],
+        { querySelectorAll: (sel) => (sel === '#ld_items .ld-item-desc-input' ? rows : []) });
+
+    const out = suggest();
+    ck(`${label}: a description typed on another row is offered`, out.includes('Radiators'),
+       'this is the reported bug — it was only offered after the whole load had been saved');
+    ck(`${label}: the saved catalogue is still offered`, out.includes('Copper') && out.includes('Brass'));
+    ck(`${label}: the catalogue comes first`, out.indexOf('Copper') < out.indexOf('Radiators'));
+    ck(`${label}: blank rows contribute nothing`, !out.includes(''));
+
+    // Case-insensitive dedupe, so typing "copper" on a row does not produce a
+    // second entry beside the catalogue's "Copper".
+    const dup = new Function('itemDescOptions', 'document',
+        grab(src, 'itemDescSuggestions', label) + '; return itemDescSuggestions;')(
+        () => ['Copper'],
+        { querySelectorAll: () => [{ value: 'copper' }, { value: '  Copper  ' }] });
+    ck(`${label}: a row repeating a known description does not duplicate it`,
+       dup().filter(d => String(d).toLowerCase() === 'copper').length === 1);
+
+    // ── the interaction that makes this two functions and not one ─────────
+    // The save handler diffs against itemDescOptions() to decide what is NEW
+    // and needs POSTing. If it used the suggestions instead, every freshly
+    // typed description would look already-known and would never be sent —
+    // trading a display bug for silent data loss.
+    const save = src.slice(src.indexOf('const knownDescs = itemDescOptions()'));
+    const block = save.slice(0, save.indexOf('const payload = {'))
+        .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    ck(`${label}: the save handler still diffs against the SAVED catalogue`,
+       /const knownDescs = itemDescOptions\(\)/.test(block) && !/itemDescSuggestions/.test(block),
+       'using suggestions here would make every new description look known and never POST it');
+
+    // ── the function must actually be WIRED to the dropdown ───────────────
+    // Added after mutation-testing: reverting the call site to
+    // itemDescOptions() left every assertion above green, because they call
+    // itemDescSuggestions directly. A perfect function nothing calls is the
+    // exact shape of the dead-feature bug this project shipped once already,
+    // so the wiring gets its own assertion.
+    const menu = src.slice(src.indexOf('const openMatches = () =>'));
+    const openMatches = menu.slice(0, menu.indexOf('input.addEventListener(\'focus\''));
+    ck(`${label}: the dropdown is built from itemDescSuggestions()`,
+       /const all = itemDescSuggestions\(\);/.test(openMatches),
+       'the union is useless if the menu still reads the saved catalogue');
+}
+
+// ── 2c. a refresh must not delete a write the server has not caught up on ──
+section('B3 — a just-saved description survives the next refresh');
+for (const [label, src] of CLIENTS) {
+    // The race: saving a load POSTs the new description fire-and-forget, then
+    // the modal closes and reopens, which refreshes from the server. That GET
+    // routinely beats the POST, returns a list without the new description,
+    // and the refresh REPLACES the array — deleting the local copy.
+    const build = (serverList) => {
+        const host = { customItemTypes: ['Copper'], itemTypesStale: false };
+        const fns = new Function('api', 'console', 'host',
+            'let customItemTypes = host.customItemTypes; let itemTypesStale = false;\n' +
+            grab(src, 'rememberNewItemType', label) + '\n' +
+            'const pendingItemTypes = new Set();\n' +
+            grab(src, 'refreshCustomItemTypes', label) + '\n' +
+            'return { remember: rememberNewItemType, refresh: refreshCustomItemTypes, ' +
+            '  read: () => customItemTypes, pending: () => Array.from(pendingItemTypes) };'
+        )(async () => serverList(), { warn: () => {} }, host);
+        return fns;
+    };
+
+    // Server has not caught up yet.
+    {
+        let list = ['Copper'];
+        const f = build(() => list);
+        f.remember('Radiators');
+        ck(`${label}: it is available immediately after saving`, f.read().includes('Radiators'));
+        await f.refresh();
+        ck(`${label}: and it SURVIVES a refresh that raced the write`,
+           f.read().includes('Radiators'),
+           'the refresh used to replace the array wholesale and delete it');
+        ck(`${label}:   ...and is still pending`, f.pending().includes('Radiators'));
+
+        // Now the server confirms it.
+        list = ['Copper', 'Radiators'];
+        await f.refresh();
+        ck(`${label}: once the server confirms, it stops being re-applied`,
+           !f.pending().includes('Radiators') && f.read().includes('Radiators'));
+
+        // ...and a LATER deletion in Settings must actually take effect, which
+        // it could not if pending entries were merged forever.
+        list = ['Copper'];
+        await f.refresh();
+        ck(`${label}: a description deleted in Settings really goes away`,
+           !f.read().includes('Radiators'),
+           'merging pending entries forever would make deletion impossible on this client');
+    }
 }
 
 // ── 3. the stale comment is gone ──────────────────────────────────────────
