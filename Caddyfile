@@ -24,6 +24,15 @@
 # THE VM. I don't have SSH access to 35.233.131.198, so I can't run these for
 # you — this file and the doc are everything needed once you SSH in.
 
-jarvis.YOURDOMAIN.com {
+# FILLED IN 2026-09-01. Apsara already owns edgemetals.com (it is the mail
+# domain this whole system reads and sends from), so no purchase was ever
+# needed — this file sat waiting on a domain she already had.
+#
+# A SUBDOMAIN, deliberately. One A record for jarvis.edgemetals.com changes
+# nothing else about the zone. Do NOT move edgemetals.com's DNS to another
+# provider to do this: the MX records for bose@ and apsara@ live there, and
+# Jarvis reads that mailbox. Breaking email to fix a login would be a poor
+# trade. Add the one record where the DNS already is.
+jarvis.edgemetals.com {
 	reverse_proxy localhost:8080
 }

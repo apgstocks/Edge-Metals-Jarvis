@@ -6,7 +6,10 @@ Jarvis today is reached at `http://35.233.131.198:8080` — plain HTTP, no TLS.
 Everything else in the Loads feature works fine over plain HTTP; only the two
 camera buttons need this.
 
-**You're on the bare IP with no domain right now → use Option B below.**
+**UPDATE 2026-09-01: Option A is now the one to use.** The premise below
+was wrong — edgemetals.com was always available, so the "no domain" path
+was never actually necessary. The quick tunnel it recommends has since
+caused a real outage, and its hostname changes on every restart.
 Option A (Caddy + Let's Encrypt) is included for later — Let's Encrypt
 cannot issue a certificate for a bare IP address, only for a real domain
 name, so it's not usable until you have one. The `Caddyfile` already in this
@@ -65,8 +68,21 @@ run `pm2 logs jarvis-tunnel --lines 20` again to see the new one.
 
 ## Option A — Caddy + Let's Encrypt (once you have a domain)
 
-1. Buy/use any domain, add a DNS A record: `jarvis.yourdomain.com` → `35.233.131.198`.
-2. Edit the `Caddyfile` in this repo — replace `jarvis.YOURDOMAIN.com` with your real domain.
+**0. RESERVE THE IP FIRST — this step was missing and it is the one that
+bites.** `35.233.131.198` is an *ephemeral* external IP unless it has been
+reserved. An ephemeral IP is released when the VM is stopped, so a single
+stop/start hands the box a different address and every A record pointing at
+it goes stale — the same silent breakage as the tunnel, just slower. The VM
+restarted on 1 Sep and `jarvis` shows 433 restarts, so this is not
+hypothetical. In the GCP console: VPC network → IP addresses → find
+35.233.131.198 → **Reserve**. It stays free while attached to a running VM.
+
+1. Add a DNS A record where edgemetals.com's DNS already lives:
+   `jarvis.edgemetals.com` → `35.233.131.198`.
+   ONE record on a subdomain. Do NOT migrate the zone to another DNS
+   provider — the MX records for bose@ and apsara@ are there, and Jarvis
+   reads that mailbox. Breaking email to fix a login is a bad trade.
+2. The `Caddyfile` in this repo is already set to `jarvis.edgemetals.com` — nothing to edit.
 3. On the VM:
 ```bash
 sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
