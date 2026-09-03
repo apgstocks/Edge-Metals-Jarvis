@@ -98,8 +98,27 @@ for (const [label, src] of CLIENTS) {
     // Behavioural: run the real function against a fake fetch and check the
     // fields actually arrive. Source-matching alone would pass on a line that
     // is present but wrong.
+    // The GET cache added 2026-09-03 lives in the same scope as api() and the
+    // function now closes over it, so the extraction has to bring it along.
+    // Without it this threw ReferenceError — which is how the change was
+    // noticed here, rather than this file quietly testing an old shape.
+    //
+    // Taken as ONE contiguous slice from the cache declarations through the
+    // end of api(), so a future declaration added between them cannot be
+    // double-counted into an "already declared" error.
+    const cacheAndApi = (() => {
+        const start = src.indexOf('const apiCache = new Map();');
+        if (start < 0) return grab(src, 'api', label);      // website, no cache
+        const apiStart = src.indexOf('async function api(path, opts = {})');
+        let d = 0;
+        for (let k = src.indexOf(') {', apiStart) + 2; k < src.length; k++) {
+            if (src[k] === '{') d++;
+            else if (src[k] === '}') { d--; if (!d) return src.slice(start, k + 1); }
+        }
+        return grab(src, 'api', label);
+    })();
     const fn = new Function('fetch', 'location', 'setToken', 'showLoginScreen', 'getToken', 'API_BASE',
-        grab(src, 'api', label) + '; return api;')(
+        cacheAndApi + '; return api;')(
         async () => ({ status: 400, ok: false, json: async () => ({ error: 'nope', code: 'PETTY_CASH_SHORT', available: 400, requested: 1500 }) }),
         { href: '' }, () => {}, () => {}, () => null, '');
     // COLLECTED, not returned. The first version wrote `return fn(...)` inside

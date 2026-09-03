@@ -1250,10 +1250,66 @@ function asArray(x) {
   return [];
 }
 
+// ── the GET cache ─────────────────────────────────────────────────────────
+// Apsara 2026-09-03: "reduce the time taken to load each tab. it is taking 5
+// seconds every time post clicking tab."
+//
+// The bulk of that was payload — /api/loads was shipping 4.4 MB of signature
+// images the list never drew, now stripped server-side. This is the other
+// half: switching back to a tab you were just on should not go to the network
+// at all before showing you something.
+//
+// STALE-WHILE-REVALIDATE. A cached response is painted immediately and the
+// real request runs anyway, repainting when it lands. So the screen is never
+// blank, and never more than one round trip out of date.
+//
+// THE RULE THAT MAKES IT SAFE: any successful write empties the whole cache.
+// Not the entry for the path that was written — the whole thing. A payment
+// POST changes /api/loads, /api/petty-cash, /api/reports/spend and
+// /api/trucker-bills, and working out that dependency graph correctly at
+// thirty call sites is a bet this app should not take with money on screen.
+// Emptying everything costs one extra fetch and cannot be wrong.
+//
+// Kept in memory only, never localStorage: a stale balance surviving an app
+// restart is exactly the kind of number someone acts on.
+const apiCache = new Map();
+const API_CACHE_TTL_MS = 60000;   // a minute; the revalidate makes this a
+                                  // floor on staleness, not a promise
+function apiCacheClear() { apiCache.clear(); }
+function apiCachePeek(path) {
+  const hit = apiCache.get(path);
+  if (!hit) return undefined;
+  if (Date.now() - hit.at > API_CACHE_TTL_MS) { apiCache.delete(path); return undefined; }
+  // A structured clone, so a caller that mutates what it renders cannot
+  // corrupt what the next paint reads.
+  try { return JSON.parse(JSON.stringify(hit.data)); } catch (e) { return undefined; }
+}
+
+// ── the fast paint ────────────────────────────────────────────────────────
+// While this is on, a GET is answered from the cache and NEVER touches the
+// network; a miss throws CACHE_MISS instead of falling back to a fetch.
+//
+// All-or-nothing is the point. A tab that fetches three things, two of them
+// cached, would otherwise spend a full round trip on the third before showing
+// anything — a "fast" path that is exactly as slow as the real one, plus the
+// cost of running twice. Throwing on the first miss abandons the fast pass
+// immediately and leaves the ordinary render to do its job.
+//
+// Safe because every tab renderer here FETCHES BEFORE IT PAINTS (checked, all
+// six), so abandoning mid-flight cannot leave half a screen behind.
+let API_PREFER_CACHE = false;
+const CACHE_MISS = Symbol('cache-miss');
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = 'Bearer ' + token;
+  const method = String(opts.method || 'GET').toUpperCase();
+  if (API_PREFER_CACHE && method === 'GET' && !opts.raw) {
+    const hit = apiCachePeek(path);
+    if (hit !== undefined) return hit;
+    const miss = new Error('cache miss'); miss.cacheMiss = CACHE_MISS; throw miss;
+  }
   const res = await fetch(API_BASE + path, { ...opts, headers });
   if (res.status === 401) {
     setToken(null);
@@ -1286,6 +1342,16 @@ async function api(path, opts = {}) {
     err.status = res.status;
     for (const k of Object.keys(data || {})) { if (k !== 'error') err[k] = data[k]; }
     throw err;
+  }
+  // Cached only on the way OUT of a successful GET, so a failed request can
+  // never poison the cache with an error body.
+  if (method === 'GET') {
+    apiCache.set(path, { at: Date.now(), data });
+  } else {
+    // Every write, not just the ones that obviously matter. See the note on
+    // apiCache — guessing which paths a write invalidates is the bet that
+    // leaves a settled load showing as unpaid.
+    apiCacheClear();
   }
   return data;
 }
@@ -1879,8 +1945,24 @@ function loadIsResignable(l) {
 
 // The button is offered when it would either capture a first signature, or
 // legitimately replace an existing one.
+// ── is this load signed? ──────────────────────────────────────────────────
+// The list response stopped carrying the signature IMAGE on 2026-09-03. It
+// was 4.4 MB of a 4.5 MB /api/loads payload — a base64 PNG per signed load —
+// and nothing here ever drew it; every use was this question. The server now
+// answers it directly with `seller_signed`.
+//
+// BOTH FIELDS ARE ACCEPTED, and that is not belt-and-braces. This app is
+// installed before the VM is updated, every time — so a new APK spends a
+// while talking to a server that still sends the old shape. Reading only
+// `seller_signed` would make every signed load in the yard read as unsigned
+// during exactly that window.
+function loadIsSigned(l) {
+  if (!l) return false;
+  return l.seller_signed != null ? !!l.seller_signed : !!l.seller_signature;
+}
+
 function loadIsSignable(l) {
-  if (!(l && l.seller_signature)) return true;   // never signed — always offer
+  if (!loadIsSigned(l)) return true;   // never signed — always offer
   return loadIsResignable(l);
 }
 
@@ -3565,7 +3647,7 @@ function loadCardHtml(l) {
              is not a button any more. -->
         ${l.pdf_link && l._kind !== 'sale' ? (
           loadIsSignable(l)
-            ? `<button class="btn btn-sign-load" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">${l.seller_signature ? '✓ Signed — re-sign' : 'Sign'}</button>`
+            ? `<button class="btn btn-sign-load" data-id="${esc(l.id)}" style="font-size:12px; padding:6px 12px;">${loadIsSigned(l) ? '✓ Signed — re-sign' : 'Sign'}</button>`
             : `<span class="badge" title="Signed, and locked because a payment has been recorded against this load" style="font-size:12px; padding:6px 12px; background:var(--steel-100); color:var(--steel-700);">✓ Signed</span>`
         ) : ''}
       </div>
@@ -5881,7 +5963,26 @@ function wireExpenseModal() {
   });
 }
 
+// Paints the tab from cache if everything it needs is cached, then falls
+// through to the ordinary render, which fetches and repaints. Failure here is
+// never surfaced: a fast paint that cannot happen is not an error, it is just
+// the ordinary path.
+async function fastPaintCurrentMobileTab() {
+  API_PREFER_CACHE = true;
+  try { await paintCurrentMobileTab(); return true; }
+  catch (e) { return false; }
+  finally { API_PREFER_CACHE = false; }
+}
+
 async function renderCurrentMobileTab() {
+  // Cached view first, so the screen is never blank while the network works.
+  // Deliberately NOT skipping the fetch afterwards: this shows you the last
+  // thing you saw, it does not decide that it is still true.
+  await fastPaintCurrentMobileTab();
+  return paintCurrentMobileTab();
+}
+
+async function paintCurrentMobileTab() {
   try {
     if (currentMobileTab === 'loads') {
       // Purchases and sales in one deck, per Apsara 2026-08-24 — a sale saved

@@ -126,8 +126,16 @@ section('B2 — re-sign is gone once money is booked, but a FIRST sign is not');
     // IS_SUPER injected as a parameter — see section A for why.
     const buildResign = (isSuper) => new Function('IS_SUPER',
         grab(src, 'loadIsResignable', 'app') + '; return loadIsResignable;')(isSuper);
+    // loadIsSigned pulled in as well since 2026-09-03. The signature IMAGE
+    // stopped travelling with the loads list that day — it was 4.4 MB of a
+    // 4.5 MB response and nothing ever drew it — so "is this signed" moved
+    // into its own function that reads the new `seller_signed` boolean and
+    // still falls back to the old field. loadIsSignable calls it, so an
+    // extraction without it throws ReferenceError, which is how this file
+    // noticed rather than testing a stale copy.
     const buildSign = (isSuper) => new Function('IS_SUPER',
-        grab(src, 'loadIsResignable', 'app') + grab(src, 'loadIsSignable', 'app') + '; return loadIsSignable;')(isSuper);
+        grab(src, 'loadIsSigned', 'app') + grab(src, 'loadIsResignable', 'app')
+        + grab(src, 'loadIsSignable', 'app') + '; return loadIsSignable;')(isSuper);
     const resignable = buildResign(false);
     const signable = buildSign(false);
 

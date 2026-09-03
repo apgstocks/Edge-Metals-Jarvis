@@ -1149,11 +1149,41 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // The paid/pending arithmetic lives in one place, so a card, a
             // ticket and an invoice cannot each round it slightly differently.
             const { paymentSummary } = require('./helpers/payments');
-            res.json(loadLoads().map(l => ({
-                ...l,
-                pdf_stale: !!l.pdf_link && (Number(l.pdf_template_version) || 0) < PDF_TEMPLATE_VERSION,
-                payment: paymentSummary(l.id, l.amount),
-            })));
+            res.json(loadLoads().map(l => {
+                // ── THE SIGNATURE IMAGE DOES NOT TRAVEL WITH THE LIST ──────
+                // Apsara 2026-09-03: "it is taking 5 seconds every time post
+                // clicking tab." Measured before changing anything, on a
+                // 250-load fixture: the server built this response in 57 ms
+                // and the response was 4.49 MB. 4.4 MB of that was
+                // seller_signature — a base64 PNG, 10-40 KB each, on every
+                // signed load. Over a Cloudflare tunnel on a phone that is
+                // the five seconds.
+                //
+                // And the list never renders it. Every single use of
+                // seller_signature in both clients is a TRUTHINESS CHECK —
+                // "is this signed", to label the button "Sign" or "✓ Signed —
+                // re-sign", and to decide loadIsSignable. Nothing draws the
+                // image. So the blob was pure freight.
+                //
+                // The PDF builders and the signature route read the real
+                // value from disk (helpers/pdf.js, POST /api/loads/:id/
+                // signature) and are untouched — this strips it from ONE
+                // response, not from the record.
+                //
+                // OLD CLIENTS: an APK from before this change reads
+                // seller_signature and now finds nothing, so a signed load
+                // shows "Sign" rather than "✓ Signed — re-sign". Cosmetic,
+                // and the dangerous half of it — re-signing a paid load — is
+                // refused by the server regardless (SIGNATURE_FROZEN).
+                const { seller_signature, ...rest } = l;
+                return {
+                    ...rest,
+                    // What the clients actually wanted all along.
+                    seller_signed: !!seller_signature,
+                    pdf_stale: !!l.pdf_link && (Number(l.pdf_template_version) || 0) < PDF_TEMPLATE_VERSION,
+                    payment: paymentSummary(l.id, l.amount),
+                };
+            }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
     // Item-type inventory + per-day rollup — per Apsara 2026-08-15. Computed
