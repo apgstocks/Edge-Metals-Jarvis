@@ -1286,29 +1286,47 @@ function apiCachePeek(path) {
 }
 
 // ── the fast paint ────────────────────────────────────────────────────────
-// While this is on, a GET is answered from the cache and NEVER touches the
-// network; a miss throws CACHE_MISS instead of falling back to a fetch.
+// While this is on, a GET is answered from the cache and never touches the
+// network.
 //
-// All-or-nothing is the point. A tab that fetches three things, two of them
-// cached, would otherwise spend a full round trip on the third before showing
-// anything — a "fast" path that is exactly as slow as the real one, plus the
-// cost of running twice. Throwing on the first miss abandons the fast pass
-// immediately and leaves the ordinary render to do its job.
+// THE MISS IS CHECKED BEFORE THE RENDER STARTS, NOT DURING IT. The first
+// version threw a "cache miss" error from api() and expected the wrapper to
+// catch it. It never got there: FOUR places in the render path catch their own
+// errors, and the outermost one paints err.message into the view — so opening
+// a tab printed the words "cache miss" on screen for a moment. Apsara saw it
+// within minutes.
 //
-// Safe because every tab renderer here FETCHES BEFORE IT PAINTS (checked, all
-// six), so abandoning mid-flight cannot leave half a screen behind.
+// Worse were the quiet ones. The Loads deck fetches sales and drafts with
+// `.catch(() => [])`, so a miss there would have painted a deck with the sales
+// silently missing; the Documents tab swallows its address-book failure the
+// same way. An abort mechanism that depends on nobody up the stack catching
+// errors is not an abort mechanism — it is a hope.
+//
+// So instead: remember which GET paths each tab used last time, and only
+// attempt the fast paint when every one of them is already cached. Nothing can
+// miss mid-render because nothing is attempted unless it is all there.
 let API_PREFER_CACHE = false;
-const CACHE_MISS = Symbol('cache-miss');
+// While a real render runs, the paths it fetches are collected here, so the
+// next visit knows exactly what that tab needs.
+let API_RECORD = null;
+const tabDeps = new Map();       // tab id -> Set of GET paths
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = 'Bearer ' + token;
   const method = String(opts.method || 'GET').toUpperCase();
-  if (API_PREFER_CACHE && method === 'GET' && !opts.raw) {
-    const hit = apiCachePeek(path);
-    if (hit !== undefined) return hit;
-    const miss = new Error('cache miss'); miss.cacheMiss = CACHE_MISS; throw miss;
+  if (method === 'GET' && !opts.raw) {
+    if (API_RECORD) API_RECORD.add(path);
+    if (API_PREFER_CACHE) {
+      const hit = apiCachePeek(path);
+      // Cannot normally miss — fastPaintCurrentMobileTab checks every recorded
+      // path first. If it somehow does (an entry ageing out between the check
+      // and the use), fall through to the network rather than throwing: a
+      // slightly slow fast paint is a nuisance, an error painted into the view
+      // is what she reported.
+      if (hit !== undefined) return hit;
+    }
   }
   const res = await fetch(API_BASE + path, { ...opts, headers });
   if (res.status === 401) {
@@ -5963,11 +5981,22 @@ function wireExpenseModal() {
   });
 }
 
-// Paints the tab from cache if everything it needs is cached, then falls
-// through to the ordinary render, which fetches and repaints. Failure here is
-// never surfaced: a fast paint that cannot happen is not an error, it is just
-// the ordinary path.
+// Can this tab be painted from cache alone, with no network call and no
+// chance of a miss part-way through? Only if we have seen it render before and
+// every path it used is still cached.
+function canFastPaint(tab) {
+  const deps = tabDeps.get(tab);
+  if (!deps || deps.size === 0) return false;      // never rendered yet
+  for (const p of deps) if (apiCachePeek(p) === undefined) return false;
+  return true;
+}
+
+// Paints the tab from cache when that is possible, then falls through to the
+// ordinary render, which fetches and repaints. A tab that cannot be fast
+// painted is not an error — it is just the ordinary path, and nothing is
+// shown to say so.
 async function fastPaintCurrentMobileTab() {
+  if (!canFastPaint(currentMobileTab)) return false;
   API_PREFER_CACHE = true;
   try { await paintCurrentMobileTab(); return true; }
   catch (e) { return false; }
@@ -5979,7 +6008,24 @@ async function renderCurrentMobileTab() {
   // Deliberately NOT skipping the fetch afterwards: this shows you the last
   // thing you saw, it does not decide that it is still true.
   await fastPaintCurrentMobileTab();
-  return paintCurrentMobileTab();
+
+  // The real render, recording what it fetched so the NEXT visit knows what
+  // this tab needs. Recorded fresh each time rather than accumulated: a tab
+  // whose paths change with a filter (the spend report carries its dates in
+  // the query string) must not keep asking for a window nobody is looking at.
+  const tab = currentMobileTab;
+  const seen = new Set();
+  API_RECORD = seen;
+  try {
+    return await paintCurrentMobileTab();
+  } finally {
+    API_RECORD = null;
+    // Recorded even when the render failed part way, and that is safe rather
+    // than sloppy: a failed GET is never cached, so canFastPaint will find the
+    // missing entry and decline. The dependency list says which paths a tab
+    // uses; the cache says whether they are there. Two questions, kept apart.
+    if (seen.size) tabDeps.set(tab, seen);
+  }
 }
 
 async function paintCurrentMobileTab() {

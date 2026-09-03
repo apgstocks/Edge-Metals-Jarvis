@@ -213,17 +213,73 @@ section('D — a repeat GET is answered without the network');
     c.setPrefer(false);
 }
 
-section('E — all or nothing');
+section('E — a cache miss NEVER becomes something on screen');
 {
+    // ── THE BUG SHE FOUND ─────────────────────────────────────────────────
+    // Apsara, minutes after installing: "when i click tab, it shows cache
+    // miss."
+    //
+    // The first design threw an Error('cache miss') from api() and expected
+    // fastPaintCurrentMobileTab to catch it. It never got there. FOUR places
+    // in the render path catch their own errors, and paintCurrentMobileTab's
+    // catch paints err.message straight into the view — so opening a tab
+    // printed the words "cache miss" where the loads should be.
+    //
+    // This test PASSED anyway, because it exercised the fast paint with a STUB
+    // that threw, instead of the real renderer with its own try/catch in the
+    // way. The stub modelled the mechanism I had in mind rather than the code
+    // that runs. That is the whole lesson of this section.
     const c = loadCache();
-    await c.api('/api/loads');          // cached
     c.setPrefer(true);
-    let threw = null;
-    try { await c.api('/api/trucker-bills'); } catch (e) { threw = e; }
+    let threw = null, got;
+    try { got = await c.api('/api/never-fetched'); } catch (e) { threw = e; }
     c.setPrefer(false);
-    ck('an uncached path aborts the fast paint instead of fetching', !!threw,
-       'a fast path that waits for one uncached call is exactly as slow, and runs the render twice');
-    ck('  and it did not go to the network', c.callLog.length === 1);
+    ck('an uncached GET during a fast paint does NOT throw', !threw,
+       'a thrown miss is caught by whichever renderer catches errors, and painted as text');
+    ck('  it falls through to the network instead', c.callLog.length === 1,
+       'slightly slow is a nuisance; "cache miss" printed in the view is what she reported');
+    ck('  and returns real data', !!got);
+
+    // Nothing in the shipped file may reintroduce a thrown miss.
+    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
+    ck('nothing throws a cache miss any more', !/cacheMiss/.test(nc) && !/CACHE_MISS/.test(nc),
+       'the abort has to happen before the render starts, not inside it');
+}
+
+section('E2 — so the decision is made BEFORE the render runs');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const grabFn = (name) => {
+        const s = src.indexOf('function ' + name + '(');
+        let d = 0;
+        for (let k = src.indexOf(') {', s) + 2; k < src.length; k++) {
+            if (src[k] === '{') d++;
+            else if (src[k] === '}') { d--; if (!d) return src.slice(s, k + 1); }
+        }
+        return '';
+    };
+    // canFastPaint is the whole guard, so it is executed rather than read.
+    const mk = (deps, cached) => new Function('tabDeps', 'apiCachePeek',
+        grabFn('canFastPaint') + '; return canFastPaint;')(
+        new Map([['loads', new Set(deps)]]),
+        (p) => (cached.includes(p) ? {} : undefined));
+
+    ck('a tab never rendered before is not fast painted', mk([], [])('loads') === false,
+       'there is nothing to paint, and no way to know what it needs');
+    ck('a tab whose paths are ALL cached is',
+       mk(['/api/loads', '/api/outbound-loads'], ['/api/loads', '/api/outbound-loads'])('loads') === true);
+    ck('one missing path is enough to decline',
+       mk(['/api/loads', '/api/outbound-loads'], ['/api/loads'])('loads') === false,
+       'the Loads deck fetches sales with .catch(() => []) — a miss there would paint a deck with the sales silently gone');
+    ck('an unknown tab declines', mk(['/api/loads'], ['/api/loads'])('trucker') === false);
+
+    const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
+    ck('GET paths are recorded while a real render runs', /if \(API_RECORD\) API_RECORD\.add\(path\);/.test(nc));
+    ck('  recording is switched off afterwards', /API_RECORD = null;/.test(nc),
+       'left on, the fast paint would record its own reads and the list could never shrink');
+    ck('  and the list is rebuilt each render, not accumulated', /const seen = new Set\(\);/.test(nc),
+       'the spend report carries its dates in the path — accumulating would keep demanding windows nobody is looking at');
 }
 
 section('F — THE RISK: a write must never leave stale money on screen');
@@ -306,38 +362,61 @@ section('H — the tab switch paints from cache, then corrects itself');
         }
         return '';
     };
-    const run = (fastPaintSucceeds) => {
+    // THE STUB SWALLOWS ITS OWN ERRORS, exactly as the real renderer does.
+    // The previous stub threw on a miss and the wrapper caught it, which is
+    // the mechanism I had in my head — but paintCurrentMobileTab has its OWN
+    // try/catch that paints err.message into the view and returns normally.
+    // So the stub now does the same: it records what it would have PAINTED,
+    // and the assertion is that "cache miss" is never among it.
+    const run = (everythingCached) => {
         let real = 0, fast = 0;
-        const scope = {
-            paintCurrentMobileTab: async () => {
-                // The fast pass calls this too, with the flag on. Count only
-                // the passes that were NOT the fast one.
-                if (scope.API_PREFER_CACHE) { fast++; if (!fastPaintSucceeds) throw new Error('cache miss'); return; }
-                real++;
-            },
-            API_PREFER_CACHE: false,
+        const painted = [];
+        const grabSync = (name) => {
+            const s = src.indexOf('function ' + name + '(');
+            let d = 0;
+            for (let k = src.indexOf(') {', s) + 2; k < src.length; k++) {
+                if (src[k] === '{') d++;
+                else if (src[k] === '}') { d--; if (!d) return src.slice(s, k + 1); }
+            }
+            return '';
         };
-        const fn = new Function('stub', `
-            let API_PREFER_CACHE = false;
+        const fn = new Function('rec', `
+            let API_PREFER_CACHE = false, API_RECORD = null;
+            const currentMobileTab = 'loads';
+            const tabDeps = new Map([['loads', new Set(['/api/loads'])]]);
+            const apiCachePeek = (p) => (rec.cached ? {} : undefined);
+            // Stands in for the real renderer, INCLUDING its own catch.
             const paintCurrentMobileTab = async () => {
-                stub.API_PREFER_CACHE = API_PREFER_CACHE;
-                return stub.paintCurrentMobileTab();
+                if (API_PREFER_CACHE) rec.fast++; else rec.real++;
+                try {
+                    if (API_PREFER_CACHE && !rec.cached) throw new Error('cache miss');
+                } catch (err) {
+                    rec.painted.push(err.message);   // what the view would show
+                }
             };
-            ${grabFn('fastPaintCurrentMobileTab').replace(/API_PREFER_CACHE/g, 'API_PREFER_CACHE')}
+            ${grabSync('canFastPaint')}
+            ${grabFn('fastPaintCurrentMobileTab')}
             ${grabFn('renderCurrentMobileTab')}
-            return renderCurrentMobileTab;`)(scope);
-        return fn().then(() => ({ real, fast }));
+            return renderCurrentMobileTab;`)({ get real() { return real; }, set real(v) { real = v; },
+                                              get fast() { return fast; }, set fast(v) { fast = v; },
+                                              painted, cached: everythingCached });
+        return fn().then(() => ({ real, fast, painted }));
     };
 
     const hit = await run(true);
     ck('a cache HIT still runs the real render', hit.real === 1,
        'painting from cache and stopping there would show yesterday and call it today');
     ck('  and it painted from cache first', hit.fast === 1);
+    ck('  and nothing odd reached the view', hit.painted.length === 0);
 
     const miss = await run(false);
     ck('a cache MISS runs the real render', miss.real === 1);
-    ck('  exactly once', miss.real === 1 && miss.fast === 1,
-       'a miss must not cost a second full render');
+    ck('  and does NOT attempt the fast paint at all', miss.fast === 0,
+       'the guard runs before the render, so a miss cannot happen inside it');
+    // THE ASSERTION THAT WOULD HAVE CAUGHT WHAT SHE SAW.
+    ck('  so the words "cache miss" never reach the screen',
+       !miss.painted.some((t) => /cache miss/i.test(t)),
+       'Apsara: "when i click tab, it shows cache miss"');
 
     const fp = nocomment.slice(nocomment.indexOf('async function fastPaintCurrentMobileTab()'));
     ck('the fast paint turns the flag off whatever happens', /finally \{ API_PREFER_CACHE = false; \}/.test(fp),
