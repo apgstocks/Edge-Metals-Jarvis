@@ -77,14 +77,27 @@ function collectRows({ payments, expenses, from, to }) {
         // Found 2026-09-02 when Apsara said the report's behaviour did not
         // look right. She was correct: on any yard that records sales, every
         // total here was inflated by its income.
+        // ── THREE KINDS NOW, NOT TWO ──────────────────────────────────────
+        // Apsara 2026-09-03 added trucker bills ("Need to incorporate this in
+        // report as well"). They are paid through this same ledger with
+        // load_kind: 'trucker', so they arrive here for free — but they must
+        // NOT be counted as load spend. "What did we pay for metal" and "what
+        // did we pay to move it" are different questions and she reads both.
+        //
+        // Note what happens if this is left alone: trucker payments still land
+        // in the total, correctly, but under `loadTotal`, and the Loads line
+        // in the report silently overstates by the haulage. Right total, wrong
+        // story — the kind of wrong that survives a long time.
+        const isSale = p.load_kind === 'sale';
+        const isTrucker = p.load_kind === 'trucker';
         rows.push({
-            kind: 'load',
-            direction: p.load_kind === 'sale' ? 'in' : 'out',
+            kind: isTrucker ? 'trucker' : 'load',
+            direction: isSale ? 'in' : 'out',
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
             method: METHODS.includes(p.mode) ? p.mode : UNCLASSIFIED,
             amount: round2(amount),
-            label: `${p.load_kind === 'sale' ? 'Sale' : 'Load'} ${p.load_id}`.trim(),
+            label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
         });
     }
@@ -145,7 +158,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
 
     const months = new Map();
     const byMethod = Object.fromEntries(columns.map((m) => [m, 0]));
-    let total = 0, loadTotal = 0, expenseTotal = 0;
+    let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0;
 
     for (const r of rows) {
         const m = monthOf(r.date);
@@ -154,7 +167,13 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
         bucket[r.method] = round2(bucket[r.method] + r.amount);
         byMethod[r.method] = round2(byMethod[r.method] + r.amount);
         total = round2(total + r.amount);
+        // An explicit three-way split, not an if/else pair. The previous shape
+        // was `if load ... else expense`, which would have swept the new
+        // trucker rows into expenses — a default bucket that silently absorbs
+        // anything unrecognised is how a category goes missing without anyone
+        // seeing a wrong number.
         if (r.kind === 'load') loadTotal = round2(loadTotal + r.amount);
+        else if (r.kind === 'trucker') truckerTotal = round2(truckerTotal + r.amount);
         else expenseTotal = round2(expenseTotal + r.amount);
     }
 
@@ -210,6 +229,11 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
         total,
         loadTotal,
         expenseTotal,
+        // Haulage, its own line. Apsara 2026-09-03. The three add up to
+        // `total` exactly — asserted in tests/spend-report.js, because a split
+        // that does not reconcile with its own total is a report that invites
+        // the reader to pick which number to believe.
+        truckerTotal,
         count: rows.length,
         cash,
         rows,                      // the drill-down, already sorted newest first

@@ -72,9 +72,21 @@ for (const [label, src] of CLIENTS) {
     // Once the header row is hidden, a bare number is unreadable: "3,300" with
     // nothing beside it could be gross, tare or net. Each cell must carry
     // data-label, or be the card's heading.
+    // ── FOUND BY ID, NOT BY STYLE STRING ─────────────────────────────────
+    // These used to be matched on their inline style, which is how the
+    // Trucker Bills table broke this file on 2026-09-03: it was written with
+    // byte-for-byte the same style as the inventory drill-down, was defined
+    // EARLIER in the file, and so indexOf handed this section the wrong table
+    // — which it then reported under the drill-down's name.
+    //
+    // It failed loudly only because the new table has an empty-state row. Had
+    // it not, this section would have passed while silently checking a screen
+    // it was not written for, and the drill-down would have gone unasserted.
+    // Every stacked table now carries an id and is found by it.
     for (const [name, marker] of [
-        ['inventory drill-down', 'class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;"'],
-        ['spend report', 'class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;"'],
+        ['inventory drill-down', '<table id="invLinesTable"'],
+        ['spend report', '<table id="spendReportTable"'],
+        ['trucker bills', '<table id="trkBillsTable"'],
     ]) {
         const at = src.indexOf(marker);
         ck(`${label}: ${name} table is present`, at > 0);
@@ -89,10 +101,17 @@ for (const [label, src] of CLIENTS) {
         // attribute, so it exempted nearly every cell in the table. Stripping
         // all the data-labels left the suite green. Mutation testing caught it;
         // reading it would not have.
+        // A colspan cell is an empty state — "No trucker bills yet." — which
+        // spans every column and so has no single column name to carry.
+        // Exempted by an explicit attribute, like the spacer above, rather
+        // than by a pattern that guesses: the first spacer rule here used
+        // /style="padding:[^"]*"/, and [^"]* swallowed the whole attribute,
+        // exempting nearly every cell in the table.
         const unlabelled = cells.filter(a =>
             !/data-label=/.test(a)
             && !/class="[^"]*\bst-head\b/.test(a)
-            && !/class="[^"]*\bst-spacer\b/.test(a));
+            && !/class="[^"]*\bst-spacer\b/.test(a)
+            && !/\bcolspan=/.test(a));
         ck(`${label}:   every ${name} cell is labelled, a heading, or a marked spacer`,
            unlabelled.length === 0,
            `unlabelled: ${unlabelled.slice(0, 2).join(' | ')}`);

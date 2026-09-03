@@ -264,6 +264,14 @@ body { overflow-y:auto; }
       .pay-full { background:rgba(74,222,128,.13); color:var(--status-good, #4ade80); border:1px solid rgba(74,222,128,.35); }
       .pay-part { background:rgba(217,154,43,.13); color:var(--status-warning, #d99a2b); border:1px solid rgba(217,154,43,.4); }
       .pay-over { background:rgba(217,90,43,.13); color:#d95a2b; border:1px solid rgba(217,90,43,.4); }
+      /* Added 2026-09-03 with the Trucker tab. Loads never needed an UNPAID
+         badge — an unpaid load simply shows none — but a bills ledger is read
+         as a list of debts, where "nothing paid yet" is the state you are
+         looking FOR and a blank cell reads as missing data instead.
+         NOTE: this rule block appears TWICE in this file, a duplication that
+         predates the tab. Both copies are kept in step deliberately; whichever
+         one wins, the badge renders. */
+      .pay-none { background:rgba(148,163,184,.12); color:var(--text-muted); border:1px solid var(--border-subtle); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
@@ -743,6 +751,61 @@ body { overflow-y:auto; }
     </div>
     <div class="modal-foot">
       <button id="expSave" class="btn btn-primary">Save expense</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trucker bill — Apsara 2026-09-03. Four fields, exactly the ones she
+     named: date, company, an OPTIONAL load ticket, amount. The ticket is
+     free text and is not checked against loads.json on purpose; a hauler's
+     invoice may name a ticket that was voided or renumbered, and refusing
+     the bill would mean the yard cannot record a debt it actually owes. -->
+<div id="truckerModal" class="hidden modal-overlay" style="align-items:center;">
+  <div class="modal-shell" style="max-width:480px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div id="trkTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add trucker bill</div>
+      <button id="trkClose" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="ld-grid-2">
+        <div class="field"><label>Date</label><input id="trk_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+        <div class="field"><label>Amount ($)</label><input id="trk_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Company</label><input id="trk_company" placeholder="e.g. Ace Haulage"></div>
+      <div class="field" style="margin-top:14px;"><label>Load ticket (optional)</label><input id="trk_ticket" placeholder="e.g. EDGE_42"></div>
+      <div id="trkErr" style="margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="trkSave" class="btn btn-primary">Save bill</button>
+    </div>
+  </div>
+</div>
+
+<!-- Paying a trucker bill. Zelle or Wire only, per Apsara — and the options
+     are built from the SERVER's list rather than hardcoded here, so the
+     dropdown cannot offer something the server would reject. The server
+     refuses Cash on this ledger whatever this form sends. -->
+<div id="truckerPayModal" class="hidden modal-overlay" style="align-items:center;">
+  <div class="modal-shell" style="max-width:440px;">
+    <div class="modal-stripe"></div>
+    <div class="modal-head">
+      <div>
+        <div id="trkPayTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Pay</div>
+        <div id="trkPaySub" style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:3px;"></div>
+      </div>
+      <button id="trkPayClose" class="btn" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="ld-grid-2">
+        <div class="field"><label>Mode</label><select id="trk_pay_mode"></select></div>
+        <div class="field"><label>Amount ($)</label><input id="trk_pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+      </div>
+      <div class="field" style="margin-top:14px;"><label>Paid on</label><input id="trk_pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+      <div id="trkPayErr" style="margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="trkPaySave" class="btn btn-primary">Record payment</button>
     </div>
   </div>
 </div>
@@ -3736,6 +3799,14 @@ function renderLoads(loads) {
       .pay-full { background:rgba(74,222,128,.13); color:var(--status-good, #4ade80); border:1px solid rgba(74,222,128,.35); }
       .pay-part { background:rgba(217,154,43,.13); color:var(--status-warning, #d99a2b); border:1px solid rgba(217,154,43,.4); }
       .pay-over { background:rgba(217,90,43,.13); color:#d95a2b; border:1px solid rgba(217,90,43,.4); }
+      /* Added 2026-09-03 with the Trucker tab. Loads never needed an UNPAID
+         badge — an unpaid load simply shows none — but a bills ledger is read
+         as a list of debts, where "nothing paid yet" is the state you are
+         looking FOR and a blank cell reads as missing data instead.
+         NOTE: this rule block appears TWICE in this file, a duplication that
+         predates the tab. Both copies are kept in step deliberately; whichever
+         one wins, the badge renders. */
+      .pay-none { background:rgba(148,163,184,.12); color:var(--text-muted); border:1px solid var(--border-subtle); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
@@ -4919,6 +4990,15 @@ function renderMobileTabs() {
     // POST/DELETE /api/petty-cash are requireAdmin server-side, so hiding the
     // buttons is UX rather than the boundary.
     tabBtn('petty', 'Petty cash'),
+    // Truckers — Apsara 2026-09-03, "a tab called trucker for everyone", so it
+    // sits with the unconditional ones rather than in the admin block below.
+    // '/api/trucker-bills' is on STAFF_ALLOWED_PATH_PREFIXES to match.
+    //
+    // What "everyone" does NOT include is paying: the Pay button is admin-only
+    // because /api/payments is deliberately absent from that allowlist, the
+    // same division that already applies to loads. A staff session records
+    // what is owed; recording that it was settled stays with admin.
+    tabBtn('trucker', 'Trucker'),
     // Expenses and Documents are admin-only. Hiding the button is UX only,
     // NOT the security boundary: /api/expenses is requireAdmin-gated and the
     // proforma/invoice routes are denied to staff by omission from
@@ -4932,6 +5012,251 @@ function renderMobileTabs() {
     renderMobileTabs();
     renderCurrentMobileTab();
   }));
+}
+
+// ── Trucker tab ──────────────────────────────────────────────────────────
+// Apsara 2026-09-03: "now include a tab called trucker for everyone ... it
+// contains date, company name, load ticket number (optional), amount. edit,
+// delete, pay option should be there. when i click pay - option should be as
+// zelle/wire. once paid, hide delete option for staff and admin."
+//
+// NOT the trucker ROSTER on the website, which is a directory of hauliers and
+// their WhatsApp groups. This is what the yard OWES them. Two different things
+// wearing the same word — see helpers/truckerBills.js.
+let truckerBills = [];
+let truckerModes = ['Zelle', 'Wire'];
+let editingTruckerBillId = null;
+let payingTruckerBill = null;
+
+// Mirrors loadIsDeletable exactly, including the Jarvis exception. Same rule,
+// same shape, so the two cannot drift into meaning different things about the
+// same idea.
+function truckerBillIsDeletable(b) {
+  if (IS_SUPER) return true;
+  const p = b && b.payment;
+  return !(p && Number(p.paid) > 0);
+}
+// Payable while anything is outstanding — and only for a session that is
+// allowed to record payments at all. Staff see the tab and the amounts; they
+// do not settle bills, because /api/payments would 403 them and a button that
+// always fails is worse than no button.
+function truckerBillIsPayable(b) {
+  if (ROLE === 'staff') return false;
+  const p = b && b.payment;
+  if (!p) return true;
+  return p.status !== 'paid' && p.status !== 'overpaid';
+}
+
+function truckerBadge(b) {
+  const p = b && b.payment;
+  if (!p || !p.paid) return '<span class="pay-badge pay-none">UNPAID</span>';
+  if (p.status === 'overpaid') return `<span class="pay-badge pay-over">OVERPAID ${payMoney(p.over)}</span>`;
+  if (p.status === 'paid') return `<span class="pay-badge pay-full">PAID ${payMoney(p.paid)}</span>`;
+  return `<span class="pay-badge pay-part">PART ${payMoney(p.paid)}</span>`;
+}
+
+async function renderTruckerTab() {
+  const data = await api('/api/trucker-bills');
+  truckerBills = Array.isArray(data.bills) ? data.bills : [];
+  truckerModes = Array.isArray(data.modes) && data.modes.length ? data.modes : truckerModes;
+  const rep = data.report || { billed: 0, paid: 0, outstanding: 0, overpaid: 0, count: 0 };
+
+  $('viewRoot').innerHTML = `
+    <div style="padding:16px 14px 90px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px;">
+        <div>
+          <div class="eyebrow">// Trucker</div>
+          <h2 style="font-size:19px; text-transform:uppercase; margin:0;">Haulage bills</h2>
+        </div>
+        <button id="btnAddTruckerBill" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">+ Add bill</button>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:16px;">
+        <div class="card" style="padding:12px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Billed</div>
+          <div style="font-size:16px; font-weight:700; margin-top:4px;">${payMoney(rep.billed)}</div>
+        </div>
+        <div class="card" style="padding:12px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Paid</div>
+          <div style="font-size:16px; font-weight:700; margin-top:4px;">${payMoney(rep.paid)}</div>
+        </div>
+        <div class="card" style="padding:12px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Outstanding</div>
+          <div style="font-size:16px; font-weight:700; margin-top:4px; color:${rep.outstanding > 0 ? 'var(--status-warn)' : 'var(--text-strong)'};">${payMoney(rep.outstanding)}</div>
+        </div>
+      </div>
+      ${rep.overpaid > 0 ? `
+      <!-- Shown ONLY when it is non-zero, and never netted against
+           outstanding. Money paid beyond what was billed is something to ring
+           the hauler about, not a credit to quietly subtract — see
+           billsReport in helpers/truckerBills.js. -->
+      <div class="card" style="padding:10px 12px; margin-bottom:14px; border-color:var(--status-warn);">
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--status-warn);">
+          ${payMoney(rep.overpaid)} paid beyond what was billed — chase it back.
+        </span>
+      </div>` : ''}
+
+      <div class="card" style="overflow:hidden;">
+        <table id="trkBillsTable" class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
+          <thead>
+            <tr style="background:var(--surface-sunken); color:var(--text-muted); font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase;">
+              <th style="padding:9px 12px; text-align:left;">Company</th>
+              <th style="padding:9px 12px; text-align:left;">Date</th>
+              <th style="padding:9px 12px; text-align:left;">Ticket</th>
+              <th style="padding:9px 12px; text-align:right;">Amount</th>
+              <th style="padding:9px 12px; text-align:left;">Status</th>
+              <th style="padding:9px 12px; text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+          ${truckerBills.length ? truckerBills.map(b => `
+            <tr style="border-bottom:1px solid var(--border-subtle);">
+              <td class="st-head" style="padding:9px 12px; font-weight:600; color:var(--text-strong);">${esc(b.company)}</td>
+              <td data-label="Date" style="padding:9px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(fmtDate(b.date))}</td>
+              <td data-label="Ticket" style="padding:9px 12px; font-family:var(--font-mono); color:var(--text-muted);">${b.load_ticket ? esc(b.load_ticket) : '—'}</td>
+              <td data-label="Amount" style="padding:9px 12px; text-align:right; font-family:var(--font-mono);">${payMoney(b.amount)}</td>
+              <td data-label="Status" style="padding:9px 12px;">${truckerBadge(b)}</td>
+              <td data-label="Actions" style="padding:9px 12px; text-align:right;">
+                <div style="display:flex; gap:5px; justify-content:flex-end; flex-wrap:wrap;">
+                  <button class="btn btn-secondary btn-edit-trk" data-id="${esc(b.id)}" style="padding:5px 10px; font-size:10.5px;">Edit</button>
+                  ${truckerBillIsPayable(b) ? `<button class="btn btn-pay-trk" data-id="${esc(b.id)}" style="padding:5px 10px; font-size:10.5px;">Pay</button>` : ''}
+                  ${truckerBillIsDeletable(b) ? `<button class="btn btn-danger btn-del-trk" data-id="${esc(b.id)}" style="padding:5px 10px; font-size:10.5px;">Delete</button>` : ''}
+                </div>
+              </td>
+            </tr>`).join('')
+          : `<tr><td colspan="6" style="padding:34px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No trucker bills yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  $('btnAddTruckerBill').addEventListener('click', () => openTruckerBillModal(null));
+  document.querySelectorAll('.btn-edit-trk').forEach(btn => btn.addEventListener('click', () =>
+    openTruckerBillModal(truckerBills.find(b => b.id === btn.dataset.id) || null)));
+  document.querySelectorAll('.btn-pay-trk').forEach(btn => btn.addEventListener('click', () =>
+    openTruckerPayModal(truckerBills.find(b => b.id === btn.dataset.id) || null)));
+  document.querySelectorAll('.btn-del-trk').forEach(btn => btn.addEventListener('click', async () => {
+    const b = truckerBills.find(x => x.id === btn.dataset.id);
+    if (!b) return;
+    if (!confirm(`Are you sure you want to delete the ${b.company} bill for ${payMoney(b.amount)}?`)) return;
+    // The paid case only ever reaches a Jarvis session — everyone else is not
+    // shown the button, and the server returns 409 regardless. Same second
+    // prompt as a paid load, for the same reason: this erases the record that
+    // money moved.
+    const paid = b.payment && Number(b.payment.paid);
+    if (paid > 0 && !confirm(
+      `${b.company} has ${payMoney(paid)} recorded as paid against this bill.\n\n`
+      + `Deleting it removes those payment records too.\n\n`
+      + `This is logged against the Jarvis profile. Continue?`)) return;
+    try {
+      await api(`/api/trucker-bills/${encodeURIComponent(b.id)}`, { method: 'DELETE' });
+      await renderTruckerTab();
+    } catch (err) {
+      // The server's own words. BILL_HAS_PAYMENTS carries a sentence that
+      // already explains the way out, so restating it here would only give
+      // the operator a second, worse version of the same message.
+      alert(err.message);
+    }
+  }));
+}
+
+function openTruckerBillModal(b) {
+  editingTruckerBillId = b ? b.id : null;
+  $('trkTitle').textContent = b ? `Edit ${b.id}` : 'Add trucker bill';
+  $('trk_date').value = toUsDate(b ? (b.date || '') : todayLocalDateStrForExpense());
+  wireUsDateField('trk_date');
+  $('trk_company').value = b ? (b.company || '') : '';
+  $('trk_ticket').value = b ? (b.load_ticket || '') : '';
+  $('trk_amount').value = b ? (b.amount ?? '') : '';
+  $('trkErr').textContent = '';
+  $('truckerModal').classList.remove('hidden');
+  $('truckerModal').style.display = 'flex';
+}
+function closeTruckerBillModal() {
+  $('truckerModal').classList.add('hidden');
+  $('truckerModal').style.display = '';
+  editingTruckerBillId = null;
+}
+
+function openTruckerPayModal(b) {
+  if (!b) return;
+  payingTruckerBill = b;
+  const pending = (b.payment && Number(b.payment.pending)) || b.amount;
+  $('trkPayTitle').textContent = `Pay ${b.company}`;
+  $('trkPaySub').textContent = `${b.id} · ${payMoney(b.amount)} billed · ${payMoney((b.payment && b.payment.paid) || 0)} paid`;
+  // Built from the SERVER's list, so the dropdown cannot offer something the
+  // server would reject — and the server refuses Cash on this ledger whatever
+  // the dropdown says.
+  $('trk_pay_mode').innerHTML = truckerModes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  // Pre-filled with what is still outstanding, rounded here rather than left
+  // as a float — 1000 - 333.33 - 333.33 is 333.34000000000003, and a Pay box
+  // that opens showing that is a Pay box nobody trusts.
+  $('trk_pay_amount').value = pending > 0 ? Math.round(pending * 100) / 100 : '';
+  $('trk_pay_date').value = toUsDate(todayLocalDateStrForExpense());
+  wireUsDateField('trk_pay_date');
+  $('trkPayErr').textContent = '';
+  $('truckerPayModal').classList.remove('hidden');
+  $('truckerPayModal').style.display = 'flex';
+}
+function closeTruckerPayModal() {
+  $('truckerPayModal').classList.add('hidden');
+  $('truckerPayModal').style.display = '';
+  payingTruckerBill = null;
+}
+
+function wireTruckerModals() {
+  $('trkClose').addEventListener('click', closeTruckerBillModal);
+  $('trkSave').addEventListener('click', async () => {
+    const payload = {
+      date: toIsoDate($('trk_date').value),
+      company: $('trk_company').value.trim(),
+      load_ticket: $('trk_ticket').value.trim() || null,
+      amount: $('trk_amount').value,
+    };
+    const btn = $('trkSave');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    $('trkErr').textContent = '';
+    try {
+      await (editingTruckerBillId
+        ? api(`/api/trucker-bills/${encodeURIComponent(editingTruckerBillId)}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : api('/api/trucker-bills', { method: 'POST', body: JSON.stringify(payload) }));
+      closeTruckerBillModal();
+      await renderTruckerTab();
+    } catch (err) {
+      $('trkErr').textContent = String(err.message || '').replace(/^Validation:\s*/, '');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save bill';
+    }
+  });
+
+  $('trkPayClose').addEventListener('click', closeTruckerPayModal);
+  $('trkPaySave').addEventListener('click', async () => {
+    if (!payingTruckerBill) return;
+    const btn = $('trkPaySave');
+    btn.disabled = true; btn.textContent = 'Recording…';
+    $('trkPayErr').textContent = '';
+    try {
+      await api('/api/payments', {
+        method: 'POST',
+        body: JSON.stringify({
+          load_id: payingTruckerBill.id,
+          // The field the whole report split hangs off. Without it the payment
+          // is stored as a purchase and the haulage disappears into what the
+          // yard paid for metal — see helpers/payments.js.
+          load_kind: 'trucker',
+          mode: $('trk_pay_mode').value,
+          amount: $('trk_pay_amount').value,
+          paid_on: toIsoDate($('trk_pay_date').value),
+        }),
+      });
+      closeTruckerPayModal();
+      await renderTruckerTab();
+    } catch (err) {
+      $('trkPayErr').textContent = err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Record payment';
+    }
+  });
 }
 
 // ── Expenses tab (admin only) ────────────────────────────────────────────
@@ -5004,7 +5329,7 @@ function invLinesHtml(key) {
   const t = d.totals || {};
   return `
     <div style="overflow-x:auto;">
-    <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
+    <table id="invLinesTable" class="stack-table" style="width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px;">
       <thead><tr style="background:var(--surface-sunken); text-align:right;">
         <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Load</th>
         <th style="padding:8px 10px; text-align:left; font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Seller</th>
@@ -5196,7 +5521,7 @@ async function renderSpendReportTab() {
 
       ${(rep.months || []).length ? `
       <div class="card" style="padding:0; overflow-x:auto; margin-bottom:18px;">
-        <table class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
+        <table id="spendReportTable" class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
           <thead><tr style="background:var(--surface-sunken); text-align:right;">
             <th style="padding:10px 12px; text-align:left; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Month</th>
             ${cols.map(c => `<th style="padding:10px 12px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c)}</th>`).join('')}
@@ -5585,6 +5910,7 @@ async function renderCurrentMobileTab() {
     }
     if (currentMobileTab === 'inventory') { await renderInventoryTab(); return; }
     if (currentMobileTab === 'petty') { await renderPettyCashTab(); return; }
+    if (currentMobileTab === 'trucker') { await renderTruckerTab(); return; }
     if (currentMobileTab === 'report') { await renderSpendReportTab(); return; }
     if (currentMobileTab === 'expenses') { await renderExpensesTab(); return; }
     if (currentMobileTab === 'documents') { await renderDocumentsTab(); return; }
@@ -5998,6 +6324,7 @@ $('scanManualUse').addEventListener('click', useManualWeight);
 $('scanManual').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); useManualWeight(); } });
 wireSignPad();
 wireExpenseModal();
+wireTruckerModals();
 
 $('btnLogin').addEventListener('click', doLogin);
 $('loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });

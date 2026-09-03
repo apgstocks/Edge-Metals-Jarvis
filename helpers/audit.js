@@ -48,10 +48,11 @@ const mutateJson = (file, dflt, fn) => mutateJsonRaw(file, dflt, fn, { strict: t
 // typo becomes a visible 'unknown-action' row rather than a category nobody
 // ever greps for.
 const ACTIONS = [
-    'delete-paid-load',      // a load with payments against it
-    'delete-payment',        // one payment removed from a load
-    'resign-paid-load',      // signature replaced after money moved
-    'edit-locked-load',      // the edit-unlock prompt satisfied by this profile
+    'delete-paid-load',           // a load with payments against it
+    'delete-paid-trucker-bill',   // a trucker bill with payments against it
+    'delete-payment',             // one payment removed from a load or bill
+    'resign-paid-load',           // signature replaced after money moved
+    'edit-locked-load',           // the edit-unlock prompt satisfied by this profile
 ];
 
 function listEntries() {

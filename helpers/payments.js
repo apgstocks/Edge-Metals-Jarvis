@@ -135,9 +135,22 @@ async function addPayment(input = {}) {
     const record = {
         id: newPaymentId(),
         load_id: loadId,
-        // Which store the load lives in. Ids are unique per store but not
+        // Which store the payable lives in. Ids are unique per store but not
         // across them, so without this a purchase and a sale could collide.
-        load_kind: input.load_kind === 'sale' ? 'sale' : 'purchase',
+        //
+        // 'trucker' added 2026-09-03 for the haulage bills. It has to be an
+        // ALLOWLIST rather than the old `=== 'sale' ? 'sale' : 'purchase'`,
+        // which silently coerced everything else to 'purchase': a trucker
+        // payment would have been stored as a purchase, and then the spend
+        // report — which splits on this field — would have labelled it
+        // "Load TRK_001" and added it to what the yard paid for metal. The
+        // grand total would still have been right, which is what makes that
+        // class of bug last: nothing looks wrong until someone asks what a
+        // month's haulage cost.
+        //
+        // Anything unrecognised still falls back to 'purchase', so records
+        // written before this field existed keep their meaning.
+        load_kind: ['sale', 'trucker'].includes(input.load_kind) ? input.load_kind : 'purchase',
         mode,
         // What was ACTUALLY paid. On a capped cash payment this is less than
         // was asked for, and the rest stays outstanding — which is exactly

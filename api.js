@@ -434,7 +434,15 @@ function createApi() {
 // rule; POST and DELETE /api/petty-cash each carry requireAdmin of their own.
 // Staff cannot record a cash payment either (/api/payments is absent from this
 // list), so the reserve and the thing that draws it down stay behind one door.
-const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/petty-cash', '/api/verify-admin-password'];
+// '/api/trucker-bills' added 2026-09-03. Apsara asked for the Trucker tab "for
+// everyone", and a haulier's invoice arriving at the gate is yard paperwork of
+// the same kind as a load. Note what is NOT here: '/api/payments' is still
+// absent, so staff can record what is OWED to a trucker and cannot record that
+// it was settled — the same division that already applies to loads, where
+// staff weigh and price and admin pays. Letting the path through is only half
+// a rule anyway, since this list cannot tell GET from DELETE; the paid-bill
+// delete guard lives on the route itself.
+const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/vision/read-weight', '/api/vision/check-photo-quality', '/api/me', '/api/address-book', '/api/item-types', '/api/petty-cash', '/api/trucker-bills', '/api/verify-admin-password'];
     app.use((req, res, next) => {
         if (req.role !== 'staff') return next();
         if (!req.path.startsWith('/api/')) return next();
@@ -1872,6 +1880,30 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const { addPayment, paymentSummary } = require('./helpers/payments');
             const b = req.body || {};
+
+            // ── Zelle or Wire only, for a trucker bill ────────────────────
+            // Apsara 2026-09-03: "when i click pay - option should be as
+            // zelle/wire." Enforced on the WRITE PATH and not only in the
+            // dropdown, because the dropdown is not a rule — the last three
+            // money rules in this app were enforced by a hidden control and
+            // two of them turned out to be enforced nowhere else.
+            //
+            // The practical consequence is that trucker bills never touch
+            // petty cash: Cash is the only mode that withdraws from it, so
+            // refusing Cash here means the whole reserve-then-write dance in
+            // addPayment cannot apply to this ledger at all.
+            if (String(b.load_kind || '') === 'trucker') {
+                const { TRUCKER_PAYMENT_MODES } = require('./helpers/truckerBills');
+                const mode = TRUCKER_PAYMENT_MODES
+                    .find((m) => m.toLowerCase() === String(b.mode || '').trim().toLowerCase());
+                if (!mode) {
+                    return res.status(400).json({
+                        error: `A trucker bill is paid by ${TRUCKER_PAYMENT_MODES.join(' or ')}.`,
+                        code: 'TRUCKER_MODE_NOT_ALLOWED',
+                    });
+                }
+            }
+
             const payment = await addPayment({ ...b, created_by: (req.role || null) });
             // A cash payment short of the asked-for amount has to say so
             // loudly enough that the client can tell the operator, per Apsara
@@ -1901,6 +1933,115 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (e.requested != null) body.requested = e.requested;
             res.status(400).json(body);
         }
+    });
+
+    // ── Trucker bills ─────────────────────────────────────────────────────
+    // Apsara 2026-09-03: "now include a tab called trucker for everyone ... it
+    // contains date, company name, load ticket number (optional), amount.
+    // edit, delete, pay option should be there. when i click pay - option
+    // should be as zelle/wire. once paid, hide delete option for staff and
+    // admin."
+    //
+    // "FOR EVERYONE" is why '/api/trucker-bills' is on
+    // STAFF_ALLOWED_PATH_PREFIXES. What that does NOT include is paying:
+    // '/api/payments' is absent from that list and stays absent, so a staff
+    // session can record what is owed and cannot record that it was settled.
+    // That is the same division that already exists for loads — staff weigh
+    // and price them, admin pays for them — and widening it silently, in the
+    // middle of a request about a tab, would be the wrong way to change how
+    // money moves in this business. Say the word and it is one entry.
+    //
+    // No requireAdmin on GET/POST/PUT: the staff allowlist above is the gate,
+    // and every other role passes it anyway.
+    app.get('/api/trucker-bills', (req, res) => {
+        try {
+            const t = require('./helpers/truckerBills');
+            const { from, to, company } = req.query || {};
+            const bills = t.listBillsWithPayments({ from, to, company });
+            res.json({
+                bills,
+                report: t.billsReport(bills),
+                // The modes travel with the payload for the same reason the
+                // expense methods do: the dropdown is built from the server's
+                // list, so it cannot offer something the server would reject.
+                modes: t.TRUCKER_PAYMENT_MODES,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/trucker-bills', async (req, res) => {
+        try {
+            const t = require('./helpers/truckerBills');
+            const bill = await t.addBill({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, bill });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.put('/api/trucker-bills/:id', async (req, res) => {
+        try {
+            const t = require('./helpers/truckerBills');
+            const bill = await t.editBill(String(req.params.id), req.body || {});
+            if (!bill) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true, bill });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── delete, with the payment lock enforced HERE and not in the button ──
+    // "Once paid, hide delete option for staff and admin." The hiding is in
+    // both clients; this is the rule. Written at the same time as the button
+    // this time — the load equivalent went two weeks with the button as the
+    // only enforcement, and staff can reach these routes.
+    //
+    // Jarvis goes past it, consistent with loads, and is audited for it.
+    app.delete('/api/trucker-bills/:id', async (req, res) => {
+        try {
+            const t = require('./helpers/truckerBills');
+            const audit = require('./helpers/audit');
+            const { paymentsForLoad, deletePaymentsForLoad } = require('./helpers/payments');
+            const id = String(req.params.id);
+            const doomed = t.getBill(id);
+            if (!doomed) return res.status(404).json({ error: 'not found' });
+
+            const paidRows = paymentsForLoad(id);
+            const paidTotal = paidRows.reduce((a, p) => a + (Number(p.amount) || 0), 0);
+            if (paidTotal > 0 && !isSuper(req)) {
+                await audit.refused({
+                    action: 'delete-paid-trucker-bill', subject: id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: { company: doomed.company, paid: paidTotal, payments: paidRows.length },
+                    reason: 'bill has payments against it',
+                });
+                return res.status(409).json({
+                    error: 'This bill has payments recorded against it. Remove the payments first, or sign in with the Jarvis profile.',
+                    code: 'BILL_HAS_PAYMENTS', paid: paidTotal,
+                });
+            }
+
+            let entry = null;
+            if (paidTotal > 0) {
+                entry = await audit.record({
+                    action: 'delete-paid-trucker-bill', subject: id,
+                    actor: actorOf(req), role: req.role, ip: req.ip,
+                    detail: {
+                        company: doomed.company, date: doomed.date,
+                        load_ticket: doomed.load_ticket, amount: doomed.amount, paid: paidTotal,
+                        payments: paidRows.map((p) => ({ id: p.id, mode: p.mode, amount: p.amount, paid_on: p.paid_on })),
+                    },
+                });
+            }
+
+            const removed = await t.deleteBill(id);
+            if (!removed) {
+                if (entry) await audit.complete(entry, 'failed', { reason: 'bill not found' });
+                return res.status(404).json({ error: 'not found' });
+            }
+            // Payments follow the bill, exactly as they follow a load. Receipts
+            // left behind would sum against nothing and inflate the spend
+            // report. Nothing here can be Cash, so petty cash is untouched.
+            const removedPayments = await deletePaymentsForLoad(id);
+            if (entry) await audit.complete(entry, 'done', { payments_removed: removedPayments });
+            res.json({ ok: true, removed_payments: removedPayments });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // ── Spend report ──────────────────────────────────────────────────────
@@ -2007,6 +2148,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // figure a balance is measured against.
     function amountForLoad(loadId, kind) {
         try {
+            // A trucker bill is a payable like a load, with its amount on the
+            // bill itself. Without this branch it would fall through to
+            // loadLoads(), find nothing, and return null — which
+            // paymentSummary reads as "no total to settle against", so every
+            // trucker bill would report paid_amount_unknown and never show as
+            // settled no matter what was paid.
+            if (kind === 'trucker') {
+                const b = require('./helpers/truckerBills').getBill(loadId);
+                return b ? b.amount : null;
+            }
             if (kind === 'sale') {
                 const { loadOutboundLoads } = require('./helpers/outboundLoads');
                 const l = loadOutboundLoads().find((x) => x.id === loadId);

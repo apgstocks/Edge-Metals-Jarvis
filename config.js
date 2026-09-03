@@ -194,6 +194,18 @@ const FILES = {
     // inside a record that gets rewritten wholesale by an unrelated edit.
     PETTY_CASH_FILE: path.join(DATA_DIR, 'petty_cash.json'),
 
+    // ── what the yard owes its hauliers ───────────────────────────────────
+    // Apsara 2026-09-03: a Trucker tab of bills — date, company, an optional
+    // load ticket, amount — payable by Zelle or Wire.
+    //
+    // NOT the trucker ROSTER, which is a Supabase table of hauliers and their
+    // WhatsApp groups and has nothing to do with money. Two different things
+    // wearing the same word; see helpers/truckerBills.js.
+    //
+    // Its own file, like payments and petty cash, for the same reason: it must
+    // not live inside a record that some unrelated edit rewrites wholesale.
+    TRUCKER_BILLS_FILE: path.join(DATA_DIR, 'trucker_bills.json'),
+
     // ── what the top-level profile did ────────────────────────────────────
     // Every time a Jarvis session walks past a lock that stops everyone else,
     // a row lands here. It is APPEND-ONLY and nothing in the codebase deletes
