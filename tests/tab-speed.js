@@ -425,6 +425,43 @@ section('H — the tab switch paints from cache, then corrects itself');
        'a cache miss is not an error, it is the ordinary path');
 }
 
+// ── I. things near the tabs that must not have been broken ────────────────
+section('I — the yard assistant, and every overlay, survive a session expiry');
+{
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const siteSrc = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+
+    // Apsara 2026-09-03: "my yard assistant is missing now ... post restart."
+    // It was not the code — the bubble mounts and un-hides correctly in both
+    // clients — but nothing was asserting that, so there was no way to answer
+    // her quickly. Now there is.
+    for (const [label, src, dir] of [['app', appSrc, 'mobile-app/www'], ['website', siteSrc, 'dashboard']]) {
+        ck(`${label}: the assistant script is still included`, /<script src="yard-bot\.js"><\/script>/.test(src));
+        ck(`${label}:   and the file it points at exists`,
+           fs.existsSync(path.join(ROOT, dir, 'yard-bot.js')));
+    }
+    // It is loaded from the bundled assets, not fetched from the server, so a
+    // server restart cannot take it away. Worth pinning: a relative src that
+    // ever became absolute would make the bubble depend on the tunnel.
+    ck('the app loads it locally, not from the server', !/src="https?:\/\/[^"]*yard-bot/.test(appSrc));
+
+    // ── EVERY OVERLAY MUST BE IN THE DISMISS LIST ─────────────────────────
+    // showLoginScreen closes overlays before showing the login card, because
+    // they are siblings of #appShell and hiding the shell does not hide them.
+    // A new overlay that is not on that list sits on top of the login screen
+    // showing its own "unauthorized" while the real message hides behind it.
+    // The Trucker modals were added and forgotten on the day they were built,
+    // which is precisely why this is scanned rather than remembered.
+    const overlayIds = [...appSrc.matchAll(/<div id="([\w-]+)" class="hidden modal-overlay"/g)].map((m) => m[1]);
+    ck('the scan finds the overlays', overlayIds.length >= 5, `found: ${overlayIds.join(', ')}`);
+    const listStart = appSrc.indexOf("  ['loadModal', 'adminSettingsModal'");
+    const dismissList = appSrc.slice(listStart, appSrc.indexOf('].forEach', listStart));
+    for (const id of overlayIds) {
+        ck(`  ${id} is dismissed on session expiry`, dismissList.includes(`'${id}'`),
+           'left open, it covers the login card with its own error and hides the real one');
+    }
+}
+
 server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }

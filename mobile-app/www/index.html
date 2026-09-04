@@ -5022,7 +5022,23 @@ function showLoginScreen(err) {
   // unauthorized") while the real message ("Session expired — sign in
   // again") is hidden behind it. Reported by Apsara 2026-08-17 against the
   // signature pad; the same trap applied to every other overlay here.
-  ['loadModal', 'adminSettingsModal', 'staffSettingsModal', 'signOverlay', 'expenseModal'].forEach(id => {
+  // truckerModal and truckerPayModal added 2026-09-03 with the Trucker tab —
+  // and forgetting them is exactly the trap this list exists for. A session
+  // expiring while the Pay form is open would have left a full-screen overlay
+  // sitting on top of the login card, showing "unauthorized" from its own
+  // error line while the real message was hidden behind it. This list is the
+  // one place that has to be updated for every new overlay; a comment on the
+  // modal would not have caught it, which is why tests/tab-speed.js now scans
+  // for .modal-overlay ids that are missing from here.
+  //
+  // payModal and voiceSheet were ALREADY missing before today — found by the
+  // scan the moment it existed, not by anyone reading the list. payModal is
+  // the one that mattered: a session expiring while a payment was being
+  // recorded left the Pay form over the login card, reading "unauthorized",
+  // with the real "Session expired — sign in again" hidden behind it. That is
+  // the exact bug this list was written for, sitting inside it.
+  ['loadModal', 'adminSettingsModal', 'staffSettingsModal', 'signOverlay', 'expenseModal',
+   'truckerModal', 'truckerPayModal', 'payModal', 'voiceSheet'].forEach(id => {
     const el = $(id);
     if (el) { el.classList.add('hidden'); el.style.display = ''; }
   });
