@@ -206,6 +206,24 @@ const FILES = {
     // not live inside a record that some unrelated edit rewrites wholesale.
     TRUCKER_BILLS_FILE: path.join(DATA_DIR, 'trucker_bills.json'),
 
+    // ── the bank feed ─────────────────────────────────────────────────────
+    // Apsara 2026-09-03: "can i link my bank account here like quickbook."
+    //
+    // NAMED bank-* ON PURPOSE. helpers/backup.js excludes these by FILENAME,
+    // so the prefix is not cosmetic — it is what keeps a bank statement out of
+    // a shared Drive folder. Renaming either of these without adding the new
+    // name to SECRET_PATTERNS would start uploading them, silently, on the
+    // next nightly run. tests/bank.js asserts the exclusion by walking the
+    // real backup code rather than by trusting this comment.
+    //
+    // bank-item.json holds the Plaid ACCESS TOKEN. It is the standing ability
+    // to pull this account's history, it does not expire on its own, and it
+    // must never appear in an API response or a log line.
+    BANK_ITEM_FILE: path.join(DATA_DIR, 'bank-item.json'),
+    // The transactions themselves, keyed by Plaid's transaction_id so a
+    // re-sync corrects a row rather than duplicating it.
+    BANK_TX_FILE: path.join(DATA_DIR, 'bank-transactions.json'),
+
     // ── what the top-level profile did ────────────────────────────────────
     // Every time a Jarvis session walks past a lock that stops everyone else,
     // a row lands here. It is APPEND-ONLY and nothing in the codebase deletes
@@ -249,6 +267,20 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';   // separate, stronger
 // the separation this profile exists to create. api.js refuses to accept it
 // in that case rather than trusting the operator to notice.
 const JARVIS_PASSWORD = process.env.JARVIS_PASSWORD || '';
+
+// ── Plaid, for the bank feed ──────────────────────────────────────────────
+// Apsara's own credentials, set on the VM. Not created here and never handled
+// in chat — the same rule as the Picovoice key: an account in Edge Trading's
+// name is hers to open.
+//
+// PLAID_ENV is 'sandbox' until she has production access. Sandbox uses fake
+// institutions with published test logins, so the whole flow — link, sync,
+// reconcile — is exercisable end to end before a real account is ever
+// connected. The switch to production is these three values changing, not a
+// code change.
+const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID || '';
+const PLAID_SECRET    = process.env.PLAID_SECRET    || '';
+const PLAID_ENV       = process.env.PLAID_ENV       || 'sandbox';
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
@@ -531,6 +563,7 @@ module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
+    PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,

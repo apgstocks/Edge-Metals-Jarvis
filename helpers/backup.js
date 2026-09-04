@@ -54,6 +54,28 @@ const SECRET_PATTERNS = [
     /credentials?\.json$/i,
     /token.*\.json$/i,
     /\.pem$/i, /\.key$/i, /\.p12$/i, /\.jks$/i,
+    // ── BANK DATA NEVER LEAVES THE MACHINE ────────────────────────────────
+    // Added 2026-09-03, BEFORE the first bank file could exist. Apsara, asked
+    // where bank data should sit in the backup: "exclude bank data from the
+    // backup."
+    //
+    // This archive goes to a SHARED Drive folder. Everything else in it is
+    // yard paperwork — weights, tickets, what was paid for scrap. A bank
+    // transaction history is a different category of thing, and one careless
+    // share link is the whole exposure. There is no version of that trade
+    // that comes out well.
+    //
+    // bank-item.json is the more dangerous of the two. It holds the Plaid
+    // ACCESS TOKEN, which is not a copy of the data — it is the standing
+    // ability to fetch more of it, and it does not expire on its own. The
+    // transactions are last month's statement; the token is the key.
+    //
+    // The consequence, stated plainly rather than buried: these files exist on
+    // the VM and nowhere else. If that disk dies they are gone, and re-linking
+    // the bank is the only way back. That is why the GCP daily snapshots
+    // matter now in a way they did not before — it is the only remaining copy.
+    /^bank-item\.json$/i,
+    /^bank[-_].*\.json$/i,
 ];
 
 // Not worth the bytes, or not restorable anyway: lock files are transient,

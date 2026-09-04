@@ -53,6 +53,15 @@ write('gdrive-sa.json', { private_key: '-----BEGIN PRIVATE KEY-----AAAA' });
 write('gmail-token.json', { refresh_token: 'SECRET-REFRESH' });
 write('gmail-credentials.json', { client_secret: 'SECRET-CLIENT' });
 write('gmail-token-read.json', { refresh_token: 'SECRET-READ' });
+// ── bank data, excluded before the first real row could exist ─────────────
+// Apsara 2026-09-03, asked where bank data should sit in this archive:
+// "exclude bank data from the backup." This goes to a SHARED Drive folder.
+//
+// bank-item.json is the dangerous one. It holds the Plaid access token, which
+// is not a copy of the data — it is the standing ability to fetch more of it,
+// and it does not expire on its own.
+write('bank-item.json', { access_token: 'SECRET-PLAID-ACCESS', item_id: 'itm_1', cursor: 'abc' });
+write('bank-transactions.json', [{ transaction_id: 'tx_1', amount: 1200, name: 'SECRET-BANK-PAYEE' }]);
 // ── noise ─────────────────────────────────────────────────────────────────
 write('brain.json.lock', 'lock');
 write('manager_outbox.json.bak-20260901', '{}');
@@ -86,7 +95,11 @@ section('B — credentials never leave the machine');
     // for the secret VALUES. A filename filter that someone later loosens
     // would still pass a key-by-key test; it cannot pass this one.
     const blob = JSON.stringify(backup.buildArchive());
-    for (const secret of ['BEGIN PRIVATE KEY', 'SECRET-REFRESH', 'SECRET-CLIENT', 'SECRET-READ']) {
+    for (const secret of ['BEGIN PRIVATE KEY', 'SECRET-REFRESH', 'SECRET-CLIENT', 'SECRET-READ',
+                          // Bank data, added 2026-09-03. The access token
+                          // first: it is worth more than the statement, since
+                          // it fetches every future one too.
+                          'SECRET-PLAID-ACCESS', 'SECRET-BANK-PAYEE']) {
         ck(`  no trace of ${secret.slice(0, 18)} anywhere in the archive`, !blob.includes(secret));
     }
 
@@ -96,6 +109,24 @@ section('B — credentials never leave the machine');
     ck('  a private key', backup.isSecret('server.key') && backup.isSecret('cert.pem'));
     ck('  the release keystore', backup.isSecret('edge-yard-release.jks'));
     ck('  but not an ordinary store', !backup.isSecret('payments.json') && !backup.isSecret('loads.json'));
+
+    // ── bank data ─────────────────────────────────────────────────────────
+    // Asserted through the REAL collector, not just the matcher, because the
+    // question is whether these files reach the archive — not whether a regex
+    // in isolation says they should not.
+    for (const f of ['bank-item.json', 'bank-transactions.json']) {
+        ck(`${f} is EXCLUDED`, !Object.prototype.hasOwnProperty.call(stores, f),
+           'a bank statement in a shared Drive folder is one share link away from everyone');
+    }
+    ck('the matcher catches a bank file it has not seen', backup.isSecret('bank-accounts.json'),
+       'the next bank file must be excluded by the rule, not by someone remembering');
+    ck('  and the item file however it is cased', backup.isSecret('BANK-ITEM.JSON'));
+    // Narrow enough not to swallow ordinary stores. "bank" as a whole word at
+    // the start is the rule; a file that merely CONTAINS the letters is not a
+    // bank file, and excluding those would silently stop backing them up.
+    ck('  but not a store that merely contains the word',
+       !backup.isSecret('embankment.json') && !backup.isSecret('loads-bank.json'),
+       'over-matching here would quietly drop real stores out of the backup');
 }
 
 section('C — noise stays out');
