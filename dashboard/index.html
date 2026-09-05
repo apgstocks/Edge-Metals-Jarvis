@@ -4578,6 +4578,8 @@ function truckerBadge(b) {
 }
 
 async function renderTruckerTab() {
+  // Wire on first visit — see wireTruckerModals for why not at boot.
+  wireTruckerModals();
   const data = await api('/api/trucker-bills');
   truckerBills = Array.isArray(data.bills) ? data.bills : [];
   truckerModes = Array.isArray(data.modes) && data.modes.length ? data.modes : truckerModes;
@@ -4726,7 +4728,29 @@ function closeTruckerPayModal() {
   payingTruckerBill = null;
 }
 
+let truckerModalsWired = false;
 function wireTruckerModals() {
+  // ── LAZY, IDEMPOTENT, AND NULL-SAFE ───────────────────────────────────
+  // Called from renderTruckerTab rather than at boot. On the website boot()
+  // runs from an inline script partway down the document while these modals
+  // are markup at the very END of it, so at boot time the elements do not
+  // exist — wiring there threw and took renderNav() and loadTab() down with
+  // it, leaving a signed-in page with an empty sidebar and an empty body.
+  //
+  // Idempotent because it now runs on every visit to the tab, and binding a
+  // second listener to the same Save button would record every bill twice.
+  //
+  // Null-safe because a missing element must never again cost the whole
+  // page. If the markup is not there, the tab renders and its buttons do
+  // nothing — bad, but visibly bad, and only here.
+  if (truckerModalsWired) return;
+  const need = ['trkClose', 'trkSave', 'trkPayClose', 'trkPaySave'];
+  if (need.some((id) => !$(id))) {
+    console.warn('[TRUCKER] modal markup missing — buttons will not respond:',
+                 need.filter((id) => !$(id)).join(', '));
+    return;
+  }
+  truckerModalsWired = true;
   $('trkClose').addEventListener('click', closeTruckerBillModal);
   $('trkSave').addEventListener('click', async () => {
     const payload = {
@@ -6309,11 +6333,13 @@ async function boot() {
   // only one visible item that doesn't match the loaded content. Send them
   // straight to Loads instead.
   if (ROLE === 'staff') CURRENT_TAB = 'loads';
-  // Wired once at boot, not on every tab render — the modals live outside
-  // #viewRoot, so loadTab() replacing the view does not destroy their
-  // listeners, and re-wiring per render would stack a new handler on the
-  // same button each time the tab is opened. Same pattern as the app.
-  wireTruckerModals();
+  // NOTE — wireTruckerModals() used to be called HERE and it broke the whole
+  // dashboard. boot() runs from the inline script partway down the document;
+  // the trucker modals are markup at the very end, after that script. So at
+  // this point #trkClose did not exist yet, wiring threw a TypeError, and
+  // renderNav() and loadTab() below never ran: a signed-in page with an empty
+  // sidebar and an empty body. It is wired lazily from renderTruckerTab()
+  // instead, by which time the document is fully parsed.
   renderNav();
   loadTab(CURRENT_TAB);
   if (ROLE === 'admin') {

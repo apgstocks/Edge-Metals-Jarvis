@@ -462,6 +462,103 @@ section('I — the yard assistant, and every overlay, survive a session expiry')
     }
 }
 
+// ── J. the page actually boots ────────────────────────────────────────────
+section('J — boot() finishes and paints a navigation');
+{
+    // Apsara 2026-09-03 saw the dashboard signed in — role label reading ADMIN
+    // ACCESS — with an empty sidebar and an empty body.
+    //
+    // HONEST NOTE ON WHAT THIS DOES AND DOES NOT PROVE. My first diagnosis was
+    // that wireTruckerModals(), then called from boot(), threw because the
+    // modal markup sits after the inline script. Putting that ordering back as
+    // a mutation did NOT reproduce her symptom, so the diagnosis was wrong:
+    // boot() awaits /api/me first, and that await lets parsing finish before
+    // the wiring line is reached. The lazy, null-safe wiring was kept because
+    // it is better regardless, not because it was the cause.
+    //
+    // What this section IS worth: nothing anywhere asserted that boot()
+    // completes and paints a navigation. Every test passed while she looked at
+    // an empty page. It checks the outcome rather than the parts, and it will
+    // catch the NEXT thing that stops boot half way — whatever that turns out
+    // to be.
+    const { JSDOM, VirtualConsole } = require('jsdom');
+    for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
+        const html = fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+        const errors = [];
+        const vc = new VirtualConsole();
+        vc.on('jsdomError', (e) => {
+            const m = String(e && e.message || e);
+            if (!/Could not load script|Not implemented/.test(m)) errors.push(m);
+        });
+        // ── STUBS INSTALLED IN beforeParse, NOT AFTER ─────────────────────
+        // Both clients kick off boot() while the document is still being
+        // parsed. Assigning window.fetch after `new JSDOM(...)` returns is
+        // already too late: the app had run boot(), got no usable fetch, and
+        // fallen through to its login screen — so the tab bar was legitimately
+        // empty and this test failed for a reason that had nothing to do with
+        // what it was checking.
+        //
+        // The session key has to be the real one too. The app reads
+        // 'jarvis_sid'; without it, it correctly shows the sign-in screen.
+        const dom = new JSDOM(html, {
+            runScripts: 'dangerously', url: 'http://localhost/', virtualConsole: vc,
+            beforeParse(win) {
+                win.fetch = async (url) => ({
+                    status: 200, ok: true,
+                    json: async () => (String(url).includes('/api/me')
+                        ? { role: 'admin', super: false, profile: 'admin' }
+                        : []),
+                });
+                try {
+                    win.localStorage.setItem('jarvis_sid', 'tok');
+                    win.localStorage.setItem('jarvis_token', 'tok');
+                } catch (e) {}
+            },
+        });
+        const w = dom.window;
+        await new Promise((r) => setTimeout(r, 500));
+
+        ck(`${label}: boot ran without throwing`, errors.length === 0,
+           errors.slice(0, 2).join(' | '));
+
+        const d = w.document;
+        if (label === 'website') {
+            // The symptom, asserted directly: a signed-in page with no nav.
+            const nav = d.getElementById('nav') || d.querySelector('[id*="nav" i]');
+            const navButtons = d.querySelectorAll('.nav-btn').length;
+            ck('website: the sidebar has navigation in it', navButtons > 0,
+               'an empty sidebar on a signed-in page is exactly what she saw');
+            ck('  and it includes the Trucker Bills tab',
+               [...d.querySelectorAll('.nav-btn')].some((b) => /trucker/i.test(b.textContent || '')));
+        } else {
+            const tabs = d.querySelectorAll('#mobileTabBar button').length;
+            ck('app: the tab bar has tabs in it', tabs > 0);
+        }
+        w.close();
+    }
+}
+
+section('K — modal wiring cannot take the page down again');
+{
+    for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
+        const src = fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+        const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
+        // Not called at boot any more — that ordering is the bug.
+        const bootBlock = label === 'website'
+            ? nc.slice(nc.indexOf('async function boot()'), nc.indexOf('async function boot()') + 2000)
+            : nc.slice(nc.indexOf('(async function boot()'), nc.indexOf('(async function boot()') + 1200);
+        ck(`${label}: wiring is not done during boot`, !/wireTruckerModals\(\)/.test(bootBlock),
+           'the modals are markup that may not exist yet when boot runs');
+        ck(`${label}:   it is wired when the tab is opened`,
+           /renderTruckerTab\(\) \{[\s\S]{0,200}wireTruckerModals\(\)/.test(nc));
+        ck(`${label}:   it bails out instead of throwing on missing markup`,
+           /need\.some\(\(id\) => !\$\(id\)\)/.test(nc),
+           'a missing element must cost that tab, never the whole page');
+        ck(`${label}:   and it only wires once`, /if \(truckerModalsWired\) return;/.test(nc),
+           'a second listener on Save would record every bill twice');
+    }
+}
+
 server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
