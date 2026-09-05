@@ -39,6 +39,21 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
 // only thing standing between a normal admin and the ability to erase a paid
 // load, so it must not be reachable by any request body, header or cookie the
 // caller controls.
+// Failed sign-ins per IP. Counted for VISIBILITY only — nothing here refuses
+// anyone, by her decision ("nothing as of now"). Capped so a long attack
+// cannot grow this map without bound and turn a nuisance into a memory
+// problem; at the cap the oldest entry goes, since the count that matters is
+// the one still climbing.
+const failedLogins = new Map();
+const FAILED_LOGIN_MAX_IPS = 5000;
+const originalFailedSet = failedLogins.set.bind(failedLogins);
+failedLogins.set = (k, v) => {
+    if (!failedLogins.has(k) && failedLogins.size >= FAILED_LOGIN_MAX_IPS) {
+        failedLogins.delete(failedLogins.keys().next().value);
+    }
+    return originalFailedSet(k, v);
+};
+
 function issueSession(ip, role, opts = {}) {
     const sid = crypto.randomBytes(32).toString('hex');
     sessions.set(sid, { issued: Date.now(), ip, role, super: !!opts.super });
@@ -186,8 +201,64 @@ function createApi() {
     // access control is the password/session/token check below, not CORS
     // (CORS only ever gates browser JS reading the response, not whether a
     // request can be made at all).
+    // ── NARROWED TO AN ALLOWLIST, 2026-09-03 ──────────────────────────────
+    // The reasoning above is still true as far as it goes — CORS gates a
+    // browser READING a response, not whether the request happens, and the
+    // real access control is the session check. But "still safe" and "as
+    // narrow as it should be" are different standards, and a wildcard means
+    // any page on the internet can read this API's responses the moment it
+    // gets hold of a token. With bank data arriving, that margin is worth
+    // closing.
+    //
+    // WHAT IS ALLOWED, AND WHY EACH ONE:
+    //   https://localhost   — the Android app. capacitor.config.json sets
+    //                         androidScheme "https" with no hostname, so this
+    //                         is the WebView's origin. Get this wrong and the
+    //                         app stops working entirely.
+    //   capacitor://, ionic://, http://localhost — other Capacitor schemes,
+    //                         kept so a config change or an iOS build does not
+    //                         silently break the app.
+    // The DASHBOARD needs no entry: it is served by this same Express app, so
+    // its requests are same-origin and never carry an Origin header at all.
+    //
+    // TWO ESCAPE HATCHES, because the failure mode here is being locked out of
+    // her own app from a phone with no laptop nearby:
+    //   CORS_ALLOWED_ORIGINS  — comma-separated, added to the list.
+    //   CORS_ALLOW_ALL=1      — restores the old wildcard exactly.
+    // And a refused origin is LOGGED with the value it saw, so the fix is
+    // reading one log line rather than guessing.
+    const CORS_DEFAULT_ORIGINS = [
+        'https://localhost', 'http://localhost',
+        'capacitor://localhost', 'ionic://localhost',
+    ];
+    const corsAllowed = new Set(CORS_DEFAULT_ORIGINS.concat(
+        String(process.env.CORS_ALLOWED_ORIGINS || '')
+            .split(',').map((s) => s.trim()).filter(Boolean)));
+    const corsAllowAll = process.env.CORS_ALLOW_ALL === '1';
+    if (corsAllowAll) {
+        console.warn('[CORS] CORS_ALLOW_ALL=1 — every origin is allowed. Intended as a temporary escape hatch.');
+    }
+    const corsRefused = new Set();     // logged once each, not per request
     app.use((req, res, next) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
+        const origin = req.headers.origin;
+        // NO Origin HEADER AT ALL is the common case and must keep working:
+        // same-origin browser requests, curl, the monitor, anything
+        // server-to-server. Nothing is added and nothing is blocked — CORS
+        // simply does not apply to those.
+        if (origin) {
+            if (corsAllowAll) {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+            } else if (corsAllowed.has(origin)) {
+                res.setHeader('Access-Control-Allow-Origin', origin);
+                // Responses now differ by origin, so anything caching them has
+                // to know that. Without Vary a shared cache could hand one
+                // origin's response to another.
+                res.setHeader('Vary', 'Origin');
+            } else if (!corsRefused.has(origin)) {
+                corsRefused.add(origin);
+                console.warn(`[CORS] refused origin ${origin} — if this is your app, add it: CORS_ALLOWED_ORIGINS=${origin}`);
+            }
+        }
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
         if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -332,11 +403,43 @@ function createApi() {
         else if (adminPw && eq(pw, adminPw))      role = 'admin';
         else if (eq(pw, userPw))                  role = 'user';
         else if (staffPw && eq(pw, staffPw))      role = 'staff';
-        if (!role) return res.status(401).json({ error: 'wrong password' });
+        if (!role) {
+            // ── A FAILED SIGN-IN IS RECORDED, AND NOTHING IS BLOCKED ──────
+            // Apsara, asked what should happen after repeated wrong
+            // passwords: "nothing as of now." So there is no delay, no
+            // lockout, and no way for this to shut her out — which was the
+            // risk she was weighing.
+            //
+            // What it DOES do is say so. Without a line in the log there is
+            // no way to tell a fat-fingered password from someone working
+            // through a wordlist against a URL that is reachable from
+            // anywhere, and "we were being attacked for a fortnight" is not
+            // something anyone wants to learn afterwards. Counting is free
+            // and refuses nobody.
+            //
+            // The password is never logged, not even its length.
+            const ip = String(req.ip || 'unknown');
+            const n = (failedLogins.get(ip) || 0) + 1;
+            failedLogins.set(ip, n);
+            if (n === 5 || n === 20 || (n > 20 && n % 50 === 0)) {
+                console.warn(`[AUTH] ${n} failed sign-ins from ${ip}. Nothing is being blocked — `
+                    + 'ask for the throttle if this is not you.');
+            }
+            return res.status(401).json({ error: 'wrong password' });
+        }
+        // A success clears the counter, so an ordinary typo never accumulates
+        // into a scary-looking number.
+        failedLogins.delete(String(req.ip || 'unknown'));
 
         const sid = issueSession(req.ip, role, { super: isSuper });
+        // `Secure` added 2026-09-03. The tunnel is HTTPS, so this changes
+        // nothing today — it is what stops the cookie being sent in clear if
+        // this is ever reached over plain HTTP, which is exactly the kind of
+        // "it was fine until it wasn't" this flag exists for. The mobile app
+        // is unaffected: it authenticates with a Bearer token and never uses
+        // the cookie at all.
         res.setHeader('Set-Cookie',
-            `sid=${sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+            `sid=${sid}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
         // sid is ALSO returned in the JSON body now, not just the cookie —
         // added for the Loads mobile app. Its fetch() calls to this API are
         // cross-origin, and SameSite=Strict cookies are never attached to
