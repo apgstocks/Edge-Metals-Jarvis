@@ -142,6 +142,39 @@ function decorateBooking(b, wf) {
 function createApi() {
     const app = express();
 
+    // ── BEHIND A REVERSE PROXY, req.ip IS A LIE ───────────────────────────
+    // Apsara 2026-09-03 is moving off the Cloudflare quick tunnel onto a
+    // subdomain of her GoDaddy domain, which means Caddy or nginx terminating
+    // TLS on the VM and proxying to this process on localhost.
+    //
+    // The moment that happens, Express reports req.ip as 127.0.0.1 for EVERY
+    // request, because that is genuinely who connected. Three things quietly
+    // become wrong:
+    //   - the audit log records 127.0.0.1 as the address that deleted a paid
+    //     load, for ever. That log exists precisely because the record it
+    //     describes no longer does, and "who" is half of it.
+    //   - the failed sign-in counter sees one IP and can never distinguish a
+    //     typo from a wordlist.
+    //   - sessions are stamped with the wrong origin.
+    // None of those throw. They just stop meaning anything.
+    //
+    // OFF BY DEFAULT, AND THAT IS THE SAFE DIRECTION. X-Forwarded-For is a
+    // request header, so anyone can set it. Trusting it with no proxy in
+    // front lets a caller claim any address they like and write it into the
+    // audit log — worse than 127.0.0.1, because it is a plausible lie rather
+    // than an obvious placeholder. So it is opt-in, and only correct once
+    // something trusted is actually terminating in front of this.
+    //
+    // TRUST_PROXY=1 means one hop (Caddy/nginx on this host). A number means
+    // that many hops, for a proxy behind a proxy.
+    const trustProxy = process.env.TRUST_PROXY;
+    if (trustProxy) {
+        const hops = Number(trustProxy) || 1;
+        app.set('trust proxy', hops);
+        console.log(`[NET] trust proxy = ${hops} — client IPs read from X-Forwarded-For. `
+            + 'Only correct if a proxy you control is in front of this.');
+    }
+
     // ── say out loud whether the top-level profile is live ────────────────
     // A misconfigured JARVIS_PASSWORD fails SILENTLY at the login form: the
     // password is simply not recognised, which looks exactly like a typo. This

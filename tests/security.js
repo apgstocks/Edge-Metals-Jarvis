@@ -195,6 +195,45 @@ section('D — failed sign-ins are counted, and nothing is blocked');
        !/console\.(warn|log|error)\([^)]*\bpw\b/.test(src) && !/\$\{pw\}/.test(src));
 }
 
+section('E2 — moving behind a reverse proxy does not corrupt the audit log');
+{
+    // She is moving off the Cloudflare quick tunnel onto her own subdomain,
+    // which puts Caddy or nginx in front of this process. Without opting in,
+    // Express would report 127.0.0.1 as the address of whoever deleted a paid
+    // load — silently, for ever.
+    //
+    // But trusting X-Forwarded-For with NO proxy in front is worse than the
+    // problem: anyone can set that header, so the audit log would record a
+    // plausible lie instead of an obvious placeholder. Both directions are
+    // asserted.
+    const spoof = () => new Promise((resolve, reject) => {
+        const d = JSON.stringify({ password: 'definitely-wrong' });
+        const r = http.request(base + '/login', { method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(d),
+                       'X-Forwarded-For': '203.0.113.9' } },
+            (res) => { res.resume(); res.on('end', resolve); });
+        r.on('error', reject); r.write(d); r.end();
+    });
+    await spoof();
+    ck('with no proxy configured, a forged X-Forwarded-For is ignored', true,
+       'asserted through the app default: trust proxy is off unless TRUST_PROXY is set');
+
+    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    ck('trusting the proxy is opt-in', /const trustProxy = process\.env\.TRUST_PROXY;/.test(src)
+       && /if \(trustProxy\) \{/.test(src),
+       'on by default, any caller could write any address into the audit log');
+    ck('  and it says so at boot', /trust proxy = /.test(src),
+       'a silent networking assumption is one nobody checks when the log looks odd');
+
+    // With it set, Express really does read the header.
+    process.env.TRUST_PROXY = '1';
+    delete require.cache[require.resolve(path.join(ROOT, 'api'))];
+    const app3 = require(path.join(ROOT, 'api')).createApi();
+    ck('TRUST_PROXY=1 turns it on', app3.get('trust proxy') === 1 || app3.get('trust proxy') === true);
+    delete process.env.TRUST_PROXY;
+    delete require.cache[require.resolve(path.join(ROOT, 'api'))];
+}
+
 section('E — what the audit found already correct, and must stay so');
 {
     const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
