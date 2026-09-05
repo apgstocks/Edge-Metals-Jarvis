@@ -1,25 +1,31 @@
 // ── Jarvis Loads app — API base URL ─────────────────────────────────────
-// Points at the Cloudflare Tunnel already running on the VM under PM2
-// (process name "jarvis-tunnel", tunnels https://<this> -> localhost:8080).
+// Points at the yard server on Apsara's own domain.
 //
-// IMPORTANT — this URL is NOT permanent. It's a randomly-generated
-// *.trycloudflare.com hostname tied to that specific cloudflared process.
-// It only stays this exact URL as long as that PM2 process keeps running
-// without restarting. If the VM reboots, or you run
-// `pm2 restart jarvis-tunnel`, or the process crashes and PM2 respawns it,
-// you'll get a DIFFERENT random URL — and this app will stop being able to
-// reach the backend until this file is updated with the new URL and the
-// APK is rebuilt (Build > Generate APKs in Android Studio).
+// CHANGED 2026-09-03, and the change is the point. This used to be a random
+// *.trycloudflare.com hostname tied to one cloudflared process — a URL that
+// changed every time the VM rebooted, that process restarted, or it crashed
+// and PM2 respawned it. Every one of those events silently broke the app
+// until someone edited this file and rebuilt the APK. That is why the
+// in-app server box exists at all.
 //
-// To check the current URL at any time, SSH into the VM and run:
-//   pm2 logs jarvis-tunnel --lines 20 --nostream
+// jarvis.edgemetals.com is an A record pointing at the VM's STATIC IP
+// (35.233.131.198), with Caddy terminating HTTPS in front of the app on
+// :8080. It survives reboots, restarts and crashes, because none of those
+// change the address any more.
 //
-// For a URL that never changes, see HTTPS_SETUP.md's Option A (real domain
-// + Caddy) — worth doing once you're past prototyping, since every app
-// restart on a bare Cloudflare Tunnel is a silent breakage risk otherwise.
+// WHAT STILL BREAKS IT: letting edgemetals.com lapse, or releasing the
+// static IP. The domain renews Aug 2028 with auto-renew on. The IP is
+// promoted to static and must stay attached to the VM — a static address
+// left detached from any resource is both billed at a higher rate and
+// liable to be cleaned up.
+//
+// The in-app server box (Settings, and the login screen when the server is
+// unreachable) still overrides this at runtime and is stored in
+// localStorage, so a URL change never again requires a rebuild — this is
+// only the default a FRESH install starts from.
 //
 // Nothing else in this app needs to change when the backend URL changes —
 // every api() call in index.html reads API_BASE from here.
 window.JARVIS_CONFIG = {
-  API_BASE: 'https://loc-court-geographical-interface.trycloudflare.com',
+  API_BASE: 'https://jarvis.edgemetals.com',
 };
