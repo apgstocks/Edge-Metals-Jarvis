@@ -160,6 +160,130 @@ section('E — and the outer task survives the inner one');
     ck('  still with its two containers', d.openContainerCount() === 2);
 }
 
+section('F — putting it down and picking it up');
+{
+    // Apsara, 2026-09-07: "what if while creating a proforma-i want to send a
+    // mail, can i just say lets hold this and work on email?"
+    //
+    // She could not. That exact sentence was fed to answer(), absorbed
+    // nothing, and came back "What rate per metric ton?" — the assistant
+    // carrying on with its question while she asked it to stop.
+    //
+    // This is the POP that Grosz & Sidner's focus stack implies and that the
+    // previous change only did halfway: pushing a sub-task worked, but there
+    // was no way to SAY the transition and close the space explicitly.
+    d.clear(); d._clearParked();
+    d.start('create a proforma for Daekwang, 21 MT of auto cast');
+
+    const held = d.handle('lets hold this and work on email');
+    ck('HER SENTENCE parks the draft', !!held && held.stage === 'parked',
+       held ? held.stage : 'null — it was swallowed as an answer again');
+    // `!!held &&` on every one: without it a regression makes handle() return
+    // null, these THROW, node exits, and the run prints no totals — which
+    // reads as a broken suite rather than a caught bug. Three mutations died
+    // that way before I guarded them.
+    ck('  and says what it is holding',
+       !!held && /Daekwang/.test(held.say) && /Auto cast/.test(held.say), held && held.say);
+    ck('  and how to get it back',
+       !!held && /back to the proforma/i.test(held.say), held && held.say);
+    ck('  the live draft is closed', d.current() === null,
+       'leaving it open means the next sentence gets absorbed into it');
+    ck('  but it is HELD, not thrown away', !!d.parkedDraft());
+
+    // A HALF-BUILT DRAFT HAS NO PRICE. summary() was written for the preview
+    // where every field is filled; parked mid-build it produced "$NaN per MT
+    // — $NaN total" in the very sentence confirming her work was safe.
+    ck('  and no NaN in the sentence', !!held && !/NaN/.test(held.say), held && held.say);
+
+    // Nothing else touches it in between.
+    ck('an ordinary sentence does not resurrect it',
+       d.handle('do we have any bookings from Houston') === null);
+    ck('  nor does an answer to something else', d.handle('two') === null);
+    ck('  and it is still parked', !!d.parkedDraft());
+
+    const back = d.handle('back to the proforma');
+    ck('"back to the proforma" brings it back', !!back && back.resumed === true,
+       back ? JSON.stringify(back.stage) : 'null');
+    // `back.fields &&` too: with resume disabled, handle() returns the
+    // ASKING stage, which carries `have` and not `fields` — so this threw
+    // instead of failing and the run printed no totals at all.
+    const bf = back && back.fields;
+    ck('  with every field intact',
+       !!bf && bf.consignee === 'Daekwang' && bf.material === 'Auto cast' && bf.mt === 21,
+       JSON.stringify(bf));
+    ck('  and it asks the question it was on', !!back && /rate/i.test(back.say), back && back.say);
+    ck('  the held slot is now empty', d.parkedDraft() === null,
+       'a draft in two places is a draft that can diverge');
+
+    // ...and it carries on exactly where it was.
+    d.answer('8450');
+    ck('  and the answer lands on the resumed draft',
+       !!d.current() && d.current().fields.rate === 8450,
+       d.current() ? JSON.stringify(d.current().fields) : 'no draft open — resume did not restore it');
+}
+
+section('G — the ways she might say it, and what must not trigger');
+{
+    for (const t of [
+        'lets hold this and work on email',
+        'hold this for now',
+        'park this',
+        'pause this',
+        'set this aside',
+        'leave this for now',
+        'come back to this later',
+    ]) ck(`"${t}" parks`, d.isPark(t) === true);
+
+    for (const t of [
+        'back to the proforma',
+        'resume the proforma',
+        'carry on with the proforma',
+        'finish the proforma',
+        'where were we',
+    ]) ck(`  "${t}" resumes`, d.isResume(t) === true);
+
+    // WHAT MUST NOT. "hold on" is a hesitation mid-sentence, and parking a
+    // document because she paused to think would be worse than the bug.
+    for (const t of [
+        'hold on',
+        'wait',
+        'hold on, make it 25 MT',
+        'create a proforma for Daekwang',
+        'send it to Yurim',
+        'any bookings from Houston',
+    ]) ck(`  "${t}" does not park`, d.isPark(t) === false);
+
+    for (const t of [
+        'yes', 'send it', 'two containers', 'what is the cutoff',
+    ]) ck(`  "${t}" does not resume`, d.isResume(t) === false);
+}
+
+section('H — a parked draft does not outlive its usefulness');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/proformaDraft.js'), 'utf8');
+    ck('parking expires', /PARK_TTL_MS/.test(src) && d.PARK_TTL_MS === 2 * 60 * 60 * 1000,
+       String(d.PARK_TTL_MS) + ' — a draft abandoned yesterday reappearing mid-sentence today is worse than losing it');
+    ck('  and the expiry is checked on read, not by a timer',
+       /Date\.now\(\) - parked\.at > PARK_TTL_MS/.test(src),
+       'a timer would have to be cancelled on every other path');
+
+    // A SECOND park would silently bin the first. Not losing work is the
+    // entire reason parking exists, so it is said.
+    ck('a second park says it replaces the first',
+       /that replaces the one you parked earlier/.test(src));
+
+    // The endpoint has to let it through even while the brain holds a
+    // question, or "hold this" gets read as an answer to "Send it?".
+    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    ck('parking reaches the draft even mid-confirm',
+       /const parking = pro\.isPark\(asked\) \|\| pro\.isResume\(asked\);/.test(api)
+       && /answeringBrain && !amended && !parking/.test(api),
+       'otherwise the AI classifier guesses at "hold this" with a yes/no open');
+    ck('  and parking does not trip the staged-draft cleanup',
+       /pro\.isStaged\(\) && !parking\) pro\.clear\(\)/.test(api),
+       'binning the work she just asked to keep');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -84,8 +84,30 @@ section('B — the guards actually short-circuit');
        /const quick = answeringBrain\s*\n\s*\?\s*null/.test(seg),
        'answering from the booking list would drop the confirmation on the floor');
     ck('  and the proforma draft stands down',
-       /const step = \(answeringBrain && !amended\) \? null : pro\.handle\(asked\)/.test(seg),
+       /const step = \(answeringBrain && !amended && !parking\) \? null : pro\.handle\(asked\)/.test(seg),
        'a proforma in progress must not swallow a trucker confirmation');
+
+    // ── THE SECOND EXCEPTION, AND WHY IT NEEDS NO THIRD LOCK ─────────────
+    // "hold this" also has to reach the draft while a pending is open, or the
+    // brain reads it as an answer to "Send it to Daekwang?". Unlike the
+    // amendment exception this one is NOT gated on the pending being a
+    // proforma — and it does not need to be, which is worth stating rather
+    // than leaving as an apparent inconsistency.
+    //
+    // isPark() only fires when a draft is actually open, and isResume() only
+    // when one is actually parked. With a TRUCKER confirmation outstanding
+    // and no proforma anywhere, handle() returns null and the sentence falls
+    // through to the brain exactly as before. The narrowing is in the
+    // functions, not in the condition.
+    ck('  parking reaches the draft too',
+       /const parking = pro\.isPark\(asked\) \|\| pro\.isResume\(asked\);/.test(seg));
+    const pd = require(path.join(ROOT, 'helpers/proformaDraft.js'));
+    pd.clear(); pd._clearParked();
+    ck('    but with no proforma anywhere it decides nothing',
+       pd.handle('lets hold this and work on email') === null,
+       'a trucker confirmation must still own the conversation');
+    ck('    and nor does "back to the proforma"',
+       pd.handle('back to the proforma') === null);
 
     // ── THE ONE EXCEPTION, AND HOW NARROW IT HAS TO BE ───────────────────
     // Apsara, 2026-09-07: "what if i want change in cif and payment terms."

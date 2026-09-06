@@ -1092,11 +1092,19 @@ function summary() {
     // with no mention of two containers is a figure she cannot check.
     const boxes = p.containers > 1 ? `${p.containers} containers of ` : '';
 
+    // ── A HALF-BUILT DRAFT HAS NO PRICE YET ──────────────────────────────
+    // summary() was written for the preview, where every field is filled. It
+    // is now also read when she PARKS a draft mid-build, and a missing rate
+    // came out as "$NaN per MT — $NaN total" — which is not a number, it is a
+    // bug wearing a dollar sign, and it appeared in the sentence confirming
+    // her work had been safely put down.
+    const priced = Number.isFinite(p.items[0].rate) && p.items[0].rate > 0;
+
     return `${boxes}${p.items[0].qty} MT of ${shown}`
         + (swapped ? ` (your "${p.material_said}")` : '')
-        + ` for ${buyer} `
-        + `at ${money(p.items[0].rate)} per MT — ${money(p.total)} total, `
-        + `${terms}, ${p.payment_terms}.`;
+        + ` for ${buyer}`
+        + (priced ? ` at ${money(p.items[0].rate)} per MT — ${money(p.total)} total` : '')
+        + `, ${terms}, ${p.payment_terms}.`;
 }
 
 // ── WHAT ELSE THE CONVERSATION IS ABOUT RIGHT NOW ────────────────────────
@@ -1157,6 +1165,53 @@ function openContainerCount() {
     return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
+// ── "LETS HOLD THIS AND WORK ON EMAIL" ───────────────────────────────────
+// Apsara, 2026-09-07: "what if while creating a proforma-i want to send a
+// mail,can i just say lets hold this and work on email?"
+//
+// She could not. That exact sentence was fed to answer(), absorbed nothing,
+// and came back "What rate per metric ton?" — the assistant carrying on with
+// its question while she asked it to stop. There was no way to put a
+// half-built document down.
+//
+// This is the POP that Grosz & Sidner's focus stack (1986) implies and that
+// the previous change only did halfway. Pushing a sub-task was already
+// handled: an email drafted mid-proforma inherits the proforma's entities.
+// What was missing is the ability to SAY the transition — to close the focus
+// space explicitly rather than leaving it open and hoping nothing eats it.
+//
+// A parked draft is HELD, not finished and not cancelled. It comes back with
+// every field intact, including the answers she had already given.
+const PARK = /\b(?:hold|park|pause|shelve|stash)\s+(?:this|that|it|the\s+(?:proforma|pi|invoice))\b|\b(?:set|put)\s+(?:this|that|it)\s+aside\b|\bleave\s+(?:this|that|it)\s+(?:for\s+now|aside)\b|\bcome\s+back\s+to\s+(?:this|that|it)\b|\b(?:hold|park)\s+on\s+to\s+(?:this|that|it)\b/i;
+
+// Coming back. "where were we" is in here because it is what people actually
+// say after a detour, and it means nothing else while a draft is parked.
+const RESUME = /\b(?:back\s+to|resume|carry\s+on\s+with|continue\s+with|finish|pick\s+up)\s+(?:the\s+)?(?:proforma|pi|invoice|that|it)\b|\bwhere\s+(?:were|was)\s+we\b|\b(?:unpark|unhold)\b/i;
+
+// One slot. A second park overwrites the first, and that is SAID rather than
+// silently losing the earlier one — the whole point of parking is not losing
+// work.
+let parked = null;
+
+// Two hours. Long enough for an email detour, a phone call and a cup of tea;
+// short enough that a draft abandoned yesterday does not reappear halfway
+// through today's. Same reasoning as the referent TTL in voiceMemory.js: a
+// context that outlives its usefulness is worse than one that expires.
+const PARK_TTL_MS = 2 * 60 * 60 * 1000;
+
+function parkedDraft() {
+    if (!parked) return null;
+    if (Date.now() - parked.at > PARK_TTL_MS) {
+        console.log('[PROFORMA] the parked draft expired');
+        parked = null;
+        return null;
+    }
+    return parked;
+}
+
+function isPark(text) { return PARK.test(String(text || '')); }
+function isResume(text) { return RESUME.test(String(text || '')); }
+
 // ── THE WHOLE DECISION, IN ONE TESTABLE PLACE ────────────────────────────
 // This lived inline in api.js's /api/voice/ask handler, and two mutations
 // survived the entire suite because of it: turning the flow off completely,
@@ -1211,7 +1266,49 @@ function markStaged() { if (draft) draft.staged = true; }
 function isStaged() { return !!(draft && draft.staged); }
 
 function handle(text) {
+    // ── COMING BACK ──────────────────────────────────────────────────────
+    // Checked FIRST, and before the `!open` early return, because the whole
+    // point is that nothing is open when she says it.
+    const held = parkedDraft();
+    if (held && isResume(text)) {
+        draft = held.draft;
+        parked = null;
+        const q = nextQuestion();
+        const p = payload();
+        console.log('[PROFORMA] resumed the parked draft');
+        return {
+            stage: q ? 'asking' : 'preview',
+            resumed: true,
+            say: q ? `Back to it — ${summary()} ${q}` : summary(),
+            have: Object.assign({}, draft.fields),
+            fields: Object.assign({}, draft.fields),
+            defaulted: p ? p.defaulted : [],
+        };
+    }
+
     const open = !!draft;
+
+    // ── PUTTING IT DOWN ──────────────────────────────────────────────────
+    // Before answer(), because otherwise "lets hold this and work on email"
+    // is absorbed as an answer to whatever was last asked — which is exactly
+    // what it did: it swallowed the sentence and repeated "What rate per
+    // metric ton?" at her.
+    if (open && isPark(text)) {
+        const line = summary();
+        const overwritten = parkedDraft();
+        parked = { draft, at: Date.now() };
+        draft = null;
+        console.log('[PROFORMA] parked the draft');
+        return {
+            stage: 'parked',
+            say: `Held it — ${line} Say "back to the proforma" when you want it.`
+                // A second park would otherwise lose the first without a word,
+                // and not losing work is the entire reason this exists.
+                + (overwritten ? ' Note: that replaces the one you parked earlier.' : ''),
+            summary: line,
+        };
+    }
+
     if (!isStart(text) && !open) return null;
 
     // A staged draft is waiting on her yes. It must not absorb whatever she
@@ -1284,7 +1381,9 @@ module.exports = {
     materialIn, materialPhrase, MATERIAL_CUE, catalogMaterials, catalogPattern, describeFor, resolveConsignee, rememberedTerms,
     KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
+    _clearParked: () => { parked = null; },
     handle, brainDraft, recipient, SEND_TO, contextLine, openContainerCount,
+    isPark, isResume, parkedDraft, PARK, RESUME, PARK_TTL_MS,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
     namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,

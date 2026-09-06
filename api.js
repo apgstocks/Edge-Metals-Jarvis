@@ -2090,13 +2090,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // it is narrow: the pending had to be a proforma, the draft had
             // to be staged, and the sentence had to carry both a correction
             // cue and a real field value.
-            const step = (answeringBrain && !amended) ? null : pro.handle(asked);
+            // ── PARKING OUTRANKS AN OPEN BRAIN QUESTION ──────────────────
+            // Apsara, 2026-09-07: "can i just say lets hold this and work on
+            // email?"
+            //
+            // "Hold this" while a confirm_proforma is staged has to reach the
+            // draft, not the brain — the brain would read it as an answer to
+            // "Send it to Daekwang?" and the AI classifier would guess. Same
+            // narrow exception as an amendment, and for the same reason: it
+            // is a statement ABOUT the proforma, not an answer to its
+            // question.
+            const parking = pro.isPark(asked) || pro.isResume(asked);
+            const step = (answeringBrain && !amended && !parking) ? null : pro.handle(asked);
 
             // The confirm is over — sent, or cancelled — so a staged draft is
             // finished with. Without this it stays alive and a much later
             // "actually make it FOB" would resurrect a proforma that was
             // already emailed to a customer.
-            if (!brainPending && !step && pro.isStaged()) pro.clear();
+            if (!brainPending && !step && pro.isStaged() && !parking) pro.clear();
             if (step) {
                 let previewHtml = null;
                 // Declared out here, not inside the staging block, so the

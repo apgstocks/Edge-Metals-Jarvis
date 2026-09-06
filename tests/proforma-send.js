@@ -373,7 +373,7 @@ section('E — the handover is wired, and awaited');
        iPending !== -1 && iPro !== -1 && iPending < iPro,
        'otherwise her "yes" starts a second proforma instead of sending the first');
     ck('  which is what stops the draft being clobbered mid-confirm',
-       /const step = \(answeringBrain && !amended\) \? null : pro\.handle\(asked\)/.test(seg),
+       /const step = \(answeringBrain && !amended && !parking\) \? null : pro\.handle\(asked\)/.test(seg),
        'the pending owns the conversation — except for an amendment to its own proforma');
 
     // ── HER QUESTION, 2026-09-07 ─────────────────────────────────────────
@@ -393,7 +393,7 @@ section('E — the handover is wired, and awaited');
     ck('  the draft survives the handover so there is something to amend',
        /pro\.markStaged\(\)/.test(seg) && !/\bpro\.clear\(\);[\s\S]{0,80}markStaged/.test(seg));
     ck('  and is dropped once the confirm is over',
-       /if \(!brainPending && !step && pro\.isStaged\(\)\) pro\.clear\(\)/.test(seg),
+       /if \(!brainPending && !step && pro\.isStaged\(\) && !parking\) pro\.clear\(\)/.test(seg),
        'otherwise "actually make it FOB" later resurrects a proforma already emailed to a customer');
 }
 
