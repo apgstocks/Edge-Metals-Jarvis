@@ -135,7 +135,41 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
     w.__ackFetches = [];
     w.fetch = async (p) => {
         w.__ackFetches.push(p);
-        return { ok: true, arrayBuffer: async () => new ArrayBuffer(2048) };
+        // The VOICE is encoded in the sample rate, so the buffer that is
+        // eventually played can be traced back to which voice it came from.
+        // Without something distinguishable, "fetched both, played one" is
+        // indistinguishable from correct behaviour.
+        const rate = /Leda/.test(p) ? 22050 : 24000;
+        return { ok: true, __rate: rate, arrayBuffer: async () => ({ __rate: rate }) };
+    };
+
+    // A context that records every buffer it is asked to play, at its rate.
+    w.__playedRates = [];
+    w.AudioContext = class {
+        constructor() { this.destination = {}; this.state = 'suspended'; }
+        resume() { this.state = 'running'; return Promise.resolve(); }
+        decodeAudioData(buf) {
+            const rate = (buf && buf.__rate) || 24000;
+            return Promise.resolve({
+                duration: 0.4, sampleRate: rate,
+                getChannelData: () => new Float32Array(rate === 22050 ? 8820 : 9600),
+            });
+        }
+        createBuffer(ch, len, rate) {
+            return { length: len, sampleRate: rate, getChannelData: () => new Float32Array(len) };
+        }
+        createBufferSource() {
+            const self = this;
+            const node = {
+                buffer: null, onended: null, connect() {},
+                start() { w.__playedRates.push(node.buffer && node.buffer.sampleRate); },
+                stop() {},
+            };
+            return node;
+        }
+        createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+        createOscillator() { return { type: '', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} }; }
+        get currentTime() { return 0; }
     };
 
     // voice-machine.js is UMD: it prefers module.exports when it sees one.
@@ -596,6 +630,39 @@ section('A0b — Scout has a name, a colour and a voice of its own');
     ck('  and naming Jarvis wins when both are said',
        both.log.console.some((l) => /Jarvis — listening/.test(l)),
        'addressing one assistant and mentioning the other is not addressing both');
+
+    // ── AND THEY DO NOT SOUND THE SAME ───────────────────────────────────
+    // A mutation making both acknowledge in Jarvis's voice survived until
+    // this existed — because "a sound played" is not "the RIGHT sound
+    // played", and the voice is the whole signal she asked for.
+    ck('each assistant fetches its OWN voice',
+       b.w.__ackFetches.some((p) => /voice=Charon/.test(p))
+       && b.w.__ackFetches.some((p) => /voice=Leda/.test(p)),
+       'fetched: ' + JSON.stringify(b.w.__ackFetches));
+
+    // ── WHICH ONE ACTUALLY PLAYED ────────────────────────────────────────
+    // Fetching two voices and then playing the same one for both is
+    // indistinguishable from correct behaviour unless the audio itself is
+    // traceable. Each voice comes back at its own sample rate, so the buffer
+    // that reaches the speakers can be attributed.
+    const sc = browser();
+    sc.doc.getElementById('jvToggle').click();
+    await new Promise((r) => setTimeout(r, 10));   // both acknowledgements load
+    sc.w.__playedRates = [];
+    sc.mic().hear('hey scout');
+    await new Promise((r) => setTimeout(r, 10));
+    ck('Scout acknowledges in SCOUT\'s voice',
+       sc.w.__playedRates.indexOf(22050) !== -1,
+       'played at ' + JSON.stringify(sc.w.__playedRates) + ' — 24000 is Jarvis answering for Scout');
+
+    const jv = browser();
+    jv.doc.getElementById('jvToggle').click();
+    await new Promise((r) => setTimeout(r, 10));
+    jv.w.__playedRates = [];
+    jv.mic().hear('hey jarvis');
+    await new Promise((r) => setTimeout(r, 10));
+    ck('  and Jarvis in his', jv.w.__playedRates.indexOf(24000) !== -1,
+       'played at ' + JSON.stringify(jv.w.__playedRates));
 }
 
 section('A0 — it does not answer in the 1990s robot voice');
