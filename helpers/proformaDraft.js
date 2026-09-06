@@ -129,6 +129,12 @@ function materialIn(text) {
     return null;
 }
 
+// Things that appear after "to" in a correction but are never a buyer.
+// Incoterms and the names of the other fields on the document. Anchored at
+// the start of the captured name so "change it to FOB and payment terms"
+// resolves to no consignee at all rather than to a company called that.
+const NOT_A_CONSIGNEE = /^(?:cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|payment|shipment|trade|delivery|the\s+rate|rate|it|that|this|them|us|me|him|her|mt|\d)/i;
+
 // Order matters: this is the order the document reads, so the conversation
 // follows the page rather than the shape of the data structure.
 const FIELDS = [
@@ -143,8 +149,28 @@ const FIELDS = [
             // "Daekwang of 21 MT at 8450", which is the name that would have
             // been printed at the top of a document sent to a customer.
             // Found by widening the material parser, not by looking for it.
-            const m = /\b(?:for|to|consignee(?:\s+is)?)\s+([A-Za-z][\w&.\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bof\b|\bat\b|\brate\b|\bwith\b|\bmaterial\b|\d))/i.exec(t);
-            return m ? m[1].trim().replace(/[.,]$/, '') : null;
+            // "consignee to Hyundai Steel" and "consignee should be X"
+            // both used to capture the preposition as part of the name —
+            // "to Hyundai Steel" went on the document, and into the address
+            // book lookup, which then failed for a company that exists.
+            const m = /\b(?:consignee\s+(?:is\s+|to\s+|should\s+be\s+)?|for\s+|to\s+)([A-Za-z][\w&.\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bof\b|\bat\b|\brate\b|\bwith\b|\bmaterial\b|\d))/i.exec(t);
+            if (!m) return null;
+            const name = m[1].trim().replace(/[.,]$/, '');
+            // ── A TERM IS NOT A COMPANY ──────────────────────────────────
+            // "change it TO FOB and payment terms" matched the `to` branch
+            // and set the consignee to "FOB and payment terms" — a garbage
+            // company name on a document about to be emailed to a customer.
+            // Found by running her own correction sentence, not by reading
+            // the regex, and it existed before today: "send the proforma to
+            // CIF" would have done the same thing.
+            //
+            // Checked on the START of the capture, not the whole of it, so a
+            // real company whose name happens to begin with one of these
+            // words is still refused rather than mangled — but "Chrome
+            // Metals" and "Talk Trading" are untouched, because the words
+            // here are incoterms and field names, not materials.
+            if (NOT_A_CONSIGNEE.test(name)) return null;
+            return name;
         },
     },
     {
@@ -168,7 +194,11 @@ const FIELDS = [
         // "per"/"/" before the unit. A bare "N MT" is a quantity and can
         // never be a price.
         parse: (t) => {
-            const m = /\brate\s+(?:is\s+|of\s+)?(?:\$|usd\s*)?(\d[\d,]*(?:\.\d+)?)/i.exec(t)
+            // "the rate SHOULD BE 8600" — how a correction is actually
+            // phrased, and it parsed to nothing, so "no, the rate should be
+            // 8600" was not recognised as an amendment at all and fell
+            // through to the AI classifier with a confirm still open.
+            const m = /\brate\s+(?:should\s+be\s+|needs?\s+to\s+be\s+|is\s+|of\s+|to\s+|=\s*)?(?:\$|usd\s*)?(\d[\d,]*(?:\.\d+)?)/i.exec(t)
                 || /(?:\$|\busd\s*)(\d[\d,]*(?:\.\d+)?)/i.exec(t)
                 || /(\d[\d,]*(?:\.\d+)?)\s*(?:\/|per\s+)(?:mt|ton|tonne)\b/i.exec(t)
                 || /\bat\s+(?:\$|usd\s*)?(\d[\d,]*(?:\.\d+)?)\b/i.exec(t);
@@ -234,8 +264,28 @@ const SEND_TO = /\b(?:send|mail|email|e-mail)\s+(?:it|this|that|the\s+(?:proform
 function absorb(text) {
     const t = String(text || '');
     const got = {};
+
+    // ── THE CONSIGNEE'S NAME IS NOT A MATERIAL ───────────────────────────
+    // "change the consignee to Hyundai Steel" set material = "Steel", because
+    // materialIn() reads the whole sentence and half her buyers are named
+    // after metals — Hyundai Steel, POSCO, Chrome Metals. The description
+    // line on the proforma would have silently changed along with the buyer.
+    //
+    // So the consignee is parsed FIRST and its span blanked out of the text
+    // every other field is read from. Blanking rather than reordering,
+    // because the name can sit anywhere in the sentence.
+    const consigneeField = FIELDS.find((f) => f.key === 'consignee');
+    const who = consigneeField ? consigneeField.parse(t) : null;
+    let rest = t;
+    if (who) {
+        got.consignee = who;
+        const esc = who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        rest = t.replace(new RegExp(esc, 'i'), ' ');
+    }
+
     for (const f of FIELDS) {
-        const v = f.parse(t);
+        if (f.key === 'consignee') continue;
+        const v = f.parse(rest);
         if (v !== null && v !== undefined && v !== '') got[f.key] = v;
     }
     // "email it to Yurim" — an explicit recipient that is NOT the consignee.
@@ -477,9 +527,62 @@ function summary() {
 // So the decision moves here, where it can be executed, and api.js keeps
 // only the plumbing. Returns null when this utterance is nothing to do with
 // a proforma — which is the common case and must stay cheap.
+// ── "WAIT. CHANGE THESE AND CREATE" ──────────────────────────────────────
+// Apsara, 2026-09-07, reading the preview back to me: "what if i want change
+// in cif and payment terms. if i say wait.change these andccreate, how jarvis
+// would take that?"
+//
+// Badly, was the answer. While the draft is open a correction works — absorb()
+// re-reads the whole sentence on every turn, so "make it FOB" simply
+// overwrites the term. But the moment the preview is READY, api.js stages the
+// confirm_proforma pending and the draft was cleared, so "wait, change the
+// terms" returned null, fell through to a brain holding an open yes/no
+// question, and got reclassified from scratch by the AI. I wrote a comment
+// naming that cost and shipped it anyway; she found it in one reading.
+//
+// So a staged draft is kept, but INERT. While staged it answers only two
+// things — a correction, or a brand new proforma — and returns null for
+// everything else, so an ordinary sentence never re-opens a document that is
+// already sitting in front of her waiting for a yes.
+//
+// A CORRECTION NEEDS A CUE, and that is the whole safety of it. "Change it to
+// FOB" is a correction; "forward that to Sher Trucking" is not — but the
+// consignee parser matches "to Sher Trucking" perfectly happily, so absorbing
+// any sentence that yields a field would quietly rewrite the consignee of a
+// document she is about to send. Requiring an explicit cue AND a field is
+// what keeps those apart.
+const CORRECTION_CUE = /\b(wait|hold on|hang on|actually|instead|change|correct|make it|make that|should be|rather|scrap that|no[,.]|not\s+\w+,?\s+(?:make|change))\b/i;
+
+function isAmendment(text) {
+    const t = String(text || '');
+    if (!t.trim() || !draft) return false;
+    if (!CORRECTION_CUE.test(t)) return false;
+    // It must actually CHANGE something. "Wait" on its own is a hesitation,
+    // and treating it as an amendment would cancel a confirmation she had
+    // not finished thinking about.
+    const got = absorb(t);
+    return Object.keys(got).length > 0;
+}
+
+// api.js calls this after staging the pending, so a later correction has
+// something to correct.
+function markStaged() { if (draft) draft.staged = true; }
+function isStaged() { return !!(draft && draft.staged); }
+
 function handle(text) {
     const open = !!draft;
     if (!isStart(text) && !open) return null;
+
+    // A staged draft is waiting on her yes. It must not absorb whatever she
+    // says next — "any bookings from Houston" would be read as an answer and
+    // silently redraw a document that is already staged for sending.
+    if (open && draft.staged && !isStart(text)) {
+        if (!isAmendment(text)) return null;
+        // A real correction reopens it. The caller is responsible for tearing
+        // down the pending it staged — see api.js — because a document that
+        // has been amended must not still be confirmable in its old form.
+        draft.staged = false;
+    }
 
     if (!open) start(text); else answer(text);
 
@@ -525,6 +628,7 @@ module.exports = {
     materialIn, catalogMaterials, KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; },
     handle, brainDraft, recipient, SEND_TO,
+    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
 };

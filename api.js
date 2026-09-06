@@ -2011,9 +2011,53 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // restarting the draft on every answer so it could never finish.
             // api.js keeps the plumbing; the module keeps the thinking.
             const pro = require('./helpers/proformaDraft');
+
+            // ── "WAIT. CHANGE THESE AND CREATE" ──────────────────────────
+            // Apsara, 2026-09-07: "what if i want change in cif and payment
+            // terms. if i say wait.change these andccreate, how jarvis would
+            // take that?"
+            //
+            // Badly. The staged proforma is a yes/no question, and a
+            // correction is neither — so it fell past the brain's yes/no
+            // policy into the general AI classifier, with a confirm_proforma
+            // pending still open. Exactly the failure workflow/brain.js
+            // already documents for "schedule this mail" arriving during an
+            // await_email_confirm.
+            //
+            // An amendment outranks the confirmation it amends: the document
+            // she is being asked about no longer exists in that form, so the
+            // pending is torn down BEFORE the draft is re-opened. Leaving it
+            // would mean a later "yes" confirming the version she just
+            // changed — a document sent with the terms she rejected.
+            let amended = false;
+            if (answeringBrain && brainPending && brainPending.type === 'confirm_proforma'
+                && pro.isStaged() && pro.isAmendment(asked)) {
+                try {
+                    await require('./workflow/actions').clearPending(
+                        `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`);
+                    amended = true;
+                    console.log(`[PROFORMA] amendment during confirm: "${asked}" — pending torn down`);
+                } catch (e) {
+                    // Could not clear it: do NOT reopen the draft. Two live
+                    // versions of one document is worse than making her say
+                    // "no" first.
+                    console.error('[PROFORMA] could not tear down the pending, leaving the confirm standing:', e.message);
+                }
+            }
+
             // A brain question outranks a proforma draft: the brain's are
-            // the ones with a WhatsApp to a driver behind them.
-            const step = answeringBrain ? null : pro.handle(asked);
+            // the ones with a WhatsApp to a driver behind them. An amendment
+            // to the brain's OWN proforma question is the one exception, and
+            // it is narrow: the pending had to be a proforma, the draft had
+            // to be staged, and the sentence had to carry both a correction
+            // cue and a real field value.
+            const step = (answeringBrain && !amended) ? null : pro.handle(asked);
+
+            // The confirm is over — sent, or cancelled — so a staged draft is
+            // finished with. Without this it stays alive and a much later
+            // "actually make it FOB" would resurrect a proforma that was
+            // already emailed to a customer.
+            if (!brainPending && !step && pro.isStaged()) pro.clear();
             if (step) {
                 let previewHtml = null;
                 if (step.stage === 'preview') {
@@ -2068,14 +2112,19 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                             subject: '',
                             who: step.recipient.name,
                         });
-                        // The voice draft is cleared on hand-off, deliberately.
-                        // Two modules owning one draft is the "second set of
-                        // rules to keep in step" problem again. The cost is
-                        // real and worth naming: saying "no" cancels the
-                        // pending and she starts the proforma over rather than
-                        // amending it. Fix that by teaching the brain to amend
-                        // a confirm_proforma, not by keeping a shadow copy here.
-                        pro.clear();
+                        // KEPT, not cleared — but marked staged, which makes it
+                        // inert. I cleared it here first and wrote a comment
+                        // admitting the cost ("she starts the proforma over
+                        // rather than amending it"); she read the preview and
+                        // asked about that exact case in one go. Shipping a
+                        // known bad edge because it was documented is not the
+                        // same as fixing it.
+                        //
+                        // Staged means: answer a correction or a brand-new
+                        // proforma, and NOTHING else. So it can be amended,
+                        // but an ordinary sentence can never quietly redraw a
+                        // document that is sitting in front of her.
+                        pro.markStaged();
                         // An address-book warning is the one thing that must
                         // survive the hand-off — a proforma going out with no
                         // address on it is not something to discover later.

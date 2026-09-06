@@ -84,8 +84,34 @@ section('B — the guards actually short-circuit');
        /const quick = answeringBrain\s*\n\s*\?\s*null/.test(seg),
        'answering from the booking list would drop the confirmation on the floor');
     ck('  and the proforma draft stands down',
-       /const step = answeringBrain \? null : pro\.handle\(asked\)/.test(seg),
+       /const step = \(answeringBrain && !amended\) \? null : pro\.handle\(asked\)/.test(seg),
        'a proforma in progress must not swallow a trucker confirmation');
+
+    // ── THE ONE EXCEPTION, AND HOW NARROW IT HAS TO BE ───────────────────
+    // Apsara, 2026-09-07: "what if i want change in cif and payment terms."
+    // An amendment to a staged proforma now outranks its own confirmation,
+    // which is a hole in "an open question owns the conversation" — the rule
+    // this whole file exists to guard.
+    //
+    // It is safe only because it is triple-locked, and every lock is checked
+    // here. Losing any one of them means "yes, Sher Trucking" during a
+    // trucker confirmation could be read as a proforma correction, and the
+    // WhatsApp to the driver never goes.
+    // Asserted as ONE condition, not three separate greps. `pro.isStaged()`
+    // appears twice in the handler — the second is the teardown after the
+    // confirm ends — so a grep for it on its own passed happily with the lock
+    // deleted from the condition it was supposed to be guarding. Caught by
+    // mutation; the lesson is that a search over a whole function proves
+    // nothing about the one line that matters.
+    const lock = /answeringBrain && brainPending && brainPending\.type === 'confirm_proforma'\s*\n\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked\)/;
+    ck('  the amendment exception is locked to all three conditions at once',
+       lock.test(seg),
+       'proforma pending AND staged AND a real field change — drop any one and '
+       + '"yes, Sher Trucking" during a trucker confirm can be read as a proforma correction');
+    ck('    with the pending torn down before the draft reopens',
+       seg.indexOf('clearPending(') !== -1
+       && seg.indexOf('clearPending(') < seg.indexOf('const step ='),
+       'a later "yes" would otherwise confirm the version she just changed');
 }
 
 section('C — the declaration reaches its uses');

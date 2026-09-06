@@ -245,6 +245,85 @@ section('D — the covering note, and every way it falls back');
 
 function finish() {
 
+section('D2 — "wait. change these and create"');
+{
+    // Apsara, 2026-09-07, reading the preview back: "what if i want change in
+    // cif and payment terms. if i say wait.change these andccreate, how
+    // jarvis would take that?"
+    //
+    // Section E below greps api.js for the wiring. THIS section runs the
+    // decision, because the wiring being present says nothing about whether
+    // the right sentences reach it — and three real parser bugs were sitting
+    // behind this one question, none of which a source grep would have found.
+    stubContacts((q) => (/hyundai/i.test(q)
+        ? { type: 'exact', contact: { name: 'Hyundai Steel', email: 'buy@hyundai-steel.com' } }
+        : known('Daekwang', 'purchasing@daekwang.co.kr')(q)));
+    d.clear();
+    const first = d.handle('create a proforma for Daekwang, 21 MT of copper at 8450 per MT');
+    ck('the preview is ready', first.ready === true);
+    d.markStaged();
+
+    // WHILE STAGED, ORDINARY TALK MUST BOUNCE OFF IT. The draft is sitting in
+    // front of her waiting for a yes; absorbing whatever she says next would
+    // silently redraw the document she is looking at.
+    ck('"yes" is not intercepted', d.handle('yes') === null,
+       'it must reach the brain, which is what actually sends');
+    ck('  nor an unrelated question',
+       d.handle('do we have any bookings from Houston') === null);
+    ck('  nor an instruction about something else',
+       d.handle('forward that to Sher Trucking') === null,
+       'the consignee parser matches "to Sher Trucking" — without a correction cue this rewrites the buyer');
+    ck('  nor a bare hesitation',
+       d.handle('wait') === null && d.handle('hold on') === null,
+       '"wait" alone changes nothing and must not tear down a confirmation she has not finished thinking about');
+
+    // HER SENTENCE.
+    const amend = d.handle('wait, change it to FOB and payment terms 30 days from BL date');
+    ck('her correction is taken', !!amend, 'returned null — it would fall through to the AI classifier');
+    ck('  the shipment term changed', amend.fields.shipment_terms === 'FOB');
+    ck('  the payment term changed', /30 days/i.test(amend.fields.payment_terms));
+    // THE BUG THIS FOUND. "change it TO FOB" matched the consignee parser's
+    // `to` branch and set the buyer to "FOB and payment terms" — a garbage
+    // company name on a document about to be emailed to a customer.
+    ck('  and the CONSIGNEE is untouched', amend.fields.consignee === 'Daekwang',
+       'got ' + amend.fields.consignee + ' — a term is not a company');
+    ck('  the figures survive', amend.fields.rate === 8450 && amend.fields.mt === 21);
+    ck('  and it is ready to send again', amend.ready === true);
+
+    // The other phrasings, each of which was broken in its own way.
+    d.markStaged();
+    const mt = d.handle('actually make it 25 MT');
+    ck('"actually make it 25 MT"', !!mt && mt.fields.mt === 25, mt && mt.fields.mt);
+
+    d.markStaged();
+    // "the rate SHOULD BE" parsed to nothing, so this was not even recognised
+    // as an amendment and fell through with a confirm still open.
+    const rate = d.handle('no, the rate should be 8600');
+    ck('"no, the rate should be 8600"', !!rate && rate.fields.rate === 8600,
+       rate ? rate.fields.rate : 'NOT RECOGNISED');
+
+    d.markStaged();
+    const cons = d.handle('change the consignee to Hyundai Steel');
+    ck('"change the consignee to Hyundai Steel"',
+       !!cons && cons.fields.consignee === 'Hyundai Steel',
+       cons ? cons.fields.consignee : 'null');
+    // AND THE SECOND BUG THIS FOUND. materialIn() reads the whole sentence,
+    // and half her buyers are named after metals — so changing the buyer to
+    // "Hyundai Steel" silently changed the DESCRIPTION LINE to "Steel".
+    ck('  without the buyer\'s name becoming the material',
+       cons.fields.material === 'copper',
+       'got ' + cons.fields.material + ' — POSCO, Hyundai Steel, Chrome Metals all do this');
+    ck('  and the new recipient is resolved',
+       cons.recipient.email === 'buy@hyundai-steel.com');
+
+    // A brand new proforma always wins, staged or not.
+    d.markStaged();
+    const fresh = d.handle('create a proforma for Daekwang, 21 MT of brass at 4000');
+    ck('a brand new proforma starts fresh',
+       !!fresh && fresh.fields.material === 'brass' && fresh.fields.rate === 4000,
+       JSON.stringify(fresh && fresh.fields));
+}
+
 section('E — the handover is wired, and awaited');
 {
     const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')
@@ -288,7 +367,28 @@ section('E — the handover is wired, and awaited');
        iPending !== -1 && iPro !== -1 && iPending < iPro,
        'otherwise her "yes" starts a second proforma instead of sending the first');
     ck('  which is what stops the draft being clobbered mid-confirm',
-       /const step = answeringBrain \? null : pro\.handle\(asked\)/.test(seg));
+       /const step = \(answeringBrain && !amended\) \? null : pro\.handle\(asked\)/.test(seg),
+       'the pending owns the conversation — except for an amendment to its own proforma');
+
+    // ── HER QUESTION, 2026-09-07 ─────────────────────────────────────────
+    // "what if i want change in cif and payment terms. if i say wait.change
+    // these andccreate, how jarvis would take that?"
+    //
+    // Badly, until she asked. The staged proforma is a yes/no question and a
+    // correction is neither, so it fell past the brain's yes/no policy into
+    // the general AI classifier with a confirm still open.
+    ck('  an amendment tears the pending down FIRST',
+       /await require\('\.\/workflow\/actions'\)\.clearPending\(/.test(seg)
+       && seg.indexOf('clearPending(') < seg.indexOf('const step ='),
+       'a later "yes" would otherwise confirm the version she just rejected');
+    ck('  and only for a proforma pending, only when staged, only on a real change',
+       /brainPending\.type === 'confirm_proforma'\s*\n?\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked\)/.test(seg),
+       'a loose amendment test would hijack a trucker confirmation');
+    ck('  the draft survives the handover so there is something to amend',
+       /pro\.markStaged\(\)/.test(seg) && !/\bpro\.clear\(\);[\s\S]{0,80}markStaged/.test(seg));
+    ck('  and is dropped once the confirm is over',
+       /if \(!brainPending && !step && pro\.isStaged\(\)\) pro\.clear\(\)/.test(seg),
+       'otherwise "actually make it FOB" later resurrects a proforma already emailed to a customer');
 }
 
 section('F — and the send itself is still the brain\'s, gated on yes');
