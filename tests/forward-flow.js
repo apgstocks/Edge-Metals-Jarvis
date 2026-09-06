@@ -143,10 +143,17 @@ section('E — the referent still resolves before the brain sees it');
     // "forward the first one to Sher" only means something if the ordinal
     // was turned into a booking number BEFORE the brain's regex layer, which
     // cannot resolve a reference itself.
-    const iResolve = seg.indexOf('mem.resolve(stripped)');
+    // resolveSmart, not resolve — the SECOND time this check has silently
+    // compared against a name that no longer exists (fu.answerFollowUp was
+    // the first). indexOf returning -1 is caught explicitly now, so a rename
+    // fails loudly instead of passing against nothing.
+    const iResolve = seg.indexOf('mem.resolveSmart(stripped)');
     const iBrain = seg.indexOf("require('./workflow/brain')");
-    ck('the ordinal is resolved first', iResolve !== -1 && iResolve < iBrain,
-       '"the first one" reaching a regex layer is just a phrase it cannot match');
+    ck('the reference is resolved before the brain sees it',
+       iResolve !== -1 && iBrain !== -1 && iResolve < iBrain,
+       iResolve === -1
+           ? 'mem.resolveSmart(stripped) is not in the handler — renamed again?'
+           : '"the Maersk one" reaching a regex layer is just a phrase it cannot match');
     ck('  and the RESOLVED text is what the brain is given',
        /text: asked,/.test(seg),
        'passing the raw utterance would undo the resolution entirely');

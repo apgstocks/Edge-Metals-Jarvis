@@ -285,8 +285,39 @@ async function resolveSmart(text) {
     return exact;
 }
 
+// ── ASKING BACK IN HER WORDS ─────────────────────────────────────────────
+// When the reference cannot be pinned down, the honest response is to ask —
+// but "say the first one" is me telling her which phrase I happen to parse,
+// which is the thing she objected to. So find a field that actually DIFFERS
+// between the rows on screen and offer that instead: "the Maersk one or the
+// MSC one?".
+//
+// A field only helps if its values are distinct. Three bookings all on
+// Maersk make the carrier useless for telling them apart, so a field with a
+// repeat in it is skipped rather than offered.
+const DISTINGUISH_BY = [
+    { key: 'carrier', word: '' },
+    { key: 'vessel', word: '' },
+    { key: 'to', word: 'going to ' },
+    { key: 'from', word: 'from ' },
+];
+
+function distinguishers() {
+    const set = currentReferents();
+    if (!set || set.rows.length < 2 || set.rows.length > 4) return null;
+
+    for (const f of DISTINGUISH_BY) {
+        const vals = set.rows.map((r) => (r[f.key] == null ? '' : String(r[f.key]).trim()));
+        if (vals.some((v) => !v)) continue;             // a blank tells her nothing
+        if (new Set(vals.map((v) => v.toLowerCase())).size !== vals.length) continue; // a repeat does not distinguish
+        const parts = vals.map((v) => `the ${f.word}${v} one`);
+        return parts.slice(0, -1).join(', ') + ' or ' + parts[parts.length - 1] + '?';
+    }
+    return null;
+}
+
 module.exports = {
     remember, setReferents, currentReferents, history, resolve, resolveSmart,
-    pickRow, reset, PICK_RULES,
+    pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,
 };

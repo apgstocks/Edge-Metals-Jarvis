@@ -1958,8 +1958,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // references from history perfectly well, and the measured
             // result of rewriting for a model that can see context is
             // slightly WORSE accuracy, not better (Ishii et al. 2022).
+            //
+            // Apsara, later the same day: "my user doesnt know about nouns.
+            // you can try to understand what he says like any ai does."
+            // So resolveSmart, not resolve — the model works out WHICH ROW
+            // ("the Maersk one", "the urgent one", "send it"), and the
+            // booking number is then read out of OUR row by index. The model
+            // picks; it never writes an identifier.
             const stripped = stripAgentName(text);
-            const ref = mem.resolve(stripped);
+            const ref = await mem.resolveSmart(stripped);
             const asked = ref.text;
             if (ref.resolved) {
                 console.log(`[VOICE] "${ref.resolved.from}" → booking ${ref.resolved.to} (#${ref.resolved.n})`);
@@ -1970,7 +1977,13 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // the brain already makes for a bare digit with two possible
                 // sources.
                 mem.remember('user', stripped);
-                const which = `Which one — there are ${ref.ambiguous} on screen. Say "the first one", or give me the booking number.`;
+                // Ask in HER vocabulary, not mine. Telling someone to say
+                // "the first one" is telling them the phrase I happen to
+                // parse — the exact thing she objected to. Offer what
+                // actually tells the rows apart: the carrier, the port, the
+                // vessel. Whichever field differs between them.
+                const which = `Which one — there are ${ref.ambiguous} on screen. `
+                    + (mem.distinguishers() || 'Give me the booking number.');
                 mem.remember('bot', which);
                 return res.json({
                     agent: route.agent, agent_name: agent.name, voice: agent.voice,
