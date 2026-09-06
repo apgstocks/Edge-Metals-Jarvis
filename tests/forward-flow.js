@@ -56,13 +56,17 @@ section('A — an open question outranks everything');
 
     const iPending = seg.indexOf('brainPending = require');
     const iRoute = seg.indexOf('const route =');
-    const iFollow = seg.indexOf('fu.answerFollowUp');
+    // fu.answer, not fu.answerFollowUp — the endpoint now calls the DYNAMIC
+    // one ("i dont want any fixed intent"), which asks the model and keeps
+    // the patterns only as the offline net. Searching for the old name
+    // returned -1 and the ordering check silently compared against it.
+    const iFollow = seg.indexOf('fu.answer(');
     const iProforma = seg.indexOf('pro.handle(asked)');
     const iScout = seg.indexOf("require('./helpers/yardAsk')");
 
     ck('the open question is looked up FIRST', iPending !== -1 && iPending < iRoute,
        'the router must not decide before we know a question is outstanding');
-    ck('  before the follow-up shortcut', iPending < iFollow,
+    ck('  before the follow-up shortcut', iFollow !== -1 && iPending < iFollow,
        '"when is the next cutoff" is a follow-up; "yes" is an ANSWER, and they are not the same');
     ck('  before the proforma draft', iPending < iProforma);
     ck('  and before Scout', iPending < iScout);
