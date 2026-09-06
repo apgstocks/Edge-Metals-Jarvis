@@ -5907,17 +5907,17 @@ async function startProformaFromEmail(chatId, targetName) {
 // Same material→code map the documents page uses for invoice numbers. Kept
 // deliberately small here; see dashboard/documents.html for the full table and
 // the note about moving it server-side.
-function itemCodeFor(desc) {
-    const n = String(desc || '').toUpperCase().replace(/[^A-Z]/g, '');
-    const rules = [['AW', ['ALUMINUMWHEEL', 'ALUMINIUMWHEEL', 'ALWHEEL']], ['CW', ['CHROMEWHEEL']],
-        ['AL', ['ALUMINIUMCOMBO', 'ALUMINUMCOMBO', 'ALCOMBO']], ['AC', ['AUTOCAST']],
-        ['AP', ['SCRAPAUTOPART', 'AUTOPART']], ['RC', ['REGULARCOMBO']], ['BT', ['BATTERY', 'BATTERIES']],
-        ['HW', ['HARNESSWIRE', 'HARNESS']], ['TT', ['TAINTTABOUR', 'TAINTTABOR', 'TOUGHTABOO']],
-        ['ML', ['MIXEDLOAD']], ['SU', ['SEALEDUNIT']], ['MM', ['MIXEDMOTOR']], ['RD', ['ROTOR', 'DRUM']],
-        ['MC', ['MIXEDCOMBO']]];
-    for (const [code, keys] of rules) if (keys.some((k) => n.includes(k))) return code;
-    return null;
-}
+// ── ONE ITEM-CODE LIST, NOT TWO ──────────────────────────────────────────
+// This was a private copy of dashboard/documents.html's ITEM_CODE_RULES, and
+// the two had already drifted: 'ALLOY WHEEL' and 'TAINT TABOO' were on the
+// dashboard's list and missing here. The same material described the same way
+// produced a DIFFERENT INVOICE NUMBER depending on which screen raised the
+// document — the dashboard gave AW, an emailed order gave nothing and fell
+// back to the plain suggestion.
+//
+// Delegated rather than deleted so the name still reads at its call sites.
+const itemCodeFor = (desc) => require('../helpers/itemCode').itemCodeFor(desc);
+
 
 
 
@@ -5943,6 +5943,18 @@ async function prepareProformaNumbers(draft) {
                 containerNos.push(`${sug.year_prefix}${sug.letter_code}${numStr}`);
                 n += 1;
             }
+            // ── THE NUMBER HAS TO NAME EVERY CONTAINER ───────────────────
+            // Apsara, 2026-09-07: "PDF / form — one combined number naming
+            // every container: 260901_RC_26JY100,101".
+            //
+            // This was built from the FIRST container only and handed
+            // straight to the PDF, so a two-container order from an email
+            // went out as 260823_AC_26JY90 while the customer was being
+            // billed for 90 AND 91. The dashboard wizard has combined
+            // correctly all along (retrofitInvNoContainers); this path never
+            // did, and proformaFilename's own combining made the SAVED FILE
+            // look right, which is why it went unnoticed.
+            invNo = require('../helpers/containerCodes').combineInvNo(invNo, containerNos);
         }
     } catch (e) { /* no history — she can supply the number on confirm */ }
 
@@ -5982,19 +5994,18 @@ function proformaFilename(invNo, containerNos, consignee) {
     const list = Array.isArray(containerNos) ? containerNos.filter(Boolean) : [];
     let codes = base;
     if (list.length > 1) {
-        const first = list[0];
-        // Split a code like "26JY90" into its letter prefix and trailing digits.
-        const m = /^(.*?)(\d+)$/.exec(first);
-        const prefix = m ? m[1] : null;
-        const extras = list.slice(1).map((c) => {
-            const mm = /^(.*?)(\d+)$/.exec(c);
-            return (prefix && mm && mm[1] === prefix) ? mm[2] : c;
-        });
-        // Only append when the invoice number actually ends with that first
-        // container code — if the numbering came from somewhere else, gluing
-        // container tails onto it would produce nonsense.
-        if (base.endsWith(first)) codes = `${base},${extras.join(',')}`;
-        else codes = `${base}_${list.join(',')}`;
+        // The SHARED combiner — this used to be a third private copy of the
+        // same rule, alongside the dashboard's shortenContainerCodes and
+        // nothing at all on the path that most needed it. Now the filename
+        // and the number inside the document cannot disagree, which is what
+        // hid the bug: the file was called ...26JY90,91 while the invoice
+        // number printed on the page said 26JY90.
+        const cc = require('../helpers/containerCodes');
+        const combined = cc.combineInvNo(base, list);
+        // combineInvNo returns `base` unchanged when the number did not come
+        // from this container series. The filename can still carry the codes
+        // in that case — it is a filename, not a financial field.
+        codes = (combined !== base) ? combined : `${base}_${list.join(',')}`;
     }
     const who = String(consignee || '').slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '').trim().replace(/\s+/g, '_');
     const raw = who ? `${codes}_${who}` : codes;
