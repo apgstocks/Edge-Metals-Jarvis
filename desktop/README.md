@@ -13,13 +13,26 @@ works. No remembering to open the right browser first.
 Then the ordinary reasons: a Dock icon, its own window, and no address bar to
 lose the tab behind.
 
-## Build it (on the Mac — this cannot be built on Linux)
+## Already built
+
+`builds/Jarvis-mac-AppleSilicon.zip` and `builds/Jarvis-mac-Intel.zip` are
+ready to run — unzip, drag `Jarvis.app` to Applications.
+
+I had said this could not be built off a Mac. That was WRONG, and worth
+recording: the `.dmg` target genuinely needs macOS, because it shells out to
+`sips`, an Apple image tool. The `.app` itself does not. Targeting a zip
+instead produced a real, runnable application from Linux. The lesson is the
+usual one — the error message named `sips`, not "macOS required", and reading
+it would have got there faster than assuming.
+
+## Rebuilding it yourself
 
 ```
 cd desktop
 npm install
 npm start          # run it straight away, to check it works
-npm run build      # produces dist/Jarvis-1.0.0.dmg
+npm run build      # .dmg — needs macOS
+npx electron-builder --mac zip --arm64 --x64   # .app in a zip — works anywhere
 ```
 
 `npm start` is worth doing first. If the window opens and the orb appears,

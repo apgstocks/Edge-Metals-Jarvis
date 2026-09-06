@@ -24,7 +24,15 @@
 const { app, BrowserWindow, shell, systemPreferences } = require('electron');
 const path = require('path');
 
+// ── where it points ───────────────────────────────────────────────────────
+// Defaults to the live site. `npm run dev` overrides it to localhost:8080,
+// which is the developer path and is NOT a compromise on the microphone:
+// Chromium treats http://localhost as a SECURE CONTEXT, so getUserMedia and
+// the speech recogniser work there exactly as they do over HTTPS. That means
+// the wake word can be tested against a server running on this Mac, with no
+// deploy and no certificate.
 const APP_URL = process.env.JARVIS_URL || 'https://jarvis.edgemetals.com';
+const DEV = process.env.JARVIS_DEV === '1';
 
 // Only this origin may load in the window. A yard app that can be navigated
 // anywhere is a browser with the address bar taken away — which is worse than
@@ -50,6 +58,22 @@ function create() {
     });
 
     win.loadURL(APP_URL);
+    if (DEV) win.webContents.openDevTools({ mode: 'right' });
+
+    // A page that fails to load must SAY SO. Without this the window is just
+    // black — which looks identical to "the app is broken" and sends someone
+    // debugging the wrong thing. The commonest cause by far is running
+    // `npm run dev` without the server started, so that is named first.
+    win.webContents.on('did-fail-load', (e, code, desc, url) => {
+        const hint = /localhost/.test(APP_URL)
+            ? 'Is the Jarvis server running? In the repo root:  npm start'
+            : 'Check the site is up and this Mac is online.';
+        win.webContents.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+            `<body style="background:#0C0E10;color:#8A9299;font:13px ui-monospace,monospace;padding:40px;line-height:1.7">
+             <div style="color:#B4703A;font-weight:700;letter-spacing:.1em;text-transform:uppercase">Could not load Jarvis</div>
+             <p>${desc} (${code})<br>${url}</p><p>${hint}</p>
+             <p style="color:#5A6169">Point it elsewhere with:  JARVIS_URL=http://localhost:8080 npm start</p></body>`));
+    });
 
     // The microphone prompt. Granted only for this origin, and only for media
     // — every other permission a web page can ask for is refused outright,
@@ -72,6 +96,7 @@ function create() {
 }
 
 app.whenReady().then(async () => {
+    console.log(`[JARVIS] loading ${APP_URL}${DEV ? '  (dev, devtools open)' : ''}`);
     // Ask macOS for the microphone up front, once, with the app's own name on
     // the dialog. Without this the first "Hey Jarvis" fails silently on some
     // macOS versions: the page asks, the OS has never been asked, and nothing
