@@ -393,19 +393,23 @@ section('G4 — the desktop app uses the LOCAL engine, and prefers it');
        /window\.JarvisLocalRecognition = LocalRecognition/.test(loc),
        'masquerading as SpeechRecognition would make the choice invisible');
 
-    // THE ENERGY GATE. Running Whisper continuously would keep a fan on all
-    // day for a room that is silent most of it.
-    ck('Whisper only sees audio that might be speech', /SPEECH_LEVEL/.test(loc) && /rms > SPEECH_LEVEL/.test(loc),
-       'transcribing silence continuously is a battery bug with a model attached');
-    ck('  an utterance is capped', /MAX_MS/.test(loc),
-       'a noisy room must not grow the buffer without bound');
-    ck('  and very short noises are dropped', /held >= MIN_MS/.test(loc),
-       'a slammed door is not a sentence');
-
-    // The audio buffer is REUSED by the audio thread. Keeping the reference
-    // would hand Whisper the last frame repeated N times.
-    ck('audio frames are copied, not referenced', /new Float32Array\(buf\)/.test(loc),
-       'the audio thread reuses that buffer on the very next callback');
+    // ── THE ENERGY GATE IS TESTED IN tests/voice-gate.js, NOT HERE ───────
+    // What used to sit here were four grep-the-source assertions: does the
+    // file contain the string "SPEECH_LEVEL", does it contain "held >=
+    // MIN_MS". They tested SPELLING, not conduct — and they proved it by
+    // breaking the moment the gate was rewritten to adapt to the room, even
+    // though the new gate does the same job better. A test that fails on a
+    // rename and passes on a broken threshold is worse than no test: it
+    // costs attention and buys nothing.
+    //
+    // tests/voice-gate.js now runs the real onaudioprocess handler against
+    // synthetic audio and checks what it DOES — that silence never reaches
+    // Whisper, that a 190ms bang is discarded, that a 9s ceiling holds, that
+    // frames are copied rather than aliased. All four of those were verified
+    // by mutation; these greps were not.
+    ck('the gate has its own behavioural suite',
+       fs.existsSync(path.join(ROOT, 'tests/voice-gate.js')),
+       'if this file is gone, the energy gate is untested — the greps that used to live here were not a substitute');
 
     // And the processor must not be audible.
     ck('the capture node is routed at zero gain', /mute\.gain\.value = 0/.test(loc),
