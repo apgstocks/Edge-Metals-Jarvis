@@ -574,6 +574,77 @@ section('I4 — the customer\'s own name for it goes on the document');
 
 function rest() {
 
+section('I6 — HER words beat my tidying');
+{
+    // Apsara, 2026-09-07: "a brand-new buyer still my update should win."
+    //
+    // materialIn() normalises to the catalog spelling, which is right for
+    // RECOGNITION. It was also what went on the DOCUMENT:
+    //
+    //     "Aluminium Auto Casting Scrap"  printed as  "Auto cast"
+    //     "Copper Millberry 99.9%"        printed as  "Copper"
+    //     "Zorba 95/5"                    printed as  "Zorba"
+    //
+    // Every one of those is her being MORE specific than my catalog, and I
+    // replaced it with less. "Copper" instead of "Copper Millberry 99.9%" is
+    // a different grade at a different price on a document a buyer pays.
+    const ppP = require.resolve(path.join(ROOT2, 'helpers/proformaPricing.js'));
+    const realPp = require.cache[ppP];
+    require.cache[ppP] = { id: ppP, filename: ppP, loaded: true, exports: { lookup: () => ({}) } };
+
+    const shown = (said) => {
+        d.clear();
+        d.start('create a proforma for Brand New Ltd, 21 MT of ' + said + ' at 900');
+        return d.payload().items[0].description;
+    };
+
+    // HERS — she added a grade, a purity, an alloy.
+    for (const said of [
+        'Aluminium Auto Casting Scrap',
+        'Copper Millberry 99.9%',
+        'Zorba 95/5',
+        'Birch/Cliff 99.5%',
+        '500 series',
+        'Al combo',
+    ]) ck(`"${said}" survives to the document`, shown(said) === said, 'got ' + JSON.stringify(shown(said)));
+
+    // TIDIED — she said the term itself, mangled by the transcriber. This is
+    // the case normalisation exists for, and it must still work.
+    ck('but a whisper artefact is still tidied', shown('autocasting') === 'Auto cast',
+       'got ' + shown('autocasting'));
+    ck('  and a plural', shown('Auto casts') === 'Auto cast', 'got ' + shown('Auto casts'));
+    ck('  and a run-together', shown('autocast') === 'Auto cast');
+
+    // THE RESIDUE TEST. "autocasting" minus "autocast" leaves "ing" — three
+    // characters, which passes a bare length check. Stripping plain English
+    // endings before measuring is the difference between tidying a mishearing
+    // and overwriting a grade.
+    ck('  an -ing residue is not treated as her being specific',
+       d.materialPhrase('21 MT of autocasting at 900') === 'Auto cast');
+    ck('  while a real grade residue is',
+       d.materialPhrase('21 MT of Copper Millberry 99.9% at 900') === 'Copper Millberry 99.9%',
+       d.materialPhrase('21 MT of Copper Millberry 99.9% at 900'));
+
+    // THE DECIMAL POINT. The clause terminator treated the "." in "99.9" as a
+    // full stop, so the capture ended at "99" — a different grade.
+    ck('a decimal point inside a grade is not a clause end',
+       shown('Copper Millberry 99.9%') === 'Copper Millberry 99.9%',
+       'got ' + JSON.stringify(shown('Copper Millberry 99.9%')));
+    ck('  and the rate after it is still read',
+       (() => { d.clear(); d.start('create a proforma for X, 21 MT of Copper Millberry 99.9% at 900'); return d.payload().items[0].rate; })() === 900);
+
+    // AND THE OTHER HALF OF HER SENTENCE STILL WORKS.
+    d.clear();
+    d.start('create a proforma for Brand New Ltd, 21 MT of Zorba 95/5 at 1150, FOB Qingdao');
+    const p = d.payload();
+    ck('her terms win for a brand-new buyer too',
+       p.shipment_terms === 'FOB' && p.port_discharge === 'QINGDAO',
+       p.shipment_terms + ' / ' + p.port_discharge);
+    ck('  and her description with them', p.items[0].description === 'Zorba 95/5');
+
+    if (realPp) require.cache[ppP] = realPp; else delete require.cache[ppP];
+}
+
 section('I5 — the consignee is matched against the address book');
 {
     // Apsara, 2026-09-07: "when i say consignee name, try matching it with

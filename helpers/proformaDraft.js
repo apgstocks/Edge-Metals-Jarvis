@@ -140,6 +140,16 @@ function catalogPattern(name) {
     return re;
 }
 
+// `\.(?!\d)` rather than a bare `.` in the terminator: a period INSIDE a
+// number is a decimal point, not a clause end. With the bare version "Copper
+// Millberry 99.9%" was captured as "Copper Millberry 99" — a different grade
+// at a different price on a document a buyer pays against.
+//
+// The position a material occupies in her sentence — "21 MT of X at 8450",
+// "material is X". Hoisted out of materialIn so materialPhrase() below reads
+// from the same one; two copies of this and they drift.
+const MATERIAL_CUE = /\b(?:material\s+(?:is\s+|of\s+)?|\d[\d,.]*\s*(?:mt|metric tons?|tons?|tonnes?)\s+of\s+|\bof\s+)([A-Za-z0-9][A-Za-z0-9&./%+'\- ]{1,40}?)(?=\s*(?:$|[,;]|\.(?!\d)|\bat\b|\brate\b|\bfor\b|\bwith\b|\$|\d[\d,]*\s*(?:mt|per)\b))/i;
+
 function materialIn(text) {
     const t = String(text || '');
     if (!t.trim()) return null;
@@ -170,7 +180,7 @@ function materialIn(text) {
     // her real grades and a letters-only opener silently skipped it — which
     // is precisely the noun-vocabulary failure this whole change is about,
     // reintroduced one character wide.
-    const cue = /\b(?:material\s+(?:is\s+|of\s+)?|\d[\d,.]*\s*(?:mt|metric tons?|tons?|tonnes?)\s+of\s+|\bof\s+)([A-Za-z0-9][A-Za-z0-9&./\- ]{1,40}?)(?=\s*(?:$|[,.;]|\bat\b|\brate\b|\bfor\b|\bwith\b|\$|\d[\d,]*\s*(?:mt|per)\b))/i.exec(t);
+    const cue = MATERIAL_CUE.exec(t);
     if (cue) {
         const v = cue[1].trim().replace(/[.,]$/, '');
         // A quantity is not a material, however it is phrased. Letting the
@@ -188,6 +198,59 @@ function materialIn(text) {
 // reject a second incoterm ("change from FOB to CIF" must not read CIF as a
 // place). Two copies would drift.
 const INCOTERM = /\b(cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|cpt|cip)\b/i;
+
+// ── HER WORDS BEAT MY TIDYING ────────────────────────────────────────────
+// Apsara, 2026-09-07: "a brand-new buyer still my update should win."
+//
+// materialIn() normalises to the catalog spelling, which is right for
+// RECOGNITION — "autocasting" is a whisper artefact and "Auto cast" is what
+// she meant. But it was also what went on the DOCUMENT, so:
+//
+//     she said "Aluminium Auto Casting Scrap"  → printed "Auto cast"
+//     she said "Copper Millberry 99.9%"        → printed "Copper"
+//     she said "Zorba 95/5"                    → printed "Zorba"
+//
+// Every one of those is her being MORE specific than my catalog, and I
+// replaced it with less. "Copper" instead of "Copper Millberry 99.9%" is a
+// different grade at a different price on a document a buyer pays against.
+//
+// THE TEST IS WHETHER SHE ADDED ANYTHING. Strip the recognised term out of
+// what she said; if meaningful words remain, hers is the fuller description
+// and hers is what goes on the paper. If nothing remains, she said the term
+// itself — possibly mangled — and the tidy spelling is the improvement.
+//
+// Same shape as the buyer-vs-goods test: remove the part we recognised and
+// look at what is left.
+function materialPhrase(text) {
+    const t = String(text || '');
+    const canon = materialIn(t);
+    if (!canon) return null;
+
+    // What she actually said, in the position a material occupies.
+    const m = MATERIAL_CUE.exec(t);
+    const said = m ? m[1].trim().replace(/[.,]$/, '') : '';
+    if (!said) return canon;
+
+    // Guards already applied by materialIn's own cue branch, repeated here
+    // because this branch can be reached when the CATALOG matched instead.
+    if (NOT_A_MATERIAL.test(said) || /^\d[\d,.]*$/.test(said)
+        || /^\d[\d,.]*\s*(?:mt|metric tons?|tons?|tonnes?)$/i.test(said)) return canon;
+
+    const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
+    // Her phrase has to CONTAIN what we recognised, or they are two different
+    // things and the recognised one is the safer answer.
+    if (!norm(said).includes(norm(canon))) return canon;
+
+    // Residue that is ONLY an English ending is the whisper artefact, not her
+    // being specific: "autocasting" minus "autocast" leaves "ing", which is
+    // three characters and would have passed a bare length test. Stripped
+    // before measuring, which is the difference between tidying a mishearing
+    // and overwriting a grade.
+    const extra = norm(said).replace(norm(canon), '').replace(/^(?:ing|ed|es|s)$/, '');
+    // Two characters of residue is noise — a plural, a hyphen. More than that
+    // is a grade, a purity, an alloy: information she added on purpose.
+    return extra.length > 2 ? said : canon;
+}
 
 // Things that appear after "to" in a correction but are never a buyer.
 // Incoterms and the names of the other fields on the document. Anchored at
@@ -243,7 +306,7 @@ const FIELDS = [
     {
         key: 'material',
         ask: 'What material?',
-        parse: (t) => materialIn(t),
+        parse: (t) => materialPhrase(t),
     },
     {
         key: 'rate',
@@ -726,14 +789,20 @@ function rememberedTerms(consignee) {
 function describeFor(consignee, material) {
     const raw = String(material || '').trim();
     if (!raw || !consignee) return raw;
-    // NORMALISED HERE, not assumed of the caller. payload() happens to pass a
-    // material that materialIn() already tidied, but a raw "autocasting" has
-    // to work too — and it did not: catalogPattern("autocasting") does not
-    // match "Aluminium Auto Casting Scrap", so the customer's own wording was
-    // missed for exactly the spoken form this whole change is about. A
-    // function that only works when its caller pre-processes the argument is
-    // a trap for the next caller.
-    const said = materialIn(raw) || raw;
+    // ── NORMALISED FOR LOOKUP ONLY, NEVER FOR OUTPUT ─────────────────────
+    // Apsara, 2026-09-07: "a brand-new buyer still my update should win."
+    //
+    // This line used to be `const said = materialIn(raw) || raw` AND the
+    // function returned `said` when nothing matched — so my catalog tidying
+    // came back out the other end and overwrote her. She would say "Aluminium
+    // Auto Casting Scrap" and the document printed "Auto cast": materialPhrase
+    // had correctly kept her words, and this undid it one function later.
+    //
+    // The normalised form is still needed to FIND the customer's wording —
+    // catalogPattern("autocasting") does not match "Aluminium Auto Casting
+    // Scrap", but catalogPattern("Auto cast") does. So it is used to search
+    // and then thrown away.
+    const lookupKey = materialIn(raw) || raw;
     try {
         const past = require('./proformaPricing').lookup(consignee);
         const seen = Object.keys((past && past.items) || {});
@@ -749,23 +818,23 @@ function describeFor(consignee, material) {
         // ignores what sits around it. Longest first: if a customer has been
         // sent both "Auto cast" and "Aluminium Auto Casting Scrap", the fuller
         // description is the one their PO carries.
-        const pat = catalogPattern(said);
+        const pat = catalogPattern(lookupKey);
         const hit = seen
-            .filter((d) => pat.test(d) || catalogPattern(d).test(said))
+            .filter((d) => pat.test(d) || catalogPattern(d).test(lookupKey))
             .sort((a, b) => b.length - a.length)[0];
-        if (hit && hit.toLowerCase() !== said.toLowerCase()) {
-            console.log(`[PROFORMA] ${consignee} calls "${said}" → "${hit}" — using their wording`);
+        if (hit && hit.toLowerCase() !== raw.toLowerCase()) {
+            console.log(`[PROFORMA] ${consignee} calls "${raw}" → "${hit}" — using their wording`);
             return hit;
         }
-        // Their history had nothing closer, so her tidied catalog name is
-        // what goes on the paper — not the raw "autocasting" whisper heard.
-        return said;
     } catch (e) {
         // No pricing history is the normal case for a new customer, and an
         // unreadable store must not cost her the document.
         console.warn('[PROFORMA] could not read the customer price history:', e.message);
     }
-    return said;
+    // HER WORDS, unchanged. materialPhrase() has already decided whether the
+    // tidy catalog spelling or her fuller description belongs here; re-tidying
+    // it now is the bug this comment block is about.
+    return raw;
 }
 
 function payload() {
@@ -1099,7 +1168,7 @@ function handle(text) {
 }
 
 module.exports = {
-    materialIn, catalogMaterials, catalogPattern, describeFor, resolveConsignee, rememberedTerms,
+    materialIn, materialPhrase, MATERIAL_CUE, catalogMaterials, catalogPattern, describeFor, resolveConsignee, rememberedTerms,
     KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
