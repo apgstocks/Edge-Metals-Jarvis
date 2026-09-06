@@ -810,10 +810,22 @@ section('SIMULATED SCENARIOS — replaying real conversations end to end');
     // which drives the actual verifyBookings and reads the actual output.
     // Run by `npm test` alongside this file. This one assertion remains here
     // only to make sure that suite cannot be quietly dropped.
+    // 2026-09-07: this used to grep package.json for the filename, because
+    // `npm test` was a hand-written && chain. That chain is the reason 23
+    // suites drifted out of the run unnoticed and the whole thing stopped
+    // dead at the second link for twelve days. The runner now globs tests/,
+    // so "wired in" means "on disk and not excluded" — and the exclusion list
+    // is what has to be checked, not a name in a script.
     ckTrue('the verify simulation suite exists and is wired into npm test',
         require('fs').existsSync(R('tests/verify-simulation.js'))
-        && /verify-simulation/.test(src('package.json')),
+        && !/'verify-simulation\.js'/.test(src('scripts/run-tests.js')),
         'the hang fix is only as good as the suite that proves it')
+    ckTrue('  and the runner picks every suite up by globbing, not by a list',
+        /readdirSync\(DIR\)/.test(src('scripts/run-tests.js')),
+        'a hand-maintained list is how those 23 suites went unrun')
+    ckTrue('  and reports at the end instead of stopping at the first red one',
+        !/&&\s*node tests\//.test(src('package.json')),
+        'an && chain hides every suite after the first failure')
 }
 
 // ─────────────────────────────────────────────────────────────────────────

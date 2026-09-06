@@ -368,12 +368,16 @@ section('E — the handover is wired, and awaited');
     const from = api.indexOf("app.post('/api/voice/ask'");
     const seg = api.slice(from, api.indexOf('\n    app.', from + 10));
     const iPending = seg.indexOf('brainPending = require');
-    const iPro = seg.indexOf('pro.handle(asked)');
+    // 'pro.handle(asked' — handle now takes the dynamic transition as a
+    // second argument. Matching the old exact call returned -1; the explicit
+    // !== -1 guard below is what turned that into a loud failure instead of a
+    // green comparison against a sentinel.
+    const iPro = seg.indexOf('pro.handle(asked');
     ck('  and an open pending outranks a new proforma draft',
        iPending !== -1 && iPro !== -1 && iPending < iPro,
        'otherwise her "yes" starts a second proforma instead of sending the first');
     ck('  which is what stops the draft being clobbered mid-confirm',
-       /const step = \(answeringBrain && !amended && !parking\) \? null : pro\.handle\(asked\)/.test(seg),
+       /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
        'the pending owns the conversation — except for an amendment to its own proforma');
 
     // ── HER QUESTION, 2026-09-07 ─────────────────────────────────────────

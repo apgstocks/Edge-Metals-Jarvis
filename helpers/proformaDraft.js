@@ -1265,12 +1265,39 @@ function isAmendment(text) {
 function markStaged() { if (draft) draft.staged = true; }
 function isStaged() { return !!(draft && draft.staged); }
 
-function handle(text) {
+// ── WHAT THE DYNAMIC CLASSIFIER NEEDS TO SEE ─────────────────────────────
+// helpers/draftIntent.js cannot tell "hold on, 8450" (an answer) from "hold
+// this, Yurim needs a reply" (a park) without knowing what was just asked.
+// So the state goes out with the sentence. Guarded, because a draft that has
+// only just started has no items yet and summary() reaching into items[0] on
+// one would throw inside a voice turn — which is how contextLine() failed.
+function transitionState() {
+    const held = parkedDraft();
+    let line = '';
+    if (draft) { try { line = summary(); } catch (e) { line = ''; } }
+    else if (held) line = held.line || '';
+    let q = null;
+    if (draft) { try { q = nextQuestion(); } catch (e) { q = null; } }
+    return { open: !!draft, parked: !!held, summary: line, question: q };
+}
+
+// `opts.transition` is the dynamic decision from helpers/draftIntent.js:
+// 'park' | 'resume' | 'none'. When it is supplied it is AUTHORITATIVE — the
+// classifier has already run these same patterns as its own fast path, so
+// re-testing them here would give a second, quieter layer a vote on something
+// that was already decided. When it is absent (every other caller, and the
+// tests) the patterns decide exactly as before, which is what keeps this
+// change from touching any path but the voice one.
+function handle(text, opts) {
+    const decided = (opts && opts.transition) || null;
+    const wantsResume = decided ? decided === 'resume' : isResume(text);
+    const wantsPark   = decided ? decided === 'park'   : isPark(text);
+
     // ── COMING BACK ──────────────────────────────────────────────────────
     // Checked FIRST, and before the `!open` early return, because the whole
     // point is that nothing is open when she says it.
     const held = parkedDraft();
-    if (held && isResume(text)) {
+    if (held && wantsResume) {
         draft = held.draft;
         parked = null;
         const q = nextQuestion();
@@ -1293,10 +1320,14 @@ function handle(text) {
     // is absorbed as an answer to whatever was last asked — which is exactly
     // what it did: it swallowed the sentence and repeated "What rate per
     // metric ton?" at her.
-    if (open && isPark(text)) {
+    if (open && wantsPark) {
         const line = summary();
         const overwritten = parkedDraft();
-        parked = { draft, at: Date.now() };
+        // The line is stored with it: once `draft` is nulled there is nothing
+        // left to summarise, and transitionState() has to describe the held
+        // draft to the classifier so "lets get back to Daekwang" can be
+        // recognised as a resume.
+        parked = { draft, at: Date.now(), line };
         draft = null;
         console.log('[PROFORMA] parked the draft');
         return {
@@ -1383,7 +1414,7 @@ module.exports = {
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     _clearParked: () => { parked = null; },
     handle, brainDraft, recipient, SEND_TO, contextLine, openContainerCount,
-    isPark, isResume, parkedDraft, PARK, RESUME, PARK_TTL_MS,
+    isPark, isResume, parkedDraft, transitionState, PARK, RESUME, PARK_TTL_MS,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
     namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,

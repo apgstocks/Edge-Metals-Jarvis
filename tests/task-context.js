@@ -275,8 +275,12 @@ section('H — a parked draft does not outlive its usefulness');
     // The endpoint has to let it through even while the brain holds a
     // question, or "hold this" gets read as an answer to "Send it?".
     const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    // Apsara, 2026-09-07: "it has to work dynamically." The two regexes are
+    // now the offline net inside helpers/draftIntent.js; the decision itself
+    // is the model's, so this reads the classifier call rather than the
+    // patterns it fell back to.
     ck('parking reaches the draft even mid-confirm',
-       /const parking = pro\.isPark\(asked\) \|\| pro\.isResume\(asked\);/.test(api)
+       /const parking = transition === 'park' \|\| transition === 'resume';/.test(api)
        && /answeringBrain && !amended && !parking/.test(api),
        'otherwise the AI classifier guesses at "hold this" with a yes/no open');
     ck('  and parking does not trip the staged-draft cleanup',

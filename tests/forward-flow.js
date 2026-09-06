@@ -61,7 +61,14 @@ section('A — an open question outranks everything');
     // the patterns only as the offline net. Searching for the old name
     // returned -1 and the ordering check silently compared against it.
     const iFollow = seg.indexOf('fu.answer(');
-    const iProforma = seg.indexOf('pro.handle(asked)');
+    // 'pro.handle(asked' without the closing paren — handle now takes the
+    // dynamic transition as a second argument, and matching the old exact
+    // call returned -1, which made `iPending < iProforma` compare against a
+    // sentinel and pass for the wrong reason. Third time a source grep in
+    // this file has silently measured a name that no longer exists.
+    const iProforma = seg.indexOf('pro.handle(asked');
+    ck('  the proforma handler is still called', iProforma !== -1,
+       'pro.handle was renamed or dropped — the ordering checks below mean nothing without it');
     const iScout = seg.indexOf("require('./helpers/yardAsk')");
 
     ck('the open question is looked up FIRST', iPending !== -1 && iPending < iRoute,
@@ -84,7 +91,7 @@ section('B — the guards actually short-circuit');
        /const quick = answeringBrain\s*\n\s*\?\s*null/.test(seg),
        'answering from the booking list would drop the confirmation on the floor');
     ck('  and the proforma draft stands down',
-       /const step = \(answeringBrain && !amended && !parking\) \? null : pro\.handle\(asked\)/.test(seg),
+       /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
        'a proforma in progress must not swallow a trucker confirmation');
 
     // ── THE SECOND EXCEPTION, AND WHY IT NEEDS NO THIRD LOCK ─────────────
@@ -100,7 +107,17 @@ section('B — the guards actually short-circuit');
     // through to the brain exactly as before. The narrowing is in the
     // functions, not in the condition.
     ck('  parking reaches the draft too',
-       /const parking = pro\.isPark\(asked\) \|\| pro\.isResume\(asked\);/.test(seg));
+       /const parking = transition === 'park' \|\| transition === 'resume';/.test(seg));
+    // AND THE TRANSITION IS THE DYNAMIC ONE. Apsara, 2026-09-07: "it has to
+    // work dynamically." A regression that swapped classify() back for the
+    // two regexes would leave every assertion in this section green while
+    // quietly restoring the fixed vocabulary she asked me to remove.
+    ck('    decided by the model, not a word list',
+       /require\('\.\/helpers\/draftIntent'\)\s*\n?\s*\.classify\(asked, pro\.transitionState\(\)\)/.test(seg),
+       'classify() is what makes park/resume dynamic; the regexes are its offline net');
+    ck('    and awaited, because it is a network call',
+       /const transition = await require\('\.\/helpers\/draftIntent'\)/.test(seg),
+       'an unawaited promise is truthy, so EVERY utterance would count as parking');
     const pd = require(path.join(ROOT, 'helpers/proformaDraft.js'));
     pd.clear(); pd._clearParked();
     ck('    but with no proforma anywhere it decides nothing',

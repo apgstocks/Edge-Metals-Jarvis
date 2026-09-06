@@ -2100,8 +2100,26 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // narrow exception as an amendment, and for the same reason: it
             // is a statement ABOUT the proforma, not an answer to its
             // question.
-            const parking = pro.isPark(asked) || pro.isResume(asked);
-            const step = (answeringBrain && !amended && !parking) ? null : pro.handle(asked);
+            //
+            // ── AND IT IS DECIDED DYNAMICALLY, NOT BY A WORD LIST ────────
+            // Apsara, 2026-09-07: "As per my command, it has to work
+            // dynamically." The command is "i dont want any fixed intent",
+            // and two regexes covering six phrasings broke it. The decision
+            // now goes to a model with the live draft and the outstanding
+            // question in front of it — see helpers/draftIntent.js for why
+            // this is a safe place for one and the amendment lock above is
+            // not. The patterns survive as the offline net and as a fast
+            // path, so an unreachable Gemini degrades to today's behaviour
+            // rather than to silence.
+            //
+            // Gated on a proforma being open or parked, so this costs nothing
+            // on every other utterance — and cannot form an opinion about
+            // "yes, Sher Trucking" during a trucker confirmation.
+            const transition = await require('./helpers/draftIntent')
+                .classify(asked, pro.transitionState());
+            const parking = transition === 'park' || transition === 'resume';
+            const step = (answeringBrain && !amended && !parking)
+                ? null : pro.handle(asked, { transition });
 
             // The confirm is over — sent, or cancelled — so a staged draft is
             // finished with. Without this it stays alive and a much later
