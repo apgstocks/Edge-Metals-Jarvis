@@ -2010,6 +2010,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Never allowed to break the answer. A panel is an extra; a
             // missing panel is a worse screen, a thrown exception is no
             // answer at all.
+            // ── A FOLLOW-UP IS ANSWERED FROM WHAT WAS JUST SAID ──────────
+            // Apsara, 2026-09-06: "Everytime when i say hey jarvis, it is
+            // like restarting all over again without any idea about context
+            // memory .. if i say, when is the next cut off, it should answer
+            // that."
+            //
+            // It restarted because every question went to a language model
+            // with a fresh prompt, and the brain's transcript records what
+            // she SAYS and never what it REPLIED — so a follow-up arrived
+            // with nothing to attach to.
+            //
+            // A person who has just read out three bookings does not
+            // re-derive them to answer "and the ERD?". They look at the same
+            // list. helpers/voiceMemory.js is keeping that list; this reads
+            // the answer straight off it — no model, no round trip, and no
+            // possibility of inventing a date, which matters because the
+            // next sentence is usually "forward that".
+            //
+            // Returns null for anything it does not recognise, and that
+            // falls through to the assistants as before. A confident wrong
+            // answer about a cutoff is worse than a slower right one.
+            const fu = require('./helpers/followUp');
+            const refSet = mem.currentReferents();
+            const quick = fu.answerFollowUp(asked, refSet, ref.resolved && ref.resolved.row);
+            if (quick) {
+                console.log(`[VOICE] follow-up answered from the list: ${asked}`);
+                mem.remember('bot', quick);
+                return res.json({
+                    agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'following on from what you just asked',
+                    answer: quick, ok: true,
+                    // The panel stays exactly as it was. Redrawing it under
+                    // her mid-conversation is how "the first one" comes to
+                    // mean a different booking.
+                    cards: null,
+                });
+            }
+
             let cards = null;
             try {
                 cards = require('./helpers/answerCards').cardsFor(asked);
@@ -2018,6 +2056,35 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // from replacing the very list it is pointing at.
                 mem.setReferents(cards);
             } catch (e) { console.warn('[VOICE] cards failed:', e.message); }
+
+            // ── SAY THE SHORT VERSION ────────────────────────────────────
+            // Apsara: "It should not read out anything extra like unassigned
+            // supplier etc. I want how a human assistant will handle it.
+            // They will say yes boss, we have 3 bookings available, earliest
+            // cutoff is next wednesday. You want me to forward that?"
+            //
+            // A model handed a table answers by describing the table —
+            // carriers, vessels, container counts, which containers have no
+            // supplier. All of that is ON THE SCREEN. Reading it aloud is
+            // the thing she asked me to stop.
+            //
+            // So when there IS a panel, the spoken line is composed here:
+            // the count, the nearest cutoff in words a person uses, and an
+            // offer of the next step. The offer matters — it is what makes
+            // it an assistant rather than a search box, and it is the shape
+            // she wrote out herself.
+            if (cards && cards.rows && cards.rows.length) {
+                const said = fu.opening(cards);
+                if (said) {
+                    console.log(`[VOICE] answering from the list: ${cards.rows.length} row(s)`);
+                    mem.remember('bot', said);
+                    return res.json({
+                        agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                        routed_because: 'reading the bookings',
+                        answer: said, ok: true, cards,
+                    });
+                }
+            }
 
             if (route.agent === 'scout') {
                 const { askYard } = require('./helpers/yardAsk');
