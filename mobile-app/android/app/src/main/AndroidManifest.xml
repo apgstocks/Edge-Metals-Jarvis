@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -65,13 +66,35 @@
          separate sandboxed context and needs its own. -->
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- Voice commands (2026-08-23). The speech-recognition plugin's own
-         manifest already declares RECORD_AUDIO and the RecognitionService
-         <queries> entry, and the manifest merger would pull both in on its
-         own — declared here as well so the app's required permissions are
-         readable in one place rather than only discoverable by opening a
-         dependency's manifest. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- RECORD_AUDIO REMOVED 2026-09-05. Apsara: "i dont want voice on app
+         .. only on website."
+
+         Worth removing rather than just leaving unused. A declared
+         microphone permission shows on the Play listing and in the phone's
+         app-info screen, and an app that asks for the mic and never uses it
+         is exactly the thing people are right to be suspicious of. Voice now
+         lives on the website, where the browser asks for the microphone
+         itself, per visit, and the person can see the tab that is listening.
+
+         NOTE for whoever re-adds voice here: the speech-recognition plugin's
+         own manifest also declares RECORD_AUDIO, and the manifest merger
+         would pull it back in on its own. Removing this line is not enough
+         on its own if that plugin is still a dependency — check the merged
+         manifest in build/intermediates, not just this file.
+
+         WHICH IS EXACTLY WHAT HAPPENED. Deleting the line was not enough:
+         @capacitor-community/speech-recognition is still a dependency and its
+         own manifest declares RECORD_AUDIO, so the merger put it straight
+         back. Verified by reading the merged manifest, not by assuming.
+
+         tools:node="remove" instructs the merger to strip it no matter which
+         dependency asks for it. That is stronger than uninstalling the
+         plugin, because it keeps working if the plugin ever returns as a
+         transitive dependency of something else. The app's own code reaches
+         these plugins defensively (cap.Plugins && cap.Plugins.SpeechRecognition)
+         and simply gets null, so nothing throws.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
     <!-- required="false" so the app still installs on a camera-less
          device (e.g. a tablet used only for reviewing loads) — it just
          won't be able to use the camera capture button there. -->
