@@ -538,7 +538,7 @@ section('A00b — no fetch must not break the voice bar');
     //
     // Found when this very harness had no fetch and the whole file crashed.
     const b = browser();
-    delete b.w.fetch;
+    b.w.fetch = undefined;
     b.w.__jarvisVoiceLoaded = false;
     let threw = null;
     try {

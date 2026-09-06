@@ -911,7 +911,12 @@
         // a switch that does nothing, over a missing acknowledgement. Found
         // by the test harness, which has no fetch, and it would have been
         // true of any browser without one.
-        if (typeof fetch !== 'function') {
+        // window.fetch, not bare `fetch`. A bare reference walks the scope
+        // chain and finds whatever is outside the page — which is how the
+        // guard came to be untestable: the harness deleted window.fetch and
+        // the lookup quietly found Node's global instead, so the branch this
+        // guard protects was never once executed.
+        if (typeof window.fetch !== 'function') {
             console.log('[VOICE] no fetch — acknowledgement will use the local voice or the tone');
             warmAckLocal();
             return;
@@ -933,7 +938,7 @@
 
     function warmAckFromServer() {
         // fetch, not api(): this returns a WAV, not JSON.
-        fetch('/api/voice/phrase/ack', { credentials: 'same-origin' })
+        window.fetch('/api/voice/phrase/ack', { credentials: 'same-origin' })
             .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
             .then(function (buf) {
                 var ctx = audio();
