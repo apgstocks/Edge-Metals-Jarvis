@@ -301,6 +301,51 @@ section('G2 — the code that SPEAKS closes the mic itself');
     ck('  the question reached the assistant', log.asked.length > 0 && /acme/i.test(log.asked[0]));
 }
 
+section('G3 — no speech engine is admitted, not papered over');
+{
+    // ── FOUND ON HER MACHINE, NOT IN A TEST ───────────────────────────────
+    // The desktop app showed "LISTENING" with a red dot and heard nothing,
+    // twice, while I theorised. Opening devtools in it took seconds:
+    //   SR exists: true / MIC STARTED / SPEECH ERROR: network / MIC ENDED
+    //
+    // Speech recognition in Chrome is a GOOGLE SERVICE. Chrome ships private
+    // API keys; Electron's Chromium does not have them. The API exists and
+    // fails instantly, every time. My justification for the desktop app —
+    // "Electron bundles Chromium so the wake word works" — was simply wrong.
+    //
+    // The failure that matters is not that speech is missing. It is that the
+    // UI claimed to be listening while it was not, which is the same lie the
+    // old "HEY JARVIS" label told.
+    const { w, log, mic } = browser();
+    w.JarvisVoice.dispatch('USER_TOGGLE');
+    ck('it starts out listening', !!mic());
+
+    mic().onerror({ error: 'network' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    ck('a network error switches it OFF', w.JarvisVoice.state().enabled === false,
+       'showing "Listening" against an engine that cannot answer is a lie');
+    ck('  the microphone is closed', !mic());
+    ck('  the dot is not live', !w.document.getElementById('jarvisVoiceBar').classList.contains('live'));
+    ck('  and the button names the way out', /chrome/i.test(w.document.getElementById('jvToggle').textContent),
+       '"it does not work" without a way forward is not an explanation');
+    ck('  as does the status line', /Chrome/.test(w.document.getElementById('jvText').textContent));
+
+    // It must NOT retry. Retrying spins for ever while the pill says
+    // Listening — which is exactly the state this fix exists to prevent.
+    const before = log.starts;
+    w.JarvisVoice.dispatch('USER_TOGGLE');
+    ck('and it refuses to reopen the microphone', log.starts === before,
+       'there is no recovering from a missing engine; retrying just lies faster');
+
+    // An ordinary quiet-room error is NOT treated this way.
+    const ok = browser();
+    ok.w.JarvisVoice.dispatch('USER_TOGGLE');
+    ok.mic().onerror({ error: 'no-speech' });
+    ck('a no-speech error leaves it listening', ok.w.JarvisVoice.state().enabled === true,
+       'silence in a yard is normal and must not switch the feature off');
+}
+
 section('H — Safari degrades to a button instead of half-working');
 {
     // Safari supports SpeechRecognition and then handles `continuous` badly:

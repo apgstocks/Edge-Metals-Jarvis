@@ -5,10 +5,37 @@ window.
 
 ## Why this exists rather than a bookmark
 
-**The wake word.** "Hey Jarvis" needs continuous speech recognition, which
-Safari handles badly — and Safari is the default browser on this Mac. Electron
-bundles Chromium, so inside this window the engine is always the one that
-works. No remembering to open the right browser first.
+**NOT the wake word — I was wrong about that, and it is worth being blunt.**
+
+I built this app justifying it with "Electron bundles Chromium, so the wake
+word works even though Safari is the default browser". That is false.
+
+Speech recognition in Chrome is a GOOGLE SERVICE, not a browser feature.
+Chrome ships private API keys for it. Electron's Chromium does not have them
+and is not permitted to. Proved on the machine rather than argued about, in
+the app's own devtools:
+
+    SR exists: true
+    MIC STARTED
+    SPEECH ERROR: network
+    MIC ENDED
+
+No configuration fixes this. **"Hey Jarvis" needs real Google Chrome.**
+
+The app now detects that failure and says so — the button changes to "Use
+Chrome" and it stops pretending to listen — rather than sitting there with a
+red dot hearing nothing.
+
+## So what is this app still good for
+
+A Dock icon, its own window that survives quitting the browser, and no
+address bar to lose the tab behind. Everything except the wake word works in
+it, including the orb and the typed assistant.
+
+If the wake word is what you want, open **https://jarvis.edgemetals.com in
+Google Chrome**. Making it work inside this app would mean paying for a cloud
+speech API (Deepgram, OpenAI, Google Cloud Speech) with a key you own — real
+work and a real bill, and worth discussing rather than assuming.
 
 Then the ordinary reasons: a Dock icon, its own window, and no address bar to
 lose the tab behind.

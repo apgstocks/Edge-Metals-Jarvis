@@ -73,6 +73,10 @@
     // short enough that an open mic in a noisy office closes on its own.
     var CAPTURE_MS = 8000;
 
+    // Set once the recogniser has told us it has no engine behind it. There
+    // is no recovering from that within this window, so it latches.
+    var speechUnavailable = false;
+
     var state = VM.initial({ enabled: false, foreground: !document.hidden });
     var rec = null, captureTimer = null, heardDuringCapture = '';
     var origTitle = document.title;
@@ -118,7 +122,9 @@
         //
         // The off state now names the ACTION. The on state names what to say,
         // because at that point saying it is exactly what to do.
-        el('jvToggle').textContent = state.enabled ? 'Listening' : (canWake ? 'Turn on voice' : 'Hold to talk');
+        el('jvToggle').textContent = speechUnavailable ? 'Use Chrome'
+            : state.enabled ? 'Listening'
+            : (canWake ? 'Turn on voice' : 'Hold to talk');
         // The tab title, because a dot in the corner is invisible the moment
         // she switches tabs — and "is it still listening?" must be answerable
         // without coming back to look.
@@ -161,7 +167,7 @@
 
     // ── the recogniser ────────────────────────────────────────────────────
     function startMic() {
-        if (!SR || rec) return;
+        if (!SR || rec || speechUnavailable) return;
         rec = new SR();
         rec.continuous = canWake;
         rec.interimResults = true;
@@ -183,11 +189,40 @@
         };
 
         rec.onerror = function (ev) {
-            if (ev && (ev.error === 'not-allowed' || ev.error === 'service-not-allowed')) {
+            var err = ev && ev.error;
+            if (err === 'not-allowed' || err === 'service-not-allowed') {
                 // Continuing to show "Listening" without permission is a lie,
                 // and the reducer treats it as switching the setting off.
                 dispatch('PERMISSION_DENIED');
                 say('Microphone blocked — allow it in the address bar.');
+                return;
+            }
+            // ── 'network' MEANS THE ENGINE IS NOT AVAILABLE AT ALL ────────
+            // Found on Apsara's Mac, 2026-09-06, by opening devtools in the
+            // desktop app rather than reasoning about it. The console said:
+            //   SR exists: true / MIC STARTED / SPEECH ERROR: network / MIC ENDED
+            //
+            // Speech recognition in Chrome is a GOOGLE SERVICE, not a browser
+            // feature. Chrome ships private API keys for it; Electron's
+            // Chromium does not have them and is not permitted to. So the API
+            // exists, starts, fails instantly and stops — for ever, on every
+            // attempt.
+            //
+            // I had justified the whole desktop app with "Electron bundles
+            // Chromium so the wake word works". That was wrong: Chromium is
+            // not Chrome for this API. No amount of configuration fixes it.
+            //
+            // So this is treated as a HARD CAPABILITY FAILURE rather than a
+            // transient error. Retrying would spin for ever while the pill
+            // said "Listening", which is the same lie the old "HEY JARVIS"
+            // label told — the UI claiming a state that is not true.
+            if (err === 'network') {
+                speechUnavailable = true;
+                dispatch('USER_DISABLE');
+                say('Voice needs Google Chrome — this app cannot do speech');
+                console.warn('[VOICE] SpeechRecognition returned "network". This build has no speech '
+                    + 'engine (Electron ships Chromium without Google\'s speech API keys). '
+                    + 'Open https://jarvis.edgemetals.com in Google Chrome for the wake word.');
                 return;
             }
             // 'no-speech' and 'aborted' are ordinary in a quiet room.
@@ -263,7 +298,18 @@
     }
 
     // ── wiring ────────────────────────────────────────────────────────────
+    var mounted = false;
     function mount() {
+        // IDEMPOTENT. mount() can be reached twice — the readyState check
+        // registers a DOMContentLoaded listener, and anything that fires that
+        // event again runs it a second time. Without this guard the second run
+        // appends a duplicate bar and, worse, RESETS the status line: a
+        // "Voice needs Google Chrome" message was being overwritten a
+        // millisecond later by the mount-time "Click to start listening",
+        // hiding the one explanation the person needed. Caught in the test
+        // harness, but the same overwrite is possible in a browser.
+        if (mounted) return;
+        mounted = true;
         if (!SR) return;                       // no recogniser at all: show nothing
         document.head.appendChild(css);
         document.body.appendChild(bar);
