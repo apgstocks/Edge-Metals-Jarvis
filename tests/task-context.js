@@ -284,6 +284,64 @@ section('H — a parked draft does not outlive its usefulness');
        'binning the work she just asked to keep');
 }
 
+section('I — PARKED means the email does NOT inherit it');
+{
+    // Apsara, 2026-09-07, correcting my summary of my own code: "you do the
+    // email — and it still inherits the proforma's context --> it should not
+    // do that."
+    //
+    // She is right, and the two cases are genuinely different. The signal
+    // distinguishing them is HER OWN WORDS:
+    //
+    //   proforma IN PROGRESS, she asks for a mail
+    //       → a sub-task. Grosz & Sidner: the focus space is still open and
+    //         its entities are still salient, so it inherits.
+    //
+    //   proforma PARKED — "lets hold this and work on email"
+    //       → she has explicitly set it down. The focus space is POPPED. Its
+    //         entities are no longer in the attentional state, and an email
+    //         that quietly carried Daekwang's rate into a message about
+    //         something else would be the assistant ignoring what she said.
+    //
+    // THE CODE ALREADY DID THIS — park() nulls the live draft and both
+    // accessors read it — but nothing tested it, and my summary to her
+    // claimed the opposite. A load-bearing distinction with no test is one
+    // refactor away from being wrong, and "it happens to work" is not the
+    // same as "it is guaranteed".
+    d.clear(); d._clearParked();
+    d.start('create a proforma for Daekwang, 2 containers, 21 MT of auto cast at 8450');
+
+    ck('in progress, the context is available', !!d.contextLine());
+    ck('  and so is the container count', d.openContainerCount() === 2);
+
+    d.handle('lets hold this and work on email');
+
+    ck('PARKED, the context is gone', d.contextLine() === null,
+       String(d.contextLine()) + ' — she put it down; an email must not carry it');
+    ck('  and so is the container count', d.openContainerCount() === null,
+       'inheriting 2 containers into an unrelated booking request commits her to a carrier');
+    ck('  but the draft itself is still safe', !!d.parkedDraft(),
+       'popped from the focus space is not the same as thrown away');
+
+    // AND IT COMES BACK when she resumes — the entities return to the
+    // attentional state with the task.
+    d.handle('back to the proforma');
+    ck('resuming restores the context', !!d.contextLine());
+    ck('  and the count', d.openContainerCount() === 2);
+
+    // THE ACCESSORS READ THE LIVE DRAFT, NOT THE PARKED SLOT. This is the
+    // line that would break it: a later "convenience" making contextLine()
+    // fall back to `parked` would silently undo her instruction.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/proformaDraft.js'), 'utf8');
+    const ctx = src.slice(src.indexOf('function contextLine()'), src.indexOf('function openContainerCount()'));
+    ck('contextLine never reads the parked slot',
+       !/parked/.test(ctx),
+       'falling back to a parked draft would leak a task she explicitly set down');
+    const cnt = src.slice(src.indexOf('function openContainerCount()'),
+                          src.indexOf('function openContainerCount()') + 400);
+    ck('  nor does openContainerCount', !/parked/.test(cnt));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
