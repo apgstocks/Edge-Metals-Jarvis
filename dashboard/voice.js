@@ -912,10 +912,16 @@
         // by the test harness, which has no fetch, and it would have been
         // true of any browser without one.
         // window.fetch, not bare `fetch`. A bare reference walks the scope
-        // chain and finds whatever is outside the page — which is how the
-        // guard came to be untestable: the harness deleted window.fetch and
-        // the lookup quietly found Node's global instead, so the branch this
-        // guard protects was never once executed.
+        // chain and finds whatever is outside the page — which is how this
+        // came to be untestable: the harness deleted window.fetch and the
+        // lookup quietly found Node's global instead.
+        //
+        // HONEST NOTE ON THIS BRANCH: it is redundant. The try/catch below
+        // already turns a missing fetch into the local fallback, and a
+        // mutation removing this check survives the suite for that reason —
+        // not because the suite is weak. It is kept for the clearer log
+        // line, and recorded here so nobody spends an hour writing a test
+        // that cannot fail.
         if (typeof window.fetch !== 'function') {
             console.log('[VOICE] no fetch — acknowledgement will use the local voice or the tone');
             warmAckLocal();
