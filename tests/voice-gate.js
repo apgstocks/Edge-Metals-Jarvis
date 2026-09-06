@@ -587,12 +587,17 @@ section('I — it does not transcribe its own "Mm-hm"');
             [...rep(10, 0.05), ...rep(QUIET_TO_END + 2, 0.002)]);   // she starts again
         ck('one capture, from after the acknowledgement', h.log.sent.length === 1,
            'got ' + h.log.sent.length);
-        const ms = Number((( h.log.lines.filter((l) => /captured/.test(l)).pop() || '')
-            .match(/captured (\d+)ms/) || [])[1] || 0);
-        // 10 frames (~930ms) + ~700ms tail + ~800ms pre-roll ≈ 2400ms.
-        // Splicing the earlier 8 frames in would add ~750ms on top.
-        ck('  and it does NOT include the audio from before the ack', ms < 2900,
-           'captured ' + ms + 'ms — the pre-ack half was glued on, producing a sentence she never said');
+        // ASSERTED ON THE BUFFER, NOT THE REPORTED DURATION. My previous
+        // version checked the "captured Nms" line and still passed under
+        // mutation: removing the discard also zeroes the millisecond
+        // counters, so the log said a short capture while the AUDIO handed
+        // to Whisper contained both halves. The number lied; the samples
+        // could not.
+        const n = h.log.sent[0].length;
+        // ~18 frames of 4096 at 44.1k, downsampled to 16k ≈ 27k samples.
+        // Splicing the 8 pre-ack frames on adds ~12k more.
+        ck('  and the BUFFER does not include audio from before the ack', n < 32000,
+           n + ' samples — the pre-ack half was glued on, producing a sentence she never said');
     }
 }
 
