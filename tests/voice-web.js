@@ -155,6 +155,79 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
 (async () => {
 console.log('\n─ "Hey Jarvis" in the browser ───────────────────────────────');
 
+section('Z — the files are clean text');
+{
+    // A NUL byte got into dashboard/voice.js, mid-string, from one of my own
+    // scripted edits: `name: ' kokoro:'` became `name: '\0kokoro:'`. Node
+    // parsed it happily and every test passed. What gave it away was `grep`
+    // refusing to search the file because it had decided it was binary.
+    //
+    // These files are SERVED TO A BROWSER, and a control character inside a
+    // string literal is the kind of thing that works in one parser and not
+    // another. Cheap to check, and I have been editing these files with
+    // scripts all day.
+    for (const f of ['dashboard/voice.js', 'dashboard/voice-local.js',
+                     'dashboard/voice-machine.js', 'dashboard/orb.js']) {
+        const buf = fs.readFileSync(path.join(ROOT, f));
+        const bad = [];
+        for (let i = 0; i < buf.length; i += 1) {
+            const b = buf[i];
+            // Tab, LF and CR are the only control characters that belong.
+            if (b < 9 || (b > 13 && b < 32)) bad.push(i);
+        }
+        ck(`${f} has no stray control characters`, bad.length === 0,
+           bad.length + ' found, first at byte ' + bad[0]
+           + ' — a NUL inside a string literal parses in Node and may not in a browser');
+    }
+}
+
+section('A000 — nothing she says or hears gets cut in half');
+{
+    // Apsara, twice: "a chat box with text is coming but it is half cut",
+    // then "the transcription is also cut into half - not wrapping."
+    //
+    // Two locations, one bug, and I fixed only the first. Both the ANSWER
+    // and the LIVE TRANSCRIPT were being written into the status pill —
+    // a single-line flex row — after being sliced to 60 and 44 characters.
+    // So each was cut twice over: once by the slice, once by the pill.
+    const b = browser();
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+
+    // A sentence longer than either slice, of the kind she actually says.
+    const LONG = 'record a twelve thousand dollar zelle payment against edge zero seven for the copper load that came in on tuesday';
+    b.mic().hear('hey jarvis');
+    b.mic().hear(LONG);
+
+    const cardQ = b.doc.getElementById('jvCardQ');
+    const pill = b.doc.getElementById('jvText');
+
+    ck('the live transcript goes in the card', !!cardQ && cardQ.textContent.length > 60,
+       'card holds ' + (cardQ ? cardQ.textContent.length : 0) + ' chars');
+    ck('  IN FULL, not sliced', cardQ.textContent.indexOf('tuesday') !== -1,
+       'got: ' + cardQ.textContent);
+    ck('  and the pill is left as a one-word status',
+       pill.textContent.length < 20,
+       'pill says "' + pill.textContent + '" — long text in a one-line pill is the bug');
+
+    // The answer, same requirement.
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 10));
+    const cardA = b.doc.getElementById('jvCardA');
+    ck('the answer goes in the card too', cardA.textContent.indexOf('six hundred') !== -1,
+       'got: ' + cardA.textContent);
+    ck('  and the pill did not swallow it', b.doc.getElementById('jvText').textContent.length < 20);
+
+    // The CSS has to actually permit wrapping. Text in a container that
+    // cannot wrap is still cut off, however complete the string is.
+    const styles = Array.from(b.doc.querySelectorAll('style')).map((s) => s.textContent).join('');
+    ck('  the card wraps rather than clipping', /#jvCardA\{[^}]*white-space:pre-wrap/.test(styles),
+       'nowrap or a fixed height would reintroduce this with the string intact');
+    ck('  and breaks long words instead of overflowing',
+       /#jvCardA\{[^}]*word-break:break-word/.test(styles));
+    ck('  and scrolls when the answer is genuinely long',
+       /#jvCard\{[^}]*overflow-y:auto/.test(styles));
+}
+
 section('A00 — the desktop app answers in its own voice, and survives it failing');
 {
     // Apsara: "why cant this work like siri". Part of the answer was that

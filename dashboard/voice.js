@@ -297,7 +297,7 @@
             try { kokoroNow = window.localStorage.getItem('jarvisKokoroVoice') || 'af_heart'; } catch (e) {}
             [{ id: 'af_heart', label: 'Heart', hint: 'female · natural' },
              { id: 'af_bella', label: 'Bella', hint: 'female · warmer' }].forEach(function (k) {
-                rows.push({ kokoro: k.id, name: ' kokoro:' + k.id, label: k.label,
+                rows.push({ kokoro: k.id, name: 'kokoro:' + k.id, label: k.label,
                     hint: k.hint, on: kokoroNow === k.id });
             });
         }
@@ -631,7 +631,20 @@
 
             if (state.capturing) {
                 heardDuringCapture = txt;
-                say('“' + txt.slice(0, 44) + '”');
+                // ── THE TRANSCRIPT GOES IN THE CARD, NOT THE PILL ────────
+                // Apsara, 2026-09-06: "the transcription is also cut into
+                // half - not wrapping."
+                //
+                // Same bug as the answer, second location, and I fixed only
+                // the first. This wrote what she was saying into the status
+                // pill after slice(0, 44) — a single-line flex row with no
+                // wrapping — so anything longer than about six words was
+                // cut off mid-sentence while she was still speaking.
+                //
+                // The card wraps and scrolls. The pill goes back to being
+                // what it is good at: one word of state.
+                say('Listening');
+                showCard(txt, '', true);
                 return;
             }
             // Not capturing: the only thing worth hearing is the wake word.
