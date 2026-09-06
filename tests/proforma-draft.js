@@ -175,6 +175,118 @@ section('H — terms are defaults she can override');
     ck('  and not marked as a default', d.payload().defaulted.indexOf('shipment_terms') === -1);
 }
 
+section('I — the material is whatever she calls it');
+{
+    // Apsara, 2026-09-06: "my user doesnt know about nouns."
+    //
+    // The material parser was twenty-one metals I typed from memory. Scrap
+    // grades are ISRI names, house shorthand and whatever the buyer agreed
+    // to call it — so anything off my list came back null and she was asked
+    // "What material?" about a sentence that had already said it.
+
+    // 1. HER CATALOG. data/item_types.json is the descriptions she actually
+    //    types on load tickets, and it grows without anyone editing this file.
+    const cat = d.catalogMaterials();
+    // Asserted on the COUNT, not just non-empty: the loop below silently
+    // checks nothing when the catalog is empty, so a mutation that removed
+    // the catalog entirely cost only one failing assertion instead of four.
+    ck('her own item catalog is the vocabulary', cat.length >= 5, cat.join(','));
+    for (const name of cat.slice(0, 3)) {
+        ck(`  "${name}" is understood`,
+           d.materialIn(`21 MT of ${name} at 900`) === name,
+           'got ' + d.materialIn(`21 MT of ${name} at 900`));
+    }
+    // Parentheses in a catalog entry must be escaped, not compiled as a group.
+    if (cat.includes('Al rims(Dirty)')) {
+        ck('  and a catalog entry with punctuation does not break the regex',
+           d.materialIn('material is Al rims(Dirty), rate 900') === 'Al rims(Dirty)');
+    }
+
+    // LONGEST FIRST. Her real catalog happens to contain no nested pair, so
+    // a mutation removing the sort left everything green — the same hole the
+    // port list had. This stubs a catalog that does contain one, because
+    // "Al combo" and "Al combo clean" is exactly what a user-editable list
+    // grows into, and the failure is silent: the short grade on the document,
+    // under a preview that looks complete.
+    {
+        const itPath = require.resolve(path.join(__dirname, '../helpers/itemTypes.js'));
+        const real = require.cache[itPath];
+        require.cache[itPath] = {
+            id: itPath, filename: itPath, loaded: true,
+            exports: { loadCustomItemTypes: () => ['Al combo', 'Al combo clean', 'Zorba'] },
+        };
+        d._clearMaterialCache();
+        ck('  the longer of two overlapping grades wins',
+           d.materialIn('21 MT of Al combo clean at 900') === 'Al combo clean',
+           'got ' + d.materialIn('21 MT of Al combo clean at 900'));
+        ck('  while the shorter one still matches on its own',
+           d.materialIn('21 MT of Al combo at 900') === 'Al combo');
+        if (real) require.cache[itPath] = real; else delete require.cache[itPath];
+        d._clearMaterialCache();
+    }
+
+    // 2. THE METALS FLOOR — nobody writes a load ticket for "copper" in the
+    //    abstract, so the catalog will not carry it.
+    ck('the plain metals still work', d.materialIn('21 MT of copper at 8450') === 'copper');
+
+    // 3. A POSITION ONLY A MATERIAL CAN OCCUPY. This is the part that means
+    //    she never has to have heard of my list.
+    ck('a grade nobody hardcoded is understood',
+       d.materialIn('21 MT of Taldon at 4200') === 'Taldon');
+    ck('  and one that starts with a digit',
+       d.materialIn('21 MT of 500 series at 8450 per MT') === '500 series',
+       'a letters-only opener skipped "500 series" — the same failure one character wide');
+    ck('  and an explicit "material is"',
+       d.materialIn('material is Tweak, rate 1200') === 'Tweak');
+
+    // WHAT IT MUST NOT SWALLOW. Loosening this field is only safe because a
+    // material is free text she previews; it stops being safe the moment it
+    // starts eating the quantity or the price.
+    ck('a quantity is never a material',
+       d.materialIn('for Daekwang of 21 MT at 8450') === null,
+       'got ' + d.materialIn('for Daekwang of 21 MT at 8450') + ' — "21 MT" on the description line is a wasted document');
+    ck('  nor a bare number', d.materialIn('of 8450') === null);
+    ck('  nor the word "material" itself', d.materialIn('material is material') === null);
+    ck('  and the rate is not dragged into the description',
+       !/8450/.test(String(d.materialIn('21 MT of 500 series at 8450 per MT'))));
+    ck('  a sentence with no material at all gives null',
+       d.materialIn('what time do we close') === null);
+    ck('  and so does silence', d.materialIn('') === null && d.materialIn(null) === null);
+
+    // Widening it must not have widened the RATE. That distinction is the
+    // whole design: material is a word on a page she checks, a rate is money.
+    d.clear();
+    const loose = d.start('create a proforma for Daekwang, 21 MT of 500 series at 8450 per MT');
+    ck('the rate is still read strictly', loose.fields.rate === 8450, String(loose.fields.rate));
+    ck('  and the quantity is still 21', loose.fields.mt === 21);
+    d.clear();
+    const noRate = d.start('create a proforma for Daekwang, 21 MT of Taldon');
+    ck('  and an unstated rate is still asked for, never guessed',
+       noRate.fields.rate === undefined && d.missing().includes('rate'));
+}
+
+section('J — the consignee stops at the end of the name');
+{
+    // FOUND BY WIDENING THE MATERIAL PARSER, not by looking for it. The
+    // consignee pattern was greedy and ran through the rest of the sentence:
+    // "make a proforma for Daekwang of 21 MT at 8450" produced a consignee of
+    // "Daekwang of 21 MT at 8450" — the name printed at the top of a document
+    // sent to a customer.
+    const consignee = (t) => { d.clear(); return d.start(t).fields.consignee; };
+    ck('"for Daekwang of 21 MT at 8450" → Daekwang',
+       consignee('make a proforma for Daekwang of 21 MT at 8450') === 'Daekwang',
+       'got ' + consignee('make a proforma for Daekwang of 21 MT at 8450'));
+    ck('  a comma ends the name',
+       consignee('create a proforma for Daekwang, 21 MT of copper at 8450') === 'Daekwang');
+    ck('  "at" ends it', consignee('proforma for Hyundai at 2100') === 'Hyundai');
+    ck('  a digit ends it', consignee('proforma for Yurim 21 MT of copper rate 900') === 'Yurim');
+    ck('  and a two-word name survives',
+       consignee('create a proforma for Sung Il, 25 MT of Zorba at 1150') === 'Sung Il',
+       'got ' + consignee('create a proforma for Sung Il, 25 MT of Zorba at 1150'));
+    ck('  as does one at the end of the sentence',
+       consignee('raise a proforma for Kim Metals') === 'Kim Metals');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

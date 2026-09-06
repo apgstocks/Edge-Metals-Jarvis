@@ -40,6 +40,95 @@ const DEFAULT_PAYMENT_TERMS = '100% TT against scan copy of documents';
 const DEFAULT_SHIPMENT_TERMS = 'CIF';
 const DEFAULT_ALLOWANCE = '+/- 10% on weights';
 
+// ── WHAT COUNTS AS A MATERIAL ────────────────────────────────────────────
+// Apsara, 2026-09-06: "my user doesnt know about nouns."
+//
+// This started as twenty-one metals I typed from memory. Scrap grades are
+// not twenty-one words — they are ISRI names (Birch, Cliff, Zorba, Talk),
+// house shorthand ("500 series", "Al combo"), and whatever she and the buyer
+// agreed to call it this month. Anything outside my list came back null and
+// she was asked "What material?" about a sentence that had already said it.
+//
+// Three sources, in order of how sure we are:
+//   1. HER CATALOG — data/item_types.json, the descriptions she actually
+//      types on load tickets. Same move as the ports in answerCards.js: the
+//      vocabulary already exists in her data, and hardcoding a rival list is
+//      me deciding what her yard is allowed to trade in.
+//   2. The metals list, kept as a floor for things the catalog may not carry
+//      (nobody makes a load ticket for "copper" in the abstract).
+//   3. AN EXPLICIT CUE — "material is X", "21 MT of X at 8450". If she names
+//      it in a position where only a material can go, the word is the
+//      material whether or not anyone has heard of it.
+//
+// The looseness is safe HERE in a way it would not be for `rate`, and the
+// distinction is the whole design: material is free text printed on a
+// document she previews before it is sent. Getting it wrong shows her a
+// wrong word to correct. Getting a RATE wrong sends $441 where $177,450
+// belonged, which is why that field stays strict and this one does not.
+const KNOWN_METALS = /\b(copper|brass|aluminium|aluminum|steel|iron|radiators?|compressors?|alternators?|starters?|motors?|sealed units?|zorba|zurik|birch|cliff|honey|berry|candy|talk|barley|shred|ubc)\b/i;
+
+// Words that sit where a material would but are never one. Without this,
+// "make a proforma for Daekwang of 21 MT at 8450" reads "MT" as the material.
+const NOT_A_MATERIAL = /^(mt|ton|tons|tonne|tonnes|metric|it|that|this|the|a|an|them|those|stuff|material|cargo|goods|usd|dollars?)$/i;
+
+let _matCache = null;
+let _matCacheAt = 0;
+const MAT_CACHE_MS = 30 * 1000;
+
+// Her own item descriptions, longest first so "Al rims(Dirty)" wins over
+// "Al". Punctuation in a catalog entry is escaped, not assumed away — "Al
+// rims(Dirty)" has parentheses in it and would otherwise be a broken regex.
+function catalogMaterials() {
+    if (_matCache && Date.now() - _matCacheAt < MAT_CACHE_MS) return _matCache;
+    let list = [];
+    try {
+        list = require('./itemTypes').loadCustomItemTypes() || [];
+    } catch (e) {
+        console.warn('[PROFORMA] could not read the item catalog:', e.message);
+    }
+    _matCache = list
+        .map((s) => String(s || '').trim())
+        .filter((s) => s.length >= 3 && !NOT_A_MATERIAL.test(s))
+        .sort((a, b) => b.length - a.length);
+    _matCacheAt = Date.now();
+    return _matCache;
+}
+
+function materialIn(text) {
+    const t = String(text || '');
+    if (!t.trim()) return null;
+
+    // 1. Her catalog, matched as written.
+    for (const name of catalogMaterials()) {
+        const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp('(?:^|[^A-Za-z0-9])' + esc + '(?![A-Za-z0-9])', 'i').test(t)) return name;
+    }
+
+    // 2. The metals floor.
+    const m = KNOWN_METALS.exec(t);
+    if (m) return m[0];
+
+    // 3. A position only a material can occupy. "21 MT of 500 series at
+    //    8450", "material is Taldon". Stops at a price, a quantity or a
+    //    clause end so the rate is never swallowed into the description.
+    // The capture starts [A-Za-z0-9], not [A-Za-z]: "500 series" is one of
+    // her real grades and a letters-only opener silently skipped it — which
+    // is precisely the noun-vocabulary failure this whole change is about,
+    // reintroduced one character wide.
+    const cue = /\b(?:material\s+(?:is\s+|of\s+)?|\d[\d,.]*\s*(?:mt|metric tons?|tons?|tonnes?)\s+of\s+|\bof\s+)([A-Za-z0-9][A-Za-z0-9&./\- ]{1,40}?)(?=\s*(?:$|[,.;]|\bat\b|\brate\b|\bfor\b|\bwith\b|\$|\d[\d,]*\s*(?:mt|per)\b))/i.exec(t);
+    if (cue) {
+        const v = cue[1].trim().replace(/[.,]$/, '');
+        // A quantity is not a material, however it is phrased. Letting the
+        // digit in above means "of 21 MT" can now reach here, and "21 MT"
+        // on the description line of a proforma is a document she has to
+        // throw away.
+        if (v && !NOT_A_MATERIAL.test(v)
+            && !/^\d[\d,.]*$/.test(v)
+            && !/^\d[\d,.]*\s*(?:mt|metric tons?|tons?|tonnes?)$/i.test(v)) return v;
+    }
+    return null;
+}
+
 // Order matters: this is the order the document reads, so the conversation
 // follows the page rather than the shape of the data structure.
 const FIELDS = [
@@ -48,18 +137,20 @@ const FIELDS = [
         ask: 'Who is the consignee?',
         // A name, not a number. Anything is acceptable except emptiness.
         parse: (t) => {
-            const m = /\b(?:for|to|consignee(?:\s+is)?)\s+([A-Za-z][\w&.\- ]{1,60})/i.exec(t);
+            // NON-GREEDY, and stopped at a clause boundary. The greedy
+            // version ran straight through the rest of the sentence: "make a
+            // proforma for Daekwang of 21 MT at 8450" gave a consignee of
+            // "Daekwang of 21 MT at 8450", which is the name that would have
+            // been printed at the top of a document sent to a customer.
+            // Found by widening the material parser, not by looking for it.
+            const m = /\b(?:for|to|consignee(?:\s+is)?)\s+([A-Za-z][\w&.\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bof\b|\bat\b|\brate\b|\bwith\b|\bmaterial\b|\d))/i.exec(t);
             return m ? m[1].trim().replace(/[.,]$/, '') : null;
         },
     },
     {
         key: 'material',
         ask: 'What material?',
-        parse: (t) => {
-            const KNOWN = /\b(copper|brass|aluminium|aluminum|steel|iron|radiators?|compressors?|alternators?|starters?|motors?|sealed units?|zorba|zurik|birch|cliff|honey|berry|candy|talk|barley|shred|ubc)\b/i;
-            const m = KNOWN.exec(t);
-            return m ? m[0] : null;
-        },
+        parse: (t) => materialIn(t),
     },
     {
         key: 'rate',
@@ -323,6 +414,8 @@ function handle(text) {
 }
 
 module.exports = {
+    materialIn, catalogMaterials, KNOWN_METALS, NOT_A_MATERIAL,
+    _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; },
     handle,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
