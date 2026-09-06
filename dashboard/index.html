@@ -6364,6 +6364,15 @@ boot();
        form did. Self-contained: injects its own markup and styles, and
        reuses whatever api() the host already defines. -->
   <script src="yard-bot.js"></script>
+  <!-- "Hey Jarvis" on the laptop. Apsara 2026-09-05.
+       voice-machine.js MUST load first: it is the pure reducer that owns the
+       rule about when the microphone may be open, and voice.js only carries
+       out what it decides. Same file the Android app used, still covered by
+       tests/voice-machine.js.
+       Only possible since the site got a real certificate this morning —
+       browsers refuse the microphone over plain HTTP. -->
+  <script src="voice-machine.js"></script>
+  <script src="voice.js"></script>
 
 <!-- Trucker bill + Pay modals. TOP-LEVEL, not inside the Loads tab's
      template string: the first port of these put them beside #payModal,
