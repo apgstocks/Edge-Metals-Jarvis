@@ -63,11 +63,37 @@
     console.log('[VOICE] desktop bridge found — speech will run locally');
 
     var TARGET_HZ = 16000;
-    // Loudness above which we start collecting. RMS on a normalised buffer, so
-    // this is not decibels — it is a level found by listening to a quiet room
-    // rather than derived. Deliberately generous: a missed command is worse
-    // than an occasional wasted transcription of a cough.
-    var SPEECH_LEVEL = 0.012;
+    // ── WHEN IS IT SPEECH? ────────────────────────────────────────────────
+    // This was a fixed number, 0.012, which I arrived at by imagining a quiet
+    // room. On her MacBook it silently swallowed a whole "Hey Jarvis": the
+    // microphone was open, the audio was flowing, and nothing ever crossed
+    // the line, so Whisper was never called and NOTHING WAS PRINTED. She had
+    // no way to tell that from the feature being broken.
+    //
+    // A fixed threshold cannot be right anyway. macOS applies automatic gain,
+    // built-in and external mics differ by an order of magnitude, and a yard
+    // office at 7am and at noon are different rooms. So the gate now measures
+    // the room instead of assuming it: a slow average of the quiet gives a
+    // NOISE FLOOR, and speech is anything a few times louder than that.
+    //
+    // The absolute floor below it is a backstop, not the decision — without
+    // one, a perfectly silent room drives the floor toward zero and every
+    // fan tick becomes speech.
+    var TRIGGER_OVER_FLOOR = 3.5;   // times the measured floor
+    var ABSOLUTE_FLOOR = 0.004;     // below this it is not speech, whatever the room
+    // ASYMMETRIC, and the tests are why. A single adaptation rate of 0.02 was
+    // still rejecting normal speech: the floor starts at ABSOLUTE_FLOOR and
+    // crawls down so slowly that for the first several seconds the trigger
+    // sat at 0.014 — HIGHER than the fixed 0.012 that failed her in the first
+    // place. So the room getting quieter is believed quickly, and the room
+    // getting louder is believed slowly. That asymmetry is also what stops a
+    // passing truck from deafening the gate for the next minute.
+    var FLOOR_DOWN = 0.15;          // quiet is learned fast
+    var FLOOR_UP = 0.02;            // noise is learned slowly
+    // How often to say what it is hearing when nothing is triggering. This
+    // exists so "I said Hey Jarvis and nothing happened" produces a NUMBER
+    // rather than another round of guessing.
+    var REPORT_MS = 4000;
     // How long it must stay quiet before we decide the sentence ended. Shorter
     // than this and it cuts people off mid-pause; longer and every command
     // feels laggy.
@@ -86,7 +112,12 @@
         this.onstart = null;
         this._ctx = null; this._stream = null; this._node = null;
         this._chunks = []; this._collecting = false; this._quietFor = 0; this._heldMs = 0;
+        this._voicedMs = 0;
         this._stopped = false;
+        // Starts at the absolute floor and adapts downward to a quiet room or
+        // upward to a noisy one.
+        this._floor = ABSOLUTE_FLOOR;
+        this._peak = 0; this._lastReport = 0;
     }
 
     LocalRecognition.prototype.start = function () {
@@ -116,11 +147,49 @@
                 for (var i = 0; i < buf.length; i += 1) sum += buf[i] * buf[i];
                 var rms = Math.sqrt(sum / buf.length);
 
-                if (rms > SPEECH_LEVEL) {
-                    if (!self._collecting) { self._collecting = true; self._chunks = []; self._heldMs = 0; }
+                // The trigger, measured against this room rather than an
+                // imagined one.
+                var trigger = Math.max(self._floor * TRIGGER_OVER_FLOOR, ABSOLUTE_FLOOR);
+                if (rms > self._peak) self._peak = rms;
+
+                if (rms > trigger) {
+                    if (!self._collecting) {
+                        self._collecting = true; self._chunks = []; self._heldMs = 0;
+                        self._voicedMs = 0;
+                        console.log('[VOICE] hearing something — level '
+                            + rms.toFixed(4) + ', trigger ' + trigger.toFixed(4));
+                    }
+                    // ── VOICED time, kept apart from HELD time ───────────
+                    // The MIN_MS check used to run on _heldMs, which counts
+                    // the 700ms of silence that ENDS every capture. So the
+                    // shortest possible capture was ~800ms and the "ignore
+                    // short blips" rule could literally never fire — a
+                    // slammed door went to Whisper like anything else. Found
+                    // by tests/voice-gate.js, not by reading it back.
+                    self._voicedMs += msPerBuf;
                     self._quietFor = 0;
-                } else if (self._collecting) {
-                    self._quietFor += msPerBuf;
+                } else {
+                    // Only quiet audio teaches the floor, or a long sentence
+                    // would drag the threshold up above the speaker's own
+                    // voice and cut them off.
+                    self._floor += (rms - self._floor)
+                        * (rms < self._floor ? FLOOR_DOWN : FLOOR_UP);
+                    if (self._collecting) self._quietFor += msPerBuf;
+                }
+
+                // ── the "nothing happened" report ────────────────────────
+                // Printed only while idle, so it never interleaves with a
+                // capture. Four seconds apart: often enough to answer "is it
+                // hearing me at all", rare enough not to be noise itself.
+                if (!self._collecting) {
+                    self._lastReport += msPerBuf;
+                    if (self._lastReport >= REPORT_MS) {
+                        self._lastReport = 0;
+                        console.log('[VOICE] listening — loudest ' + self._peak.toFixed(4)
+                            + ', needs ' + trigger.toFixed(4)
+                            + (self._peak < trigger ? '  ← too quiet, nothing sent to Whisper' : ''));
+                        self._peak = 0;
+                    }
                 }
 
                 if (self._collecting) {
@@ -133,9 +202,22 @@
 
                     if (self._quietFor >= SILENCE_MS || self._heldMs >= MAX_MS) {
                         var held = self._heldMs;
+                        var voiced = self._voicedMs;
                         var chunks = self._chunks;
                         self._collecting = false; self._chunks = []; self._quietFor = 0; self._heldMs = 0;
-                        if (held >= MIN_MS) self._flush(chunks, ctx.sampleRate);
+                        self._voicedMs = 0;
+                        self._lastReport = 0; self._peak = 0;
+                        if (voiced >= MIN_MS) {
+                            console.log('[VOICE] captured ' + Math.round(held) + 'ms ('
+                                + Math.round(voiced) + 'ms of speech) — transcribing');
+                            self._flush(chunks, ctx.sampleRate);
+                        } else {
+                            // A door, a cough, a chair. Said out loud because
+                            // "it triggered but discarded it" and "it never
+                            // triggered" need different fixes.
+                            console.log('[VOICE] ignored a ' + Math.round(voiced) + 'ms blip (under '
+                                + MIN_MS + 'ms)');
+                        }
                     }
                 }
             };
@@ -180,7 +262,13 @@
             var text = String(r.text || '').trim();
             // Whisper emits these for silence and noise. Passing them on would
             // have the wake matcher chewing on "[BLANK_AUDIO]" all day.
-            if (!text || /^[\[\(].*[\]\)]$/.test(text) || text === '.') return;
+            if (!text || /^[\[\(].*[\]\)]$/.test(text) || text === '.') {
+                console.log('[VOICE] Whisper heard nothing usable' + (text ? ' (' + text + ')' : ''));
+                return;
+            }
+            // The single most useful line in this file: what it ACTUALLY
+            // heard, which is what the wake matcher then has to match.
+            console.log('[VOICE] heard: "' + text + '"');
             if (self.onresult) {
                 self.onresult({ resultIndex: 0, results: [Object.assign([{ transcript: text }], { isFinal: true })] });
             }
