@@ -1919,6 +1919,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     agent: 'scout', agent_name: agent.name, voice: agent.voice,
                     routed_because: route.why,
                     answer: out.answer, proposal: out.proposal || null, ok: out.ok !== false,
+                    cards,
                 });
             }
 
@@ -1947,6 +1948,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                 routed_because: route.why,
                 answer: replies.join('\n\n') || 'Done.', replies, ok: true,
+                cards,
             });
         } catch (e) {
             console.error('[API] voice/ask failed:', e.message);
