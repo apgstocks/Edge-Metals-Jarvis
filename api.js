@@ -1887,6 +1887,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const asked = stripAgentName(text);
             const agent = AGENTS[route.agent];
 
+            // ── THE SCREEN ───────────────────────────────────────────────
+            // Apsara, 2026-09-06: "like JARVIS in iron man, a screen should
+            // appear, where it shows me all relevant answer to my question
+            // as jarvis is talking back."
+            //
+            // Looked up from the question, from the same store the answer
+            // comes from — NOT parsed out of what Jarvis says. A regex over
+            // the reply would lose rows silently the moment the wording
+            // changed, and a table that is confidently incomplete is worse
+            // than no table.
+            //
+            // Never allowed to break the answer. A panel is an extra; a
+            // missing panel is a worse screen, a thrown exception is no
+            // answer at all.
+            let cards = null;
+            try { cards = require('./helpers/answerCards').cardsFor(asked); }
+            catch (e) { console.warn('[VOICE] cards failed:', e.message); }
+
             if (route.agent === 'scout') {
                 const { askYard } = require('./helpers/yardAsk');
                 const out = await askYard(asked, { history: (req.body || {}).history, role: req.role });
