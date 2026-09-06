@@ -62,8 +62,14 @@ const ymd = (s) => {
     return m ? `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}` : '';
 };
 
-// Finds a port named anywhere in the question. Longest alias first, so
-// "long beach" is not matched as "beach" would be by a shorter entry.
+// Finds a port named anywhere in the question.
+//
+// Longest alias first. Worth being honest about: NO CURRENT PAIR OF ALIASES
+// needs this — a mutation removing the sort left every test passing, because
+// no alias is a word-bounded prefix of another today. It is kept because the
+// list will grow ("newark" beside "new york", say) and the failure it
+// prevents is silent: the wrong port, quietly, with a full-looking table.
+// Recorded rather than dressed up as something the tests prove.
 function portIn(text) {
     const t = String(text || '').toLowerCase();
     const keys = Object.keys(PORT_ALIASES).sort((a, b) => b.length - a.length);
@@ -72,6 +78,22 @@ function portIn(text) {
         if (new RegExp('\\b' + k.replace('.', '\\.') + '\\b').test(t)) return PORT_ALIASES[k];
     }
     return '';
+}
+
+// Did she name a place at all? Only used to tell "no port mentioned" apart
+// from "a port I do not recognise" — two things portIn() reports the same
+// way, and which need opposite behaviour.
+//
+// Deliberately narrow: the word right after from/at/out of/in, and only when
+// it is not one of the ordinary words that follow those prepositions in a
+// question about bookings. Being wrong here costs a panel, never a wrong
+// panel, which is the right direction to fail in.
+const NOT_A_PLACE = /^(the|a|an|this|that|these|those|our|my|us|now|there|here|today|tomorrow|yesterday|last|next|week|month|year|it|them|which|what|any|all)$/i;
+
+function namesSomewhere(text) {
+    var m = /\b(?:from|at|out of|in|to)\s+([a-z][a-z.\-]{2,})/i.exec(String(text || ''));
+    if (!m) return false;
+    return !NOT_A_PLACE.test(m[1]);
 }
 
 function bookingRows(port) {
@@ -126,7 +148,20 @@ function cardsFor(question) {
     // mean a different booking than the one she is looking at.
     if (IS_INSTRUCTION.test(q)) return null;
 
+    // ── A PLACE WE DO NOT KNOW IS NOT "NO PLACE" ─────────────────────────
+    // portIn() returns '' both when no port was named and when one was named
+    // that we do not recognise — and bookingRows('') means "no filter", so
+    // "any bookings from Reykjavik" quietly rendered EVERY booking. She would
+    // have been looking at a full table under a question about a port with
+    // nothing in it, which is not a smaller mistake than showing nothing.
+    //
+    // So a place is looked for separately from a KNOWN place. If she named
+    // somewhere and it is not a port in the bookings, the honest panel is no
+    // panel — Jarvis still answers in words, and the words can say there is
+    // nothing there.
     const port = portIn(q);
+    if (!port && namesSomewhere(q)) return null;
+
     const rows = bookingRows(port);
     if (!rows.length) return null;
     return {
@@ -136,4 +171,4 @@ function cardsFor(question) {
     };
 }
 
-module.exports = { cardsFor, bookingRows, portIn, PORT_ALIASES };
+module.exports = { cardsFor, bookingRows, portIn, namesSomewhere, PORT_ALIASES };

@@ -185,7 +185,8 @@
     var cardTimer = null;
 
     var cardCss = [
-        '#jvCard{position:fixed;right:18px;bottom:132px;z-index:902;width:340px;max-width:calc(100vw - 36px);',
+        // position:relative — #jvStack places it. See panelCss.
+        '#jvCard{position:relative;width:340px;max-width:100%;',
         '  max-height:46vh;overflow-y:auto;padding:14px 16px;border-radius:16px;background:#14181B;',
         '  border:1px solid rgba(255,255,255,.14);box-shadow:0 12px 34px rgba(0,0,0,.55);',
         '  font-family:system-ui,-apple-system,sans-serif;cursor:pointer;',
@@ -240,7 +241,15 @@
     panel.id = 'jvPanel';
     panel.className = 'hidden';
     var panelCss = [
-        '#jvPanel{position:fixed;right:18px;bottom:132px;z-index:902;width:420px;max-width:calc(100vw - 36px);',
+        // ── ONE COLUMN, NOT TWO FIXED BOXES ──────────────────────────────
+        // The answer card and the results panel were both anchored at
+        // right:18px bottom:132px, which does not stack them — it puts one
+        // exactly on top of the other. A flex column owns the position; the
+        // two children just sit in it, newest at the bottom, and neither
+        // needs to know how tall the other is.
+        '#jvStack{position:fixed;right:18px;bottom:132px;z-index:902;display:flex;',
+        '  flex-direction:column;align-items:flex-end;gap:10px;max-width:calc(100vw - 36px);}',
+        '#jvPanel{position:relative;right:auto;bottom:auto;width:420px;max-width:100%;',
         '  max-height:60vh;overflow-y:auto;border-radius:16px;background:#0F1418;',
         '  border:1px solid rgba(180,112,58,.34);box-shadow:0 16px 44px rgba(0,0,0,.62);',
         '  font-family:system-ui,-apple-system,sans-serif;}',
@@ -1035,9 +1044,14 @@
         css.textContent += cardCss + voiceCss + panelCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
-        document.body.appendChild(card);
+        // Panel first, card under it: results above, the sentence being
+        // spoken nearest the voice bar she is looking at.
+        var stack = document.createElement('div');
+        stack.id = 'jvStack';
+        stack.appendChild(panel);
+        stack.appendChild(card);
+        document.body.appendChild(stack);
         document.body.appendChild(voiceSheet);
-        document.body.appendChild(panel);
         el('jvvClose').addEventListener('click', closeVoices);
         // Rendered now, so the first "Hey Jarvis" does not wait on it.
         warmAck();
