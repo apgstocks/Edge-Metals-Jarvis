@@ -237,6 +237,21 @@ ipcMain.handle('tts:warm', async () => {
 ipcMain.handle('tts:speak', async (_e, text, voice) => tts.speak(text, voice));
 ipcMain.handle('tts:status', async () => tts.status());
 
+// ── the endpointer ───────────────────────────────────────────────────────
+const turn = require('./turn');
+
+ipcMain.handle('turn:warm', async () => {
+    try { await turn.load(); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('turn:analyse', async (_e, pcm) => {
+    const audio = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
+    return turn.analyse(audio);
+});
+
+ipcMain.handle('turn:status', async () => turn.status());
+
 app.whenReady().then(async () => {
     console.log(`[JARVIS] loading ${APP_URL}${DEV ? '  (dev, devtools open)' : ''}`);
     // Ask macOS for the microphone up front, once, with the app's own name on
@@ -271,6 +286,12 @@ app.whenReady().then(async () => {
     tts.load().then(
         () => console.log('[JARVIS] voice ready — Kokoro, local'),
         (e) => console.error('[JARVIS] voice NOT ready, falling back to the browser voice —', e.message));
+
+    // Also non-fatal. Without it the renderer keeps its silence timer, which
+    // is what it did before and is merely worse, not broken.
+    turn.load().then(
+        () => console.log(`[JARVIS] turn detection ready — ${turn.MODEL_FILE}, threshold ${turn.COMPLETE_AT}`),
+        (e) => console.error('[JARVIS] turn detection NOT ready, using the silence timer —', e.message));
 });
 
 // Standard on macOS: closing the window does not quit the app.

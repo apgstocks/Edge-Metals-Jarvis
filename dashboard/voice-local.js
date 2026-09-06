@@ -97,10 +97,28 @@
     // ~800ms of audio kept before the trigger, so the first word's quiet
     // attack is not lost. 4096 frames at 44.1kHz is ~93ms each.
     var PREROLL_FRAMES = 9;
-    // How long it must stay quiet before we decide the sentence ended. Shorter
-    // than this and it cuts people off mid-pause; longer and every command
-    // feels laggy.
+    // ── WHEN HAS SHE FINISHED? ────────────────────────────────────────────
+    // Two answers, and the better one is only available in the desktop app.
+    //
+    // ASK_AT_MS is when the turn model is CONSULTED — a short pause, because
+    // its whole value is answering earlier than a timer safely could. If it
+    // says she is still going, the pause simply continues.
+    //
+    // SILENCE_MS is the fallback, and the ceiling. It is what runs when
+    // there is no turn model, and it also ends the turn regardless of what
+    // the model thinks, because a model that keeps saying "not yet" must not
+    // be able to hold the microphone open indefinitely. Every value of this
+    // constant is wrong in one direction — short enough to feel responsive
+    // is short enough to cut someone off mid-sentence — which is exactly why
+    // the model is worth having.
+    var ASK_AT_MS = 260;
     var SILENCE_MS = 700;
+    // How long the model gets to answer before we stop waiting for it. It is
+    // ~12ms on the published benchmark plus ~40ms of feature extraction, so
+    // this is generous; the point is that a hung IPC call can never leave
+    // her talking to a microphone that has stopped deciding.
+    var TURN_TIMEOUT_MS = 400;
+    var turnBridge = window.jarvisTurn || null;
     // Hard ceiling on one utterance, so a noisy room cannot grow the buffer
     // without bound and then hand Whisper a minute of audio.
     var MAX_MS = 9000;
@@ -117,6 +135,8 @@
         this._chunks = []; this._collecting = false; this._quietFor = 0; this._heldMs = 0;
         this._voicedMs = 0;
         this._pre = [];
+        this._asking = false;
+        this._turnSaidDone = false;
         this._stopped = false;
         // Starts at the absolute floor and adapts downward to a quiet room or
         // upward to a noisy one.
@@ -190,7 +210,12 @@
                     // slammed door went to Whisper like anything else. Found
                     // by tests/voice-gate.js, not by reading it back.
                     self._voicedMs += msPerBuf;
+                    // She carried on. Any pending verdict is about a pause
+                    // that turned out not to be the end, so it is discarded
+                    // and the next pause gets a fresh question.
                     self._quietFor = 0;
+                    self._asking = false;
+                    self._turnSaidDone = false;
                 } else {
                     // Only quiet audio teaches the floor, or a long sentence
                     // would drag the threshold up above the speaker's own
@@ -223,12 +248,30 @@
                     self._chunks.push(new Float32Array(buf));
                     self._heldMs += msPerBuf;
 
-                    if (self._quietFor >= SILENCE_MS || self._heldMs >= MAX_MS) {
+                    // ── ASK THE MODEL, EARLY AND ONCE PER PAUSE ─────────
+                    // At a short pause, before the timer would fire. If it
+                    // says she is still speaking, nothing happens and the
+                    // pause carries on — the timer below is still the
+                    // ceiling, so a model that never says "finished" cannot
+                    // hold the microphone open.
+                    //
+                    // `_asking` guards against firing on every subsequent
+                    // frame of the same pause: at ~93ms per frame a 700ms
+                    // pause would otherwise run the model seven times, and
+                    // it is reset only when speech resumes or the turn ends.
+                    if (turnBridge && !self._asking && !self._turnSaidDone
+                        && self._quietFor >= ASK_AT_MS && self._quietFor < SILENCE_MS) {
+                        self._asking = true;
+                        self._askTurn(ctx.sampleRate);
+                    }
+
+                    if (self._turnSaidDone || self._quietFor >= SILENCE_MS || self._heldMs >= MAX_MS) {
                         var held = self._heldMs;
                         var voiced = self._voicedMs;
                         var chunks = self._chunks;
                         self._collecting = false; self._chunks = []; self._quietFor = 0; self._heldMs = 0;
                         self._voicedMs = 0;
+                        self._asking = false; self._turnSaidDone = false;
                         self._lastReport = 0; self._peak = 0;
                         if (voiced >= MIN_MS) {
                             console.log('[VOICE] captured ' + Math.round(held) + 'ms ('
@@ -262,43 +305,72 @@
         });
     };
 
-    LocalRecognition.prototype._flush = function (chunks, rate) {
+    // Asks the turn model whether this pause is the end of her sentence.
+    // The whole turn so far is sent, not the newest fragment: the model
+    // reasons about how an utterance is ENDING, and its documentation calls
+    // running it on a fragment an explicit anti-pattern.
+    LocalRecognition.prototype._askTurn = function (rate) {
         var self = this;
+        var pcm = resample(flatten(this._chunks), rate);
+        var settled = false;
+        // A hung or slow call must not be able to stop the gate deciding.
+        // The timer below still ends the turn either way; this just stops a
+        // late answer arriving after the fact and confusing the next turn.
+        var timer = setTimeout(function () {
+            if (settled) return;
+            settled = true;
+            // _asking is NOT cleared here. It means "already asked during
+            // this pause", and a timeout does not make the question worth
+            // asking again — the pause timer takes it from here. Clearing it
+            // made the gate re-ask on every remaining frame of the pause.
+            console.log('[VOICE] turn model timed out — falling back to the pause timer');
+        }, TURN_TIMEOUT_MS);
+
+        turnBridge.analyse(pcm).then(function (r) {
+            if (settled) return;
+            settled = true; clearTimeout(timer);
+            if (!r || !r.ok) {
+                console.log('[VOICE] turn model unavailable (' + ((r && r.error) || '?')
+                    + ') — using the pause timer');
+                return;
+            }
+            var p = Number(r.probability);
+            if (r.complete) {
+                // Ends the turn on the NEXT frame rather than here, so the
+                // flush happens on the audio thread with the rest of the
+                // bookkeeping instead of racing it.
+                self._turnSaidDone = true;
+                console.log('[VOICE] she finished — ' + p.toFixed(2) + ' (' + r.ms + 'ms)');
+            } else {
+                // Asked and answered for this pause. If she resumes, the
+                // speech branch clears the flag and the NEXT pause gets its
+                // own question — which is the cadence the model expects.
+                console.log('[VOICE] still speaking — ' + p.toFixed(2) + ', waiting');
+            }
+        }).catch(function (e) {
+            if (settled) return;
+            settled = true; clearTimeout(timer);
+            console.log('[VOICE] turn model threw — using the pause timer:', e && e.message);
+        });
+    };
+
+    // Pulled out of _flush so the turn model and the transcriber prepare
+    // audio identically. Two copies of resampling arithmetic that must agree
+    // is two chances to disagree.
+    function flatten(chunks) {
         var total = 0, i;
         for (i = 0; i < chunks.length; i += 1) total += chunks[i].length;
         var flat = new Float32Array(total);
         var at = 0;
         for (i = 0; i < chunks.length; i += 1) { flat.set(chunks[i], at); at += chunks[i].length; }
+        return flat;
+    }
 
-        // ── DOWNSAMPLE 44.1k → 16k, WITH A FILTER ────────────────────────
-        // This was `out[i] = flat[Math.floor(i * ratio)]` — nearest-neighbour
-        // decimation, keeping roughly one sample in every 2.76 and throwing
-        // the rest away. The comment above it claimed the artefacts "sit far
-        // above the band that carries words". THAT IS BACKWARDS, and it is
-        // the whole reason Whisper produced:
-        //
-        //     "Hmm. You get number up on me. Who's like this?"
-        //
-        // from a clear sentence. Decimating without filtering does not
-        // discard high frequencies, it FOLDS them down into the audible band
-        // — aliasing. Everything above 8kHz in the room (consonants,
-        // sibilance, fan noise, keyboard) reappears as a low-frequency
-        // rumble mixed on top of the speech. The model then transcribes the
-        // rumble along with the words, which is exactly what those garbled
-        // sentences are.
-        //
-        // The fix is to LOW-PASS before decimating. A box filter — the mean
-        // of the samples spanned by each output sample — is the cheapest
-        // one that works, a few adds per output sample, and it removes most
-        // of what would otherwise fold over. A windowed-sinc would be
-        // textbook-correct and is not worth it here: the difference between
-        // "no filter" and "a crude filter" is enormous, the difference
-        // between "crude" and "ideal" is small, and this runs on every
-        // utterance.
+    function resample(flat, rate) {
         var ratio = rate / TARGET_HZ;
         var outLen = Math.floor(flat.length / ratio);
         var out = new Float32Array(outLen);
-        for (i = 0; i < outLen; i += 1) {
+        for (var i = 0; i < outLen; i += 1) {
             var from = Math.floor(i * ratio);
             var to = Math.min(flat.length, Math.floor((i + 1) * ratio));
             if (to <= from) to = Math.min(flat.length, from + 1);
@@ -306,6 +378,26 @@
             for (var j = from; j < to; j += 1) acc += flat[j];
             out[i] = (to > from) ? acc / (to - from) : 0;
         }
+        return out;
+    }
+
+    LocalRecognition.prototype._flush = function (chunks, rate) {
+        var self = this;
+
+        // flatten() and resample() are shared with the turn model above.
+        // They used to be inline here, and having the endpointer prepare its
+        // audio with a second copy of the same arithmetic would be two
+        // chances for the two to disagree about what she said.
+        //
+        // The downsample they share is BOX-FILTERED, and that matters more
+        // than it looks. It was nearest-neighbour decimation — one sample in
+        // every 2.76, the rest discarded — with a comment claiming the
+        // artefacts sit "far above the band that carries words". That is
+        // backwards. Decimating without a low-pass FOLDS everything above
+        // 8kHz down into the speech band, and it is the whole reason Whisper
+        // once turned a clear sentence into "Hmm. You get number up on me.
+        // Who's like this?"
+        var out = resample(flatten(chunks), rate);
 
         bridge.transcribe(out).then(function (r) {
             if (!r || !r.ok) {
@@ -337,6 +429,7 @@
         try { if (this._ctx) this._ctx.close(); } catch (e) {}
         this._node = null; this._stream = null; this._ctx = null;
         this._collecting = false; this._chunks = []; this._pre = [];
+        this._asking = false; this._turnSaidDone = false;
         if (this.onend) this.onend();
     };
     LocalRecognition.prototype.abort = LocalRecognition.prototype.stop;

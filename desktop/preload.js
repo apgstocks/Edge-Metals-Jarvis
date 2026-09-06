@@ -41,6 +41,15 @@ contextBridge.exposeInMainWorld('jarvisSpeech', {
 //
 // Still narrow. It takes text and returns audio samples. It cannot read a
 // file, spawn anything, or reach the rest of Node.
+// ── has she finished talking? ────────────────────────────────────────────
+// Audio in, one probability out. It cannot even see the transcript.
+contextBridge.exposeInMainWorld('jarvisTurn', {
+    available: true,
+    warm: function () { return ipcRenderer.invoke('turn:warm'); },
+    analyse: function (pcm) { return ipcRenderer.invoke('turn:analyse', pcm); },
+    status: function () { return ipcRenderer.invoke('turn:status'); },
+});
+
 contextBridge.exposeInMainWorld('jarvisTTS', {
     available: true,          // the BRIDGE exists; whether the MODEL loaded is status()
     warm: function () { return ipcRenderer.invoke('tts:warm'); },

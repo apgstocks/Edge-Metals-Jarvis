@@ -279,33 +279,70 @@
         var current = savedVoiceName();
 
         box.innerHTML = '';
-        // "System default" first, and it is not a cosmetic entry — passing
-        // NO voice is the only way Chromium will use the Premium voice she
-        // set in System Settings, because it hoists that one to index 0.
-        // Selecting "Samantha" by name gets the compact one instead.
-        var rows = [{ name: '', label: 'System default', hint: 'follows macOS' }];
+        var rows = [];
+
+        // ── KOKORO FIRST, WHEN IT IS THERE ───────────────────────────────
+        // These are not browser voices; they are synthesised in the desktop
+        // app. Listed above the browser ones because they are better than
+        // anything the browser can reach here, and marked so it is obvious
+        // which is which.
+        //
+        // Two voices, not fifty-four. Kokoro's own voice table grades
+        // af_heart A and af_bella A-, and most of the rest C to F — one is
+        // graded F+. Offering the whole list would only give her a way to
+        // make this worse than what it replaced. Both are American female,
+        // which is what she asked for.
+        if (ttsBridge && ttsBridge.speak) {
+            var kokoroNow = '';
+            try { kokoroNow = window.localStorage.getItem('jarvisKokoroVoice') || 'af_heart'; } catch (e) {}
+            [{ id: 'af_heart', label: 'Heart', hint: 'female · natural' },
+             { id: 'af_bella', label: 'Bella', hint: 'female · warmer' }].forEach(function (k) {
+                rows.push({ kokoro: k.id, name: ' kokoro:' + k.id, label: k.label,
+                    hint: k.hint, on: kokoroNow === k.id });
+            });
+        }
+
+        // "System default" is not a cosmetic entry — passing NO voice is the
+        // only way Chromium will use the Premium voice she set in System
+        // Settings, because it hoists that one to index 0. Selecting
+        // "Samantha" by name gets the compact one instead.
+        rows.push({ name: '', label: 'System default', hint: 'follows macOS' });
         pool.forEach(function (v) {
             rows.push({ name: v.name, label: v.name, hint: v.lang });
         });
 
+        // A Kokoro row is selected when it is the stored Kokoro voice AND no
+        // browser voice has been chosen — because a browser choice means she
+        // deliberately left the local engine.
+        var usingKokoro = !!(ttsBridge && ttsBridge.speak) && !current;
+
         rows.forEach(function (r) {
+            var isOn = r.kokoro ? (usingKokoro && r.on) : (!r.kokoro && !usingKokoro && r.name === current);
             var row = document.createElement('div');
-            row.className = 'jvvRow' + (r.name === current ? ' on' : '');
-            row.innerHTML = '<span class="jvvTick">' + (r.name === current ? '✓' : '') + '</span>'
+            row.className = 'jvvRow' + (isOn ? ' on' : '');
+            row.innerHTML = '<span class="jvvTick">' + (isOn ? '✓' : '') + '</span>'
                 + '<span></span><small></small>';
             row.children[1].textContent = r.label;
             row.children[2].textContent = r.hint || '';
             row.addEventListener('click', function () {
                 try {
-                    if (r.name) window.localStorage.setItem(VOICE_PREF_KEY, r.name);
-                    else window.localStorage.removeItem(VOICE_PREF_KEY);
+                    if (r.kokoro) {
+                        window.localStorage.setItem('jarvisKokoroVoice', r.kokoro);
+                        // Clearing the browser preference is what routes
+                        // speech back through Kokoro.
+                        window.localStorage.removeItem(VOICE_PREF_KEY);
+                    } else if (r.name) {
+                        window.localStorage.setItem(VOICE_PREF_KEY, r.name);
+                    } else {
+                        window.localStorage.removeItem(VOICE_PREF_KEY);
+                    }
                 } catch (e) {}
                 chosenVoice = null;             // re-pick with the new preference
                 renderVoiceList();
                 // Speak a sample immediately. Choosing a voice you cannot
                 // hear is choosing blind, and the whole complaint was about
                 // how it sounds.
-                sample();
+                sample(r.kokoro || null);
             });
             box.appendChild(row);
         });
@@ -313,10 +350,32 @@
 
     // Deliberately NOT speak(): that dispatches SPEAK_START and closes the
     // microphone, which is right for an answer and wrong for a preview.
-    function sample() {
+    function sample(kokoroVoice) {
+        var line = 'Two loads from Acme are still unpaid.';
+        // A Kokoro preview goes through Kokoro, or she would pick a voice by
+        // listening to a different one.
+        if (kokoroVoice && ttsBridge && ttsBridge.speak) {
+            stopKokoro();
+            ttsBridge.speak(line, kokoroVoice).then(function (r) {
+                if (!r || !r.ok || !r.pcm || !r.pcm.length) return;
+                try {
+                    if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    var pcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
+                    var buf = ttsCtx.createBuffer(1, pcm.length, r.sampleRate || 24000);
+                    buf.getChannelData(0).set(pcm);
+                    var src = ttsCtx.createBufferSource();
+                    src.buffer = buf;
+                    src.connect(ttsCtx.destination);
+                    src.onended = function () { ttsNode = null; };
+                    ttsNode = src;
+                    src.start();
+                } catch (e) {}
+            }).catch(function () {});
+            return;
+        }
         if (!window.speechSynthesis) return;
         try { window.speechSynthesis.cancel(); } catch (e) {}
-        var u = new SpeechSynthesisUtterance('Two loads from Acme are still unpaid.');
+        var u = new SpeechSynthesisUtterance(line);
         var v = pickVoice();
         if (v) { u.voice = v; u.lang = v.lang || 'en-US'; }
         u.rate = 1.0;

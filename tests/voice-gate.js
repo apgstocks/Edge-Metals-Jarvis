@@ -373,6 +373,131 @@ section('F3 — high frequencies are filtered, not folded into the speech');
        'came through at ' + kept.toFixed(4) + ' of 0.05 — a filter that eats speech is no better');
 }
 
+section('H — the turn model decides, and can never hang the microphone');
+{
+    // Apsara: "use this in jarvis Waveform model reading prosody."
+    //
+    // The 700ms timer is replaced by Smart Turn v3, which listens to HOW a
+    // sentence ends rather than how long the pause is. The gate asks it at
+    // ~260ms — well before the timer would fire — and that is the whole
+    // point: a timer cannot answer sooner than its own length without
+    // cutting people off.
+    //
+    // What this section actually guards is the failure modes. An endpointer
+    // that hangs, throws, or is simply absent must degrade to the old timer,
+    // because the alternative is a microphone that never decides she has
+    // stopped talking.
+
+    async function withTurn(levels, turnImpl) {
+        const h = harness();
+        h.asked = [];
+        h.w.jarvisTurn = {
+            available: true,
+            analyse: async (pcm) => { h.asked.push(pcm); return turnImpl(pcm, h.asked.length); },
+        };
+        // Re-evaluated so voice-local.js picks up the bridge, exactly as a
+        // page loaded inside the desktop app would.
+        h.w.__jarvisLocalSpeechLoaded = false;
+        h.w.eval(SRC);
+        const rec = new h.w.JarvisLocalRecognition();
+        h.delivered = [];
+        rec.onresult = (ev) => h.delivered.push(ev.results[0][0].transcript);
+        rec.start();
+        await new Promise((r) => setTimeout(r, 0));
+        const fn = h.frame();
+        for (const lv of levels) {
+            fn(frameAt(lv));
+            // The verdict arrives on a promise, so the loop has to yield or
+            // every frame would be processed before any answer came back.
+            await new Promise((r) => setTimeout(r, 0));
+        }
+        // Long enough for TURN_TIMEOUT_MS (400ms) to actually elapse. The
+        // "it never answers" case is about a real wall-clock timeout, and a
+        // 5ms wait asserted that the timeout had not happened yet.
+        await new Promise((r) => setTimeout(r, 450));
+        return h;
+    }
+
+    // Frames of quiet needed to reach ASK_AT_MS (260) but not SILENCE_MS.
+    const QUIET_TO_ASK = 4;      // ~372ms
+
+    // ── it ends the turn EARLY when she has finished ─────────────────────
+    {
+        const h = await withTurn(
+            [...rep(20, 0.002), ...rep(14, 0.05), ...rep(QUIET_TO_ASK, 0.002)],
+            () => ({ ok: true, complete: true, probability: 0.93, ms: 12 }));
+        ck('the model is consulted at a short pause', h.asked.length >= 1,
+           'never asking means the timer is still in charge and this was pointless');
+        ck('  and "finished" ends the turn before the 700ms timer',
+           h.log.sent.length === 1,
+           'the whole value of the model is answering sooner than a timer safely can');
+        ck('  it says so, with the probability', h.log.lines.some((l) => /she finished — 0\.93/.test(l)));
+        // It must be handed the WHOLE turn, not the newest fragment — the
+        // model's own docs call that an anti-pattern, because it reasons
+        // about how the utterance is ending.
+        ck('  and it was given the whole turn, at 16kHz',
+           h.asked[0].length > 16000,
+           h.asked[0].length + ' samples — a fragment would be a few hundred');
+    }
+
+    // ── it WAITS when she is mid-sentence ────────────────────────────────
+    {
+        // "...and the total is—" then a breath, then the number. A timer
+        // cannot tell this from a finished sentence; prosody can.
+        const h = await withTurn(
+            [...rep(20, 0.002), ...rep(10, 0.05), ...rep(QUIET_TO_ASK, 0.002),
+             ...rep(10, 0.05), ...rep(QUIET_TO_END, 0.002)],
+            (pcm, n) => (n === 1
+                ? { ok: true, complete: false, probability: 0.18, ms: 12 }
+                : { ok: true, complete: true, probability: 0.91, ms: 12 }));
+        ck('a mid-sentence pause does not end the turn', h.log.sent.length === 1,
+           'two captures here means she was cut off in the middle of speaking');
+        ck('  and the whole sentence arrives as one piece',
+           h.asked[h.asked.length - 1].length > h.asked[0].length,
+           'the second question must cover more audio than the first');
+        ck('  it says it is waiting', h.log.lines.some((l) => /still speaking — 0\.18/.test(l)));
+    }
+
+    // ── every way it can fail falls back to the timer ────────────────────
+    for (const [label, impl] of [
+        ['the model is missing', async () => ({ ok: false, error: 'turn model missing' })],
+        ['the call throws', async () => { throw new Error('boom'); }],
+        ['it never answers', () => new Promise(() => {})],
+    ]) {
+        const h = await withTurn(
+            [...rep(20, 0.002), ...rep(14, 0.05), ...rep(QUIET_TO_END + 4, 0.002)], impl);
+        ck(`when ${label}, the pause timer still ends the turn`, h.log.sent.length === 1,
+           'an endpointer that fails closed is a microphone that never stops listening');
+        ck(`  and it says which`, h.log.lines.some((l) => /turn model/i.test(l)),
+           'silent degradation is the pattern that cost her the afternoon');
+    }
+
+    // ── and it is not consulted once per frame ───────────────────────────
+    {
+        // At ~93ms per frame, a 700ms pause is seven frames. Asking on each
+        // would run the model seven times per pause for one answer.
+        const h = await withTurn(
+            [...rep(20, 0.002), ...rep(14, 0.05), ...rep(QUIET_TO_END + 4, 0.002)],
+            () => ({ ok: true, complete: false, probability: 0.2, ms: 12 }));
+        ck('it asks once per pause, not once per frame', h.asked.length === 1,
+           'asked ' + h.asked.length + ' times — the guard is what keeps this cheap');
+    }
+
+    // ── a verdict must not leak into the next turn ───────────────────────
+    {
+        let n = 0;
+        const h = await withTurn(
+            [...rep(20, 0.002), ...rep(14, 0.05), ...rep(QUIET_TO_END + 4, 0.002),
+             ...rep(14, 0.05), ...rep(QUIET_TO_END + 4, 0.002)],
+            () => { n += 1; return { ok: true, complete: true, probability: 0.9, ms: 12 }; });
+        ck('two sentences produce two captures', h.log.sent.length === 2,
+           'a stale "finished" would end the second turn the instant it started');
+        ck('  and the second one is not truncated',
+           h.log.sent[1].length > 4000,
+           h.log.sent[1].length + ' samples — a leaked verdict cuts it to almost nothing');
+    }
+}
+
 section('G — the ceiling still holds');
 {
     // Someone leaves a radio on. MAX_MS (9000) must end the capture rather
