@@ -226,6 +226,17 @@ ipcMain.handle('speech:transcribe', async (_e, pcm) => {
 
 ipcMain.handle('speech:status', async () => speech.status());
 
+// ── the synthesiser ──────────────────────────────────────────────────────
+const tts = require('./tts');
+
+ipcMain.handle('tts:warm', async () => {
+    try { await tts.load(); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('tts:speak', async (_e, text, voice) => tts.speak(text, voice));
+ipcMain.handle('tts:status', async () => tts.status());
+
 app.whenReady().then(async () => {
     console.log(`[JARVIS] loading ${APP_URL}${DEV ? '  (dev, devtools open)' : ''}`);
     // Ask macOS for the microphone up front, once, with the app's own name on
@@ -252,6 +263,14 @@ app.whenReady().then(async () => {
     speech.load().then(
         () => console.log(`[JARVIS] speech ready — ${speech.MODEL}, local, nothing uploaded`),
         (e) => console.error(`[JARVIS] speech NOT ready — ${e.message}`));
+
+    // Warmed at boot for the same reason as Whisper: the first call may
+    // download ~86MB, and having that happen inside her first question is
+    // indistinguishable from the feature being broken. Failure here is not
+    // fatal — the page falls back to the browser's own voice.
+    tts.load().then(
+        () => console.log('[JARVIS] voice ready — Kokoro, local'),
+        (e) => console.error('[JARVIS] voice NOT ready, falling back to the browser voice —', e.message));
 });
 
 // Standard on macOS: closing the window does not quit the app.

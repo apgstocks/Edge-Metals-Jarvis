@@ -98,12 +98,30 @@
                 s.enabled = true;
                 break;
 
+            // ── TURNING IT OFF MEANS OFF, INCLUDING THE SPEAKER ──────────
+            // Found 2026-09-06 by a test written for the new local
+            // synthesiser, but the bug is older than that and was never
+            // Kokoro's: switching voice off while Jarvis was mid-sentence
+            // left `speaking` true and produced NO effects, so the reply
+            // carried on talking over her. With the browser voice that was
+            // merely rude. With audio playing through an AudioContext it is
+            // worse, because `speaking` staying true also means the state
+            // never returns to idle.
+            //
+            // Clearing `speaking` here makes the derived comparison in
+            // run() emit STOP_SPEAKING, which is what actually silences
+            // both engines. `capturing` goes too: a capture window left
+            // open on a disabled assistant is a microphone nobody expects
+            // to be listening.
             case 'USER_DISABLE':
                 s.enabled = false;
+                s.speaking = false;
+                s.capturing = false;
                 break;
 
             case 'USER_TOGGLE':
                 s.enabled = !s.enabled;
+                if (!s.enabled) { s.speaking = false; s.capturing = false; }
                 break;
 
             case 'APP_BACKGROUND':

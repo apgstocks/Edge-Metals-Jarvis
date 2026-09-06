@@ -40,6 +40,7 @@
     }
   },
   "dependencies": {
-    "smart-whisper": "^0.8.1"
+    "smart-whisper": "^0.8.1",
+    "kokoro-js": "^1.2.1"
   }
 }

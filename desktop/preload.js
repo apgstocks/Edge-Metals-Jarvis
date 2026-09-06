@@ -32,3 +32,18 @@ contextBridge.exposeInMainWorld('jarvisSpeech', {
 
     status: function () { return ipcRenderer.invoke('speech:status'); },
 });
+
+// ── the voice it answers in ──────────────────────────────────────────────
+// Separate from jarvisSpeech because they are separate capabilities and one
+// can work while the other does not: Whisper may be loaded while Kokoro is
+// still downloading, and the page has to be able to tell. Merging them would
+// make "is speech available" a question with two answers.
+//
+// Still narrow. It takes text and returns audio samples. It cannot read a
+// file, spawn anything, or reach the rest of Node.
+contextBridge.exposeInMainWorld('jarvisTTS', {
+    available: true,          // the BRIDGE exists; whether the MODEL loaded is status()
+    warm: function () { return ipcRenderer.invoke('tts:warm'); },
+    speak: function (text, voice) { return ipcRenderer.invoke('tts:speak', text, voice); },
+    status: function () { return ipcRenderer.invoke('tts:status'); },
+});

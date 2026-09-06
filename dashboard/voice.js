@@ -367,7 +367,15 @@
 
     // ── speaking ──────────────────────────────────────────────────────────
     function stopSpeaking() {
+        // BOTH engines. Adding Kokoro without adding it here would have been
+        // a genuinely dangerous omission: STOP_SPEAKING is the effect that
+        // guarantees Jarvis is silent before the microphone reopens, and a
+        // version that only silenced the browser voice would leave Kokoro
+        // audible into an open mic — the self-triggering loop that
+        // voice-machine.js exists to prevent, reintroduced through the back
+        // door by a new speaker.
         try { window.speechSynthesis.cancel(); } catch (e) {}
+        stopKokoro();
     }
     // ── WHICH VOICE IT ANSWERS IN ────────────────────────────────────────
     // Apsara, 2026-09-06: "the jarvis voice looks more robot."
@@ -459,9 +467,65 @@
         }
     } catch (e) {}
 
-    function speak(text) {
-        if (!window.speechSynthesis) return;
-        dispatch('SPEAK_START');           // closes the mic BEFORE any audio
+    // ── KOKORO, WHEN THE DESKTOP APP PROVIDES IT ─────────────────────────
+    // The browser's speech engine has a hard ceiling in Electron — Chromium
+    // matches macOS voices by NAME, so Premium and Compact "Samantha" are
+    // indistinguishable and the compact one always wins. No amount of
+    // picking gets past that. So the desktop app brings its own
+    // synthesiser and the page uses it when it is there.
+    //
+    // Played through an AudioContext rather than an <audio> element: the
+    // main process returns raw Float32 samples, and encoding a WAV there
+    // only to decode it here would be two conversions for nothing.
+    var ttsBridge = window.jarvisTTS || null;
+    var ttsCtx = null;
+    var ttsNode = null;
+
+    function stopKokoro() {
+        try { if (ttsNode) { ttsNode.onended = null; ttsNode.stop(); } } catch (e) {}
+        ttsNode = null;
+    }
+
+    // Returns true if it took the job. Returns false — synchronously — if it
+    // cannot, so the caller can fall back without waiting on a promise that
+    // may never settle.
+    function speakLocal(text, onDone) {
+        if (!ttsBridge || !ttsBridge.speak) return false;
+        var voice = null;
+        try { voice = window.localStorage.getItem('jarvisKokoroVoice') || null; } catch (e) {}
+        ttsBridge.speak(String(text).slice(0, 600), voice).then(function (r) {
+            if (!r || !r.ok || !r.pcm || !r.pcm.length) {
+                // NOT silent. The fallback runs, and the reason is on record.
+                console.warn('[VOICE] local voice failed, using the browser voice —',
+                    (r && r.error) || 'no audio');
+                speakBrowser(text, onDone);
+                return;
+            }
+            try {
+                if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+                var pcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
+                var buf = ttsCtx.createBuffer(1, pcm.length, r.sampleRate || 24000);
+                buf.getChannelData(0).set(pcm);
+                stopKokoro();
+                var src = ttsCtx.createBufferSource();
+                src.buffer = buf;
+                src.connect(ttsCtx.destination);
+                src.onended = function () { ttsNode = null; onDone(); };
+                ttsNode = src;
+                src.start();
+            } catch (e) {
+                console.warn('[VOICE] could not play local audio —', e && e.message);
+                speakBrowser(text, onDone);
+            }
+        }).catch(function (e) {
+            console.warn('[VOICE] local voice threw, using the browser voice —', e && e.message);
+            speakBrowser(text, onDone);
+        });
+        return true;
+    }
+
+    function speakBrowser(text, onDone) {
+        if (!window.speechSynthesis) { onDone(); return; }
         var u = new SpeechSynthesisUtterance(String(text).slice(0, 600));
         var v = pickVoice();
         if (v) { u.voice = v; u.lang = v.lang || 'en-US'; }
@@ -474,9 +538,22 @@
         // failed utterance would leave `speaking` true for ever and the
         // microphone would never reopen — the feature would simply stop
         // working with nothing on screen to explain it.
-        u.onend = function () { dispatch('SPEAK_END'); };
-        u.onerror = function () { dispatch('SPEAK_END'); };
-        try { window.speechSynthesis.speak(u); } catch (e) { dispatch('SPEAK_END'); }
+        u.onend = onDone;
+        u.onerror = onDone;
+        try { window.speechSynthesis.speak(u); } catch (e) { onDone(); }
+    }
+
+    function speak(text) {
+        dispatch('SPEAK_START');           // closes the mic BEFORE any audio
+        // EXACTLY ONE dispatch of SPEAK_END, whichever engine runs and
+        // however it ends. Two would reopen the microphone while Jarvis is
+        // still talking, which is the self-triggering loop this whole
+        // feature is built around preventing; zero would leave `speaking`
+        // true for ever and the mic shut permanently.
+        var done = false;
+        var finish = function () { if (done) return; done = true; dispatch('SPEAK_END'); };
+        if (speakLocal(text, finish)) return;
+        speakBrowser(text, finish);
     }
 
     // ── the recogniser ────────────────────────────────────────────────────

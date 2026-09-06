@@ -144,6 +144,188 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
 (async () => {
 console.log('\n─ "Hey Jarvis" in the browser ───────────────────────────────');
 
+section('A00 — the desktop app answers in its own voice, and survives it failing');
+{
+    // Apsara: "why cant this work like siri". Part of the answer was that
+    // the browser's speech engine has a ceiling in Electron — Chromium
+    // matches macOS voices by NAME, so Premium and Compact "Samantha" are
+    // the same voice from JavaScript and the compact one wins. The desktop
+    // app therefore brings its own synthesiser (Kokoro) and the page uses
+    // it when present.
+    //
+    // The risk this section exists for is NOT that Kokoro sounds bad. It is
+    // that a second speaker, playing through an AudioContext instead of
+    // speechSynthesis, breaks the one rule this feature is built on: Jarvis
+    // must be silent before the microphone reopens.
+
+    function withKokoro(opts) {
+        const b = browser(opts || {});
+        const played = [];
+        let ended = null;
+        b.played = played;
+        // A fake AudioContext that records what was played and lets the test
+        // decide when it finishes.
+        b.w.AudioContext = class {
+            constructor() { this.destination = {}; }
+            createBuffer(ch, len, rate) {
+                return { length: len, sampleRate: rate, getChannelData: () => new Float32Array(len) };
+            }
+            createBufferSource() {
+                const node = {
+                    buffer: null, onended: null,
+                    connect() {}, start() { played.push(node.buffer); ended = node; },
+                    stop() { node.stopped = true; },
+                };
+                return node;
+            }
+        };
+        b.finishAudio = () => { if (ended && ended.onended) ended.onended(); };
+        b.playing = () => ended && !ended.stopped;
+        return b;
+    }
+
+    // ── the happy path ───────────────────────────────────────────────────
+    {
+        const b = withKokoro();
+        b.w.jarvisTTS = {
+            available: true,
+            speak: async (t) => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(2400) }),
+        };
+        // Re-evaluate voice.js so it sees the bridge, exactly as a page
+        // loaded inside the desktop app would.
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis');
+        b.mic().hear('what is in inventory');
+        b.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 10));
+
+        ck('the local voice is used, not the browser one', b.played.length === 1,
+           'Kokoro is the whole reason the desktop app can sound better than the browser ceiling');
+        ck('  and the browser voice stayed out of it', b.log.spoken.length === 0);
+
+        // THE RULE. The mic must not be open while it is talking, and must
+        // come back after — and this is a DIFFERENT code path from
+        // speechSynthesis, so the old test does not cover it.
+        ck('  the microphone is shut while it speaks', !b.mic(),
+           'a second speaker that forgets this recreates the self-triggering loop');
+        b.finishAudio();
+        await new Promise((r) => setTimeout(r, 5));
+        ck('  and reopens only when the audio actually ended', !!b.mic(),
+           'if onended never dispatches SPEAK_END the mic is shut for ever and voice silently dies');
+    }
+
+    // ── it must never leave her in silence ───────────────────────────────
+    for (const [label, bridge] of [
+        ['the model failed to load', { available: true, speak: async () => ({ ok: false, error: 'model missing' }) }],
+        ['it returned no audio', { available: true, speak: async () => ({ ok: true, pcm: new Float32Array(0) }) }],
+        ['the call threw', { available: true, speak: async () => { throw new Error('boom'); } }],
+    ]) {
+        const b = withKokoro();
+        b.w.jarvisTTS = bridge;
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis');
+        b.mic().hear('what is in inventory');
+        b.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 10));
+
+        ck(`when ${label}, it falls back to the browser voice`, b.log.spoken.length === 1,
+           'a robotic voice is a complaint; silence is a broken feature');
+        ck(`  and says why`, b.log.console.some((l) => /local voice/i.test(l)),
+           'the silent-failure pattern that cost her the entire afternoon');
+        await new Promise((r) => setTimeout(r, 5));
+        ck(`  and the microphone comes back`, !!b.mic(),
+           'a fallback that forgets SPEAK_END leaves the mic shut for ever');
+    }
+
+    // ── SILENCING IT MUST SILENCE *IT*, NOT JUST THE BROWSER ─────────────
+    // The dangerous omission. STOP_SPEAKING is the effect that guarantees
+    // Jarvis is quiet before the microphone reopens. It used to call only
+    // speechSynthesis.cancel(), which does nothing to audio playing through
+    // an AudioContext — so Kokoro would carry on talking into a live mic,
+    // and hearing its own name in its own reply is the infinite loop
+    // voice-machine.js was written to prevent.
+    //
+    // A mutation removing stopKokoro() survived the whole suite. This is why.
+    {
+        const b = withKokoro();
+        b.w.jarvisTTS = {
+            available: true,
+            speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(24000) }),
+        };
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis');
+        b.mic().hear('what is in inventory');
+        b.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 10));
+        ck('it is speaking through the local engine', b.playing() === true);
+
+        // She turns voice off mid-answer — or hides the tab, or says
+        // something new. Every one of those runs STOP_SPEAKING.
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        await new Promise((r) => setTimeout(r, 5));
+        ck('  turning voice off actually stops the local audio', b.playing() === false,
+           'speechSynthesis.cancel() does nothing to an AudioContext — Kokoro would talk into an open mic');
+        ck('  and the microphone is not open', !b.mic());
+    }
+
+    // USER_DISABLE is a separate branch of the reducer from USER_TOGGLE and
+    // reaches the same state by a different route — it is what a permission
+    // denial and a programmatic switch-off use. Tested separately because a
+    // mutation that broke only this one survived a suite that tested only
+    // the toggle.
+    {
+        const b = withKokoro();
+        b.w.jarvisTTS = {
+            available: true,
+            speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(24000) }),
+        };
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis');
+        b.mic().hear('what is in inventory');
+        b.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 10));
+        ck('  (speaking, via the other branch)', b.playing() === true);
+        b.w.JarvisVoice.dispatch('USER_DISABLE');
+        await new Promise((r) => setTimeout(r, 5));
+        ck('  USER_DISABLE stops it talking too', b.playing() === false,
+           'the two ways of switching voice off must not disagree about whether Jarvis shuts up');
+    }
+
+    // ── exactly one SPEAK_END, ever ──────────────────────────────────────
+    {
+        // If BOTH engines report completion — the local one fails after
+        // already dispatching, say — the mic reopens twice, and the second
+        // reopen can land while audio is still playing.
+        const b = withKokoro();
+        b.w.jarvisTTS = { available: true, speak: async () => ({ ok: false, error: 'nope' }) };
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis');
+        b.mic().hear('what is in inventory');
+        b.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 15));
+        ck('a failed local attempt speaks exactly once, not twice',
+           b.log.spoken.length === 1,
+           'saying it twice is what a naive fallback does, and it is worse than not speaking');
+    }
+}
+
 section('A0 — it does not answer in the 1990s robot voice');
 {
     // Apsara, 2026-09-06: "the jarvis voice looks more robot."
@@ -651,8 +833,17 @@ section('G4 — the desktop app uses the LOCAL engine, and prefers it');
     // page is one that page could call.
     const pre = fs.readFileSync(path.join(ROOT, 'desktop/preload.js'), 'utf8');
     const exposed = (pre.match(/^\s{4}(\w+):/gm) || []).map((m) => m.trim().replace(':', ''));
-    ck('the preload bridge exposes only speech', exposed.every((n) => /available|warm|transcribe|status/.test(n)),
-       `exposed: ${exposed.join(', ')}`);
+    // Was "exposes only speech". A second capability was added deliberately —
+    // Kokoro, because the browser's own voice has a hard ceiling in Electron
+    // — so the assertion is updated rather than deleted. What it must keep
+    // guarding is that the surface stays SMALL and stays about AUDIO: text
+    // and samples in and out, and nothing that touches this Mac.
+    const ALLOWED = ['available', 'warm', 'transcribe', 'speak', 'status'];
+    ck('the preload bridge exposes audio and nothing else',
+       exposed.every((n) => ALLOWED.indexOf(n) !== -1),
+       `exposed: ${exposed.join(', ')} — anything outside [${ALLOWED.join(', ')}] is a new door into this machine`);
+    ck('  and it has not quietly grown', exposed.length <= 10,
+       `${exposed.length} methods exposed; each one is something a compromised server could call`);
     // Comments stripped first. The preload's own comment says the bridge
     // cannot "read a file, spawn a process" — and the regex matched that
     // prose rather than any code. The fifth time this trap has caught me in
