@@ -120,9 +120,11 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
         // `undefined` on every call.
         log.paths.push(p);
         log.asked.push(body.text || body.question);
+        w.__lastAgent = body.agent || null;
+        const who = body.agent === 'scout' ? 'scout' : 'jarvis';
         return {
             ok: true, answer: 'Acme is owed six hundred dollars.',
-            agent: 'scout', agent_name: 'Scout',
+            agent: who, agent_name: who === 'scout' ? 'Scout' : 'Jarvis',
         };
     };
     w.Audio = class { play() {} };
@@ -555,6 +557,47 @@ section('A00b — no fetch must not break the voice bar');
     ck('  and it still turns voice on', b.w.JarvisVoice.state().enabled === true);
 }
 
+section('A0b — Scout has a name, a colour and a voice of its own');
+{
+    // Apsara, 2026-09-06: "if i call scout, will it create another bubble -
+    // in different colour to enquire about yard data" and "when i call Hey
+    // scout, a different voice should answer with MMm hmm."
+    //
+    // Two assistants have sat behind the router for weeks and only ONE had
+    // a name she could say. Scout could be reached only by accident — by
+    // using words that happened to score as yard vocabulary.
+    const b = browser();
+    b.doc.getElementById('jvToggle').click();
+
+    b.mic().hear('hey scout');
+    ck('"hey scout" wakes it', b.w.JarvisVoice.state().capturing === true,
+       'Scout existed and could not be called');
+    ck('  and it knows Scout was the one called',
+       b.log.console.some((l) => /Scout — listening/.test(l)),
+       b.log.console.join(' | '));
+
+    b.mic().hear('how much do we owe acme');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 10));
+    ck('  the SERVER is told which assistant she called',
+       b.log.asked.length > 0 && b.w.__lastAgent === 'scout',
+       'sent agent=' + b.w.__lastAgent + ' — otherwise the router guesses from content and can pick the other one');
+
+    // Jarvis is still the default, and naming him wins when both appear.
+    const j = browser();
+    j.doc.getElementById('jvToggle').click();
+    j.mic().hear('hey jarvis');
+    ck('"hey jarvis" still wakes Jarvis',
+       j.log.console.some((l) => /Jarvis — listening/.test(l)));
+
+    const both = browser();
+    both.doc.getElementById('jvToggle').click();
+    both.mic().hear('hey jarvis ask scout about the loads');
+    ck('  and naming Jarvis wins when both are said',
+       both.log.console.some((l) => /Jarvis — listening/.test(l)),
+       'addressing one assistant and mentioning the other is not addressing both');
+}
+
 section('A0 — it does not answer in the 1990s robot voice');
 {
     // Apsara, 2026-09-06: "the jarvis voice looks more robot."
@@ -848,8 +891,10 @@ section('B — the wake word, and only the wake word');
         const b2 = browser();
         b2.w.JarvisVoice.dispatch('USER_TOGGLE');
         b2.mic().hear('hey jarvis');
-        ck('  and so is a successful one',
-           b2.log.console.some((l) => /wake word matched/.test(l)),
+        // The message now NAMES the assistant, because there are two and
+        // knowing which one woke is the point.
+        ck('  and so is a successful one, naming who woke',
+           b2.log.console.some((l) => /Jarvis — listening for your command/.test(l)),
            'silence on success is just as unreadable as silence on failure');
     }
 
@@ -1034,10 +1079,33 @@ section('G3 — no speech engine is admitted, not papered over');
     w.JarvisVoice.dispatch('USER_TOGGLE');
     ck('it starts out listening', !!mic());
 
+    // ── ONE ERROR IS A HICCUP, THREE IS A VERDICT ────────────────────────
+    // Apsara, 2026-09-06: "when while on chrome - it shows me Voice needs
+    // Google Chrome — this app cannot do speech." In Chrome that message is
+    // simply wrong, and it was this latch firing on the FIRST error.
+    //
+    // Chrome's recogniser is a remote Google service and returns "network"
+    // for ordinary transient things — a moment of bad connectivity, a tab
+    // waking from sleep. A genuine absence of an engine, which is what
+    // Electron has, fails every time and immediately. Repetition is the only
+    // thing that separates them.
+    mic().onerror({ error: 'network' });
+    await new Promise((r) => setTimeout(r, 20));
+    ck('ONE network error does not kill it', w.JarvisVoice.state().enabled === true,
+       'this fired on the first error and told her to use the browser she was already using');
+    ck('  it says it is reconnecting', /reconnect/i.test(w.document.getElementById('jvText').textContent),
+       'got: ' + w.document.getElementById('jvText').textContent);
+    ck('  and the microphone is reopened', !!mic(),
+       'a transient failure must not end the session');
+
+    mic().onerror({ error: 'network' });
+    await new Promise((r) => setTimeout(r, 20));
+    ck('  two does not either', w.JarvisVoice.state().enabled === true);
+
     mic().onerror({ error: 'network' });
     await new Promise((r) => setTimeout(r, 20));
 
-    ck('a network error switches it OFF', w.JarvisVoice.state().enabled === false,
+    ck('but THREE in a row switches it OFF', w.JarvisVoice.state().enabled === false,
        'showing "Listening" against an engine that cannot answer is a lie');
     ck('  the microphone is closed', !mic());
     ck('  the dot is not live', !w.document.getElementById('jarvisVoiceBar').classList.contains('live'));
@@ -1051,6 +1119,30 @@ section('G3 — no speech engine is admitted, not papered over');
     w.JarvisVoice.dispatch('USER_TOGGLE');
     ck('and it refuses to reopen the microphone', log.starts === before,
        'there is no recovering from a missing engine; retrying just lies faster');
+
+    // ── AND A SUCCESS RESETS THE COUNT ───────────────────────────────────
+    // Without this the errors accumulate across a whole session: two
+    // hiccups this morning, one this afternoon, and the feature latches off
+    // hours later for no reason she could connect to anything.
+    {
+        const c = browser();
+        c.w.JarvisVoice.dispatch('USER_TOGGLE');
+        c.mic().onerror({ error: 'network' });
+        await new Promise((r) => setTimeout(r, 20));
+        c.mic().onerror({ error: 'network' });
+        await new Promise((r) => setTimeout(r, 20));
+        // The engine works again.
+        c.mic().hear('hey jarvis');
+        await new Promise((r) => setTimeout(r, 5));
+        // Two more would latch it if the count had not been cleared.
+        c.mic().onerror({ error: 'network' });
+        await new Promise((r) => setTimeout(r, 20));
+        c.mic().onerror({ error: 'network' });
+        await new Promise((r) => setTimeout(r, 20));
+        ck('a working result clears the error count',
+           c.w.JarvisVoice.state().enabled === true,
+           'errors accumulating across a session latch it off hours later, for nothing');
+    }
 
     // An ordinary quiet-room error is NOT treated this way.
     const ok = browser();

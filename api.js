@@ -1850,7 +1850,23 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/voice/phrase/:name', async (req, res) => {
         try {
             const { phrase } = require('./helpers/voice');
-            const wav = await phrase(String(req.params.name || ''));
+            // ── ?voice=Leda ──────────────────────────────────────────────
+            // Apsara, 2026-09-06: "when i call Hey scout, a different voice
+            // should answer with MMm hmm."
+            //
+            // The two assistants already HAVE different voices — Jarvis is
+            // Charon, Scout is Leda, declared in helpers/voiceRouter.js —
+            // and say() has always taken a voice. Only this endpoint was
+            // hard-wired to the default, so both acknowledgements came back
+            // in the same voice and the one signal that says WHICH assistant
+            // is listening was thrown away at the last step.
+            //
+            // Safe to cache: cacheKey() already includes the voice and its
+            // style prompt, so the two never collide on disk.
+            const wanted = String(req.query.voice || '').trim();
+            const VOICES_ALLOWED = ['Charon', 'Leda'];
+            const wav = await phrase(String(req.params.name || ''),
+                VOICES_ALLOWED.indexOf(wanted) !== -1 ? { voice: wanted } : {});
             res.set('Content-Type', 'audio/wav');
             // Immutable: a fixed phrase in a fixed voice never changes, so the
             // WebView can keep it and the wake acknowledgement costs nothing
@@ -1883,7 +1899,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const text = String((req.body || {}).text || '').trim();
             if (!text) return res.status(400).json({ error: 'nothing was said' });
 
-            const route = routeVoice(text);
+            // ── SHE CAN NAME THE ASSISTANT ───────────────────────────────
+            // "Hey Scout" addresses Scout, whatever the content scores. The
+            // router already honours an explicit address in TYPED text; this
+            // carries the same thing from the wake word, where the name has
+            // already been stripped off before the router ever sees it.
+            const named = String((req.body || {}).agent || '').toLowerCase();
+            const route = (named === 'scout' || named === 'jarvis')
+                ? { agent: named, why: 'you called ' + named + ' by name', addressed: true }
+                : routeVoice(text);
             const agent = AGENTS[route.agent];
             const mem = require('./helpers/voiceMemory');
 

@@ -116,6 +116,32 @@
         + '(?:hey|ok|okay|hi)\\s+(?:jarvis|jarviss|jervis|jarvez|javis|charvis|travis|jarvie|service)'
         + '|jarvis|jarviss|jervis|jarvez'
         + ')\\b', 'i');
+
+    // ── AND SCOUT HAS A NAME TOO ─────────────────────────────────────────
+    // Apsara, 2026-09-06: "when i call Hey scout, a different voice should
+    // answer with MMm hmm (new bubble indicating diff assistant)."
+    //
+    // Two assistants have existed behind the router for weeks — Scout for
+    // the yard ledger, Jarvis for everything else — and only one of them
+    // had a name you could say. Calling Scout was impossible; you could
+    // only be ROUTED to it by the words you happened to use.
+    //
+    // Same near-miss tolerance as the Jarvis matcher, for the same reason:
+    // a 77MB model guessing at a proper noun. "Scout" is short and common
+    // enough that the sloppy spellings are only admitted after an address.
+    var WAKE_SCOUT = new RegExp(
+        '\\b(?:(?:hey|ok|okay|hi)\\s+(?:scout|scot|scoot|skout)|scout)\\b', 'i');
+
+    // Which one she called. Drives the colour, the voice of the
+    // acknowledgement, and the agent the server is told to use — so the
+    // answer comes from the assistant she actually addressed rather than
+    // whichever one the content happens to score for.
+    var addressed = 'jarvis';
+
+    var AGENT_LOOK = {
+        jarvis: { name: 'Jarvis', voice: 'Charon', accent: '#B4703A', tint: 'rgba(180,112,58,' },
+        scout:  { name: 'Scout',  voice: 'Leda',   accent: '#3E8E7E', tint: 'rgba(62,142,126,' },
+    };
     // How long a command may run before it is cut off. Long enough for
     // "record a twelve thousand dollar zelle payment against edge zero seven",
     // short enough that an open mic in a noisy office closes on its own.
@@ -124,6 +150,11 @@
     // Set once the recogniser has told us it has no engine behind it. There
     // is no recovering from that within this window, so it latches.
     var speechUnavailable = false;
+    // Consecutive "network" errors. Three, because a genuine absence of an
+    // engine fails every time and immediately, while a hiccup does not —
+    // and any successful result resets it to zero.
+    var networkErrors = 0;
+    var NETWORK_ERRORS_BEFORE_GIVING_UP = 3;
 
     var state = VM.initial({ enabled: false, foreground: !document.hidden });
     var rec = null, captureTimer = null, heardDuringCapture = '';
@@ -325,6 +356,32 @@
         // she says so.
     }
     function hidePanel() { panel.classList.add('hidden'); }
+
+    // ── WHICH ASSISTANT IS ON SCREEN ─────────────────────────────────────
+    // Apsara: "if I call scout, will it create another bubble - in different
+    // colour to enquire about yard data."
+    //
+    // Not a second bubble — one bubble that says WHOSE it is. Two stacks
+    // would mean two places to look and two things to dismiss, for a
+    // distinction that is one property of one answer. The colour, the name
+    // in the card, and the voice of the acknowledgement all move together,
+    // so there is never a moment where the screen says one assistant and the
+    // speaker says the other.
+    function paintAgent(who) {
+        var look = AGENT_LOOK[who] || AGENT_LOOK.jarvis;
+        try {
+            card.style.borderColor = look.tint + '.42)';
+            panel.style.borderColor = look.tint + '.42)';
+            var q = el('jvCardQ');
+            if (q) q.style.color = look.accent;
+            var head = panel.querySelector('.jvpHead');
+            if (head) head.style.color = look.accent;
+            document.querySelectorAll('.jvpN').forEach(function (n) {
+                n.style.background = look.tint + '.2)';
+                n.style.color = look.accent;
+            });
+        } catch (e) {}
+    }
 
     // ── CHOOSING THE VOICE ───────────────────────────────────────────────
     // Apsara, 2026-09-06: "set different voice."
@@ -735,6 +792,10 @@
             for (var i = ev.resultIndex; i < ev.results.length; i += 1) txt += ev.results[i][0].transcript;
             txt = txt.trim();
             if (!txt) return;
+            // The engine just worked. Whatever went wrong before was
+            // transient, and the count must not creep up over a long session
+            // until one bad afternoon latches the feature off.
+            networkErrors = 0;
 
             if (state.capturing) {
                 heardDuringCapture = txt;
@@ -763,8 +824,13 @@
             // in this feature where a decision was taken in silence. From
             // where she sat, a mis-transcription and a dead microphone
             // looked identical. They need completely different fixes.
-            if (WAKE.test(txt)) {
-                console.log('[VOICE] wake word matched — listening for your command');
+            var isScout = WAKE_SCOUT.test(txt);
+            if (WAKE.test(txt) || isScout) {
+                // Scout only when Jarvis was NOT also named — "hey jarvis,
+                // ask scout about the loads" addresses Jarvis.
+                addressed = (isScout && !WAKE.test(txt)) ? 'scout' : 'jarvis';
+                console.log('[VOICE] ' + AGENT_LOOK[addressed].name
+                    + ' — listening for your command');
                 dispatch('WAKE_HEARD');
             } else {
                 console.log('[VOICE] no wake word in "' + txt + '" — say "Jarvis" to start');
@@ -808,11 +874,39 @@
                 dispatch('RECOGNISER_STOPPED');
                 return;
             }
+            // ── ONE "network" IS NOT A VERDICT ───────────────────────────
+            // Apsara, 2026-09-06: "when while on chrome - it shows me Voice
+            // needs Google Chrome — this app cannot do speech."
+            //
+            // In real Chrome that message is simply wrong, and it was my
+            // logic being too harsh. I wrote this latch for ELECTRON, where
+            // "network" means there is no speech engine at all and never
+            // will be — a permanent, unrecoverable fact. But Chrome's
+            // recogniser is a remote Google service, and it returns
+            // "network" for ordinary transient things: a moment of poor
+            // connectivity, the service briefly refusing, a tab waking from
+            // sleep. Latching on the FIRST one turns a hiccup into a dead
+            // feature with a message telling her to use the browser she is
+            // already using.
+            //
+            // Repetition is what separates the two. A genuine absence of an
+            // engine fails EVERY time, immediately; a hiccup does not. So it
+            // takes three in a row, and any successful result resets the
+            // count.
             if (err === 'network' && !LOCAL) {
+                networkErrors += 1;
+                if (networkErrors < NETWORK_ERRORS_BEFORE_GIVING_UP) {
+                    console.warn('[VOICE] speech service returned "network" ('
+                        + networkErrors + '/' + NETWORK_ERRORS_BEFORE_GIVING_UP + ') — retrying');
+                    say('Reconnecting…');
+                    dispatch('RECOGNISER_STOPPED');   // the reducer restarts it
+                    return;
+                }
                 speechUnavailable = true;
                 dispatch('USER_DISABLE');
                 say('Voice needs Google Chrome — this app cannot do speech');
-                console.warn('[VOICE] SpeechRecognition returned "network". This build has no speech '
+                console.warn('[VOICE] SpeechRecognition returned "network" '
+                    + networkErrors + ' times in a row. This build has no speech '
                     + 'engine (Electron ships Chromium without Google\'s speech API keys). '
                     + 'Open https://jarvis.edgemetals.com in Google Chrome for the wake word.');
                 return;
@@ -858,7 +952,11 @@
     // which is a far better defence than hoping echo cancellation catches
     // it. Without that, the first thing Whisper hears every single time is
     // Jarvis humming, and "Mm-hm" becomes the command.
-    var ackPcm = null;
+    // One per assistant. Two voices, two cached buffers — a shared one
+    // would mean Scout answering in Jarvis's voice, which is precisely the
+    // signal she asked for.
+    var ackBuf = { jarvis: null, scout: null };
+    var ackPcm = null;          // kept for the tone fallback path
     var ackRate = 24000;
 
     // ── AN AUDIOCONTEXT STARTS STOPPED ───────────────────────────────────
@@ -944,23 +1042,31 @@
 
     function warmAckFromServer() {
         // fetch, not api(): this returns a WAV, not JSON.
-        window.fetch('/api/voice/phrase/ack', { credentials: 'same-origin' })
-            .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
-            .then(function (buf) {
-                var ctx = audio();
-                if (!ctx) return Promise.reject(new Error('no audio context'));
-                return ctx.decodeAudioData(buf);
-            })
-            .then(function (decoded) {
-                ackPcm = decoded.getChannelData(0);
-                ackRate = decoded.sampleRate;
-                console.log('[VOICE] acknowledgement ready — '
-                    + Math.round(decoded.duration * 1000) + 'ms, from the server');
-            })
-            .catch(function (e) {
-                console.log('[VOICE] no server acknowledgement (' + (e && e.message) + ') — trying locally');
-                warmAckLocal();
-            });
+        // BOTH assistants, each in its own voice. cacheKey() on the server
+        // already includes the voice and its style prompt, so the two never
+        // collide on disk.
+        Object.keys(AGENT_LOOK).forEach(function (who) {
+            var v = AGENT_LOOK[who].voice;
+            window.fetch('/api/voice/phrase/ack?voice=' + encodeURIComponent(v),
+                { credentials: 'same-origin' })
+                .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
+                .then(function (buf) {
+                    var ctx = audio();
+                    if (!ctx) return Promise.reject(new Error('no audio context'));
+                    return ctx.decodeAudioData(buf);
+                })
+                .then(function (decoded) {
+                    ackBuf[who] = decoded;
+                    if (who === 'jarvis') { ackPcm = decoded.getChannelData(0); ackRate = decoded.sampleRate; }
+                    console.log('[VOICE] ' + AGENT_LOOK[who].name + ' acknowledgement ready — '
+                        + Math.round(decoded.duration * 1000) + 'ms, ' + v);
+                })
+                .catch(function (e) {
+                    console.log('[VOICE] no server acknowledgement for '
+                        + AGENT_LOOK[who].name + ' (' + (e && e.message) + ')');
+                    if (who === 'jarvis') warmAckLocal();
+                });
+        });
     }
 
     // A two-note hum, synthesised on the spot. This is the fallback for the
@@ -993,14 +1099,20 @@
         try {
             var ctx = audio();
             if (!ctx) return 0;
-            if (ackPcm) {
-                var buf = ctx.createBuffer(1, ackPcm.length, ackRate);
-                buf.getChannelData(0).set(ackPcm);
+            // The assistant she CALLED, not a default. Hearing a different
+            // voice is the fastest possible confirmation that the right one
+            // is listening — faster than reading anything.
+            var decoded = ackBuf[addressed] || null;
+            var pcmNow = decoded ? decoded.getChannelData(0) : ackPcm;
+            var rateNow = decoded ? decoded.sampleRate : ackRate;
+            if (pcmNow) {
+                var buf = ctx.createBuffer(1, pcmNow.length, rateNow);
+                buf.getChannelData(0).set(pcmNow);
                 var src = ctx.createBufferSource();
                 src.buffer = buf;
                 src.connect(ctx.destination);
                 src.start();
-                ms = Math.round((ackPcm.length / ackRate) * 1000);
+                ms = Math.round((pcmNow.length / rateNow) * 1000);
             } else {
                 ms = humAck(ctx);
             }
@@ -1017,6 +1129,7 @@
     function openCapture() {
         heardDuringCapture = '';
         say('Listening');
+        paintAgent(addressed);
         showCard('', 'Go ahead…', true);
         playAck();
         clearTimeout(captureTimer);
@@ -1076,7 +1189,7 @@
         // The parameter is `text`, not `question`: the router needs the words
         // as spoken to decide, and stripAgentName() on the server removes any
         // "Scout," or "Jarvis," prefix afterwards.
-        api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q }) })
+        api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q, agent: addressed }) })
             .then(function (r) {
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 var answer = (r && r.answer) || 'No answer.';
@@ -1091,6 +1204,12 @@
                 // out in one paint rather than the card jumping when the
                 // panel appears underneath it.
                 showPanel(r && r.cards);
+                // The colour follows the ANSWERING agent, which can differ
+                // from the one addressed — she says "Hey Jarvis" and asks
+                // about loads, and the router hands it to Scout. Showing the
+                // agent she called rather than the one that answered would
+                // be a prettier lie.
+                paintAgent((r && r.agent) || addressed);
                 var who = (r && r.agent_name) || '';
                 say(who || 'Answered');
                 showCard(undefined, answer, false);
