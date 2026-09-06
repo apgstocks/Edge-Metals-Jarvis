@@ -133,10 +133,16 @@ section('E — the module still loads without a Mac');
     // into the require cache rather than loaded.
     let live = null;
     let willReturn = null;
+    const given = [];
     try {
         const nativePath = require.resolve('smart-whisper', { paths: [path.join(__dirname, '../desktop')] });
+        // `given` records the audio the model was actually handed, which is
+        // the only way to see what transcribe() did to it on the way. An
+        // earlier attempt overrode the module's exported load() instead —
+        // useless, because transcribe() calls the internal binding, so the
+        // stub never ran and the assertions read undefined.
         class FakeWhisper {
-            async transcribe() { return { result: Promise.resolve(willReturn) }; }
+            async transcribe(audio) { given.push(audio); return { result: Promise.resolve(willReturn) }; }
         }
         require.cache[nativePath] = {
             id: nativePath, filename: nativePath, loaded: true, exports: { Whisper: FakeWhisper },
@@ -170,6 +176,33 @@ section('E — the module still loads without a Mac');
         ck('null does not throw', await call(null) === '');
 
         ck('and the model is now reported loaded', live.status().ready === true);
+
+        // ── the 1-second floor ───────────────────────────────────────────
+        // whisper.cpp refused her actual "Hey Jarvis" — "input is too short,
+        // 920 ms < 1000 ms" — and returned an empty array. A two-word wake
+        // phrase is the NORMAL input for this app, not an edge case, so the
+        // short path is the one that has to work.
+        given.length = 0;
+        willReturn = [{ text: 'ok' }];
+        // A recognisable payload, so the padding can be told apart from the
+        // audio rather than merely counted.
+        const short = new Float32Array(Math.round(16000 * 0.92)).fill(0.5);
+        await live.transcribe(short);                                        // her 920ms
+        ck('a 920ms utterance is padded past whisper\'s 1s floor',
+           given[0].length >= 16000,
+           'got ' + given[0].length + ' samples — whisper returns nothing at all below 16000');
+        ck('  the original audio survives at the front',
+           given[0][0] === 0.5 && given[0][short.length - 1] === 0.5,
+           'padding that overwrote the speech would transcribe silence perfectly');
+        ck('  and the padding is SILENCE, not repeated audio',
+           given[0][short.length] === 0 && given[0][given[0].length - 1] === 0,
+           'repeating the last frames would have whisper hear a stutter and transcribe it');
+
+        const long = new Float32Array(16000 * 3).fill(0.5);
+        await live.transcribe(long);                                         // a real sentence
+        ck('  but a 3s utterance is passed through untouched',
+           given[1].length === 16000 * 3,
+           'padding audio that does not need it would waste decode time on silence');
     }
 
     console.log(`\n  ${pass} passed, ${fail} failed`);

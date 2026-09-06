@@ -143,9 +143,34 @@ function sentence(raw) {
 // pcm is Float32 mono at 16 kHz — resampled in the renderer, because the
 // AudioContext there already has the machinery and shipping 44.1 kHz over IPC
 // would be nearly three times the bytes for no gain.
+// ── whisper.cpp will not look at less than a second ──────────────────────
+// Its own words, from her terminal:
+//
+//   whisper_full_with_state: input is too short - 920 ms < 1000 ms.
+//   consider padding the input audio with silence
+//
+// and then an empty result. A short "Hey Jarvis" is EXACTLY the case this
+// application is built around, so this is not an edge case, it is the normal
+// one. Padded with silence, as the model itself suggests.
+//
+// Padding is safe: whisper pads internally to a 30-second window regardless,
+// so trailing silence changes nothing about the decode except that it is
+// allowed to happen at all. Done HERE rather than in the renderer because it
+// is whisper's constraint, not the microphone's — anything that ever calls
+// this gets the same protection.
+const MIN_SAMPLES = 16000 * 1.2;      // 1.2s at 16kHz, comfortably over the 1s floor
+
+function padded(pcm) {
+    if (!pcm || pcm.length >= MIN_SAMPLES) return pcm;
+    const out = new Float32Array(MIN_SAMPLES);   // zero-filled: silence
+    out.set(pcm, 0);
+    return out;
+}
+
 async function transcribe(pcm) {
     const model = await load();
-    const task = await model.transcribe(pcm, { language: 'en', suppress_non_speech_tokens: true });
+    const audio = padded(pcm);
+    const task = await model.transcribe(audio, { language: 'en', suppress_non_speech_tokens: true });
     return sentence(await task.result);
 }
 
