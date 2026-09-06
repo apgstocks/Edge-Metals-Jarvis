@@ -431,6 +431,17 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
            'the wake word is not a gesture — only the click can start the clock');
         ck('  and the microphone stays OPEN while it plays', !!b.mic(),
            'closing the mic to say "go ahead" defeats the entire point of saying it');
+        // ── WHERE THE SOUND CAME FROM ────────────────────────────────────
+        // Two mutations survived without this. The acknowledgement should be
+        // Jarvis's OWN VOICE, fetched once from /api/voice/phrase/ack and
+        // cached — not the two-note tone, which is the last resort. Asking
+        // only "did a sound play" cannot tell those apart, and the tone is
+        // exactly what she complained about twice.
+        ck('  it asked the server for the spoken acknowledgement',
+           b.w.__ackFetches.some((p) => /\/api\/voice\/phrase\/ack/.test(p)),
+           'fetched: ' + JSON.stringify(b.w.__ackFetches)
+           + ' — without this it falls back to the tone, which is what she kept hearing');
+
         ck('  and the card tells her to go ahead',
            /go ahead/i.test(b.doc.getElementById('jvCardA').textContent),
            'got: ' + b.doc.getElementById('jvCardA').textContent);
@@ -516,6 +527,32 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
            b.log.spoken.length === 1,
            'saying it twice is what a naive fallback does, and it is worse than not speaking');
     }
+}
+
+section('A00b — no fetch must not break the voice bar');
+{
+    // The guard exists because warmAck() runs during MOUNT. An exception
+    // there — no fetch, a blocked request, a CSP rule — aborts mount partway
+    // and leaves the bar on screen with no click handler attached: a switch
+    // that does nothing, in service of a missing sound.
+    //
+    // Found when this very harness had no fetch and the whole file crashed.
+    const b = browser();
+    delete b.w.fetch;
+    b.w.__jarvisVoiceLoaded = false;
+    let threw = null;
+    try {
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+    } catch (e) { threw = e; }
+
+    ck('mounting without fetch does not throw', threw === null,
+       threw && threw.message);
+    ck('  the switch is still there and still wired',
+       !!b.doc.getElementById('jvToggle'),
+       'a bar with no handler is worse than no bar — it looks like it works');
+    b.doc.getElementById('jvToggle').click();
+    ck('  and it still turns voice on', b.w.JarvisVoice.state().enabled === true);
 }
 
 section('A0 — it does not answer in the 1990s robot voice');
