@@ -464,13 +464,14 @@
             ttsBridge.speak(line, kokoroVoice).then(function (r) {
                 if (!r || !r.ok || !r.pcm || !r.pcm.length) return;
                 try {
-                    if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    var ctx = audio();
+                    if (!ctx) return;
                     var pcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
-                    var buf = ttsCtx.createBuffer(1, pcm.length, r.sampleRate || 24000);
+                    var buf = ctx.createBuffer(1, pcm.length, r.sampleRate || 24000);
                     buf.getChannelData(0).set(pcm);
-                    var src = ttsCtx.createBufferSource();
+                    var src = ctx.createBufferSource();
                     src.buffer = buf;
-                    src.connect(ttsCtx.destination);
+                    src.connect(ctx.destination);
                     src.onended = function () { ttsNode = null; };
                     ttsNode = src;
                     src.start();
@@ -666,14 +667,15 @@
                 return;
             }
             try {
-                if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+                var ctx = audio();
+                if (!ctx) { speakBrowser(text, onDone); return; }
                 var pcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
-                var buf = ttsCtx.createBuffer(1, pcm.length, r.sampleRate || 24000);
+                var buf = ctx.createBuffer(1, pcm.length, r.sampleRate || 24000);
                 buf.getChannelData(0).set(pcm);
                 stopKokoro();
-                var src = ttsCtx.createBufferSource();
+                var src = ctx.createBufferSource();
                 src.buffer = buf;
-                src.connect(ttsCtx.destination);
+                src.connect(ctx.destination);
                 src.onended = function () { ttsNode = null; onDone(); };
                 ttsNode = src;
                 src.start();
@@ -859,6 +861,31 @@
     var ackPcm = null;
     var ackRate = 24000;
 
+    // ── AN AUDIOCONTEXT STARTS STOPPED ───────────────────────────────────
+    // Apsara asked for the acknowledgement twice, which is how this was
+    // found: it was built, committed, and made no sound.
+    //
+    // Browsers create an AudioContext in state "suspended" and will not run
+    // it until a USER GESTURE resumes it. Every AudioContext here was being
+    // created lazily inside playAck() — triggered by the wake word, which is
+    // not a gesture — so it was born suspended and stayed that way. The
+    // nodes connected, start() was called, no exception was thrown, and
+    // nothing was ever heard. Autoplay policy failing closed and silently is
+    // exactly the shape of bug this whole day has been about.
+    //
+    // Two halves to the fix: create it during the toggle CLICK, which is a
+    // real gesture, and resume it before every use in case the browser
+    // suspended it again (they do, on tab hide).
+    function audio() {
+        try {
+            if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ttsCtx.state === 'suspended' && ttsCtx.resume) {
+                ttsCtx.resume().catch(function () {});
+            }
+            return ttsCtx;
+        } catch (e) { return null; }
+    }
+
     // Rendered ONCE, at startup, not on every wake. Kokoro takes a few
     // hundred milliseconds, which is fine to spend at boot and hopeless in
     // the gap between her saying the name and expecting a reply.
@@ -902,17 +929,18 @@
     function playAck() {
         var ms = 420;
         try {
-            if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+            var ctx = audio();
+            if (!ctx) return 0;
             if (ackPcm) {
-                var buf = ttsCtx.createBuffer(1, ackPcm.length, ackRate);
+                var buf = ctx.createBuffer(1, ackPcm.length, ackRate);
                 buf.getChannelData(0).set(ackPcm);
-                var src = ttsCtx.createBufferSource();
+                var src = ctx.createBufferSource();
                 src.buffer = buf;
-                src.connect(ttsCtx.destination);
+                src.connect(ctx.destination);
                 src.start();
                 ms = Math.round((ackPcm.length / ackRate) * 1000);
             } else {
-                ms = humAck(ttsCtx);
+                ms = humAck(ctx);
             }
         } catch (e) { /* an inaudible ack is not worth an exception */ }
 
@@ -1073,7 +1101,19 @@
         if (canWake) {
             // Nothing auto-starts. The first click is also what gives the
             // browser the user gesture it requires before opening a mic.
-            t.addEventListener('click', function () { dispatch('USER_TOGGLE'); });
+            t.addEventListener('click', function () {
+                // ── THE ONE MOMENT THE BROWSER WILL START AUDIO ──────────
+                // An AudioContext is created suspended and only a USER
+                // GESTURE may start it. This click is the only gesture in
+                // the whole flow — everything after it is triggered by the
+                // wake word, which is not one. Creating the context lazily
+                // inside playAck() therefore produced a context that could
+                // never run: nodes connected, start() called, no exception,
+                // no sound. That is why the acknowledgement had to be asked
+                // for twice.
+                audio();
+                dispatch('USER_TOGGLE');
+            });
         } else {
             // Press-to-talk: hold the button, speak, release.
             var down = function (e) { e.preventDefault(); dispatch('CAPTURE_START'); startMic(); };

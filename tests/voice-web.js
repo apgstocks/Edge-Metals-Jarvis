@@ -250,7 +250,24 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         // A fake AudioContext that records what was played and lets the test
         // decide when it finishes.
         b.w.AudioContext = class {
-            constructor() { this.destination = {}; }
+            constructor() {
+                this.destination = {};
+                // Born SUSPENDED, exactly like a real one. A harness that
+                // reports "running" from the start cannot tell a context
+                // that was resumed from one that was never started — which
+                // is the whole bug.
+                this.state = 'suspended';
+                b.w.__ctxState = 'suspended';
+                // Was it made during the click? Anything created later can
+                // never be started by any browser.
+                b.w.__ctxMadeOnClick = !!b.w.__inClick;
+            }
+            resume() { this.state = 'running'; b.w.__ctxState = 'running'; return Promise.resolve(); }
+            createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+            createOscillator() {
+                return { type: '', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} };
+            }
+            get currentTime() { return 0; }
             createBuffer(ch, len, rate) {
                 return { length: len, sampleRate: rate, getChannelData: () => new Float32Array(len) };
             }
@@ -351,13 +368,34 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
         await new Promise((r) => setTimeout(r, 5));      // warmAck renders it
 
-        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        // Through the real button, because the fix is about WHICH moment
+        // creates the context. dispatch() alone skips the click handler and
+        // would prove nothing.
+        b.w.__inClick = true;
+        b.doc.getElementById('jvToggle').click();
+        b.w.__inClick = false;
         const before = b.played.length;
         b.mic().hear('hey jarvis');                       // the wake, nothing more
         await new Promise((r) => setTimeout(r, 5));
 
         ck('the wake word makes a SOUND', b.played.length === before + 1,
            'the old acknowledgement was a zero-length WAV — the intent was there, the sound was not');
+
+        // ── AND THE CONTEXT IS ACTUALLY RUNNING ──────────────────────────
+        // The second reason she heard nothing. An AudioContext is born
+        // SUSPENDED and only a user gesture may start it. Every context here
+        // was created lazily inside playAck(), triggered by the wake word,
+        // which is not a gesture — so it was suspended, and start() on a
+        // suspended context throws nothing and plays nothing.
+        //
+        // A sound object being created is NOT evidence of a sound. This
+        // asserts the clock is running.
+        ck('  and the audio clock is running, not suspended',
+           b.w.__ctxState === 'running',
+           'state is "' + b.w.__ctxState + '" — a suspended context plays silently and reports no error');
+        ck('  it was created on the CLICK, the only gesture there is',
+           b.w.__ctxMadeOnClick === true,
+           'created later, in the wake handler, it can never be started');
         ck('  and the microphone stays OPEN while it plays', !!b.mic(),
            'closing the mic to say "go ahead" defeats the entire point of saying it');
         ck('  and the card tells her to go ahead',
