@@ -221,6 +221,102 @@
     function hideCard() { clearTimeout(cardTimer); card.classList.add('hidden'); }
     card.addEventListener('click', hideCard);
 
+    // ── THE SCREEN ───────────────────────────────────────────────────────
+    // Apsara, 2026-09-06: "like JARVIS in iron man, a screen should appear,
+    // where it shows me all relevant answer to my question as jarvis is
+    // talking back. For eg: If i ask any available bookings from Houston? It
+    // should show Booking number, ERD, cut off."
+    //
+    // The rows arrive from the server already looked up — see
+    // helpers/answerCards.js for why they are NOT parsed out of the spoken
+    // reply. This file only draws them.
+    //
+    // NUMBERED, AND THAT IS LOAD-BEARING. "Forward the first booking to Sher
+    // Trucking" only means something if something was numbered, and the
+    // number she sees has to be the number the server used — which is why it
+    // comes down in the data rather than being however this happens to
+    // render a list.
+    var panel = document.createElement('div');
+    panel.id = 'jvPanel';
+    panel.className = 'hidden';
+    var panelCss = [
+        '#jvPanel{position:fixed;right:18px;bottom:132px;z-index:902;width:420px;max-width:calc(100vw - 36px);',
+        '  max-height:60vh;overflow-y:auto;border-radius:16px;background:#0F1418;',
+        '  border:1px solid rgba(180,112,58,.34);box-shadow:0 16px 44px rgba(0,0,0,.62);',
+        '  font-family:system-ui,-apple-system,sans-serif;}',
+        '#jvPanel.hidden{display:none;}',
+        '.jvpHead{position:sticky;top:0;background:#0F1418;padding:13px 16px 10px;',
+        '  border-bottom:1px solid rgba(255,255,255,.09);font-size:11px;letter-spacing:.12em;',
+        '  text-transform:uppercase;color:#B4703A;font-weight:700;display:flex;align-items:center;gap:8px;}',
+        '.jvpHead span{margin-left:auto;color:#5A6169;letter-spacing:0;text-transform:none;font-weight:400;}',
+        '.jvpRow{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.055);display:flex;gap:11px;}',
+        '.jvpRow:last-child{border-bottom:none;}',
+        /* The number she says out loud, made unmissable. */
+        '.jvpN{flex:none;width:22px;height:22px;border-radius:50%;background:rgba(180,112,58,.2);',
+        '  color:#F3C08A;font-size:11.5px;font-weight:700;display:flex;align-items:center;',
+        '  justify-content:center;margin-top:1px;}',
+        '.jvpBody{flex:1;min-width:0;}',
+        '.jvpNo{font-size:14.5px;color:#E7ECEF;font-weight:600;letter-spacing:.01em;}',
+        '.jvpSub{font-size:11.5px;color:#8A9299;margin-top:2px;}',
+        /* ERD and cutoff are the two she asked for by name, so they get a */
+        /* line of their own rather than being buried in the summary. */
+        '.jvpDates{display:flex;gap:14px;margin-top:6px;font-size:11.5px;}',
+        '.jvpDates b{color:#5A6169;font-weight:600;margin-right:4px;}',
+        '.jvpDates i{font-style:normal;color:#C8CFD4;}',
+        '.jvpCans{margin-top:6px;font-size:11px;color:#8A9299;display:flex;flex-wrap:wrap;gap:5px;}',
+        '.jvpCan{padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.05);}',
+        /* Amber, not red: a container with no supplier is a thing to do, */
+        /* not a thing that has gone wrong. */
+        '.jvpCan.todo{background:rgba(180,112,58,.19);color:#F3C08A;}',
+    ].join('');
+
+    var esc = function (s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    };
+
+    function showPanel(cards) {
+        if (!panel.isConnected) return;
+        if (!cards || !cards.rows || !cards.rows.length) { panel.classList.add('hidden'); return; }
+
+        var html = ['<div class="jvpHead">', esc(cards.title || 'Results'),
+            '<span>', String(cards.rows.length), '</span></div>'];
+
+        cards.rows.forEach(function (r) {
+            var cans = (r.containers || []).map(function (c) {
+                var label = '#' + c.seq + ' ' + (c.size || '');
+                if (c.supplier) label += ' · ' + c.supplier;
+                if (c.trucker) label += ' → ' + c.trucker;
+                return '<span class="jvpCan' + (c.supplier ? '' : ' todo') + '">'
+                    + esc(label) + (c.supplier ? '' : ' · no supplier') + '</span>';
+            }).join('');
+
+            html.push(
+                '<div class="jvpRow">',
+                '<div class="jvpN">', String(r.n), '</div>',
+                '<div class="jvpBody">',
+                '<div class="jvpNo">', esc(r.booking_number), '</div>',
+                '<div class="jvpSub">', esc(r.carrier),
+                r.from ? ' · ' + esc(r.from) + ' → ' + esc(r.to) : '',
+                r.vessel ? ' · ' + esc(r.vessel) : '', '</div>',
+                '<div class="jvpDates">',
+                '<div><b>ERD</b><i>', esc(r.erd || '—'), '</i></div>',
+                '<div><b>Cutoff</b><i>', esc(r.cutoff || '—'), '</i></div>',
+                '</div>',
+                cans ? '<div class="jvpCans">' + cans + '</div>' : '',
+                '</div></div>');
+        });
+
+        panel.innerHTML = html.join('');
+        panel.classList.remove('hidden');
+        // Deliberately NOT on a timer. The answer card fades because it is a
+        // sentence she has finished reading; this is a list she is about to
+        // act on — "forward the first one" — and it must still be there while
+        // she says so.
+    }
+    function hidePanel() { panel.classList.add('hidden'); }
+
     // ── CHOOSING THE VOICE ───────────────────────────────────────────────
     // Apsara, 2026-09-06: "set different voice."
     //
@@ -847,6 +943,11 @@
         // perceived-speed fix: the wait now contains her own words instead
         // of an empty pill.
         showCard(q, 'Thinking…', true);
+        // The previous results go the moment a NEW question is asked. A list
+        // left on screen from the last question is one she could say "the
+        // first one" about, and mean something different from what Jarvis
+        // would do.
+        hidePanel();
         // `thinking` is not in the reducer: it is about the network, not about
         // whether the microphone may be open, and putting it there would mean
         // a state that can never affect the one decision that file exists to
@@ -887,6 +988,10 @@
                 // unattributed "I don't know" looks like the whole system
                 // being stupid. It is also the fastest way to see the router
                 // sending a question to the wrong one.
+                // The screen. Rendered before the card, so the two are laid
+                // out in one paint rather than the card jumping when the
+                // panel appears underneath it.
+                showPanel(r && r.cards);
                 var who = (r && r.agent_name) || '';
                 say(who || 'Answered');
                 showCard(undefined, answer, false);
@@ -927,11 +1032,12 @@
         if (mounted) return;
         mounted = true;
         if (!SR) return;                       // no recogniser at all: show nothing
-        css.textContent += cardCss + voiceCss;
+        css.textContent += cardCss + voiceCss + panelCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
         document.body.appendChild(card);
         document.body.appendChild(voiceSheet);
+        document.body.appendChild(panel);
         el('jvvClose').addEventListener('click', closeVoices);
         // Rendered now, so the first "Hey Jarvis" does not wait on it.
         warmAck();
