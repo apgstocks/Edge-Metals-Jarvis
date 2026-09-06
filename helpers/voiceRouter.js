@@ -93,6 +93,41 @@ function scoreOf(text, patterns) {
 }
 
 // Returns { agent: 'jarvis' | 'scout', why, addressed }.
+// ── A PORT IS A FREIGHT SIGNAL, AND IT COSTS NOTHING TO KEEP CURRENT ─────
+// Apsara, 2026-09-06: "my user doesnt know about nouns."
+//
+// FREIGHT_ACTIONS is a keyword list, and widening answerCards.js to
+// understand "what's going out of Houston this week" achieved nothing on its
+// own: the router scored that sentence freight=0, sent it to Scout, and
+// Scout is restricted to yard data and has never heard of a booking. The
+// panel I had just taught it to draw was never reached.
+//
+// So the port is the signal, for the same reason it was enough in
+// answerCards: nothing else in this system is organised by port. A yard
+// question is about material, weight, suppliers and loads; none of those
+// live at a port of loading.
+//
+// Reusing answerCards.portIn() rather than adding a fourth list here is the
+// point. That vocabulary is derived from bookings.json, so a port she starts
+// shipping through next month becomes a routing signal with nobody editing
+// anything — and there is exactly one place to fix if it is ever wrong.
+//
+// A TIE-BREAKER, not a vote. A port beside real yard vocabulary ("how much
+// copper came in from the Houston load", "how many loads came in from
+// Houston today") is still a yard question, so the point is only added when
+// the yard score is zero. See the comment at the call site: the flat +1 I
+// wrote first misrouted on the second example.
+function namesAPort(t) {
+    try {
+        return !!require('./answerCards').portIn(t);
+    } catch (e) {
+        // A router that throws answers nothing at all. Losing this signal
+        // costs a misroute; losing the router costs every utterance.
+        console.warn('[ROUTER] port lookup failed:', e.message);
+        return false;
+    }
+}
+
 function routeVoice(text) {
     const t = String(text || '').trim();
     if (!t) return { agent: 'jarvis', why: 'nothing was said', addressed: false };
@@ -102,8 +137,16 @@ function routeVoice(text) {
         return { agent: 'scout', why: 'asked Scout by name', addressed: true };
     }
 
-    const freight = scoreOf(t, FREIGHT_ACTIONS);
     const yard = scoreOf(t, YARD_WORDS);
+    // The port counts ONLY when there is no yard vocabulary at all — it
+    // breaks a tie in the absence of other evidence, it does not compete.
+    //
+    // I first wrote this as a flat +1 and it misrouted immediately: "how many
+    // loads came in from Houston today" scored yard 1, freight 0+1, and the
+    // `freight >= yard` test below gives ties to Jarvis, so a plain yard
+    // question went to the wrong assistant. A weak signal that can outvote a
+    // strong one is not a weak signal.
+    const freight = scoreOf(t, FREIGHT_ACTIONS) + (yard === 0 && namesAPort(t) ? 1 : 0);
 
     // 2. A freight action is the one thing that pulls it back to Jarvis, and
     //    only when the yard is not obviously the subject. "Message the trucker"

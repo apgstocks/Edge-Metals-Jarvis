@@ -184,6 +184,54 @@ section('F — and the client asks the ROUTER, not one agent directly');
        'the endpoint routes on `text`; `question` would arrive empty');
 }
 
+section('Z — a port is enough to mean freight');
+{
+    // Apsara, 2026-09-06: "my user doesnt know about nouns."
+    //
+    // Widening answerCards.js to understand "what's going out of Houston this
+    // week" achieved NOTHING on its own. The router scored that sentence
+    // freight=0, sent it to Scout, and Scout is restricted to yard data and
+    // has never heard of a booking. The panel I had just taught it to draw
+    // was unreachable. Two components agreeing separately is not the same as
+    // a working path, and only running the whole thing showed it.
+    for (const q of [
+        "what's going out of Houston this week",
+        'what have we got heading to Busan',
+        'anything loading in Oakland',
+        'anything from LA',
+    ]) {
+        ck(`"${q}" → Jarvis`, routeVoice(q).agent === 'jarvis',
+           'Scout is yard-only; a booking question landing there gets "not in the records"');
+    }
+
+    // AND THE REGRESSION I CAUSED. I first wrote the port as a flat +1, which
+    // ties with a single yard word — and `freight >= yard` gives ties to
+    // Jarvis, so an ordinary yard question with a port name in it went to the
+    // wrong assistant. A weak signal that can outvote a strong one is not a
+    // weak signal. It now only counts when the yard score is zero.
+    for (const q of [
+        'how many loads came in from Houston today',
+        'how much copper came in from the Houston load',
+        'what did the Houston load weigh',
+    ]) {
+        ck(`  "${q}" is still Scout's`, routeVoice(q).agent === 'scout',
+           'a port beside real yard vocabulary is still a yard question');
+    }
+
+    // The vocabulary is answerCards', derived from bookings.json — not a
+    // fourth keyword list living here. A port she starts shipping through
+    // next month becomes a routing signal with nobody editing anything.
+    const src = require('fs').readFileSync(path.join(ROOT, 'helpers/voiceRouter.js'), 'utf8');
+    ck('  the port vocabulary is not duplicated here',
+       /require\('\.\/answerCards'\)\.portIn/.test(src)
+       && !/HOUSTON|SAVANNAH|LOS ANGELES/.test(src.replace(/\/\/.*$/gm, '')),
+       'a second copy of the port list is a second thing to keep in step');
+
+    // A router that throws answers nothing at all, so the lookup is guarded.
+    ck('  and a failing lookup does not take the router down',
+       /catch \(e\)/.test(src.slice(src.indexOf('function namesAPort'), src.indexOf('function routeVoice'))));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
