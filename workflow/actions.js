@@ -1125,6 +1125,48 @@ if (pending.type === 'await_cc_pattern_confirm') {
         pending.scheduled_for ? new Date(pending.scheduled_for) : null);
 }
 
+// ── "HOW MANY CONTAINERS?" — HER ANSWER ──────────────────────────────────
+// Apsara, 2026-09-06: "it should ask how many containers."
+//
+// Handled BEFORE the generic yes/no branch, because — like
+// await_cc_pattern_confirm above — this pending's answer is NOT yes or no.
+// It is "two", "2x40HC", "two 40 highcubes". A bare "no" still falls through
+// to the generic cancel below, which is right: declining to say how many
+// means don't send the mail.
+//
+// The raw sentence arrives as `selection`. workflow/brain.js has a policy
+// catch that puts it there — without it a free-text answer to an
+// option-less pending falls past every policy rule into the general AI
+// classifier, which is the documented "Schedule this mail" bug one pending
+// type over.
+if (pending.type === 'await_booking_details' && answer !== 'no') {
+    const br = require('../helpers/bookingRequest');
+    const said = String(selection || cancelText || '').trim();
+    // countInAnswer, NOT containersIn. The strict version reads a count out of
+    // a SENTENCE and deliberately refuses a bare "2", because in a sentence a
+    // bare number is far more likely to be part of something else. But "How
+    // many containers?" has just been asked, so the whole reply IS the answer
+    // and "two" is what a person actually says. Using the strict one here
+    // would have re-asked for ever on the commonest possible reply.
+    const { count, size } = br.countInAnswer(said);
+
+    // NEVER GUESSED. A booking request commits her to a carrier for a number
+    // of boxes, and "she probably meant two" is not a thing worth being
+    // wrong about at a shipping line. An unreadable answer re-asks and keeps
+    // the pending open rather than drafting something and hoping.
+    if (count == null) {
+        await _send(chatId, `I didn't catch a number in "${said || '(nothing)'}". How many containers? Say "two", or "2 x 40HC".`);
+        return { action_taken: 'booking_details_reasked' };
+    }
+
+    await clearPending(chatId);
+    return draftEmailWithAddress(
+        chatId, pending.target_name,
+        br.details(count, size, pending.details || ''),
+        pending.bkg_no, pending.to, pending.to_source,
+        pending.scheduled_for ? new Date(pending.scheduled_for) : null);
+}
+
 // Proforma confirmation (2026-08-23). Placed before the generic 'no' branch
 // only so the yes-path is readable next to its own comment; a "no" still
 // falls through to the generic cancel below, which is the right behaviour —
@@ -2556,6 +2598,61 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
             await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName} — save that as their standing cc for future emails? (yes/no — either way I'll draft this email next)`);
             return { action_taken: 'cc_pattern_confirm_staged' };
         }
+    }
+
+    // ── ASKING A CARRIER FOR SPACE: THE ONE QUESTION ─────────────────────
+    // Apsara, 2026-09-06: "if i say jarvis,send a mail to say yurim,asking
+    // for a booking -it should ask how many containers."
+    //
+    // Everything else about this path already worked — contact resolution,
+    // drafting in HER VOICE through helpers/writingStyle.js, the confirm
+    // before sending. What was missing is that a booking request with no
+    // quantity in it was drafted and sent anyway, and a carrier reading
+    // "please book us space" with no number replies asking how many, which
+    // is a day gone.
+    //
+    // Placed HERE, at the tail of draftEmailForConfirm, and not inside
+    // draftEmailWithAddress, for two reasons: rawText is in scope (the
+    // classifier's `details` is sometimes discarded as ungrounded, and her
+    // actual sentence is the more reliable source), and the address is
+    // already resolved — asking "how many containers?" and only then finding
+    // there is no email address for them is two questions where one would do.
+    //
+    // Deliberately NOT asked for port, commodity, size or ready date. That is
+    // a form read aloud, and her verdict on those is on record: "I want how a
+    // human asissyant will handle it." A person who has sent these for years
+    // asks the one thing that changes and infers the rest from the last one —
+    // which is exactly what the drafter does when it grounds itself in the
+    // previous correspondence with that same contact.
+    try {
+        const br = require('../helpers/bookingRequest');
+        const said = [details, rawText].filter(Boolean).join(' ');
+        if (br.isRequest(said)) {
+            const { count, size } = br.containersIn(said);
+            if (count == null) {
+                const staged = await setPending(chatId, {
+                    type: 'await_booking_details',
+                    target_name: targetName, details: details || null, bkg_no: bkgNo || null,
+                    to, to_source: toSource,
+                    scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+                });
+                if (staged.queued) {
+                    await _send(chatId, `I'll ask how many containers for ${targetName} once your pending "${staged.blockedBy}" is resolved.`);
+                    return { action_taken: 'booking_details_queued' };
+                }
+                await _send(chatId, br.ask(targetName));
+                return { action_taken: 'booking_details_asked' };
+            }
+            // She said the number in the same breath — so no question at all.
+            // An assistant that asks for something you just told it is the
+            // form-in-disguise this whole flow exists to avoid.
+            details = br.details(count, size, said);
+        }
+    } catch (err) {
+        // A booking request drafted WITHOUT the quantity is worse than one
+        // that was never checked, so this must not swallow the email — it
+        // falls through to the ordinary draft, which is today's behaviour.
+        console.warn('[ACTIONS] booking-request check failed, drafting as an ordinary email:', err.message);
     }
 
     return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor);

@@ -858,6 +858,29 @@ function policyDecide(ctx) {
             if (clause) return { intent: 'reschedule_pending_email', resolvedBy: 'policy', data: { send_at_text: clause } };
             return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Schedule it for when? e.g. "schedule this at 7am LA time" or "schedule for tomorrow 9am".' } };
         }
+        // ── "HOW MANY CONTAINERS?" ───────────────────────────────────────
+        // Apsara, 2026-09-06: "it should ask how many containers."
+        //
+        // Her answer is "two", "2x40HC", "two 40 highcubes" — not yes, not
+        // no, and not a numbered option. Without this it falls past every
+        // rule in this section into the general AI classifier, which is
+        // EXACTLY the "Schedule this mail" bug documented twenty lines up:
+        // an answer to an open question gets reclassified as a brand new
+        // request, finds the same pending still unresolved, and queues a
+        // second draft behind it.
+        //
+        // Placed after the YES/NO checks so a bare "no" still cancels. "Yes"
+        // is not an answer to "how many", and falls into the pending's own
+        // handler, which re-asks rather than inventing a number.
+        //
+        // The whole sentence is passed as `selection`; helpers/bookingRequest
+        // .containersIn() is what reads a count out of it, and refuses rather
+        // than guessing when there is not one.
+        if (p.type === 'await_booking_details') {
+            return { intent: 'resolve_pending', resolvedBy: 'policy',
+                data: { answer: 'yes', selection: ctx.text } };
+        }
+
         if (p.options) {
             const pick = resolveListSelection(ctx.text, p.options);
             if (pick) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes', selection: pick } };

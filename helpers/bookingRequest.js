@@ -49,7 +49,13 @@ const FOR_A_BOOKING = /\b(?:for\s+(?:a\s+|the\s+|some\s+)?)?(booking|bookings|sp
 // A booking request that is really a question ABOUT an existing booking is
 // not one of these. "Ask Yurim about booking DALA123" is chasing a booking
 // she already has, and answering it with "how many containers?" is nonsense.
-const ABOUT_AN_EXISTING_ONE = /\b(?:booking|bkg)\s*(?:no\.?|number|#)?\s*[A-Z]{2,4}\d{3,}/i;
+// Carriers do not agree on a format. Her real bookings.json holds
+// "274150389" (pure digits, Maersk), and MSC writes "MEDUX9988" — five
+// letters, which my first pattern's {2,4} silently excluded, so "ask Zimex
+// about booking MEDUX9988" was treated as a request for a NEW booking and
+// answered with "how many containers?". Widened to cover both shapes, and
+// the length floors are what stop it matching an ordinary word.
+const ABOUT_AN_EXISTING_ONE = /\b(?:booking|bkg)\s*(?:no\.?|number|#)?\s*(?:[A-Z]{2,6}\d{3,}|\d{6,})/i;
 
 function isRequest(text) {
     const t = String(text || '');
@@ -68,7 +74,15 @@ const WORD_NUMBERS = {
 };
 
 // Container sizes as they are actually written on a booking request.
-const SIZE = /\b(20\s*(?:ft|')?\s*(?:gp|dc|st)?|40\s*(?:ft|')?\s*(?:hc|hq|gp|dc|st|high\s*cubes?)?|45\s*(?:ft|')?\s*(?:hc|hq)?)\b/i;
+//
+// SIZE_CORE carries NO \b anchors, because it gets embedded after a count in
+// the combo pattern below and "2x40HC" has no word boundary between the "x"
+// and the "4" — the anchored version simply failed to match the single most
+// compact way she writes this. The trailing \d guard replaces what the
+// closing \b was for: it stops "40" matching the first two digits of "4000".
+// The optional trailing "s" is for "a couple of 40HCs".
+const SIZE_CORE = "(20\\s*(?:ft|')?\\s*(?:gp|dc|st)?|40\\s*(?:ft|')?\\s*(?:hc|hq|gp|dc|st|high\\s*cubes?)?|45\\s*(?:ft|')?\\s*(?:hc|hq)?)s?";
+const SIZE = new RegExp('\\b' + SIZE_CORE + '(?!\\d)', 'i');
 
 function normalizeSize(raw) {
     const s = String(raw || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -91,7 +105,7 @@ function containersIn(text) {
     // "40HC" is never read as the count.
     const combo = new RegExp(
         '\\b(\\d{1,3}|' + Object.keys(WORD_NUMBERS).join('|') + ')\\s*'
-        + '(?:x|\\*|by|of)?\\s*' + SIZE.source, 'i').exec(t);
+        + '(?:x|\\*|by|of)?\\s*' + SIZE_CORE + '(?!\\d)', 'i').exec(t);
     if (combo) {
         count = /^\d+$/.test(combo[1]) ? Number(combo[1]) : WORD_NUMBERS[combo[1].toLowerCase()];
         size = normalizeSize(combo[2]);
@@ -152,7 +166,41 @@ function details(count, size, original) {
     return bits.join(' ');
 }
 
+// ── ANSWERING THE QUESTION ITSELF ────────────────────────────────────────
+// containersIn() is deliberately strict: it reads a count out of a SENTENCE,
+// where a bare "2" is far more likely to be part of something else than a
+// container count, and a wrong number here books the wrong amount of space.
+//
+// But once "How many containers?" has actually been asked, the whole reply
+// is the answer, and "two" or "2" is not just valid — it is what a person
+// says. Refusing it and re-asking would be the assistant not listening.
+//
+// So this is a SEPARATE function used only by the pending resolver, and the
+// difference between them is the question having been asked. It is still not
+// a guess: something with no number in it at all returns null and is
+// re-asked, rather than defaulting to one.
+function countInAnswer(text) {
+    const t = String(text || '').trim();
+    if (!t) return { count: null, size: null };
+
+    // The sentence forms first — "two 40 highcubes", "2 containers" — so a
+    // reply that carries a size keeps it.
+    const rich = containersIn(t);
+    if (rich.count != null) return rich;
+
+    // Then the bare answer. Anchored to the WHOLE reply, so "call me in 2
+    // hours" is not read as two containers.
+    const bare = new RegExp(
+        '^(?:just\\s+|only\\s+)?(\\d{1,3}|' + Object.keys(WORD_NUMBERS).join('|') + ')'
+        + '\\s*(?:containers?|boxes|units|cntrs?|please|pls)?\\s*[.!]?$', 'i').exec(t);
+    if (bare) {
+        const n = /^\d+$/.test(bare[1]) ? Number(bare[1]) : WORD_NUMBERS[bare[1].toLowerCase()];
+        if (Number.isFinite(n) && n >= 1 && n <= 99) return { count: n, size: rich.size };
+    }
+    return { count: null, size: rich.size };
+}
+
 module.exports = {
-    isRequest, containersIn, ask, details, normalizeSize,
+    isRequest, containersIn, countInAnswer, ask, details, normalizeSize, SIZE_CORE,
     ASKING, FOR_A_BOOKING, ABOUT_AN_EXISTING_ONE, WORD_NUMBERS, SIZE,
 };
