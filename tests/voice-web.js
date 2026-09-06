@@ -34,7 +34,7 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 
 // A fake browser with a fake microphone and a fake voice, so every open and
 // close is observable.
-function browser({ chrome = true } = {}) {
+function browser({ chrome = true, voices = null } = {}) {
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
     // its own globals. Without it window.eval is Node's, and voice.js dies on
@@ -42,7 +42,7 @@ function browser({ chrome = true } = {}) {
     const dom = new JSDOM('<!doctype html><body></body>', {
         url: 'https://jarvis.edgemetals.com/', virtualConsole: vc, runScripts: 'outside-only' });
     const w = dom.window;
-    const log = { starts: 0, stops: 0, spoken: [], cancels: 0, asked: [], micOpenWhileSpeaking: [] };
+    const log = { starts: 0, stops: 0, spoken: [], spokenAs: [], cancels: 0, asked: [], micOpenWhileSpeaking: [] };
     let live = null;
 
     class FakeRecognition {
@@ -81,9 +81,26 @@ function browser({ chrome = true } = {}) {
         value: 'Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', configurable: true });
 
     w.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
+    // The voice list a real macOS Chrome offers, novelty voices and all.
+    // Included verbatim because the bug being fixed is that voice.js took
+    // whatever came first, and what comes first on macOS is one of these
+    // old compact voices — which is what Apsara heard as "more robot".
+    const VOICES = voices !== null ? voices : [
+        { name: 'Albert', lang: 'en-US' },
+        { name: 'Bad News', lang: 'en-US' },
+        { name: 'Fred', lang: 'en-US' },
+        { name: 'Zarvox', lang: 'en-US' },
+        { name: 'Samantha', lang: 'en-US' },
+        { name: 'Alex', lang: 'en-US' },
+        { name: 'Google US English', lang: 'en-US' },
+        { name: 'Yuna', lang: 'ko-KR' },
+    ];
     w.speechSynthesis = {
+        getVoices: () => VOICES,
+        onvoiceschanged: null,
         speak(u) {
             log.spoken.push(u.text);
+            log.spokenAs.push(u.voice ? u.voice.name : null);
             // THE OBSERVATION THAT MATTERS: was the microphone open at the
             // instant audio began? Dispatching SPEAK_START by hand in a test
             // proves the reducer; only this proves that the code which
@@ -118,6 +135,98 @@ function browser({ chrome = true } = {}) {
 
 (async () => {
 console.log('\n─ "Hey Jarvis" in the browser ───────────────────────────────');
+
+section('A0 — it does not answer in the 1990s robot voice');
+{
+    // Apsara, 2026-09-06: "the jarvis voice looks more robot."
+    //
+    // She was right and nothing was choosing. speechSynthesis.speak() with no
+    // `voice` set takes the platform default, and on macOS the list starts
+    // with Albert, Bad News, Fred and Zarvox — novelty and legacy voices from
+    // the era the impression comes from. Samantha and Google US English were
+    // installed the whole time, further down the same array.
+    const b = browser();
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.mic().hear('hey jarvis');
+    b.mic().hear('what is in inventory');
+    b.w.JarvisVoice.finish();          // the capture timer, driven by hand
+    await new Promise((r) => setTimeout(r, 5));
+
+    ck('it spoke at all', b.log.spokenAs.length > 0);
+    // `!== null` would PASS on undefined, which is what an unset u.voice
+    // actually produces — the assertion has to demand a real name.
+    ck('  and it CHOSE a voice rather than taking the default',
+       typeof b.log.spokenAs[0] === 'string' && b.log.spokenAs[0].length > 0,
+       'leaving u.voice unset is what produced the robot — the good voices were installed all along');
+    ck('  not Albert, Fred or Zarvox',
+       !/albert|fred|zarvox|bad news/i.test(String(b.log.spokenAs[0])),
+       'these are the first entries in macOS\'s list, which is exactly why the default sounded like that');
+    ck('  it took the best on offer',
+       b.log.spokenAs[0] === 'Google US English',
+       'picked ' + b.log.spokenAs[0] + ' — Chrome\'s own voice is the most natural available');
+
+    // Apple's downloadable voices beat everything on the wishlist and must
+    // win even though "Premium" appears nowhere in it.
+    const prem = browser({ voices: [
+        { name: 'Fred', lang: 'en-US' },
+        { name: 'Google US English', lang: 'en-US' },
+        { name: 'Ava (Premium)', lang: 'en-US' },
+    ] });
+    prem.w.JarvisVoice.dispatch('USER_TOGGLE');
+    prem.mic().hear('hey jarvis');
+    prem.mic().hear('what is in inventory');
+    prem.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  and a Premium voice outranks even that', prem.log.spokenAs[0] === 'Ava (Premium)',
+       'picked ' + prem.log.spokenAs[0]);
+
+    // A machine with nothing but novelty voices must still speak. Silence
+    // would be a worse outcome than Zarvox.
+    const bare = browser({ voices: [{ name: 'Zarvox', lang: 'en-US' }] });
+    bare.w.JarvisVoice.dispatch('USER_TOGGLE');
+    bare.mic().hear('hey jarvis');
+    bare.mic().hear('what is in inventory');
+    bare.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  but it still speaks when there is nothing good', bare.log.spoken.length > 0,
+       'refusing to answer because the voice is ugly would be a worse bug than the ugly voice');
+
+    // Voices load ASYNCHRONOUSLY. An empty list at startup is the normal
+    // case in a real browser, and must not permanently latch the default.
+    const empty = browser({ voices: [] });
+    empty.w.speechSynthesis.getVoices = () => [{ name: 'Samantha', lang: 'en-US' }];
+    empty.w.JarvisVoice.dispatch('USER_TOGGLE');
+    empty.mic().hear('hey jarvis');
+    empty.mic().hear('what is in inventory');
+    empty.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  and an empty list at startup does not latch the default for ever',
+       empty.log.spokenAs[0] === 'Samantha',
+       'getVoices() is routinely empty on first call; caching that answer is the classic bug here');
+
+    // ── AND A BAD EARLY ANSWER IS NOT KEPT EITHER ────────────────────────
+    // The harder case, and the one the voiceschanged handler is actually
+    // for. getVoices() can return a SHORT list first — often just the
+    // built-in compact voices — and fill in the good ones a moment later.
+    // Caching the first non-empty answer is not obviously wrong and leaves
+    // her permanently on Fred, which is precisely the complaint.
+    const late = browser({ voices: [{ name: 'Fred', lang: 'en-US' }] });
+    late.w.speechSynthesis.getVoices = () => [
+        { name: 'Fred', lang: 'en-US' },
+        { name: 'Samantha', lang: 'en-US' },
+    ];
+    if (typeof late.w.speechSynthesis.onvoiceschanged === 'function') {
+        late.w.speechSynthesis.onvoiceschanged();     // the browser telling us
+    }
+    late.w.JarvisVoice.dispatch('USER_TOGGLE');
+    late.mic().hear('hey jarvis');
+    late.mic().hear('what is in inventory');
+    late.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  and a better voice arriving later replaces the early poor one',
+       late.log.spokenAs[0] === 'Samantha',
+       'picked ' + late.log.spokenAs[0] + ' — without re-picking on voiceschanged she is stuck on Fred');
+}
 
 section('A — nothing listens until she says so');
 {

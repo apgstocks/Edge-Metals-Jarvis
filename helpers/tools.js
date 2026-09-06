@@ -83,6 +83,77 @@ const TOOLS = {
     // look at anything else — so a question the digest did not anticipate got
     // "that is not in the data I have", which is true and useless.
 
+    // ── BOOKINGS ─────────────────────────────────────────────────────────
+    // Apsara, 2026-09-06: "when i ask about bookings, it doesnt have any
+    // idea." It did not, and the reason was structural rather than subtle:
+    // this registry shipped with seven read tools covering loads, inventory,
+    // trucker bills, spend and petty cash, and NONE for bookings — which are
+    // the centre of the whole application. helpers/booking.js, the workflow
+    // folder and the entire container pipeline are built on them.
+    //
+    // So the model was not being evasive. It had no instrument pointed at
+    // the data, and a tool registry's whole promise is that a capability
+    // exists exactly where it is declared. This was a hole in the map.
+    //
+    // Read-only, like everything else in this half: it can describe a
+    // booking, never move one to another stage. Advancing a container is a
+    // consequential act with a supplier and a trucker on the other end of
+    // it, and that stays a deliberate click.
+    find_bookings: {
+        kind: 'read',
+        description: 'Search shipping bookings by number, carrier, port, buyer, vessel, or container stage. '
+            + 'Use this for anything about bookings, containers, cutoffs, vessels or ports.',
+        params: {
+            booking_number: { type: 'string', describe: 'full or partial booking number' },
+            port: { type: 'string', describe: 'part of a loading or discharge port, e.g. "houston"' },
+            carrier: { type: 'string', describe: 'part of a carrier name, e.g. "maersk"' },
+            supplier: { type: 'string', describe: 'a supplier assigned to any container on the booking' },
+            stage: { type: 'string', describe: 'container stage, e.g. "forwarded", "loading", "unassigned"' },
+            cutoff_before: { type: 'date', describe: 'only bookings whose cutoff is on or before this date, YYYY-MM-DD' },
+        },
+        run: async (p) => {
+            const { loadBookings } = require('./json');
+            const all = loadBookings ? loadBookings() : {};
+            const has = (hay, needle) => !needle || String(hay || '').toLowerCase().includes(String(needle).toLowerCase());
+            // Dates in this file are MM/DD/YYYY, everywhere else they are
+            // ISO. Compared as dates rather than strings because
+            // "07/20/2026" < "2026-07-20" is true as text and meaningless.
+            const asDate = (s) => {
+                const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(s || ''));
+                return m ? `${m[3]}-${m[1]}-${m[2]}` : String(s || '');
+            };
+            const rows = Object.values(all || {})
+                .filter((b) => has(b.booking_number, p.booking_number))
+                .filter((b) => !p.port || has(b.port_of_loading, p.port) || has(b.port_of_discharge, p.port))
+                .filter((b) => has(b.carrier, p.carrier))
+                .filter((b) => !p.supplier || (b.containers || []).some((c) => has(c.supplier, p.supplier)))
+                .filter((b) => !p.stage || (b.containers || []).some((c) => (
+                    String(p.stage).toLowerCase() === 'unassigned'
+                        ? !c.supplier
+                        : has(c.stage, p.stage))))
+                .filter((b) => !p.cutoff_before || (asDate(b.cutoff_date) && asDate(b.cutoff_date) <= p.cutoff_before))
+                .map((b) => ({
+                    booking_number: b.booking_number,
+                    carrier: b.carrier,
+                    route: [b.port_of_loading, b.port_of_discharge].filter(Boolean).join(' → '),
+                    vessel: b.vessel_voyage,
+                    buyer: b.buyer,
+                    erd: b.erd_date,
+                    cutoff: b.cutoff_date,
+                    containers: (b.containers || []).map((c) => ({
+                        seq: c.seq, size: c.size, container_number: c.container_number,
+                        supplier: c.supplier || null, trucker: c.trucker || null, stage: c.stage || null,
+                    })),
+                    // The two numbers she actually asks for, precomputed so
+                    // the model does not have to count and get it wrong.
+                    container_count: (b.containers || []).length,
+                    unassigned_containers: (b.containers || []).filter((c) => !c.supplier).length,
+                }))
+                .sort((a, b) => String(a.cutoff || '').localeCompare(String(b.cutoff || '')));
+            return cap(rows);
+        },
+    },
+
     find_loads: {
         kind: 'read',
         description: 'Search purchase loads by seller, date range, item description, or payment state. Use this before answering anything about specific loads.',

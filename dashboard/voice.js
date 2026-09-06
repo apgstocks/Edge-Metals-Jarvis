@@ -199,11 +199,83 @@
     function stopSpeaking() {
         try { window.speechSynthesis.cancel(); } catch (e) {}
     }
+    // ── WHICH VOICE IT ANSWERS IN ────────────────────────────────────────
+    // Apsara, 2026-09-06: "the jarvis voice looks more robot."
+    //
+    // It was, and nothing here was choosing it. speechSynthesis.speak() with
+    // no `voice` set uses the platform default, which on macOS is one of the
+    // old compact system voices — the 1990s-sounding ones. The good voices
+    // are installed and sitting right there unused, which is the same class
+    // of mistake as leaving a downloaded Whisper model on disk.
+    //
+    // Ordered by how a person actually sounds, best first. Novelty and
+    // legacy voices are excluded outright: "Fred" and friends are the source
+    // of the robot impression, and no rate or pitch tweak rescues them.
+    var VOICE_WISHLIST = [
+        'Google US English',        // Chrome's own — the most natural available
+        'Samantha',                 // macOS, the Siri-adjacent one
+        'Ava', 'Allison', 'Susan', 'Nicky', 'Zoe',
+        'Karen', 'Moira', 'Tessa',  // en-AU / en-IE / en-ZA, all modern
+        'Alex',                     // older but far better than the default
+    ];
+    var chosenVoice = null;
+
+    function pickVoice() {
+        if (chosenVoice) return chosenVoice;
+        var list = [];
+        try { list = window.speechSynthesis.getVoices() || []; } catch (e) { return null; }
+        if (!list.length) return null;      // not loaded yet; see voiceschanged
+
+        var english = list.filter(function (v) { return /^en(-|_|$)/i.test(v.lang || ''); });
+        var pool = english.length ? english : list;
+
+        // "Premium" and "Enhanced" are Apple's high-quality downloads and beat
+        // anything on the wishlist, so they are checked first.
+        var best = pool.filter(function (v) { return /(premium|enhanced)/i.test(v.name || ''); })[0];
+
+        if (!best) {
+            for (var i = 0; i < VOICE_WISHLIST.length && !best; i += 1) {
+                /* eslint-disable no-loop-func */
+                best = pool.filter(function (v) {
+                    return String(v.name || '').toLowerCase().indexOf(VOICE_WISHLIST[i].toLowerCase()) === 0;
+                })[0];
+                /* eslint-enable no-loop-func */
+            }
+        }
+        // Last resort: anything English that is not a novelty voice. The
+        // compact ones are exactly what she is complaining about.
+        if (!best) {
+            best = pool.filter(function (v) {
+                return !/(compact|novelty|bad news|good news|bells|bubbles|cellos|organ|trinoids|whisper|zarvox|albert|jester|bahh|boing|wobble|superstar)/i
+                    .test(String(v.name || ''));
+            })[0];
+        }
+        chosenVoice = best || pool[0] || null;
+        if (chosenVoice) console.log('[VOICE] speaking as "' + chosenVoice.name + '"');
+        return chosenVoice;
+    }
+
+    // The voice list is populated ASYNCHRONOUSLY. Called once at load it is
+    // routinely empty, which is why a naive implementation silently keeps the
+    // default for ever — the exact bug being fixed.
+    try {
+        if (window.speechSynthesis) {
+            window.speechSynthesis.onvoiceschanged = function () { chosenVoice = null; pickVoice(); };
+            pickVoice();
+        }
+    } catch (e) {}
+
     function speak(text) {
         if (!window.speechSynthesis) return;
         dispatch('SPEAK_START');           // closes the mic BEFORE any audio
         var u = new SpeechSynthesisUtterance(String(text).slice(0, 600));
-        u.rate = 1.05;
+        var v = pickVoice();
+        if (v) { u.voice = v; u.lang = v.lang || 'en-US'; }
+        // Slightly under natural pace. The old 1.05 on a compact voice was
+        // part of the robot impression: the poorer the voice, the worse it
+        // sounds hurried.
+        u.rate = 1.0;
+        u.pitch = 1.0;
         // Both paths end the speaking state. Without the error handler a
         // failed utterance would leave `speaking` true for ever and the
         // microphone would never reopen — the feature would simply stop

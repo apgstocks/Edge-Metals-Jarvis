@@ -40,15 +40,34 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-// tiny.en is deliberate. base or small are more accurate and slower, and this
-// is transcribing three-second yard commands rather than dictation — "record
-// a twelve thousand dollar zelle payment against edge zero seven" is short,
-// English, and full of words the model has plenty of. Latency matters more
-// than the last few points of accuracy: an assistant that answers in two
-// seconds gets used and one that answers in six does not.
-const MODEL = process.env.JARVIS_WHISPER_MODEL || 'tiny.en';
+// ── WHICH MODEL ──────────────────────────────────────────────────────────
+// Best available wins, biggest first, because Apsara asked for a better one
+// and the failure mode of naming a fixed default is that a downloaded model
+// sits on disk unused. An explicit JARVIS_WHISPER_MODEL still overrides.
+//
+// Sizes and the trade-off, on an M2 with Metal, for a 2-3 second command:
+//   tiny.en    77MB   fastest, guesses at proper nouns — where we started
+//   base.en   148MB   noticeably better, still well under a second
+//   small.en  488MB   better again; about 1-2s, which is still fine here
+//   medium.en 1.5GB   diminishing returns for short yard commands
+//
+// Accuracy is not only size. The initial_prompt below is worth more than a
+// step up this list for the specific problem of hearing "Jarvis" correctly.
+const MODEL_PREFERENCE = ['medium.en', 'small.en', 'base.en', 'tiny.en'];
+
+function pickModel() {
+    if (process.env.JARVIS_WHISPER_MODEL) return process.env.JARVIS_WHISPER_MODEL;
+    try {
+        const dir = modelDir();
+        for (const m of MODEL_PREFERENCE) {
+            if (fs.existsSync(path.join(dir, `ggml-${m}.bin`))) return m;
+        }
+    } catch (e) { /* fall through to the default */ }
+    return 'tiny.en';
+}
 
 let whisper = null;      // the loaded model, kept warm between utterances
+let chosen = null;       // which model load() actually settled on
 let loading = null;      // in-flight load, so two calls do not load twice
 let lastError = null;
 
@@ -71,12 +90,14 @@ async function load() {
             const { Whisper } = require('smart-whisper');
             const dir = modelDir();
             fs.mkdirSync(dir, { recursive: true });
-            const file = path.join(dir, `ggml-${MODEL}.bin`);
+            chosen = pickModel();
+            const file = path.join(dir, `ggml-${chosen}.bin`);
             if (!fs.existsSync(file)) {
                 throw new Error(`model missing: ${file}\n`
                     + `Download it once with:\n`
                     + `  curl -L -o "${file}" \\\n`
-                    + `    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL}.bin`);
+                    + `    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${chosen}.bin\n`
+                    + `or, from desktop/:  npm run model -- ${chosen}`);
             }
             whisper = new Whisper(file, { gpu: true });   // Metal on Apple Silicon
             lastError = null;
@@ -167,20 +188,53 @@ function padded(pcm) {
     return out;
 }
 
+// ── TELLING THE MODEL WHAT IT IS ABOUT TO HEAR ───────────────────────────
+// Whisper accepts an initial_prompt: text it treats as the preceding
+// context, which biases decoding toward those words. This is the single
+// cheapest accuracy win available, and it is aimed at the exact failure
+// Apsara hit — a clear "Hey Jarvis" coming back as "I'll see you later".
+//
+// "Jarvis" is a rare token; the model reaches for common words that sound
+// like it. Naming it here, alongside the rest of the vocabulary this yard
+// actually uses, makes those words cheap for the decoder to choose.
+//
+// Kept SHORT and factual on purpose. A long or narrative prompt makes
+// whisper hallucinate its style into silence — it will happily invent a
+// sentence in the register you gave it when it hears nothing at all.
+const PROMPT = 'Jarvis. Edge Metals yard. Loads, trucker bills, suppliers, '
+    + 'inventory, petty cash, invoices. Payments by Zelle, wire, cash, card. '
+    + 'Copper, brass, aluminium, steel, radiators.';
+
 async function transcribe(pcm) {
     const model = await load();
     const audio = padded(pcm);
-    const task = await model.transcribe(audio, { language: 'en', suppress_non_speech_tokens: true });
+    const task = await model.transcribe(audio, {
+        language: 'en',
+        suppress_non_speech_tokens: true,
+        initial_prompt: PROMPT,
+        // Each utterance is decoded ALONE. Without this, whisper carries
+        // context between calls and will continue an earlier sentence into
+        // a new one — which, on short independent commands, produces
+        // confident nonsense rather than a blank.
+        no_context: true,
+        // Greedy decoding takes the first plausible word; beam search keeps
+        // several candidates and picks the best whole sentence. On a 2-3
+        // second clip with a tiny model that difference is worth far more
+        // than the few hundred milliseconds it costs.
+        beam_size: 5,
+        temperature: 0,
+    });
     return sentence(await task.result);
 }
 
 function status() {
     return {
         ready: !!whisper,
-        model: MODEL,
+        model: chosen,
         dir: modelDir(),
         error: lastError,
     };
 }
 
-module.exports = { load, transcribe, status, MODEL, modelDir };
+module.exports = { load, transcribe, status, modelDir, pickModel, MODEL_PREFERENCE,
+    get MODEL() { return chosen; } };
