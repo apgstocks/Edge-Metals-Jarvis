@@ -1099,6 +1099,64 @@ function summary() {
         + `${terms}, ${p.payment_terms}.`;
 }
 
+// ── WHAT ELSE THE CONVERSATION IS ABOUT RIGHT NOW ────────────────────────
+// Apsara, 2026-09-07: "if proforma is being generated.. Say if i want to send
+// a mail asking for something, then it should be linked to this context na.."
+//
+// She is describing a SUBDIALOGUE, and the theory for it is old and settled.
+// Grosz & Sidner, "Attention, Intentions, and the Structure of Discourse"
+// (Computational Linguistics 12(3), 1986) splits a conversation into three
+// things, and the one that matters here is the ATTENTIONAL STATE: a stack of
+// focus spaces holding the objects that are salient right now. Starting a
+// sub-task PUSHES a focus space; it does not replace the one underneath, and
+// the entities in the outer space stay reachable throughout.
+//
+// So while a proforma for Daekwang is open, "send Yurim a mail asking for a
+// booking" is not a new conversation. It is a segment pushed on top of one
+// that already has a buyer, a material, a quantity and a set of terms in it,
+// and an assistant that cannot see them makes her say all four again.
+//
+// RavenClaw (Bohus & Rudnicky, Eurospeech 2003; Computer Speech & Language
+// 23(3), 2009) is the same idea built for real: a dialog STACK alongside a
+// task tree, sub-tasks pushed and popped, the parent still there underneath.
+// This is a much smaller version of that — one level, one open task — but the
+// shape is theirs and it is worth naming rather than inventing badly.
+//
+// Returns null when nothing is in progress, which is the common case and must
+// stay cheap.
+function contextLine() {
+    if (!draft) return null;
+    const f = draft.fields;
+    if (!f.consignee && !f.material) return null;   // nothing worth carrying
+    const p = payload();
+    if (!p) return null;
+
+    const bits = [];
+    if (p.consignee) bits.push(`for ${p.consignee_said || p.consignee}`);
+    if (p.containers > 1) bits.push(`${p.containers} containers`);
+    if (p.items[0].description) {
+        bits.push(`${p.items[0].qty} MT of ${p.items[0].description}`);
+    }
+    if (Number.isFinite(p.items[0].rate) && p.items[0].rate > 0) {
+        bits.push(`at $${p.items[0].rate}/MT`);
+    }
+    if (p.shipment_terms) {
+        bits.push(p.shipment_terms + (p.port_discharge ? ` ${p.port_discharge}` : ''));
+    }
+    return `A proforma is being drafted right now ${bits.join(', ')}.`;
+}
+
+// The container count of the proforma in progress, for a booking request that
+// does not name one. Returned as a number with its provenance, so the caller
+// can SAY where it came from rather than quietly committing her to a carrier
+// for a figure she never spoke.
+function openContainerCount() {
+    if (!draft) return null;
+    const p = payload();
+    const n = p && Number(p.containers);
+    return Number.isFinite(n) && n >= 1 ? n : null;
+}
+
 // ── THE WHOLE DECISION, IN ONE TESTABLE PLACE ────────────────────────────
 // This lived inline in api.js's /api/voice/ask handler, and two mutations
 // survived the entire suite because of it: turning the flow off completely,
@@ -1226,7 +1284,7 @@ module.exports = {
     materialIn, materialPhrase, MATERIAL_CUE, catalogMaterials, catalogPattern, describeFor, resolveConsignee, rememberedTerms,
     KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
-    handle, brainDraft, recipient, SEND_TO,
+    handle, brainDraft, recipient, SEND_TO, contextLine, openContainerCount,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
     namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,

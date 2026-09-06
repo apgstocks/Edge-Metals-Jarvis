@@ -2715,7 +2715,32 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
         const br = require('../helpers/bookingRequest');
         const said = [details, rawText].filter(Boolean).join(' ');
         if (br.isRequest(said)) {
-            const { count, size } = br.containersIn(said);
+            let { count, size } = br.containersIn(said);
+
+            // ── THE SUBDIALOGUE INHERITS THE OPEN TASK'S NUMBERS ─────────
+            // Apsara, 2026-09-07: "if proforma is being generated.. if i want
+            // to send a mail asking for something, then it should be linked
+            // to this context na.."
+            //
+            // Grosz & Sidner's focus stack (1986): starting a sub-task pushes
+            // a focus space, it does not replace the one underneath, and the
+            // entities in the outer space stay reachable. A proforma for two
+            // containers is open; "ask Yurim for a booking" is a segment on
+            // top of it, not a fresh conversation, and asking her how many
+            // when she just said two is the assistant not listening.
+            //
+            // SAID OUT LOUD, never silent. This commits her to a carrier for
+            // a number she did not speak in this sentence, so the draft names
+            // where it came from and the existing yes/no gate is what stops
+            // it if the inheritance was wrong.
+            let inherited = false;
+            if (count == null) {
+                try {
+                    const fromProforma = require('../helpers/proformaDraft').openContainerCount();
+                    if (fromProforma) { count = fromProforma; inherited = true; }
+                } catch (e) { /* no proforma open is the normal case */ }
+            }
+
             if (count == null) {
                 const staged = await setPending(chatId, {
                     type: 'await_booking_details',
@@ -2730,10 +2755,14 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
                 await _send(chatId, br.ask(targetName));
                 return { action_taken: 'booking_details_asked' };
             }
-            // She said the number in the same breath — so no question at all.
-            // An assistant that asks for something you just told it is the
+            // She said the number in the same breath — or it came from the
+            // proforma she is in the middle of. Either way, no question: an
+            // assistant that asks for something you just told it is the
             // form-in-disguise this whole flow exists to avoid.
             details = br.details(count, size, said);
+            if (inherited) {
+                await _send(chatId, `Using ${count} container${count === 1 ? '' : 's'} from the proforma you're drafting.`);
+            }
         }
     } catch (err) {
         // A booking request drafted WITHOUT the quantity is worse than one
@@ -2768,6 +2797,23 @@ async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toS
     // with this address and hand Gemini something actually informed to
     // work from, instead of inventing small talk. Skipped entirely when
     // details IS specific — old mail would just be noise there, not signal.
+    // ── THE OPEN TASK IS BACKGROUND FOR ANY EMAIL DRAFTED DURING IT ──────
+    // The attentional state again: whatever proforma is being built is
+    // salient right now, so the drafter gets to see it. Handed over as
+    // BACKGROUND, explicitly not as the subject — an email about something
+    // else must not turn into a covering note for a document nobody asked
+    // about, and the model is told so in as many words.
+    let openTask = '';
+    try {
+        const line = require('../helpers/proformaDraft').contextLine();
+        if (line) {
+            openTask = `${line} That is CONTEXT ONLY — background you may draw on if it `
+                + `is relevant to this email. It is NOT the subject unless the manager `
+                + `said so, and you must not describe or attach it.`;
+            console.log('[ACTIONS] drafting with the open proforma as context');
+        }
+    } catch (e) { /* no proforma open is the normal case */ }
+
     let recentContext = '';
     if (!details || !details.trim()) {
         try {
@@ -2806,6 +2852,7 @@ What the email needs to say: ${details || (recentContext
         ? 'No specific ask was given — write a brief, genuinely relevant follow-up grounded in the recent correspondence below (e.g. reference what it was actually about). Do NOT write generic filler like "just checking in" or "hope all is well" with no real content.'
         : 'No specific ask was given and no past correspondence was found either — ask a brief, concrete question (e.g. current pricing/availability) rather than pure small talk.')}
 ${recentContext ? `Most recent past email with them, for context (use only what's actually relevant): ${recentContext}` : ''}
+${openTask}
 ${bookingLine ? `Relevant booking data (use only what's relevant, do not dump all of it): ${bookingLine}` : ''}
 ${require('../helpers/writingStyle').getStyleGuidance()}
 Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
