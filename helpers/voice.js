@@ -92,6 +92,17 @@ const STYLES = {
 // is to signal that it heard her. "At your service." was tried and was three
 // words too many.
 const PHRASES = {
+    // Apsara, 2026-09-06: "it is not talking back with Hmm (some kind of
+    // acknowledgement that it is listening)."
+    //
+    // A NEW key rather than changing `wake`, deliberately: the WAV cache is
+    // keyed by name, so editing the text of an existing phrase would keep
+    // serving the old audio from disk and look like the change had not
+    // landed. That is a debugging afternoon nobody needs.
+    //
+    // Spelled "Mm hm" with a space because the synthesiser reads "Mmhm" as a
+    // word and "Mm-hm" as two, hyphen and all.
+    ack: 'Mm hm?',
     wake: 'Yes?',
     working: 'On it.',
     done: 'Done.',

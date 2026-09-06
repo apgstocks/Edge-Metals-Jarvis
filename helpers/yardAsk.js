@@ -154,6 +154,18 @@ async function askYard(question, opts = {}) {
                     `${f.name}(${JSON.stringify(f.params)}) -> ${JSON.stringify(f.result).slice(0, 4000)}`
                 )).join('\n')
                 : '',
+            // ── HISTORY SITS NEXT TO THE QUESTION, NOT IN THE MIDDLE ─────
+            // Moved 2026-09-06. Liu et al. (TACL 2024), "Lost in the
+            // Middle": across every model they tested, a fact placed at the
+            // start or the end of the context is used reliably and one in
+            // the middle is not — accuracy on a mid-context fact can fall
+            // below what the same model achieves with NO context at all.
+            //
+            // The conversation was sitting after a large DATA blob and a
+            // tool-result dump, which is the middle. It is what "what is the
+            // ERD" depends on entirely, so it now sits directly against the
+            // question it modifies. A one-line move with real evidence
+            // behind it.
             historyText,
             '',
             `QUESTION: ${asked}`,

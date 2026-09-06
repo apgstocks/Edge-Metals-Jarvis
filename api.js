@@ -1884,8 +1884,45 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (!text) return res.status(400).json({ error: 'nothing was said' });
 
             const route = routeVoice(text);
-            const asked = stripAgentName(text);
             const agent = AGENTS[route.agent];
+            const mem = require('./helpers/voiceMemory');
+
+            // ── RESOLVE THE REFERENCE BEFORE ANYTHING BLIND SEES IT ──────
+            // Apsara: "if I say forward that to trucker" — after three
+            // bookings were on screen.
+            //
+            // Done HERE, between stripping the agent's name and everything
+            // downstream, because two things further on cannot see a
+            // conversation at all: answerCards.cardsFor() is a regex over
+            // the utterance, and the brain's policy layer is pattern
+            // matching over session state. Both need a sentence that stands
+            // on its own.
+            //
+            // Deliberately NOT done for Gemini's benefit — it can resolve
+            // references from history perfectly well, and the measured
+            // result of rewriting for a model that can see context is
+            // slightly WORSE accuracy, not better (Ishii et al. 2022).
+            const stripped = stripAgentName(text);
+            const ref = mem.resolve(stripped);
+            const asked = ref.text;
+            if (ref.resolved) {
+                console.log(`[VOICE] "${ref.resolved.from}" → booking ${ref.resolved.to} (#${ref.resolved.n})`);
+            } else if (ref.ambiguous) {
+                // Refuses rather than guesses. The next step of this flow
+                // sends a WhatsApp to a real driver, and "that booking" with
+                // three on screen is a genuine ambiguity — the same refusal
+                // the brain already makes for a bare digit with two possible
+                // sources.
+                mem.remember('user', stripped);
+                const which = `Which one — there are ${ref.ambiguous} on screen. Say "the first one", or give me the booking number.`;
+                mem.remember('bot', which);
+                return res.json({
+                    agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'a reference I could not pin down',
+                    answer: which, ok: true, cards: null,
+                });
+            }
+            mem.remember('user', asked);
 
             // ── THE SCREEN ───────────────────────────────────────────────
             // Apsara, 2026-09-06: "like JARVIS in iron man, a screen should
@@ -1902,12 +1939,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // missing panel is a worse screen, a thrown exception is no
             // answer at all.
             let cards = null;
-            try { cards = require('./helpers/answerCards').cardsFor(asked); }
-            catch (e) { console.warn('[VOICE] cards failed:', e.message); }
+            try {
+                cards = require('./helpers/answerCards').cardsFor(asked);
+                // A NEW list replaces the old one. cardsFor returns null for
+                // instructions, which is what stops "forward the first one"
+                // from replacing the very list it is pointing at.
+                mem.setReferents(cards);
+            } catch (e) { console.warn('[VOICE] cards failed:', e.message); }
 
             if (route.agent === 'scout') {
                 const { askYard } = require('./helpers/yardAsk');
-                const out = await askYard(asked, { history: (req.body || {}).history, role: req.role });
+                // From the SERVER's memory, not the request body. A client
+                // that supplies its own transcript can supply a stale or
+                // replayed one, and the end of this flow messages a real
+                // driver.
+                const out = await askYard(asked, { history: mem.history(), role: req.role });
                 try {
                     require('./helpers/yardChatLog').logExchange({
                         question: asked, answer: out && out.answer,
@@ -1915,6 +1961,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         role: req.role || null, source: 'voice',
                     });
                 } catch (e) { /* never let logging break answering */ }
+                // WHAT JARVIS SAID, remembered too. Recording only her side
+                // gives the model a list of questions with no answers, and
+                // "what is the ERD" needs to know which booking was just
+                // discussed.
+                mem.remember('bot', out && out.answer);
                 return res.json({
                     agent: 'scout', agent_name: agent.name, voice: agent.voice,
                     routed_because: route.why,
@@ -1940,7 +1991,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             await sendCapture.run(capture, async () => {
                 await brain.process({
                     chatId, senderNumber: chatId, senderName: 'Voice',
-                    text, hasMedia: false, _source: 'voice',
+                    // `asked`, not `text`: the resolved sentence, with
+                    // "the first one" already turned into a booking number.
+                    // The brain's policy layer is regex over this string and
+                    // cannot resolve a reference itself.
+                    text: asked, hasMedia: false, _source: 'voice',
                 }, realSendMessage);
             });
             // ── replies ARE OBJECTS ──────────────────────────────────────
@@ -1957,10 +2012,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const replies = (capture.replies || [])
                 .map((r) => (r && typeof r === 'object' ? r.text : r))
                 .filter((t) => typeof t === 'string' && t.trim());
+            const spoken = replies.join('\n\n') || 'Done.';
+            mem.remember('bot', spoken);
             return res.json({
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                 routed_because: route.why,
-                answer: replies.join('\n\n') || 'Done.', replies, ok: true,
+                answer: spoken, replies, ok: true,
                 cards,
             });
         } catch (e) {

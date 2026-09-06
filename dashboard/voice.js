@@ -889,16 +889,52 @@
     // Rendered ONCE, at startup, not on every wake. Kokoro takes a few
     // hundred milliseconds, which is fine to spend at boot and hopeless in
     // the gap between her saying the name and expecting a reply.
+    // ── THE SERVER ALREADY SYNTHESISES THIS ──────────────────────────────
+    // Apsara, twice: "it is not talking back with Hmm". She was hearing the
+    // fallback tone, because the spoken version came only from Kokoro — which
+    // exists in the desktop app and nowhere else, and only once its 86MB
+    // model has downloaded.
+    //
+    // /api/voice/phrase/ack has been there all along: Gemini's voice,
+    // synthesised once and cached on disk as a WAV, built precisely for "the
+    // 'Yes?' that comes back when she says Hey Jarvis". It works in the
+    // browser AND the desktop app, needs no local model, and is the same
+    // voice Jarvis answers in.
+    //
+    // Order of preference: the server's voice, then Kokoro, then the tone.
+    // The tone is the last resort rather than the first, which is the wrong
+    // way round from how it was built.
     function warmAck() {
-        if (!ttsBridge || !ttsBridge.speak) return;
-        ttsBridge.speak('Mm hm?', null).then(function (r) {
-            if (r && r.ok && r.pcm && r.pcm.length) {
-                ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
-                ackRate = r.sampleRate || 24000;
+        var api = window.api;
+        // fetch, not api(): this returns a WAV, not JSON.
+        fetch('/api/voice/phrase/ack', { credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
+            .then(function (buf) {
+                var ctx = audio();
+                if (!ctx) return Promise.reject(new Error('no audio context'));
+                return ctx.decodeAudioData(buf);
+            })
+            .then(function (decoded) {
+                ackPcm = decoded.getChannelData(0);
+                ackRate = decoded.sampleRate;
                 console.log('[VOICE] acknowledgement ready — '
-                    + Math.round((ackPcm.length / ackRate) * 1000) + 'ms');
-            }
-        }).catch(function () {});
+                    + Math.round(decoded.duration * 1000) + 'ms, from the server');
+            })
+            .catch(function (e) {
+                console.log('[VOICE] no server acknowledgement (' + (e && e.message) + ') — trying locally');
+                if (!ttsBridge || !ttsBridge.speak) {
+                    console.log('[VOICE] falling back to the tone');
+                    return;
+                }
+                ttsBridge.speak('Mm hm?', null).then(function (r) {
+                    if (r && r.ok && r.pcm && r.pcm.length) {
+                        ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
+                        ackRate = r.sampleRate || 24000;
+                        console.log('[VOICE] acknowledgement ready — Kokoro, '
+                            + Math.round((ackPcm.length / ackRate) * 1000) + 'ms');
+                    }
+                }).catch(function () {});
+            });
     }
 
     // A two-note hum, synthesised on the spot. This is the fallback for the
