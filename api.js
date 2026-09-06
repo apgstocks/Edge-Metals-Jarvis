@@ -1948,6 +1948,54 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             }
             mem.remember('user', asked);
 
+            // ── BUILDING A PROFORMA BY BEING ASKED ───────────────────────
+            // Apsara: "if i ask jarvis to create proforma, it should create
+            // that .. it can ask whatever data is needed from me."
+            //
+            // Consulted BEFORE the router, because a proforma in progress
+            // owns the conversation: while it is open, "Daekwang" is an
+            // answer to a question, not a question about a seller. Routed
+            // normally it scores as yard vocabulary, reaches Scout, and she
+            // gets "no loads for Daekwang" in the middle of raising an
+            // invoice.
+            //
+            // The DECISION is in helpers/proformaDraft.handle(), not here.
+            // It was inline, and two mutations survived the whole suite
+            // because the only test that touched it read the source rather
+            // than running it — turning the flow off completely, and
+            // restarting the draft on every answer so it could never finish.
+            // api.js keeps the plumbing; the module keeps the thinking.
+            const pro = require('./helpers/proformaDraft');
+            const step = pro.handle(asked);
+            if (step) {
+                let previewHtml = null;
+                if (step.stage === 'preview') {
+                    // The SAME generator her existing proformas go through.
+                    // A preview rendered by a different path is not a preview
+                    // of what will be sent.
+                    try {
+                        const built = require('./helpers/proformaPdf')
+                            .buildProformaDc2Html(step.pdf);
+                        previewHtml = built && built.html ? built.html : null;
+                    } catch (e) {
+                        console.error('[PROFORMA] preview failed:', e.message);
+                    }
+                }
+                mem.remember('bot', step.say);
+                return res.json({
+                    agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'building a proforma',
+                    answer: step.say, ok: true, cards: null,
+                    proforma: {
+                        stage: step.stage,
+                        summary: step.summary || null,
+                        fields: step.fields || step.have || null,
+                        defaulted: step.defaulted || null,
+                        html: previewHtml,
+                    },
+                });
+            }
+
             // ── THE SCREEN ───────────────────────────────────────────────
             // Apsara, 2026-09-06: "like JARVIS in iron man, a screen should
             // appear, where it shows me all relevant answer to my question

@@ -233,6 +233,52 @@ function payload() {
     };
 }
 
+// ── THE SHAPE THE GENERATOR ACTUALLY WANTS ───────────────────────────────
+// payload() above is the shape this MODULE reasons about — flat, one item,
+// easy to read back in a sentence. helpers/proformaPdf.js wants something
+// else entirely: containers, each holding items, with trade terms and a
+// freight label and a country of origin.
+//
+// Kept as two functions rather than one, and translated here, because the
+// alternative is what I nearly did: invent a payload shaped the way I
+// imagined and hand it to a generator that expects another. That is the same
+// mistake as reading smart-whisper's typings instead of running it — a
+// plausible object, accepted without complaint, producing a document with
+// empty fields on it.
+//
+// Every literal below is copied from generateProformaFromPending() in
+// workflow/actions.js, which is the path her existing proformas already go
+// through. A document raised by voice must not differ from one raised from
+// an email in anything but how it was asked for.
+function pdfPayload(opts = {}) {
+    const p = payload();
+    if (!p) return null;
+    const trade = p.shipment_terms;
+    return {
+        inv_no: opts.inv_no || '',
+        inv_date: new Date().toISOString().slice(0, 10),
+        reference: '',
+        qty_unit: 'MT',
+        consignee: p.consignee,
+        consignee_sheet_tag: p.consignee,
+        consignee_address: Array.isArray(opts.addressLines) ? opts.addressLines : [],
+        trade_terms: trade,
+        port_discharge: opts.port_discharge || '',
+        payment_term: p.payment_terms,
+        freight_label: /^FOB/i.test(trade) ? 'FOB (freight excluded)' : 'CIF (freight included)',
+        buyer_po: '', buyer_po_date: '',
+        country_of_origin: 'USA',
+        shipment_allowance: p.shipment_allowance,
+        containers: [{
+            container_no: '',
+            item_code: null,
+            items: p.items.map((i) => ({
+                desc: i.description, qty: i.qty, rate: i.rate, unit: 'MT',
+            })),
+        }],
+    };
+}
+
 // A sentence for reading back before it is built. Deliberately short: this
 // is spoken, and past a couple of lines nobody is listening any more.
 function summary() {
@@ -244,7 +290,40 @@ function summary() {
         + `${p.shipment_terms}, ${p.payment_terms}.`;
 }
 
+// ── THE WHOLE DECISION, IN ONE TESTABLE PLACE ────────────────────────────
+// This lived inline in api.js's /api/voice/ask handler, and two mutations
+// survived the entire suite because of it: turning the flow off completely,
+// and restarting the draft on every answer so it could never finish. Both
+// are catastrophic and both were invisible, because the only test that
+// touched them GREPPED THE SOURCE for the order of two require() calls.
+// Reading a file is not running it.
+//
+// So the decision moves here, where it can be executed, and api.js keeps
+// only the plumbing. Returns null when this utterance is nothing to do with
+// a proforma — which is the common case and must stay cheap.
+function handle(text) {
+    const open = !!draft;
+    if (!isStart(text) && !open) return null;
+
+    if (!open) start(text); else answer(text);
+
+    const q = nextQuestion();
+    if (q) return { stage: 'asking', say: q, have: Object.assign({}, draft.fields) };
+
+    const p = payload();
+    const line = summary();
+    return {
+        stage: 'preview',
+        say: line + ' Have a look — say "send it" when you are happy.',
+        summary: line,
+        fields: Object.assign({}, draft.fields),
+        defaulted: p.defaulted,
+        pdf: pdfPayload(),
+    };
+}
+
 module.exports = {
-    isStart, start, answer, current, clear, missing, nextQuestion, payload, summary,
+    handle,
+    isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
 };
