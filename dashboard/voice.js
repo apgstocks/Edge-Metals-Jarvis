@@ -399,6 +399,100 @@
     }
     function hidePanel() { panel.classList.add('hidden'); }
 
+    // ── THE DOCUMENT, ON SCREEN, BEFORE SHE SAYS YES ─────────────────────
+    // Apsara, 2026-09-07: "Send it to Daekwang? --> show preview. post my
+    // confirmation..send"
+    //
+    // The server has been rendering this HTML and putting it in the response
+    // as `proforma.html` since the day the flow was built. NOTHING IN THE
+    // DASHBOARD EVER READ IT. She was being asked to approve a document she
+    // could only hear described — "21 MT of copper at $8,450.00" — which is
+    // exactly the wrong thing to confirm by ear, because the parts most
+    // likely to be wrong (the consignee's address, the invoice number, the
+    // container line) are the parts the sentence does not read out.
+    //
+    // AN IFRAME, SANDBOXED, srcdoc. The proforma is a full document with its
+    // own stylesheet built for A4 print; dropping that into the dashboard's
+    // DOM would have its CSS reach out and restyle the app around it. The
+    // sandbox is not because the HTML is untrusted — we generate it — but
+    // because it costs nothing and the alternative is trusting that it stays
+    // that way.
+    var doc = document.createElement('div');
+    doc.id = 'jvDoc';
+    doc.className = 'hidden';
+    var docCss = [
+        '#jvDoc{position:relative;width:460px;max-width:100%;border-radius:16px;',
+        '  background:#0F1418;border:1px solid rgba(180,112,58,.34);',
+        '  box-shadow:0 16px 44px rgba(0,0,0,.62);overflow:hidden;',
+        '  font-family:system-ui,-apple-system,sans-serif;}',
+        '#jvDoc.hidden{display:none;}',
+        '.jvdHead{padding:13px 16px 10px;border-bottom:1px solid rgba(255,255,255,.09);',
+        '  font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#B4703A;',
+        '  font-weight:700;display:flex;align-items:center;gap:8px;}',
+        '.jvdHead span{margin-left:auto;color:#5A6169;letter-spacing:0;text-transform:none;font-weight:400;}',
+        // White, because a proforma is a white document and showing it on the
+        // dark panel would be a preview of something that does not exist.
+        '.jvdPaper{background:#fff;height:340px;overflow:hidden;}',
+        '.jvdPaper iframe{width:200%;height:200%;border:0;transform:scale(.5);',
+        '  transform-origin:0 0;background:#fff;}',
+        '.jvdFoot{padding:11px 14px;border-top:1px solid rgba(255,255,255,.09);',
+        '  display:flex;align-items:center;gap:9px;}',
+        '.jvdSay{flex:1;color:#8A9199;font-size:12px;line-height:1.35;}',
+        '.jvdBtn{border:0;border-radius:9px;padding:8px 15px;font-size:12.5px;font-weight:650;',
+        '  cursor:pointer;font-family:inherit;}',
+        '.jvdSend{background:#B4703A;color:#0B0E11;}',
+        '.jvdSend:hover{background:#C77F44;}',
+        '.jvdNo{background:rgba(255,255,255,.07);color:#9AA1A9;}',
+        '.jvdNo:hover{background:rgba(255,255,255,.12);}',
+        '.jvdWarn{color:#D08B4F;}',
+    ].join('');
+
+    // `pro` is the response's proforma object. Null or a stage that is not a
+    // preview hides it — an asking stage ("What rate?") has no document yet,
+    // and showing a half-built one would invite her to approve a blank.
+    function showDoc(pro) {
+        if (!doc.isConnected) return;
+        if (!pro || pro.stage !== 'preview' || !pro.html) { hideDoc(); return; }
+
+        var ready = pro.ready !== false;
+        var inv = (pro.fields && pro.fields.inv_no) || pro.inv_no || '';
+        var head = ['<div class="jvdHead">Proforma',
+            '<span>', esc(inv || 'draft'), '</span></div>',
+            '<div class="jvdPaper"><iframe sandbox="" title="Proforma preview"></iframe></div>',
+            '<div class="jvdFoot">',
+            '<div class="jvdSay', ready ? '' : ' jvdWarn', '">',
+            esc(ready ? 'Say “yes” to send it, or tell me what to change.'
+                : (pro.blocked === 'ambiguous'
+                    ? 'Which contact did you mean?'
+                    : 'No email address for them yet — nothing will be sent.')),
+            '</div>'];
+        // The buttons exist for when she is at the keyboard, NOT as a second
+        // way of sending. They put the same words through ask() that her
+        // voice would, so there is one path to the sender and one place a
+        // confirmation can be recorded. A button that called a send endpoint
+        // directly would be the "second set of rules" problem in the UI.
+        if (ready) {
+            head.push('<button class="jvdBtn jvdNo" id="jvdCancel">No</button>',
+                '<button class="jvdBtn jvdSend" id="jvdSend">Send</button>');
+        }
+        head.push('</div>');
+        doc.innerHTML = head.join('');
+
+        // srcdoc AFTER innerHTML, because assigning it to an element that is
+        // about to be replaced loads the document twice and shows a flash of
+        // the previous proforma in the new frame.
+        var frame = doc.querySelector('iframe');
+        if (frame) frame.srcdoc = pro.html;
+
+        var send = document.getElementById('jvdSend');
+        if (send) send.addEventListener('click', function () { ask('yes'); });
+        var no = document.getElementById('jvdCancel');
+        if (no) no.addEventListener('click', function () { ask('no'); });
+
+        doc.classList.remove('hidden');
+    }
+    function hideDoc() { doc.classList.add('hidden'); doc.innerHTML = ''; }
+
     // ── WHICH ASSISTANT IS ON SCREEN ─────────────────────────────────────
     // Apsara: "if I call scout, will it create another bubble - in different
     // colour to enquire about yard data."
@@ -1245,6 +1339,14 @@
         // first one" about, and mean something different from what Jarvis
         // would do.
         hidePanel();
+        // NOT hideDoc(). The results panel is cleared because a stale list is
+        // something she could say "the first one" about and mean the wrong
+        // booking. A staged proforma is the opposite: "wait, change it to
+        // FOB" is a new question, and tearing the document off the screen
+        // while she corrects it is exactly when she most needs to see it. It
+        // is replaced by showDoc() below on every response, and hidden the
+        // moment a response comes back without one — which is what happens
+        // when the send goes through.
         // `thinking` is not in the reducer: it is about the network, not about
         // whether the microphone may be open, and putting it there would mean
         // a state that can never affect the one decision that file exists to
@@ -1289,6 +1391,10 @@
                 // out in one paint rather than the card jumping when the
                 // panel appears underneath it.
                 showPanel(r && r.cards);
+                // The document she is being asked to approve. Rendered in the
+                // same paint as the panel and the card so the column settles
+                // once rather than jumping as each piece arrives.
+                showDoc(r && r.proforma);
                 // The colour follows the ANSWERING agent, which can differ
                 // from the one addressed — she says "Hey Jarvis" and asks
                 // about loads, and the router hands it to Scout. Showing the
@@ -1335,13 +1441,26 @@
         if (mounted) return;
         mounted = true;
         if (!SR) return;                       // no recogniser at all: show nothing
-        css.textContent += cardCss + voiceCss + panelCss;
+        // docCss appended HERE, not spliced into the panelCss array where it
+        // reads more naturally. `var docCss` is declared a hundred lines
+        // BELOW that array — hoisted, so no error, but undefined at the time
+        // the array is built, and Array.join() renders undefined as an empty
+        // string. The whole document panel would have come out unstyled with
+        // nothing logged anywhere. Same family as the `const` temporal dead
+        // zone that nearly shipped in api.js, and `node --check` cannot see
+        // either. Proved by running it, not by reading it.
+        css.textContent += cardCss + voiceCss + panelCss + docCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
         // Panel first, card under it: results above, the sentence being
         // spoken nearest the voice bar she is looking at.
         var stack = document.createElement('div');
         stack.id = 'jvStack';
+        // Document first, then results, then the spoken card nearest the
+        // voice bar. The proforma is the thing she is being asked to approve,
+        // so it gets the top of the column and does not move when a shorter
+        // answer card is repainted underneath it.
+        stack.appendChild(doc);
         stack.appendChild(panel);
         stack.appendChild(card);
         document.body.appendChild(stack);

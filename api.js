@@ -2060,6 +2060,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (!brainPending && !step && pro.isStaged()) pro.clear();
             if (step) {
                 let previewHtml = null;
+                // Declared out here, not inside the staging block, so the
+                // response can carry it. `let` inside the try would be out of
+                // scope by the time the JSON is built — and the number would
+                // simply be missing from the panel header with nothing
+                // logged, which is the silent-failure shape I keep hitting.
+                let stagedInvNo = null;
                 if (step.stage === 'preview') {
                     // The SAME generator her existing proformas go through.
                     // A preview rendered by a different path is not a preview
@@ -2131,6 +2137,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         if (nums.addressWarning) {
                             step.say += ` One thing: ${nums.addressWarning}`;
                         }
+                        stagedInvNo = nums.invNo || null;
                         if (nums.invNo) step.say += ` It'll be ${nums.invNo}.`;
                     } catch (e) {
                         // Staging failed: say so rather than leaving her with a
@@ -2152,6 +2159,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         fields: step.fields || step.have || null,
                         defaulted: step.defaulted || null,
                         html: previewHtml,
+                        // Apsara, 2026-09-07: "show preview. post my
+                        // confirmation..send". The dashboard needs to know
+                        // whether this document CAN be sent, so the footer
+                        // offers Send only when a "yes" would actually do
+                        // something — a Send button on a proforma with no
+                        // recipient is a button that lies.
+                        ready: step.ready === true,
+                        blocked: step.blocked || null,
+                        recipient: step.recipient
+                            ? { name: step.recipient.name || step.recipient.who || null,
+                                email: step.recipient.email || null }
+                            : null,
+                        // Shown in the panel header. Minted at hand-off, so
+                        // it is present on a ready preview and absent while
+                        // she is still being asked questions.
+                        inv_no: stagedInvNo,
                     },
                 });
             }

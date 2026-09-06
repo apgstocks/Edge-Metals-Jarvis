@@ -34,7 +34,7 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 
 // A fake browser with a fake microphone and a fake voice, so every open and
 // close is observable.
-function browser({ chrome = true, voices = null, pref = null } = {}) {
+function browser({ chrome = true, voices = null, pref = null, reply = null } = {}) {
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
     // its own globals. Without it window.eval is Node's, and voice.js dies on
@@ -122,10 +122,17 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
         log.asked.push(body.text || body.question);
         w.__lastAgent = body.agent || null;
         const who = body.agent === 'scout' ? 'scout' : 'jarvis';
-        return {
+        const base = {
             ok: true, answer: 'Acme is owed six hundred dollars.',
             agent: who, agent_name: who === 'scout' ? 'Scout' : 'Jarvis',
         };
+        // `reply` lets a test drive the SHAPE of the response — a proforma
+        // preview, say. A function so it can differ per call, which is what a
+        // confirm-then-send exchange needs: the first call returns a document
+        // to approve, the second returns none because it has been sent.
+        if (typeof reply === 'function') return Object.assign(base, reply(body, log));
+        if (reply) return Object.assign(base, reply);
+        return base;
     };
     w.Audio = class { play() {} };
     // The server's cached acknowledgement. Present so the PREFERRED path is
@@ -1448,6 +1455,133 @@ section('H — Safari degrades to a button instead of half-working');
     ck('Chrome gets the wake word', c.w.JarvisVoice.canWake === true);
     ck('  with continuous recognition', (c.w.JarvisVoice.dispatch('USER_TOGGLE'), c.mic().continuous === true),
        'a wake word without continuous mode is just a button with extra steps');
+}
+
+section('DOC — the document, on screen, before she says yes');
+{
+    // Apsara, 2026-09-07: "Send it to Daekwang? --> show preview. post my
+    // confirmation..send"
+    //
+    // The server has been putting the rendered proforma in the response as
+    // `proforma.html` since the flow was built, and NOTHING IN THE DASHBOARD
+    // EVER READ IT. She was approving a document she could only hear
+    // described — and the parts most likely to be wrong (the address, the
+    // invoice number, the container line) are exactly the parts the spoken
+    // sentence does not read out.
+    const PAPER = '<html><body><h1>PROFORMA INVOICE</h1><p>260907_AC_26JY90</p>'
+        + '<p>Daekwang · 21 MT copper @ 8450</p></body></html>';
+    const preview = {
+        proforma: { stage: 'preview', ready: true, html: PAPER, inv_no: '260907_AC_26JY90',
+            summary: '21 MT of copper for Daekwang', fields: {}, blocked: null,
+            recipient: { name: 'Daekwang', email: 'p@daekwang.co.kr' } },
+    };
+
+    const b = browser({ reply: () => preview });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    // Driven through the real capture path, not a private hook — a hook
+    // would test a function nothing calls.
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis create a proforma for Daekwang, 21 MT of copper at 8450');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+
+    const doc = b.doc.getElementById('jvDoc');
+    ck('the document panel exists at all', !!doc,
+       'it never did — the server sent html and no one rendered it');
+    ck('  and is visible after a preview', doc && !doc.classList.contains('hidden'),
+       doc ? doc.className : 'missing');
+
+    const frame = doc && doc.querySelector('iframe');
+    ck('  the paper is an iframe', !!frame,
+       'the proforma carries its own print stylesheet; inlining it restyles the app around it');
+    ck('  carrying the REAL document', frame && frame.getAttribute('srcdoc') === PAPER,
+       'a preview of something other than what will be sent is worse than none');
+    ck('  sandboxed', frame && frame.getAttribute('sandbox') === '',
+       'we generate the html, but the sandbox costs nothing and the alternative is trusting that it stays that way');
+    ck('  with the invoice number in the header',
+       /260907_AC_26JY90/.test(doc.innerHTML));
+
+    // THE CONFIRMATION. Voice is the primary path and already worked; the
+    // buttons exist for when her hands are on the keyboard. They must put the
+    // same words through the same endpoint — a button wired to a send route
+    // would be a second sender, which is the thing this whole feature was
+    // built to avoid.
+    const send = b.doc.getElementById('jvdSend');
+    const no = b.doc.getElementById('jvdCancel');
+    ck('  a Send button is offered', !!send);
+    ck('  and a No', !!no);
+    const before = b.log.asked.length;
+    send && send.dispatchEvent(new b.w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    ck('  Send says "yes" through the ordinary ask path',
+       b.log.asked.length === before + 1 && b.log.asked[before] === 'yes',
+       JSON.stringify(b.log.asked.slice(before)));
+    ck('    to /api/voice/ask, not a send endpoint',
+       b.log.paths[b.log.paths.length - 1] === '/api/voice/ask',
+       b.log.paths[b.log.paths.length - 1]);
+}
+
+section('DOC2 — it does not offer a send it cannot make');
+{
+    const b = browser({ reply: () => ({
+        proforma: { stage: 'preview', ready: false, blocked: 'unknown',
+            html: '<html><body>x</body></html>', inv_no: null, fields: {} },
+    }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis create a proforma for Nobody Ltd, 21 MT of copper at 8450');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+
+    const doc = b.doc.getElementById('jvDoc');
+    ck('the document still shows', doc && !doc.classList.contains('hidden'),
+       'the work is done; only the address is missing, and she should see the document');
+    ck('  but there is NO Send button', !b.doc.getElementById('jvdSend'),
+       'a Send button on a proforma with no recipient is a button that lies');
+    ck('  and it says why', /email address/i.test(doc.innerHTML), doc.innerHTML.slice(0, 200));
+
+    // An "asking" stage has no document yet. Showing a half-built one invites
+    // her to approve a blank.
+    const b2 = browser({ reply: () => ({
+        proforma: { stage: 'asking', ready: false, html: null, fields: {} } }) });
+    b2.w.eval(MACHINE); b2.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b2.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b2.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b2.mic() && b2.mic().hear('hey jarvis create a proforma for Daekwang');
+    b2.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    const d2 = b2.doc.getElementById('jvDoc');
+    ck('  a question stage shows no document', !d2 || d2.classList.contains('hidden'));
+
+    // And an ordinary answer with no proforma at all must clear it, which is
+    // what happens the moment the send goes through.
+    const seq = [];
+    const b3 = browser({ reply: (body) => {
+        seq.push(body.text);
+        return seq.length === 1
+            ? { proforma: { stage: 'preview', ready: true, html: '<html><body>p</body></html>', fields: {} } }
+            : {};
+    } });
+    b3.w.eval(MACHINE); b3.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b3.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b3.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b3.mic() && b3.mic().hear('hey jarvis create a proforma for Daekwang, 21 MT of copper at 8450');
+    b3.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    ck('  a preview is up', !b3.doc.getElementById('jvDoc').classList.contains('hidden'));
+    b3.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b3.mic() && b3.mic().hear('hey jarvis yes');
+    b3.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    ck('  and it is gone once the send comes back',
+       b3.doc.getElementById('jvDoc').classList.contains('hidden'),
+       'a document left on screen after it was emailed reads as still waiting');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
