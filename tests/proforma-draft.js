@@ -574,6 +574,99 @@ section('I4 — the customer\'s own name for it goes on the document');
 
 function rest() {
 
+section('I5 — the consignee is matched against the address book');
+{
+    // Apsara, 2026-09-07: "when i say consignee name, try matching it with
+    // address book."
+    //
+    // She says "Daekwang". The address book has "Daekwang Metal Co., Ltd."
+    // with its postal address — and that is what belongs at the top of a
+    // proforma. prepareProformaNumbers already fetched the ADDRESS LINES, but
+    // the NAME stayed exactly as spoken, so the address block said the formal
+    // name while the line above it said her nickname.
+    const abP = require.resolve(path.join(ROOT2, 'helpers/addressBook.js'));
+    const ppP = require.resolve(path.join(ROOT2, 'helpers/proformaPricing.js'));
+    const realAb = require.cache[abP], realPp = require.cache[ppP];
+    const BOOK = [
+        { aliases: ['daekwang', 'daekwang metal'], raw: 'Daekwang Metal Co., Ltd.\n123 Sinhang-ro\nBusan, South Korea' },
+        { aliases: ['kim metals'], raw: 'Kim Metals Inc.\n1 A St' },
+        { aliases: ['kim trading'], raw: 'Kim Trading LLC\n2 B St' },
+    ];
+    require.cache[abP] = { id: abP, filename: abP, loaded: true, exports: { resolveAddress: (q) => {
+        const r = String(q).toLowerCase();
+        const ex = BOOK.filter((e) => e.aliases.some((a) => a === r));
+        if (ex.length === 1) return { type: 'exact', entry: ex[0] };
+        const pa = BOOK.filter((e) => e.aliases.some((a) => a.includes(r)));
+        if (pa.length === 1) return { type: 'partial', entry: pa[0] };
+        if (pa.length > 1) return { type: 'ambiguous', matches: pa };
+        return null;
+    } } };
+    require.cache[ppP] = { id: ppP, filename: ppP, loaded: true, exports: { lookup: (n) => (/daekwang/i.test(n)
+        ? { trade_terms: 'FOB', port_discharge: 'BUSAN', payment_terms: '30 days from BL', items: {} }
+        : {}) } };
+
+    d.clear();
+    d.start('create a proforma for Daekwang, 21 MT of copper at 8450');
+    const p = d.payload();
+    ck('the document carries the formal name', p.consignee === 'Daekwang Metal Co., Ltd.', p.consignee);
+    ck('  and what she said is kept', p.consignee_said === 'Daekwang', p.consignee_said);
+    ck('  with the saved address', (p.consignee_lines || []).length === 3, JSON.stringify(p.consignee_lines));
+    ck('  the read-back speaks HER word, not the mouthful',
+       /for Daekwang at/.test(d.summary()),
+       d.summary() + ' — "Daekwang Metal Co., Ltd." spoken aloud is not an improvement');
+
+    // A BUYER SHE HAS NOT SAVED YET is not an error. Refusing to draft for a
+    // new customer would be worse than a document carrying the name she gave.
+    d.clear();
+    d.start('create a proforma for Brand New Buyer, 21 MT of copper at 8450');
+    ck('an unknown buyer keeps her words', d.payload().consignee === 'Brand New Buyer');
+    ck('  and is reported as unknown', d.payload().consignee_match === 'unknown');
+
+    // TWO ENTRIES MATCHING IS A QUESTION. Guessing puts one company's name
+    // and another's address on the same document.
+    d.clear();
+    const amb = d.handle('create a proforma for Kim, 21 MT of copper at 8450');
+    ck('two matching buyers block the send', amb.ready === false && amb.blocked === 'consignee_ambiguous');
+    ck('  and both are named', /Kim Metals Inc\./.test(amb.say) && /Kim Trading LLC/.test(amb.say), amb.say);
+
+    // ── HER TERMS FOR THIS BUYER ─────────────────────────────────────────
+    // "Trade terms should be as per my update." DEFAULT_SHIPMENT_TERMS is
+    // 'CIF' for everyone, which is a guess dressed as a standard. She told
+    // the system so in August — "PORT OF DISCHARGE, TRADE TERMS, PAYMENT
+    // TERMS SHOULD BE AUTO POPULATED" — and this flow used constants anyway.
+    d.clear();
+    d.start('create a proforma for Daekwang, 21 MT of copper at 8450');
+    const t = d.payload();
+    ck('this buyer\'s remembered terms are used', t.shipment_terms === 'FOB',
+       t.shipment_terms + ' — the global default is CIF');
+    ck('  their port of discharge too', t.port_discharge === 'BUSAN');
+    ck('  and their payment terms', /30 days/.test(t.payment_terms), t.payment_terms);
+    ck('  all three marked as remembered, not as things she just said',
+       (t.remembered || []).length === 3, JSON.stringify(t.remembered));
+
+    // ...AND WHAT SHE SAYS STILL WINS. This only fills what she did not say.
+    d.clear();
+    d.start('create a proforma for Daekwang, 21 MT of copper at 8450, CIF Qingdao');
+    const said = d.payload();
+    ck('what she says overrides what is remembered',
+       said.shipment_terms === 'CIF' && said.port_discharge === 'QINGDAO',
+       said.shipment_terms + ' / ' + said.port_discharge);
+    ck('  and those are not marked remembered',
+       !(said.remembered || []).includes('shipment_terms')
+       && !(said.remembered || []).includes('port_discharge'),
+       JSON.stringify(said.remembered));
+
+    // A buyer with no history falls back to the global default rather than
+    // to nothing — a blank trade term on a proforma is not a document.
+    d.clear();
+    d.start('create a proforma for Brand New Buyer, 21 MT of copper at 8450');
+    ck('a buyer with no history still gets a term',
+       d.payload().shipment_terms === 'CIF', d.payload().shipment_terms);
+
+    if (realAb) require.cache[abP] = realAb; else delete require.cache[abP];
+    if (realPp) require.cache[ppP] = realPp; else delete require.cache[ppP];
+}
+
 section('J — the consignee stops at the end of the name');
 {
     // FOUND BY WIDENING THE MATERIAL PARSER, not by looking for it. The

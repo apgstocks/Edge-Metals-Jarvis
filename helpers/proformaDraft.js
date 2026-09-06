@@ -621,6 +621,83 @@ function fallbackFor(key) {
     return f ? f.fallback : undefined;
 }
 
+// ── THE NAME SHE SAYS vs THE NAME ON THE DOCUMENT ────────────────────────
+// Apsara, 2026-09-07: "when i say consignee name, try matching it with
+// address book."
+//
+// She says "Daekwang". The address book has "Daekwang Metal Co., Ltd." with
+// its full postal address, and that is what belongs at the top of a proforma
+// — a document naming a buyer by the nickname she uses in the yard is not one
+// their accounts department can file.
+//
+// prepareProformaNumbers already looked the address up, but only to fetch the
+// ADDRESS LINES; the consignee NAME on the document stayed exactly as spoken.
+// So the address block said "Daekwang Metal Co., Ltd." while the line above it
+// said "Daekwang".
+//
+// AMBIGUOUS IS A QUESTION, NOT A GUESS. Two entries matching "Kim" is the same
+// situation as two contacts matching a recipient, and the same answer: ask.
+// Unknown is NOT a question — she may be quoting a new buyer who is not in the
+// book yet, and refusing to draft for them would be worse than a document
+// carrying the name she gave.
+function resolveConsignee(said) {
+    const raw = String(said || '').trim();
+    if (!raw) return { ok: false, why: 'empty', said: raw, name: '' };
+    let hit = null;
+    try {
+        hit = require('./addressBook').resolveAddress(raw);
+    } catch (e) {
+        console.warn('[PROFORMA] address book unreadable:', e.message);
+        return { ok: true, why: 'error', said: raw, name: raw, lines: [] };
+    }
+    if (!hit) {
+        // A buyer she has not saved yet. Her words go on the document, and
+        // prepareProformaNumbers already warns that no address was found.
+        return { ok: true, why: 'unknown', said: raw, name: raw, lines: [] };
+    }
+    if (hit.type === 'ambiguous') {
+        return {
+            ok: false, why: 'ambiguous', said: raw, name: raw,
+            matches: (hit.matches || []).map((m) => String(m.raw || '').split('\n')[0].trim()).filter(Boolean),
+        };
+    }
+    const lines = String((hit.entry && hit.entry.raw) || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    // The FIRST line of the saved address is the company as it is written
+    // formally — that is the name the document wants. Falling back to her
+    // words if the entry somehow has no first line, because a blank consignee
+    // is worse than an informal one.
+    const name = lines[0] || raw;
+    return { ok: true, why: hit.type, said: raw, name, lines, entry: hit.entry };
+}
+
+// ── HER TERMS FOR THIS CUSTOMER, NOT MY GLOBAL DEFAULT ───────────────────
+// Apsara, 2026-09-07: "Trade terms should be as per my update."
+//
+// DEFAULT_SHIPMENT_TERMS is 'CIF' for everyone, which is a guess dressed as a
+// standard. Her real terms differ per buyer, and she already told the system
+// so — 2026-08-22, recorded in helpers/proformaPricing.js: "PORT OF DISCHARGE,
+// TRADE TERMS, PAYMENT TERMS SHOULD BE AUTO POPULATED." The dashboard reads
+// them per customer; this flow ignored all three and used constants.
+//
+// So the order is: what she said in THIS sentence, then what this customer's
+// last proforma used, then the global default. Her words always win — this
+// only fills what she did not say.
+function rememberedTerms(consignee) {
+    const out = { trade_terms: '', port_discharge: '', payment_terms: '' };
+    if (!consignee) return out;
+    try {
+        const past = require('./proformaPricing').lookup(consignee);
+        if (past) {
+            out.trade_terms = past.trade_terms || '';
+            out.port_discharge = past.port_discharge || '';
+            out.payment_terms = past.payment_terms || '';
+        }
+    } catch (e) {
+        console.warn('[PROFORMA] could not read this customer\'s terms:', e.message);
+    }
+    return out;
+}
+
 // ── WHAT THE CUSTOMER CALLS IT ───────────────────────────────────────────
 // Apsara, 2026-09-07: "customers can have it different name than my
 // description."
@@ -696,8 +773,21 @@ function payload() {
     const f = draft.fields;
     const mt = f.mt != null ? Number(f.mt) : Number(fallbackFor('mt'));
     const rate = Number(f.rate);
+
+    // The address book's formal name on the document, her words kept beside
+    // it. "Daekwang" is what she says; "Daekwang Metal Co., Ltd." is what
+    // their accounts department files.
+    const who = resolveConsignee(f.consignee);
+
+    // HER TERMS FOR THIS BUYER, ahead of my global constants. Only fills what
+    // she did not say — anything in this sentence still wins.
+    const past = rememberedTerms(who.name || f.consignee);
+
     return {
-        consignee: f.consignee || '',
+        consignee: who.name || f.consignee || '',
+        consignee_said: f.consignee || '',
+        consignee_lines: who.lines || [],
+        consignee_match: who.why || null,
         items: [{
             // What the CUSTOMER calls it, when we have sent them one before.
             // Recognition normalises to her catalog; the document does not.
@@ -708,9 +798,15 @@ function payload() {
         // Kept alongside, so the preview can say "you said X, they call it Y"
         // and she is never surprised by a word she did not choose.
         material_said: f.material || '',
-        payment_terms: f.payment_terms || fallbackFor('payment_terms'),
-        shipment_terms: f.shipment_terms || fallbackFor('shipment_terms'),
-        port_discharge: f.port_discharge || '',
+        payment_terms: f.payment_terms || past.payment_terms || fallbackFor('payment_terms'),
+        shipment_terms: f.shipment_terms || past.trade_terms || fallbackFor('shipment_terms'),
+        port_discharge: f.port_discharge || past.port_discharge || '',
+        // Which of the three came from HER last proforma to this buyer rather
+        // than from a global constant. Shown in the preview so a remembered
+        // term is never mistaken for one she just gave.
+        remembered: ['payment_terms', 'shipment_terms', 'port_discharge'].filter(
+            (k) => !f[k] && (k === 'shipment_terms' ? past.trade_terms
+                : k === 'payment_terms' ? past.payment_terms : past.port_discharge)),
         shipment_allowance: DEFAULT_ALLOWANCE,
         total: Math.round(mt * rate * 100) / 100,
         // Which values she gave and which are standing defaults. Shown in the
@@ -792,6 +888,7 @@ function brainDraft() {
     const p = payload();
     if (!p) return null;
     return {
+        // The address book's formal name, resolved in payload().
         consignee: p.consignee,
         // `desc`, not `description` — the two shapes differ by that one word,
         // and pdfPayload() above exists because I once handed a generator an
@@ -865,9 +962,15 @@ function summary() {
     // never appeared anywhere she could see.
     const terms = p.shipment_terms + (p.port_discharge ? ` ${p.port_discharge}` : '');
 
+    // HER word for the buyer, not the address book's formal one. This is
+    // spoken aloud, and "Daekwang Metal Co., Ltd." is a mouthful where
+    // "Daekwang" is what she just said. The formal name is on the document
+    // and in the preview panel, which is where it matters.
+    const buyer = p.consignee_said || p.consignee;
+
     return `${p.items[0].qty} MT of ${shown}`
         + (swapped ? ` (your "${p.material_said}")` : '')
-        + ` for ${p.consignee} `
+        + ` for ${buyer} `
         + `at ${money(p.items[0].rate)} per MT — ${money(p.total)} total, `
         + `${terms}, ${p.payment_terms}.`;
 }
@@ -952,6 +1055,21 @@ function handle(text) {
     // It used to say 'say "send it" when you are happy' and nothing listened.
     // What it says now depends on whether there is somewhere to send it, and
     // each branch is a question with a real answer behind it.
+    // ── WHICH BUYER? ────────────────────────────────────────────────────
+    // Two address-book entries matching what she said is the same situation
+    // as two contacts matching a recipient, and gets the same answer: ask.
+    // Guessing puts one company's name and another's address on one document.
+    const who = resolveConsignee(draft.fields.consignee);
+    if (!who.ok && who.why === 'ambiguous') {
+        return {
+            stage: 'preview', ready: false, blocked: 'consignee_ambiguous',
+            say: `${line} Which ${draft.fields.consignee} — ${(who.matches || []).join(', ')}?`,
+            summary: line, recipient: null, consignee: who,
+            fields: Object.assign({}, draft.fields),
+            defaulted: p.defaulted, pdf: pdfPayload(), draft: brainDraft(),
+        };
+    }
+
     const to = recipient(draft.fields.send_to);
     if (!to.ok) {
         // NOT a send with a missing address, and not a silent preview-only
@@ -981,7 +1099,8 @@ function handle(text) {
 }
 
 module.exports = {
-    materialIn, catalogMaterials, catalogPattern, describeFor, KNOWN_METALS, NOT_A_MATERIAL,
+    materialIn, catalogMaterials, catalogPattern, describeFor, resolveConsignee, rememberedTerms,
+    KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
