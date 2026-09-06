@@ -1745,7 +1745,7 @@ STRICT RULES:
 
 THE TEST IS WHETHER SHE NAMED A PERSON OR COMPANY, nothing else. Any question about HER MAIL IN GENERAL — however she phrases it, however long the sentence, whatever words she uses for mail — is show_pending_replies. A REAL INCIDENT (2026-08-29): "Any new mails?" and "All mails received today which needed my attentiom" were both classified as search_mail with NO target_name, so Jarvis searched the mailbox for the words she asked the question WITH, found nothing, and answered "No matching emails found re \"new mails\"" — which reads as "you have no mail" and was not true. A search with no sender and no booking is not a search; there is nothing to search for. NEVER return search_mail without a target_name or a bkg_no. If you were about to, the answer is show_pending_replies.
 
-AND NEVER ASK HER WHICH EMAILS SHE MEANS. Another real incident the same night: "Email digest" was answered with "I can help with that. What specifically would you like to see in the email digest?" There is exactly one digest and she named it. Asking her to specify a thing that has no variants wastes a round trip and reads as though Jarvis does not know its own features. Run it. This is the on-demand version of a scan that also runs hourly on its own. READ-ONLY — it flags and reports, it never replies to anyone. Related: "ignore_digest_item" drops one or more items from that same numbered list (from a recent digest OR from show_pending_replies) so Jarvis stops nudging about them — "ignore 3", "dismiss 1 and 3", "ignore all". Set indices to the numbers named (as strings, e.g. ["3"]), or set all=true and leave indices null for "ignore all"/"ignore everything". This does NOT mark the underlying email as replied to — it only stops the deadline nudges and chase-ups; if a genuinely new message arrives on that thread later it is judged fresh. Never use this for "ignore" in the marketing-email-filtering sense (that is decided elsewhere, per email, not by number) — this action is ONLY for dismissing a numbered item she was just shown. Do NOT confuse it with search_mail: search_mail answers a question about mail from a NAMED person ("did Zimex reply"), while this one answers "who is waiting on me" with no sender named at all. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. "lookup_address" is for ANY question about where a saved place IS, or its contact details on file — the address book holds yards, buyers, sellers, ports and facilities under short names Apsara uses daily ("Junk car", "Eccomelt", "Inesh yard", "LA"). Set target_name to the place she named, VERBATIM, and nothing else. Recognize this in whatever phrasing she uses: "Junk car address", "address of Eccomelt", "where is Inesh yard", "what's the address for LA", "send me Junk car's address", "Ecco addres" (typo), "junk car location", "Junk car mobile", "Junk car phone number". This is READ-ONLY — it just looks up and shows what's saved, nothing is sent to anyone and nothing is changed, so use it confidently rather than falling back to NEED_DATA or a refusal. A REAL INCIDENT (2026-08-22) is exactly why this action exists: "Junk car address" — a place that IS in the address book — got the generic "I'm sorry, I can't help with that. My purpose is to assist with freight operations" refusal, which was both wrong and absurd, since the data was sitting right there. If she names a place you don't recognize, still use lookup_address with her exact wording — the lookup itself reports honestly when nothing matches and offers close matches; that is not your job to pre-judge. Do NOT use draft_email/search_mail for these — she is asking what's on file, not asking to email anyone or search mail. "rescan_mail" is for "check my inbox again", "rescan mail", "look at my mail again", "re-read the emails" — it re-reads the last few days INCLUDING mail it has already assessed and skipped. Use it when she thinks something was missed. Plain "what needs my reply" is show_pending_replies and only looks at mail it has not seen before; this one deliberately looks again. Read-only, sends nothing. "learn_writing_style" is for "learn how i write", "learn my writing style", "read my sent mail and copy my style", "make emails sound like me". It reads a sample of her own sent mail and works out her tone, greeting and sign-off so drafts sound like her. No target_name, no note. Read-only and sends nothing. "show_writing_style" is for "what's my writing style", "how do you think i write", "show my style" — just reports what was learned. "generate_proforma" is for when she wants a proforma invoice raised from what someone emailed — "send proforma to Joey", "proforma from Joey", "check mail from Joey and send her a proforma", "raise a PI for Taewon from their order", "make a proforma for Rad Metal". target_name = WHOSE EMAIL TO READ, verbatim — the person whose message contains the order. That is usually the sender, and is NOT necessarily the company being invoiced: orders often arrive from an agent writing on a buyer's behalf, and working out who the document is actually for is done later by reading the email, not by you. So for "proforma from Joey" target_name is Joey, even if the order turns out to be for Daekwang. It reads that customer's most recent email, pulls out the materials, quantities and prices the email ACTUALLY STATES, reads the figures back to her, and generates and emails the document only after she says yes. If the email doesn't give a price it stops and asks rather than guessing — so choose this confidently even when you don't know whether the email has everything; working that out is its job, not yours. Do NOT use draft_email for this (that writes a normal message, it cannot produce a proforma), and do NOT use search_mail (that only reports what the mail says and stops there).
+AND NEVER ASK HER WHICH EMAILS SHE MEANS. Another real incident the same night: "Email digest" was answered with "I can help with that. What specifically would you like to see in the email digest?" There is exactly one digest and she named it. Asking her to specify a thing that has no variants wastes a round trip and reads as though Jarvis does not know its own features. Run it. This is the on-demand version of a scan that also runs hourly on its own. READ-ONLY — it flags and reports, it never replies to anyone. "summarize_email" is for when she asks WHAT AN EMAIL SAYS rather than asking you to do anything with it — "what is this email about", "what does 2 say", "summarise the Zimex mail", "explain this one", "what did Raj want". It reads the actual email and tells her in a few lines: who sent it, what they say, what if anything is being asked, and any figures or dates that matter. READ-ONLY — it sends nothing to anyone and changes nothing. Set index to the digest NUMBER if she named one ("what is 2 about" -> index "2"), as a string. Set target_name to the person or company if she named one instead ("what did Raj send", "summarise the Zimex mail"). If she named NEITHER — a bare "what is this email about" — leave both null; she is almost certainly replying to a WhatsApp message of yours, and the quoted text is resolved separately, after your classification. That is not your job here. Do NOT use search_mail for this: search_mail answers WHETHER mail arrived from someone, summarize_email explains what a specific email SAYS. And do NOT use it when she wants something sent — that is reply_email or draft_email. Related: "ignore_digest_item" drops one or more items from that same numbered list (from a recent digest OR from show_pending_replies) so Jarvis stops nudging about them — "ignore 3", "dismiss 1 and 3", "ignore all". Set indices to the numbers named (as strings, e.g. ["3"]), or set all=true and leave indices null for "ignore all"/"ignore everything". This does NOT mark the underlying email as replied to — it only stops the deadline nudges and chase-ups; if a genuinely new message arrives on that thread later it is judged fresh. Never use this for "ignore" in the marketing-email-filtering sense (that is decided elsewhere, per email, not by number) — this action is ONLY for dismissing a numbered item she was just shown. Do NOT confuse it with search_mail: search_mail answers a question about mail from a NAMED person ("did Zimex reply"), while this one answers "who is waiting on me" with no sender named at all. "reply_email" is for when the manager explicitly wants to reply INSIDE an existing email thread from someone (e.g. "reply to Zimex about DALA123: confirmed") rather than send a standalone new email — target_name = whose email to reply to, email_details = what the reply should say, bkg_no = the booking if relevant. Same rule as draft_email: target_name is verbatim what the manager said, never a guessed/invented email address. Like draft_email, this only DRAFTS and stages for yes/no confirmation, never sends directly. Use draft_email (not reply_email) when there's no indication of replying to something specific — "reply to X" or "reply to X's email" means reply_email; "email X" alone means draft_email. "backfill_cutoffs" is for when the manager wants blank booking fields (cutoff, ERD, ETD, ETA, vessel/voyage, port of loading/discharge) filled in from existing mail — e.g. "backfill missing cutoffs", "fill in whatever's missing in bookings", "check mail for missing ERD/ETA". No target/details needed — it scans every active booking on its own. This auto-fills only genuinely blank fields (never overwrites anything already set) and reports back after, no confirmation needed before running it. "lookup_address" is for ANY question about where a saved place IS, or its contact details on file — the address book holds yards, buyers, sellers, ports and facilities under short names Apsara uses daily ("Junk car", "Eccomelt", "Inesh yard", "LA"). Set target_name to the place she named, VERBATIM, and nothing else. Recognize this in whatever phrasing she uses: "Junk car address", "address of Eccomelt", "where is Inesh yard", "what's the address for LA", "send me Junk car's address", "Ecco addres" (typo), "junk car location", "Junk car mobile", "Junk car phone number". This is READ-ONLY — it just looks up and shows what's saved, nothing is sent to anyone and nothing is changed, so use it confidently rather than falling back to NEED_DATA or a refusal. A REAL INCIDENT (2026-08-22) is exactly why this action exists: "Junk car address" — a place that IS in the address book — got the generic "I'm sorry, I can't help with that. My purpose is to assist with freight operations" refusal, which was both wrong and absurd, since the data was sitting right there. If she names a place you don't recognize, still use lookup_address with her exact wording — the lookup itself reports honestly when nothing matches and offers close matches; that is not your job to pre-judge. Do NOT use draft_email/search_mail for these — she is asking what's on file, not asking to email anyone or search mail. "rescan_mail" is for "check my inbox again", "rescan mail", "look at my mail again", "re-read the emails" — it re-reads the last few days INCLUDING mail it has already assessed and skipped. Use it when she thinks something was missed. Plain "what needs my reply" is show_pending_replies and only looks at mail it has not seen before; this one deliberately looks again. Read-only, sends nothing. "learn_writing_style" is for "learn how i write", "learn my writing style", "read my sent mail and copy my style", "make emails sound like me". It reads a sample of her own sent mail and works out her tone, greeting and sign-off so drafts sound like her. No target_name, no note. Read-only and sends nothing. "show_writing_style" is for "what's my writing style", "how do you think i write", "show my style" — just reports what was learned. "generate_proforma" is for when she wants a proforma invoice raised from what someone emailed — "send proforma to Joey", "proforma from Joey", "check mail from Joey and send her a proforma", "raise a PI for Taewon from their order", "make a proforma for Rad Metal". target_name = WHOSE EMAIL TO READ, verbatim — the person whose message contains the order. That is usually the sender, and is NOT necessarily the company being invoiced: orders often arrive from an agent writing on a buyer's behalf, and working out who the document is actually for is done later by reading the email, not by you. So for "proforma from Joey" target_name is Joey, even if the order turns out to be for Daekwang. It reads that customer's most recent email, pulls out the materials, quantities and prices the email ACTUALLY STATES, reads the figures back to her, and generates and emails the document only after she says yes. If the email doesn't give a price it stops and asks rather than guessing — so choose this confidently even when you don't know whether the email has everything; working that out is its job, not yours. Do NOT use draft_email for this (that writes a normal message, it cannot produce a proforma), and do NOT use search_mail (that only reports what the mail says and stops there).
 "show_receivables" answers "who owes me money" — outstanding invoice balances, oldest first, with ageing. Use it for "who owes me", "what's outstanding", "receivables", "unpaid invoices", "how much is Taewon behind", "aging report". If she names a customer, put that name in target_name; otherwise leave target_name null for everyone. Read-only.
 "record_payment" logs money RECEIVED against an invoice — "Taewon paid 5000", "received $18,000 for 26JY52", "Eccomelt cleared invoice 260819_AC_26JY52", "mark 26JY40 paid". Set target_name = the invoice number OR the customer name, verbatim; fact = the amount exactly as she wrote it ("5000", "$8,000", "5k"); note = anything else she said (method, date, reference). This only writes a bookkeeping entry — nothing is sent and no money moves. If the reference matches more than one invoice it asks rather than guessing, so use it confidently.
 "show_orphan_payments" lists payments recorded against an invoice number that isn't on the sheet — only when she asks about orphaned or unmatched payments.
@@ -1835,7 +1835,7 @@ empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
 ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings, generate_proforma,
 learn_writing_style, show_writing_style, rescan_mail,
-bookings_list_query, bookings_count_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies,
+bookings_list_query, bookings_count_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies, summarize_email,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message, ignore_digest_item,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
 reply, silent, NEED_DATA, NEED_APPROVAL
@@ -1904,7 +1904,7 @@ const SAFE_ACTIONS = new Set([
     // details — and nothing dispatches until all of them are answered. The AI
     // chooses the INTENT; the deterministic flow still gates the SEND.
     'bookings_list_query', 'bookings_count_query', 'get_quote',
-    'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'show_pending_replies',
+    'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'show_pending_replies', 'summarize_email',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
     // hardcode everything. let jarvis ai handle this"). This is exactly the
@@ -2133,6 +2133,9 @@ async function route(decision, ctx, sendMessage) {
         case 'show_writing_style':     return actions.showWritingStyle(chatId);
         case 'rescan_mail':            return actions.rescanMail(chatId);
         case 'show_pending_replies':    return actions.showPendingReplies(chatId);
+        // quotedText is what she long-pressed and replied to — see index.js.
+        // It is how a bare "what is this email about" finds its referent.
+        case 'summarize_email':         return actions.summarizeEmail(chatId, d.index, d.target_name, ctx.quotedText);
         case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
         case 'mute_matter':           return actions.muteMatter(chatId, { index: d.index || null, target: d.target || null });
         case 'unmute_matter':         return actions.unmuteMatter(chatId, d.target || null);
@@ -2297,6 +2300,23 @@ function pendingHint(p) {
 // original question directly in the reminder prevents that confusion from
 // happening in the first place, rather than relying on the AI to explain a
 // pending it has no real visibility into.
+// Pendings Jarvis raised for its own benefit, not hers. Nobody is waiting on
+// an answer, nothing is held, and an unanswered one costs nothing — so they
+// must never chase her. Everything NOT on this list is treated as a gate: it
+// is holding an action (an unsent email, a wizard mid-flight, a contradiction
+// that needs a decision) and gets exactly one reminder.
+//
+// New pending types default to GATE by omission, which is the safe direction:
+// a nag she did not want is an annoyance, a draft that vanished without a word
+// is a lost customer reply.
+const OPTIONAL_PENDINGS = new Set([
+    'wizard_start',          // the daily "any bookings going out today?" poke
+    'await_fact_batch',      // end-of-day learning review — the exact one she quoted back
+    'await_link_purpose',    // "what did you want me to do with this link?"
+    'await_ready_check',
+    'await_domain_learn_name',
+]);
+
 function pendingFullReminder(p) {
     if (p.type === 'wizard_start') return '(Still waiting on this from earlier: any bookings need to go out to a trucker today? Reply yes or no — or "cancel" to dismiss this.)';
     if (p.type === 'wizard_await_port') return `(Still waiting: which port? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
@@ -2595,9 +2615,37 @@ async function process(rawEvent, sendMessage) {
           // 2026-08-20 ("Weight and value are required..." immediately
           // followed by a nonsensical "reply yes/no" tail).
           'quote_cargo_details_retry'].includes(result?.action_taken);
+    // ── THE "STILL WAITING" TAIL ────────────────────────────────────────────
+    //
+    // Apsara, 2026-09-06, asked what it would take to not have a pending list
+    // at all, and chose: "tell me one at a time, as it arrives."
+    //
+    // This tail used to append a reminder after EVERY unrelated message for as
+    // long as a pending sat unanswered. Ask her about a booking, get the
+    // booking plus a nag about last Tuesday's end-of-day review. That is the
+    // list she is describing: not a list she opens, a list that follows her
+    // around. Her own words earlier in the same session, quoting it back at
+    // Jarvis: "(Still waiting: end-of-day review — 1. remember: ... 2.
+    // remember: ...)" appended to a question about Houston bookings.
+    //
+    // Two rules now:
+    //
+    //   OPTIONAL pendings never nag at all. Jarvis asked, she did not answer,
+    //   that is an answer. They expire on their own (cfg.PENDING_EXPIRY_MS).
+    //
+    //   GATE pendings — the ones HOLDING something of hers, above all an
+    //   unsent drafted email — remind exactly ONCE and then go quiet. Not
+    //   zero: silently sitting on a draft she believes is going out is worse
+    //   than one reminder. Not forever: that is what she asked to stop.
+    //
+    // Deliberately NOT deleting the pending. "Stop nagging me" is not "throw
+    // away my draft" — the pending stays answerable, and "what's pending"
+    // still lists it on demand.
     if (inbound.isManagerOrTeam && pending && !alreadyExplainedPending) {
         const fresh = actions.getPending(inbound.chatId);
-        if (fresh && fresh.created_at === pending.created_at) {
+        if (fresh && fresh.created_at === pending.created_at
+            && !OPTIONAL_PENDINGS.has(fresh.type)
+            && !fresh.reminded_at) {
             const fullReminder = pendingFullReminder(fresh);
             if (fullReminder) {
                 await sendMessage(inbound.chatId, fullReminder);
@@ -2605,6 +2653,7 @@ async function process(rawEvent, sendMessage) {
                 const bkgPart = fresh.bkg_no ? ` for ${fresh.bkg_no}` : '';
                 await sendMessage(inbound.chatId, `(Still pending: ${fresh.type.replace(/_/g, ' ')}${bkgPart} — ${pendingHint(fresh)}.)`);
             }
+            await actions.markPendingReminded(inbound.chatId);
         }
     }
 
@@ -2677,4 +2726,4 @@ async function handleManagerLLMFallback(text, chatId, sendMessage) {
     return { intent: 'awaiting_confirmation', resolvedBy: 'llm', data: {}, confidence: decision.confidence };
 }
 
-module.exports = { process, normalize, policyDecide, pendingFullReminder, route };
+module.exports = { process, normalize, policyDecide, pendingFullReminder, OPTIONAL_PENDINGS, route };

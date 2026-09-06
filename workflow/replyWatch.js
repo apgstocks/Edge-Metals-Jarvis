@@ -156,7 +156,18 @@ try {
         // edgemetals". Octavio's question was addressed to AISHA. Nobody at
         // Edge Metals was asked anything - Apsara is a bystander on the thread
         // - and the digest still filed it under "emails waiting on you".
-        waiting_on: z.enum(['her', 'them', 'colleague', 'someone_else', 'nobody']).optional().default('her'),
+        // NO DEFAULT — Apsara, 2026-09-06: "waiting on her/team is fine. false
+        // positive is bad."
+        //
+        // This used to default to 'her'. So a model response that simply did
+        // not mention direction was recorded as the strongest and most
+        // disruptive claim available: her list, her problem. That is failing
+        // toward noise, from the weakest possible evidence — no evidence.
+        //
+        // Now an unstated direction stays unstated, and the To-line headers
+        // below get to decide. If they cannot either, it does not become
+        // "waiting on you" — see UNSTATED handling in assess().
+        waiting_on: z.enum(['her', 'them', 'colleague', 'someone_else', 'nobody']).nullable().optional().default(null),
         // Who the question is actually aimed at, when it is not Edge Metals.
         // Display name preferred; whatever the To header carries otherwise.
         asked_of: z.string().nullable().optional().default(null),
@@ -216,6 +227,13 @@ try {
 const LOOKBACK_DAYS = Number(process.env.REPLYWATCH_LOOKBACK_DAYS) || 3;
 const MAX_EMAILS_PER_RUN = Number(process.env.REPLYWATCH_MAX_EMAILS) || 25;   // bounds both Gemini spend and digest length
 const MIN_CONFIDENCE = 0.6;
+// Above this, a needs_reply claim is stated plainly as hers. Below it (but
+// above MIN_CONFIDENCE) the item still shows, under "I'm not sure about" —
+// see the UNSURE bucket in buildDigest. Set to the same 0.75 that
+// confidenceCaps applies when direction came from prose instead of the To
+// line, so "we could not verify she was even asked" and "we are not sure"
+// are the same threshold rather than two numbers to keep in step.
+const SURE_CONFIDENCE = 0.75;
 
 // ── Continuous monitoring — Apsara, 2026-08-22: "i want email to be
 // monitored all the time." ──────────────────────────────────────────────────
@@ -1261,8 +1279,37 @@ function addressing(toHeader, ccHeader, myAddress, managerAddress = null, fromHe
     const label = (addr) => addr
         ? cleanLabel(String(toHeader).split(',').find((p) => p.includes(addr)) || addr)
         : null;
+    // ── A THIRD PARTY WAS ALSO ASKED (2026-09-06) ──────────────────────────
+    // From a real miss Apsara sent in: Tiffany at eccomelt wrote
+    //     To: Matthew Whittaker <WhittakerM@schneider.com>, Apsara <apsara@edgemetals.com>
+    // offering appointment slots. The digest read it as "Tiffany offers you
+    // Friday 9/11". Apsara: "she didnt offer me. she was mailing matthew."
+    //
+    // The headers cannot settle this one on their own and never could: she IS
+    // on the To line, so inTo is correctly true. What the old shape could not
+    // express is that somebody OUTSIDE both companies was on that line too,
+    // and the appointment is Schneider's to take.
+    //
+    // The test is deliberately narrow — a To recipient who is at neither HER
+    // domain NOR THE SENDER'S. A sender copying their own colleagues (Marc
+    // Kang writing to Andy Park and Nancy Kim, all @mkmetaltrading.com) is
+    // completely normal and still means the question is for Edge Metals; that
+    // shape must not trip this. Checked against all three real examples she
+    // sent: it fires on Tiffany/Schneider, and not on either MK Trading mail.
+    //
+    // This does NOT decide direction by itself. It is one more piece of
+    // evidence, and downstream it only ever makes an item UNSURE — shown and
+    // numbered, but not counted as hers. Fail open, hedge, never hide.
+    const senderDomain = fromAddrs.length ? companyDomain(fromAddrs[0]) : null;
+    const thirdParty = to.find((a) => {
+        const d = companyDomain(a);
+        return d && d !== domain && (!senderDomain || d !== senderDomain);
+    }) || null;
+
     return {
         inTo, inCc, fromInternal,
+        thirdPartyInTo: inTo && !!thirdParty,
+        thirdPartyLabel: label(thirdParty),
         // Somebody at the company, but not her.
         colleagueInTo: !inTo && !!colleagueTo,
         colleagueLabel: label(colleagueTo),
@@ -1462,7 +1509,12 @@ async function assess(email) {
     // Direction decides which grounding signal applies. A sender who OWES her
     // something never asks for it in their own words, so checking their quote
     // against REQUEST_SIGNAL would null out every honest progress report.
-    let waiting_on = ['her', 'them', 'colleague', 'someone_else', 'nobody'].includes(res.waiting_on) ? res.waiting_on : 'her';
+    // UNSTATED is not "her". See the schema comment: the old fallback turned
+    // a missing field into her most disruptive bucket. Tracked separately so
+    // the header logic below can still resolve it, and so that a direction
+    // nobody ever established cannot end up asserted as fact.
+    const directionUnstated = !['her', 'them', 'colleague', 'someone_else', 'nobody'].includes(res.waiting_on);
+    let waiting_on = directionUnstated ? 'her' : res.waiting_on;
     let fromInternal = false;
     let asked_of = res.asked_of ? String(res.asked_of).trim() : null;
 
@@ -1471,6 +1523,11 @@ async function assess(email) {
     // confidence cap below: a direction inferred from prose is a weaker claim
     // than one read off a header, and the number should say so.
     let addressingUnknown = true;
+    // Set when somebody outside BOTH companies is on the To line beside her —
+    // see addressing()'s thirdPartyInTo. Never decides direction on its own;
+    // it only makes the item UNSURE downstream. (Tiffany/Schneider, 2026-09-06.)
+    let thirdPartyAddressed = false;
+    let thirdPartyLabel = null;
 
     // HEADERS BEAT THE MODEL. If no company address is in To, nobody here was
     // asked, whatever the prose sounds like. Applied only when the caller
@@ -1494,6 +1551,10 @@ async function assess(email) {
             console.error('[REPLYWATCH] addressing failed, treating direction as unknown (non-fatal):', e.message);
         }
         addressingUnknown = !!addr.unknown;
+        if (!addr.unknown && addr.thirdPartyInTo) {
+            thirdPartyAddressed = true;
+            thirdPartyLabel = addr.thirdPartyLabel || null;
+        }
         if (!addr.unknown && addr.fromInternal) fromInternal = true;
         if (!addr.unknown && addr.fromInternal && !addr.inTo) {
             // OUR OWN TEAM wrote this to an outsider. Not inbound work. Either
@@ -1784,6 +1845,24 @@ async function assess(email) {
         // itself. An email she is waiting on THEM for is not an email she can
         // reply to, so it must never enter the "waiting on you" list.
         needs_reply: waiting_on === 'her' && (res.needs_reply === true || res.needs_reply === 'true'),
+        // NOT suppressed here, deliberately, and this was my own first attempt
+        // corrected: I had needs_reply go false when the model stated no
+        // direction and the headers could not resolve one. That fails CLOSED
+        // on absence of evidence, which addressing() a hundred lines above
+        // explicitly refuses to do — "a missing To is not evidence that
+        // someone else was asked", with a near-miss production outage behind
+        // the comment. Dropping mail silently is the one outcome worse than a
+        // noisy list. So an unestablished direction makes an item UNSURE (it
+        // is still shown, still numbered, just not counted as hers) rather
+        // than invisible. See buildDigest's UNSURE bucket.
+        // Recorded so the digest can separate "she was asked" from "probably
+        // her, on prose alone" — see the UNSURE bucket in buildDigest.
+        direction_unstated: directionUnstated,
+        addressing_unknown: addressingUnknown,
+        // Somebody outside both companies was on the To line beside her, so
+        // the ask may well be theirs. Hedged, not hidden.
+        third_party_addressed: thirdPartyAddressed,
+        third_party_label: thirdPartyLabel,
         asked_for_quote: typeof res.asked_for_quote === 'string' ? res.asked_for_quote : null,
         confidence,
         // Kept so a digest line can be traced back to what the model was NOT
@@ -2632,7 +2711,34 @@ function buildDigest(matters, emailCount) {
     const elsewhere = matters.filter((f) => !f.needs_reply && f.waiting_on === 'someone_else');
     const colleague = matters.filter((f) => !f.needs_reply && f.waiting_on === 'colleague');
     const orders = matters.filter((f) => !f.needs_reply && !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && f.is_order);
-    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f));
+    // ── UNSURE (2026-09-06) ────────────────────────────────────────────────
+    // Apsara: "waiting on her/team is fine. false positive is bad."
+    //
+    // The precision/recall dial had exactly two positions: flag it as hers, or
+    // drop it and never mention it again. So tightening the bar to cut false
+    // positives meant silently binning real mail, which is the one failure
+    // worse than a noisy list.
+    //
+    // This is the third position. An item Jarvis believes needs her reply but
+    // is NOT confident about — a direction read off prose rather than the To
+    // line, or a confidence that clears the floor without being solid — is
+    // still SHOWN, and still numbered so "reply to 4" works on it. It is just
+    // not counted in "N emails waiting on you". The headline number becomes a
+    // claim Jarvis can stand behind, and nothing is thrown away to get there.
+    const unsureItem = (f) => f.needs_reply && (
+        // Nobody established a direction: the model did not state one and the
+        // To line could not settle it either. Shown, but not asserted as hers.
+        (f.direction_unstated === true && f.addressing_unknown === true)
+        // Or the model itself is not confident. This is the dial her rule
+        // turns: "waiting on her/team is fine, false positive is bad."
+        || (typeof f.confidence === 'number' && f.confidence < SURE_CONFIDENCE)
+        // Or somebody outside both companies was on the To line beside her and
+        // the ask may be theirs — the Tiffany/Schneider shape. She is still
+        // shown it; it is just not asserted as her job.
+        || f.third_party_addressed === true
+    );
+    const unsure = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && unsureItem(f));
+    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && !unsure.includes(f));
     const orderPhrase = `${orders.length} order${orders.length === 1 ? '' : 's'} came in`;
     const replyPhrase = `${replies.length} email${replies.length === 1 ? '' : 's'} waiting on you`;
     const owedPhrase = `you're waiting on ${owed.length}`;
@@ -2645,6 +2751,9 @@ function buildDigest(matters, emailCount) {
     if (owed.length) phrases.push(owedPhrase);
     if (elsewhere.length) phrases.push(elsewherePhrase);
     if (colleague.length) phrases.push(`${colleague.length} your team is handling`);
+    // Deliberately last, and deliberately hedged. It is a list of maybes and
+    // should read like one.
+    if (unsure.length) phrases.push(`${unsure.length} I'm not sure about`);
     let head;
     if (phrases.length === 1 && replies.length && matters.length !== n) {
         head = `${n} emails waiting on you — ${matters.length} thing${matters.length === 1 ? '' : 's'} to deal with:`;
@@ -2798,7 +2907,13 @@ function buildDigest(matters, emailCount) {
         }
         lines.push('');
     });
-    if (!replies.length && !orders.length) {
+    // An UNSURE item is a maybe-hers, not an owed one. It must not fall into
+    // the branch below, whose whole premise is "nothing here is yours to
+    // answer" — with unsure items present that footer says the opposite of
+    // the list, exactly the way the colleague-only case did on 31 Aug (see
+    // the comment further down). Caught by the precision test the moment the
+    // bucket was added.
+    if (!replies.length && !orders.length && !unsure.length) {
         // Nothing here is hers to answer. The reply instructions would be
         // actively wrong.
         if (elsewhere.length && !owed.length) {
@@ -2825,7 +2940,7 @@ function buildDigest(matters, emailCount) {
             : 'Say "reply to 1" if you want me to draft a nudge for your yes.');
         return lines.join('\n');
     }
-    if (!replies.length) {
+    if (!replies.length && !unsure.length) {
         // Order-only digest: the reply instructions would be noise, and worse,
         // they'd imply someone is waiting on an answer when nobody is.
         const priced = orders.find((f) => f.proforma && !(f.proforma.needs || []).length);
@@ -2836,6 +2951,12 @@ function buildDigest(matters, emailCount) {
     }
     lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
     lines.push('and I\'ll draft it for your yes before anything goes out.');
+    // Say WHY something is in the maybe pile, and how to make it go away. An
+    // unexplained "not sure" bucket is just a second list to ignore.
+    if (unsure.length) {
+        lines.push('');
+        lines.push(`The ${unsure.length === 1 ? 'one' : unsure.length} I'm not sure about might not need you at all — ask "what is N about" before deciding, or "ignore N".`);
+    }
     return lines.join('\n');
 }
 

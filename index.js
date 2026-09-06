@@ -565,6 +565,28 @@ client.on('message', async (msg) => {
             }
         }
 
+        // WHAT SHE REPLIED TO. Apsara, 2026-09-06: "when user asks about what
+        // is this email about to a whatsapp message of yours, you should able
+        // to give summary."
+        //
+        // WhatsApp carries the quoted message on the inbound event, and until
+        // now Jarvis never looked at it — hasQuotedMsg appeared nowhere in the
+        // codebase. So long-pressing a digest and asking "what is this about"
+        // arrived as four bare words with no referent, and there was nothing
+        // it could do but guess.
+        //
+        // Best-effort and non-fatal: getQuotedMessage() is another Puppeteer
+        // round-trip into whatsapp-web.js's Store, which is exactly the call
+        // that already fails intermittently for getChat()/getContact() above.
+        // A failure here must cost the quote, never the message.
+        let quotedText = null;
+        if (msg.hasQuotedMsg) {
+            try {
+                const q = await msg.getQuotedMessage();
+                quotedText = (q && q.body) ? String(q.body).slice(0, 4000) : null;
+            } catch (e) { console.warn('[WA] getQuotedMessage failed (non-fatal):', e.message); }
+        }
+
         await brain.process({
             messageId   : msg.id?._serialized,
             chatId      : chat?.id?._serialized || msg.from,
@@ -576,6 +598,7 @@ client.on('message', async (msg) => {
             mediaBase64,
             mediaMimeType,
             isGroup     : chat?.isGroup ?? String(msg.from || '').endsWith('@g.us'),
+            quotedText,
         }, sendMessage);
     } catch (err) {
         console.error('[WA] Message handler crashed:', err);
