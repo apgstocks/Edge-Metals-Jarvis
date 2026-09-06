@@ -124,6 +124,28 @@
     var MAX_MS = 9000;
     var MIN_MS = 350;      // shorter than this is a door, not a sentence
 
+    // ── ONE AUDIOCONTEXT FOR THE WHOLE PAGE ──────────────────────────────
+    // Module-level, NOT per instance, and that distinction is the actual
+    // fix. dashboard/voice.js does `rec = new SR()` on every wake, so a
+    // context owned by the instance is still a new context every time —
+    // which is exactly the leak: one per exchange, closed asynchronously,
+    // until Chrome's limit of about six is reached and the constructor
+    // throws. After that the microphone never opens again while the pill
+    // still says "Listening".
+    //
+    // Apsara: "post showing a reply, when i say hey jarvis, its not
+    // listening even though its showing that it is listening."
+    var sharedCtx = null;
+    function context() {
+        var Ctor = window.AudioContext || window.webkitAudioContext;
+        if (!Ctor) return null;
+        if (!sharedCtx || sharedCtx.state === 'closed') sharedCtx = new Ctor();
+        if (sharedCtx.state === 'suspended' && sharedCtx.resume) {
+            sharedCtx.resume().catch(function () {});
+        }
+        return sharedCtx;
+    }
+
     function LocalRecognition() {
         this.continuous = true;
         this.interimResults = false;
@@ -151,9 +173,30 @@
         navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         }).then(function (stream) {
+          try {
             if (self._stopped) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
             self._stream = stream;
-            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+            // ── ONE AUDIOCONTEXT, REUSED ─────────────────────────────────
+            // Apsara, 2026-09-06: "post showing a reply, when i say hey
+            // jarvis, its not listening even though its showing that it is
+            // listening."
+            //
+            // This built a NEW AudioContext on every start() and closed it
+            // on every stop() — so one per wake, per answer, for as long as
+            // she used it. Browsers cap concurrent AudioContexts (Chrome at
+            // about six), and closing is asynchronous, so after a handful of
+            // exchanges the constructor throws. Inside this .then() with no
+            // catch, that became an unhandled rejection: no error event, no
+            // microphone, and a pill still reading "Listening" because the
+            // state machine had been told the mic was open and nothing ever
+            // told it otherwise.
+            //
+            // Kept and reused instead. A suspended context is resumed; only
+            // the stream and the processor node are torn down between turns,
+            // which is all that actually needs to be.
+            var ctx = context();
+            if (!ctx) throw new Error('no AudioContext in this browser');
             self._ctx = ctx;
             var src = ctx.createMediaStreamSource(stream);
 
@@ -307,6 +350,19 @@
             mute.connect(ctx.destination);
 
             if (self.onstart) self.onstart();
+          } catch (err) {
+            // WITHOUT THIS the failure vanished. An exception thrown inside
+            // a .then() with no catch is an unhandled rejection: nothing on
+            // screen, nothing in the state machine, and a microphone that
+            // is not open while the UI insists it is. Reported as an engine
+            // error so voice.js can say so and the reducer can stop
+            // believing the mic is live.
+            console.warn('[VOICE] could not open the microphone —', err && err.message);
+            try { if (self._stream) self._stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e2) {}
+            self._stream = null;
+            if (self.onerror) self.onerror({ error: 'engine', message: (err && err.message) || 'microphone setup failed' });
+            if (self.onend) self.onend();
+          }
         }).catch(function (e) {
             if (self.onerror) self.onerror({ error: e && e.name === 'NotAllowedError' ? 'not-allowed' : 'audio-capture', message: e && e.message });
             if (self.onend) self.onend();
@@ -460,8 +516,12 @@
         this._stopped = true;
         try { if (this._node) { this._node.onaudioprocess = null; this._node.disconnect(); } } catch (e) {}
         try { if (this._stream) this._stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
-        try { if (this._ctx) this._ctx.close(); } catch (e) {}
-        this._node = null; this._stream = null; this._ctx = null;
+        // THE CONTEXT SURVIVES. Closing it here is what forced a new one on
+        // every wake and eventually hit the browser's limit — see start().
+        // The microphone track is released, which is what actually matters
+        // for the recording indicator and for privacy; the audio graph
+        // itself costs nothing while idle.
+        this._node = null; this._stream = null;
         this._collecting = false; this._chunks = []; this._pre = [];
         this._asking = false; this._turnSaidDone = false;
         if (this.onend) this.onend();

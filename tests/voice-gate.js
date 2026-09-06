@@ -55,11 +55,20 @@ function harness() {
         set onaudioprocess(fn) { onaudio = fn; }, get onaudioprocess() { return onaudio; },
     };
     w.AudioContext = class {
-        constructor() { this.sampleRate = RATE; this.destination = {}; }
-        createMediaStreamSource() { return { connect() {} }; }
+        constructor() { this.sampleRate = RATE; this.destination = {}; this.state = 'running'; }
+        createMediaStreamSource() {
+            // A real one THROWS on a closed context. Without this the fake
+            // let a closed context keep working, and a mutation that closed
+            // the shared context on every stop() survived the whole file.
+            if (this.state === 'closed') throw new Error('AudioContext is closed');
+            return { connect() {} };
+        }
         createScriptProcessor() { return node; }
         createGain() { return { gain: { value: 1 }, connect() {} }; }
-        close() {}
+        resume() { this.state = 'running'; return Promise.resolve(); }
+        // close() SETS THE STATE. A no-op close is not a close, and it is
+        // what let the leak hide.
+        close() { this.state = 'closed'; return Promise.resolve(); }
     };
     w.navigator.mediaDevices = {
         getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }),
@@ -599,6 +608,84 @@ section('I — it does not transcribe its own "Mm-hm"');
         ck('  and the BUFFER does not include audio from before the ack', n < 32000,
            n + ' samples — the pre-ack half was glued on, producing a sentence she never said');
     }
+}
+
+section('J — it is still listening after the tenth question');
+{
+    // Apsara, 2026-09-06: "post showing a reply, when i say hey jarvis, its
+    // not listening even though its showing that it is listening."
+    //
+    // voice.js does `rec = new SR()` on every wake. This file built a fresh
+    // AudioContext per instance and closed it on stop — so one context per
+    // exchange, closed asynchronously, against a browser limit of about six.
+    // Around the seventh question the constructor throws, inside a .then()
+    // with no catch, and the failure evaporates: no error event, no
+    // microphone, and a pill still reading "Listening" because the state
+    // machine was told the mic was open and never told otherwise.
+    //
+    // Two things are asserted, and the second is the one that would have
+    // caught it: not just that the context is reused, but that a failure to
+    // open the microphone is REPORTED rather than lost.
+    const h = harness();
+    let made = 0;
+    const Real = h.w.AudioContext;
+    h.w.AudioContext = class extends Real {
+        constructor() {
+            super();
+            made += 1;
+            // What a real browser does once the limit is reached.
+            if (made > 6) throw new Error('Failed to construct AudioContext: limit reached');
+        }
+    };
+    h.w.__jarvisLocalSpeechLoaded = false;
+    h.w.eval(SRC);
+
+    // Ten exchanges: wake, listen, stop — exactly the cycle voice.js runs.
+    let lastErr = null;
+    let opened = 0;
+    for (let i = 0; i < 10; i += 1) {
+        const rec = new h.w.JarvisLocalRecognition();
+        rec.onerror = (e) => { lastErr = e; };
+        rec.onstart = () => { opened += 1; };
+        rec.start();
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 0));
+        rec.stop();
+    }
+
+    ck('ten exchanges do not make ten audio contexts', made <= 2,
+       made + ' created — one per wake exhausts the browser\'s limit and the mic stops opening');
+    ck('  and the microphone opened every time', opened === 10,
+       opened + ' of 10 — the ones that failed are the "shows Listening but is not" state');
+    ck('  with no swallowed errors', lastErr === null,
+       'got: ' + JSON.stringify(lastErr));
+}
+
+section('J2 — a microphone that fails to open SAYS so');
+{
+    // The half that turns a silent failure into a visible one. Even with the
+    // leak fixed, setup can fail — a device unplugged, permission revoked
+    // mid-session — and an exception inside the getUserMedia .then() is an
+    // unhandled rejection that reaches nobody.
+    const h = harness();
+    h.w.AudioContext = class { constructor() { throw new Error('no audio device'); } };
+    h.w.__jarvisLocalSpeechLoaded = false;
+    h.w.eval(SRC);
+
+    const rec = new h.w.JarvisLocalRecognition();
+    let err = null, ended = false;
+    rec.onerror = (e) => { err = e; };
+    rec.onend = () => { ended = true; };
+    rec.start();
+    await new Promise((r) => setTimeout(r, 5));
+
+    ck('a failure to open the mic reports an error', !!err,
+       'without this it is an unhandled rejection: no event, no mic, and a pill that says Listening');
+    ck('  named as an engine failure so voice.js can explain it',
+       err && err.error === 'engine', JSON.stringify(err));
+    ck('  and onend fires so the reducer stops believing the mic is live',
+       ended === true,
+       'the state machine has to be told, or micShouldBeOpen stays true for ever');
 }
 
 section('G — the ceiling still holds');

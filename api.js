@@ -1943,7 +1943,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     text, hasMedia: false, _source: 'voice',
                 }, realSendMessage);
             });
-            const replies = capture.replies || [];
+            // ── replies ARE OBJECTS ──────────────────────────────────────
+            // Apsara, 2026-09-06: "[object Object] its saying object object".
+            //
+            // index.js pushes { chatId, text, media } — not strings. So
+            // join() called each object's default toString and produced
+            // "[object Object]", which was then spoken aloud and printed on
+            // the card. The captured shape has been that since the web bot
+            // surface was built; this endpoint just never looked at it.
+            //
+            // Media-only replies (a booking PDF, no words) have text: null
+            // and are dropped rather than becoming "null" on screen.
+            const replies = (capture.replies || [])
+                .map((r) => (r && typeof r === 'object' ? r.text : r))
+                .filter((t) => typeof t === 'string' && t.trim());
             return res.json({
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                 routed_because: route.why,
