@@ -279,11 +279,35 @@
     ];
     var chosenVoice = null;
 
+    // Her choice, remembered. Stored by NAME rather than by index, because
+    // the order of getVoices() is not stable across launches — an index
+    // would silently become a different voice one morning.
+    var VOICE_PREF_KEY = 'jarvisVoiceName';
+    function savedVoiceName() {
+        try { return window.localStorage.getItem(VOICE_PREF_KEY) || ''; } catch (e) { return ''; }
+    }
+
     function pickVoice() {
         if (chosenVoice) return chosenVoice;
         var list = [];
         try { list = window.speechSynthesis.getVoices() || []; } catch (e) { return null; }
         if (!list.length) return null;      // not loaded yet; see voiceschanged
+
+        // ── WHAT SHE PICKED BEATS WHAT I RANKED ──────────────────────────
+        // The wishlist below is my opinion about which voices sound human.
+        // It is only a default. If she has chosen one, that is the answer,
+        // and no amount of my ordering should override it.
+        var want = savedVoiceName();
+        if (want) {
+            var mine = list.filter(function (v) { return v.name === want; })[0];
+            if (mine) {
+                chosenVoice = mine;
+                console.log('[VOICE] speaking as "' + mine.name + '" (your choice)');
+                return chosenVoice;
+            }
+            // Chosen on another machine, or the voice was removed. Fall
+            // through to the default rather than going silent.
+        }
 
         var english = list.filter(function (v) { return /^en(-|_|$)/i.test(v.lang || ''); });
         var pool = english.length ? english : list;
