@@ -324,7 +324,67 @@ let draft = null;
 // draft is staged, handle() only answers a correction or a brand-new start,
 // and a bare "send it" is neither — it reaches the brain, which is what
 // actually sends. The overlap resolves by which of them has a document.
-const START = /\b(create|make|raise|draw\s+up|prepare|prep|generate|issue|send|do|put\s+together|draft|new)\b[^.]{0,24}\b(proforma|pi|p\.i\.|invoice)\b/i;
+const START_VERB = /\b(create|make|raise|draw\s+up|prepare|prep|generate|issue|send|do|put\s+together|draft|new)\b/i;
+
+// ── THE WORD ITSELF, AS WHISPER HEARS IT ─────────────────────────────────
+// Apsara, 2026-09-07: "if i say proforma-sometimes it is getting treated as
+// 'create a propharma' ..it is unable to resolve. instead it shows no
+// bookings found."
+//
+// The pattern above demanded the literal string "proforma". Whisper writes
+// "propharma", "profarma", "performa", "pro forma", "proform" — and every one
+// of those failed to start a draft, fell through to the router, and came back
+// "no bookings found", which is a baffling thing to hear after asking for an
+// invoice.
+//
+// EDIT DISTANCE DOES NOT WORK HERE, and I measured before choosing rather
+// than after. "propharma" is 3 edits from "proforma" — but so are "perform"
+// and "forma", and "perform a scan" turning into a proforma is worse than the
+// bug being fixed.
+//
+// So the rule is STRUCTURAL: a pro/pre/per prefix immediately followed by an
+// f or ph, then up to two vowels, then an optional r, then an m. That is the
+// shape of every mishearing and not the shape of "platform" or "pharma". The
+// handful of real English words that still fit are stoplisted by name.
+const PROFORMA_STOP = new Set([
+    'perform', 'performs', 'performed', 'performing',
+    'performance', 'performances', 'platform', 'platforms',
+]);
+const PROFORMA_SHAPE = /^(?:pro|pre|per)(?:f|ph)[aeiou]{0,2}r?m/;
+
+function looksLikeProforma(word) {
+    const t = String(word || '').toLowerCase().replace(/[^a-z]/g, '');
+    // "proform" is the shortest real mishearing at seven characters. Below
+    // that the only strings matching the shape are things like "profm" — junk
+    // no transcriber emits.
+    //
+    // I wrote this as `t.length < 7 && t !== 'proform'`, and the second half
+    // was dead: "proform" is seven characters, so the first half is already
+    // false for it. A condition that reads as load-bearing and never fires is
+    // worse than no condition, because the next person keeps it.
+    if (t.length < 7) return false;
+    if (PROFORMA_STOP.has(t)) return false;
+    return PROFORMA_SHAPE.test(t);
+}
+
+// Does the sentence name the document at all, however it was heard?
+//
+// "PI" and "P.I." stay EXACT. Two letters cannot be fuzzy-matched without
+// swallowing half the language, and she says them clearly because they are
+// initials.
+function namesProforma(text) {
+    const t = String(text || '');
+    if (/\b(?:p\.?\s?i\.?|invoice)\b/i.test(t)) return true;
+    const words = t.split(/[^A-Za-z]+/).filter(Boolean);
+    for (let i = 0; i < words.length; i += 1) {
+        if (looksLikeProforma(words[i])) return true;
+        // Adjacent words joined too: "pro forma" and "pro pharma" arrive as
+        // two tokens and neither half means anything on its own.
+        if (i + 1 < words.length && /^(?:pro|pre|per)$/i.test(words[i])
+            && looksLikeProforma(words[i] + words[i + 1])) return true;
+    }
+    return false;
+}
 
 // ── "SEND A PROFORMA" MAKES ONE. "SEND THE PROFORMA" POSTS ONE. ──────────
 // Adding "send" to the verbs above created a real collision, and the article
@@ -347,7 +407,16 @@ const CREATE_VERB = /\b(create|make|raise|draw\s+up|prepare|prep|generate|put\s+
 
 function isStart(text) {
     const t = String(text || '');
-    if (!START.test(t)) return false;
+    // The document has to be named, however it was heard.
+    if (!namesProforma(t)) return false;
+
+    // ...and either a verb asks for one, or the sentence OPENS with the word.
+    // "proforma for Daekwang, 21 MT of copper at 8450" is a complete request
+    // and she says it exactly that way; demanding a verb turned it into
+    // nothing at all.
+    const opener = /^\s*(?:hey\s+jarvis[,\s]*)?(?:a\s+|an\s+|the\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)/.exec(t);
+    const opensWithIt = !!(opener && namesProforma(opener[1]));
+    if (!START_VERB.test(t) && !opensWithIt) return false;
     // "create ... email it to Yurim" — unambiguous, whatever else it says.
     if (CREATE_VERB.test(t)) return true;
     // Only send/do/issue are ambiguous, and the article decides: "send A
@@ -853,7 +922,8 @@ module.exports = {
     materialIn, catalogMaterials, catalogPattern, describeFor, KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
-    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, START, NOT_A_START, CREATE_VERB,
+    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, START_VERB, NOT_A_START, CREATE_VERB,
+    namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
 };

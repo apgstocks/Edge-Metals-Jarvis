@@ -208,6 +208,84 @@ section('H2 — the verbs she actually reaches for');
     ]) ck(`  "${t}" does not`, d.isStart(t) === false);
 }
 
+section('H3 — the word itself, as whisper hears it');
+{
+    // Apsara, 2026-09-07: "if i say proforma-sometimes it is getting treated
+    // as 'create a propharma' ..it is unable to resolve. instead it shows no
+    // bookings found."
+    //
+    // The pattern demanded the literal string "proforma". Every mishearing
+    // failed to start a draft, fell through to the router, and came back "no
+    // bookings found" — a baffling thing to hear after asking for an invoice.
+    for (const t of [
+        'create a propharma for Daekwang',      // HER REPORTED CASE
+        'create a profarma for Daekwang',
+        'create a prophorma for Daekwang',
+        'make a profoma for Daekwang',
+        'raise a performa for Yurim',
+        'make a pro forma for Yurim',           // two tokens, neither meaningful alone
+        'make a pro pharma for Yurim',
+        'do a proform for Daekwang',
+        'create a preforma for Daekwang',
+    ]) ck(`"${t}" starts a draft`, d.isStart(t) === true);
+
+    // SHE ALSO SAYS IT WITH NO VERB AT ALL. "proforma for Daekwang, 21 MT of
+    // copper at 8450" is a complete request; demanding a verb made it nothing.
+    for (const t of [
+        'proforma for Daekwang, 21 MT of copper at 8450',
+        'propharma for Daekwang',
+        'hey jarvis proforma for Daekwang',
+        'a proforma for Daekwang',
+    ]) ck(`  "${t}" starts one too`, d.isStart(t) === true);
+
+    // WHAT MUST NOT. Edit distance was measured and REJECTED for exactly
+    // this: "propharma" is 3 edits from "proforma", and so are "perform" and
+    // "forma". "perform a scan" becoming a proforma is worse than the bug.
+    for (const t of [
+        'perform a scan for bookings past cutoff',
+        'run a scan and perform the archive',
+        'what is our performance this month',
+        'platform update',
+        'pharma company enquiry',
+        'send the proforma to Joey',            // posts an existing one
+        'any bookings from Houston',
+        'forward that to Sher Trucking',
+    ]) ck(`  "${t}" does NOT`, d.isStart(t) === false);
+
+    // The word-level test on its own, since isStart also needs a verb or an
+    // opening position and could mask a broken shape check.
+    for (const w of ['proforma', 'propharma', 'profarma', 'prophorma', 'performa', 'preforma', 'proform', 'profoma'])
+        ck(`  "${w}" is recognised as the word`, d.looksLikeProforma(w) === true);
+    for (const w of [
+        'perform', 'performance', 'platform', 'pharma', 'forma', 'form', 'proof', 'promo',
+        // THE WORDS THAT EXERCISE THE pro/pre/per ANCHOR. Every one of these
+        // contains the f-vowel-rm shape; only the anchor keeps them out, and
+        // without these my false-positive list was so easy that deleting the
+        // anchor entirely left all 153 assertions green.
+        'information', 'transform', 'transformer', 'confirm', 'confirmation',
+        'uniform', 'farm', 'formal', 'formula', 'reform', 'informal',
+    ]) ck(`  "${w}" is not`, d.looksLikeProforma(w) === false);
+
+    // And in a whole sentence, which is how they actually arrive.
+    for (const t of [
+        'confirm the booking for Daekwang',
+        'send Yurim the shipping information',
+        'is that the formal name',
+    ]) ck(`  "${t}" starts nothing`, d.isStart(t) === false);
+
+    // The stoplist is what separates the shape from real English, so it must
+    // actually be consulted rather than merely present.
+    ck('  the stoplist covers the perform family',
+       d.PROFORMA_STOP.has('perform') && d.PROFORMA_STOP.has('performance')
+       && d.PROFORMA_STOP.has('platform'));
+
+    // "PI" stays EXACT. Two letters cannot be fuzzy-matched without
+    // swallowing half the language.
+    ck('  "PI" still works', d.isStart('raise a PI for Yurim') === true);
+    ck('  and is not fuzzy-matched', d.namesProforma('pie for lunch') === false,
+       'a two-letter token matched loosely would fire on everything');
+}
+
 section('I — the material is whatever she calls it');
 {
     // Apsara, 2026-09-06: "my user doesnt know about nouns."
