@@ -1577,6 +1577,167 @@ section('FOLLOW3 — a question is not a reason to break the invariants');
        'pill says "' + off.doc.getElementById('jvText').textContent + '"');
 }
 
+section('ACK — the chime answers the wake word, nothing else');
+{
+    // Apsara, 2026-09-07: "everytime on follow ups i dont want mm hmm sound.
+    // only on hey jarvis."
+    //
+    // The acknowledgement says "I heard you call me". On a follow-up she is
+    // not calling anything — Jarvis asked HER a question and the microphone
+    // reopened by itself. Chiming there is the assistant clearing its throat
+    // before listening to an answer it asked for.
+    const b = browser({ reply: (body) => (/material/i.test(body.text || '')
+        ? { answer: 'Auto cast it is.', awaiting: false }
+        : { answer: 'What material?', awaiting: true }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 15));
+
+    const acksAt = () => b.w.__playedRates.length;
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    const beforeWake = acksAt();
+    b.w.JarvisVoice.apply ? null : null;
+    b.mic() && b.mic().hear('hey jarvis send a proforma');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 40));
+
+    // The follow-up reopen. Nothing new should have been played for it.
+    const afterFollowUp = acksAt();
+    ck('the follow-up reopen plays no chime', afterFollowUp === beforeWake,
+       `${beforeWake} → ${afterFollowUp} — she is answering a question, not calling anyone`);
+    ck('  and it is listening anyway',
+       /listening|go ahead/i.test(b.doc.getElementById('jvText').textContent),
+       b.doc.getElementById('jvText').textContent);
+
+    // The source says which call sites chime.
+    // BEHAVIOURAL, not a source grep. My first two assertions here matched
+    // the shape of the code I happened to write, and both broke the moment I
+    // moved the decision into the OPEN_CAPTURE effect — where it belongs,
+    // because that is what actually opens the capture. A test that tracks my
+    // implementation rather than her requirement fails on every refactor and
+    // proves nothing on any of them.
+    const w = browser();
+    w.w.eval(MACHINE); w.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 15));
+    w.w.JarvisVoice.dispatch('USER_TOGGLE');
+    const beforeCall = w.w.__playedRates.length;
+    w.w.JarvisVoice.dispatch('WAKE_HEARD');
+    await new Promise((r) => setTimeout(r, 20));
+    ck('  the WAKE WORD still chimes', w.w.__playedRates.length > beforeCall,
+       `${beforeCall} → ${w.w.__playedRates.length} — the wake word is the one thing the chime exists to answer`);
+}
+
+section('CUT — it does not cut her off mid-sentence');
+{
+    // Apsara, 2026-09-07: "at the end of wavelegth timeout, if i start saying
+    // something, it should get appended to the last spken. but it is just
+    // getting cut off abruptly."
+    //
+    // The window was a FIXED eight seconds from the moment capture opened, so
+    // a slow or considered sentence was guillotined at the same instant every
+    // time whether or not she was still talking.
+    ck('the window measures SILENCE, not elapsed time',
+       /var SILENCE_MS = \d+/.test(VOICE) && /captureTimer = setTimeout\(finishCapture, SILENCE_MS\)/.test(VOICE),
+       'a fixed window cuts a long sentence in half at the same point every time');
+    // Matched on the ARMING call inside the capturing branch, not on the
+    // assignment next to it — which I keyed off first and which broke the
+    // moment the seed prefix changed that line. The behaviour is asserted
+    // below anyway; this is the belt.
+    ck('  and every word she says restarts it',
+       /if \(state\.capturing\) \{[\s\S]{0,600}armCaptureTimers\(\);/.test(VOICE),
+       'without this the silence timer is just the old fixed window with a new name');
+    ck('  with a hard cap so a stuck recogniser cannot hold the mic open',
+       /HARD_CAP_MS/.test(VOICE));
+    ck('  and finishing clears BOTH timers',
+       /function finishCapture\(\) \{\s*\n[\s\S]{0,400}clearCaptureTimers\(\);/.test(VOICE),
+       'leaving the hard cap armed fires finishCapture again 45s later, mid-way through her next sentence');
+    ck('  the old fixed CAPTURE_MS window is gone from the arming path',
+       !/setTimeout\(finishCapture, CAPTURE_MS\)/.test(VOICE));
+
+    // BEHAVIOURAL: two words a moment apart must not close the capture
+    // between them.
+    const b = browser();
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 15));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis create a proforma for');
+    await new Promise((r) => setTimeout(r, 30));
+    b.mic() && b.mic().hear('hey jarvis create a proforma for Daekwang, 21 MT of copper at 8450');
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  a pause mid-sentence does not end the capture',
+       b.w.JarvisVoice.state().capturing === true,
+       'still capturing? ' + JSON.stringify(b.w.JarvisVoice.state()));
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    ck('  and the WHOLE sentence is what gets asked',
+       /8450/.test(b.log.asked[b.log.asked.length - 1] || ''),
+       JSON.stringify(b.log.asked));
+}
+
+section('CUT2 — a sentence she resumes is joined, not restarted');
+{
+    // The residual case: she pauses to think, the capture closes, and she
+    // carries on a second later. What she says next is the tail of the same
+    // sentence, not a new request.
+    const b = browser();
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 15));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis create a proforma for Daekwang');
+    b.w.JarvisVoice.finish();                      // the capture closes
+    await new Promise((r) => setTimeout(r, 25));
+    const firstAsk = b.log.asked.length;
+
+    // She carries straight on, with no wake word.
+    b.mic() && b.mic().hear('21 MT of copper at 8450');
+    await new Promise((r) => setTimeout(r, 10));
+    // A SECOND result after the reopen, which is what a real recogniser
+    // delivers. The seed used to be destroyed by exactly this: the handler
+    // does `heardDuringCapture = txt`, so the half-sentence survived only
+    // while she stayed silent — i.e. never, since she had just resumed.
+    b.mic() && b.mic().hear('21 MT of copper at 8450 per MT');
+    await new Promise((r) => setTimeout(r, 15));
+    ck('the tail reopens the capture rather than being ignored',
+       b.w.JarvisVoice.state().capturing === true,
+       JSON.stringify(b.w.JarvisVoice.state()));
+    ck('  and no chime is played for it',
+       /suppressAck = true;\s*\n\s*pendingSeed = joined;/.test(VOICE));
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    const joined = b.log.asked[b.log.asked.length - 1] || '';
+    ck('  the two halves are asked as ONE sentence',
+       /Daekwang/.test(joined) && /8450/.test(joined),
+       JSON.stringify(joined) + ' — a fragment with no subject is unanswerable');
+    ck('  and it is a new request, not a duplicate of the first',
+       b.log.asked.length > firstAsk);
+
+    // A WAKE WORD ALWAYS STARTS FRESH, whatever the timing. Otherwise the
+    // previous question is glued to an unrelated new one.
+    const c = browser();
+    c.w.eval(MACHINE); c.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 15));
+    c.w.JarvisVoice.dispatch('USER_TOGGLE');
+    c.w.JarvisVoice.dispatch('WAKE_HEARD');
+    c.mic() && c.mic().hear('hey jarvis how much do we owe acme');
+    c.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    // TWO hears: the first carries the wake word and opens the capture, the
+    // second is what the recogniser delivers once capturing — which is how
+    // section G2 drives it and how a real recogniser behaves. My first
+    // version sent one and then asserted on a question that was never asked.
+    c.mic() && c.mic().hear('hey jarvis any bookings from Houston');
+    await new Promise((r) => setTimeout(r, 10));
+    c.mic() && c.mic().hear('hey jarvis any bookings from Houston');
+    await new Promise((r) => setTimeout(r, 15));
+    c.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 25));
+    const last = c.log.asked[c.log.asked.length - 1] || '';
+    ck('  a fresh "hey jarvis" does NOT inherit the last sentence',
+       !/acme/i.test(last), JSON.stringify(last));
+}
+
 section('DOC — the document, on screen, before she says yes');
 {
     // Apsara, 2026-09-07: "Send it to Daekwang? --> show preview. post my

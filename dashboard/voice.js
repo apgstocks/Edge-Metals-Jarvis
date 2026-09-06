@@ -165,6 +165,26 @@
     // a question outstanding" does not change that answer, it changes what
     // happens next.
     var awaitingReply = false;
+    // ── PICKING UP A SENTENCE SHE WAS STILL SAYING ───────────────────────
+    // Apsara: "if i start saying something, it should get appended to the
+    // last spken. but it is just getting cut off abruptly."
+    //
+    // The silence timer above stops MOST of this by not cutting her off in
+    // the first place. This covers the rest: if she pauses to think, the
+    // capture closes, and then she carries on within a couple of seconds,
+    // what she says next is JOINED to what she already said and asked as one
+    // sentence — rather than arriving as a fragment with no subject.
+    //
+    // Deliberately short. Past a few seconds a new sentence is a new
+    // sentence, and gluing it onto the last one would produce nonsense.
+    // Consumed by the OPEN_CAPTURE effect above. One-shot: it must not leak
+    // into the next wake word, which is the one thing the chime is for.
+    var suppressAck = false;
+    var pendingSeed = '';
+    var capturePrefix = '';
+    var CONTINUE_MS = 2500;
+    var lastAsked = '';
+    var lastAskedAt = 0;
     var origTitle = document.title;
 
     // ── the DOM ───────────────────────────────────────────────────────────
@@ -726,7 +746,21 @@
             if (fx === 'STOP_SPEAKING') stopSpeaking();
             else if (fx === 'STOP_MIC') stopMic();
             else if (fx === 'START_MIC') startMic();
-            else if (fx === 'OPEN_CAPTURE') openCapture();
+            else if (fx === 'OPEN_CAPTURE') {
+                // ── THE EFFECT IS WHAT OPENS IT ──────────────────────────
+                // dispatch('WAKE_HEARD') emits OPEN_CAPTURE, and THIS line
+                // opens the capture — so the follow-up path calling
+                // openCapture({ack:false}) itself opened a second one and
+                // chimed anyway. Two openings, one chime, and my ack:false
+                // was on the call that did not matter.
+                //
+                // The suppression is a one-shot flag consumed here, so the
+                // decision belongs to whoever dispatched rather than to a
+                // second call racing the effect.
+                var quiet = suppressAck; suppressAck = false;
+                openCapture(pendingSeed ? { ack: !quiet, seed: pendingSeed } : { ack: !quiet });
+                pendingSeed = '';
+            }
         });
         paint();
     }
@@ -952,8 +986,11 @@
                 // nothing wrong with it.
                 if (state.enabled && state.foreground && !speechUnavailable) {
                     console.log('[VOICE] question outstanding — listening again without the wake word');
+                    // ack suppressed — Jarvis asked the question, so it is
+                    // not being addressed and has nothing to acknowledge.
+                    lastAsked = '';
+                    suppressAck = true;
                     dispatch('WAKE_HEARD');
-                    openCapture();
                 }
             }
         };
@@ -980,7 +1017,11 @@
             networkErrors = 0;
 
             if (state.capturing) {
-                heardDuringCapture = txt;
+                heardDuringCapture = capturePrefix ? (capturePrefix + ' ' + txt) : txt;
+                // She is still talking, so the clock starts again. This is
+                // the whole fix for being cut off: the window measures
+                // SILENCE, not elapsed time.
+                armCaptureTimers();
                 // ── THE TRANSCRIPT GOES IN THE CARD, NOT THE PILL ────────
                 // Apsara, 2026-09-06: "the transcription is also cut into
                 // half - not wrapping."
@@ -997,6 +1038,25 @@
                 showCard(txt, '', true);
                 return;
             }
+            // ── SHE CARRIED ON TALKING ───────────────────────────────
+            // Not capturing, but she spoke within the continuation window of
+            // a question that just went out. That is the tail of the sentence
+            // the capture cut short, not a new request.
+            //
+            // Guarded on the wake word being ABSENT: "Hey Jarvis, ..." is
+            // unambiguously a fresh start, whatever the timing.
+            if (lastAsked && (Date.now() - lastAskedAt) < CONTINUE_MS
+                && !WAKE.test(txt) && state.enabled) {
+                var joined = (lastAsked + ' ' + txt).trim();
+                console.log('[VOICE] continuing: "' + lastAsked + '" + "' + txt + '"');
+                lastAsked = '';
+                interrupt();          // stop the reply to the half sentence
+                suppressAck = true;
+                pendingSeed = joined;
+                dispatch('WAKE_HEARD');
+                return;
+            }
+
             // Not capturing: the only thing worth hearing is the wake word.
             //
             // ── AND IT SAYS WHICH WAY IT WENT ────────────────────────────
@@ -1350,21 +1410,82 @@
         } catch (e) {}
     }
 
-    function openCapture() {
-        heardDuringCapture = '';
+    // ── THE CHIME ANSWERS THE WAKE WORD, NOTHING ELSE ────────────────────
+    // Apsara, 2026-09-07: "everytime on follow ups i dont want mm hmm sound.
+    // only on hey jarvis."
+    //
+    // The acknowledgement exists to say "I heard you call me" — it is an
+    // answer to being addressed. On a follow-up she was not addressing
+    // anything; Jarvis had just asked HER a question and the mic reopened by
+    // itself. Chiming there is the assistant clearing its throat before
+    // listening to an answer it asked for, which is noise.
+    //
+    // `seed` carries a half-finished sentence in from the continuation path
+    // below, so the capture resumes rather than restarting.
+    function openCapture(opts) {
+        var o = opts || {};
+        // ── THE SEED IS A PREFIX, NOT AN INITIAL VALUE ───────────────────
+        // Setting heardDuringCapture alone was useless: the recogniser's very
+        // next result does `heardDuringCapture = txt`, which OVERWRITES it.
+        // So the half-sentence she was continuing survived only as long as
+        // she stayed silent — i.e. never, since she had just started talking
+        // again. Kept separately and prepended on every result instead.
+        capturePrefix = o.seed ? String(o.seed).trim() : '';
+        heardDuringCapture = capturePrefix;
         say('Listening');
         paintAgent(addressed);
-        showCard('', 'Go ahead…', true);
-        playAck();
+        showCard(o.seed || '', o.seed ? '' : 'Go ahead…', true);
+        if (o.ack !== false) playAck();
+        armCaptureTimers();
+    }
+
+    // ── IT MUST NOT CUT HER OFF MID-SENTENCE ─────────────────────────────
+    // Apsara, 2026-09-07: "at the end of wavelegth timeout, if i start saying
+    // something, it should get appended to the last spken. but it is just
+    // getting cut off abruptly."
+    //
+    // The window was a FIXED eight seconds from the moment capture opened.
+    // Eight seconds is a long sentence and a short thought, so a slow or
+    // considered answer was guillotined at the same instant every time,
+    // whether or not she was still talking.
+    //
+    // Replaced with the shape every real endpointer uses: a SILENCE timer
+    // that restarts on every word she says, and a hard cap so a stuck
+    // recogniser cannot hold the microphone open for ever. She now stops when
+    // she stops, not when the clock does.
+    var SILENCE_MS = 1800;      // quiet long enough to mean "finished"
+    var HARD_CAP_MS = 45000;    // a recogniser that never stops emitting
+    var hardCapTimer = null;
+
+    function armCaptureTimers() {
         clearTimeout(captureTimer);
-        captureTimer = setTimeout(finishCapture, CAPTURE_MS);
+        captureTimer = setTimeout(finishCapture, SILENCE_MS);
+        if (!hardCapTimer) hardCapTimer = setTimeout(function () {
+            console.log('[VOICE] hard cap reached — closing the capture');
+            finishCapture();
+        }, HARD_CAP_MS);
+    }
+    function clearCaptureTimers() {
+        clearTimeout(captureTimer);
+        clearTimeout(hardCapTimer);
+        hardCapTimer = null;
     }
 
     function finishCapture() {
-        clearTimeout(captureTimer);
+        // BOTH timers. Clearing only the silence one left the 45s hard cap
+        // armed, so a capture that ended normally would fire finishCapture a
+        // second time half a minute later — mid-way through whatever she was
+        // saying next.
+        clearCaptureTimers();
         var q = heardDuringCapture.replace(WAKE, '').trim();
+        capturePrefix = '';
         dispatch('CAPTURE_END');
         if (!q) { say(canWake ? 'Say “Hey Jarvis”' : 'Hold to talk'); return; }
+        // Remembered so a sentence she resumes a moment later can be joined
+        // to it rather than starting a new one. See the continuation window
+        // in the recogniser.
+        lastAsked = q;
+        lastAskedAt = Date.now();
         ask(q);
     }
 

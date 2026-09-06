@@ -184,6 +184,11 @@ function materialIn(text) {
     return null;
 }
 
+// One incoterm list, used by the term parser AND by the port parser to
+// reject a second incoterm ("change from FOB to CIF" must not read CIF as a
+// place). Two copies would drift.
+const INCOTERM = /\b(cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|cpt|cip)\b/i;
+
 // Things that appear after "to" in a correction but are never a buyer.
 // Incoterms and the names of the other fields on the document. Anchored at
 // the start of the captured name so "change it to FOB and payment terms"
@@ -297,8 +302,57 @@ const FIELDS = [
         optional: true,
         fallback: DEFAULT_SHIPMENT_TERMS,
         parse: (t) => {
-            const m = /\b(cif|fob|cfr|exw|ddp|dap)\b/i.exec(t);
+            // "change FROM fob TO cif" — she names the old one first, and
+            // taking the first match set it right back to what she was
+            // changing away from. The destination is the one she means.
+            const swap = /\bfrom\s+(cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|cpt|cip)\b[^.]{0,12}?\bto\s+(cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|cpt|cip)\b/i.exec(t);
+            if (swap) return swap[2].toUpperCase();
+            const m = INCOTERM.exec(t);
             return m ? m[1].toUpperCase() : null;
+        },
+    },
+    {
+        // ── "CIF BUSAN" IS TWO FACTS ─────────────────────────────────────
+        // Apsara, 2026-09-07: "i have asked to change trade terms to cif
+        // busan still it was not updating."
+        //
+        // It half-updated, which is worse than not updating. The term parser
+        // took "CIF" — which was ALREADY the default, so nothing on screen
+        // changed — and "Busan" was dropped on the floor. port_discharge was
+        // hardcoded to '' in the draft handed to the generator, so the
+        // document would have gone out with no port of discharge at all and
+        // she would have found out from the buyer.
+        //
+        // An incoterm is written WITH its named place — that is what the term
+        // means. CIF Busan and CIF Qingdao are different prices. So the port
+        // is read from the same phrase, and it is a field of its own rather
+        // than text glued onto the term, because proformaPdf.js prints them
+        // in two different places.
+        key: 'port_discharge',
+        optional: true,
+        fallback: '',
+        parse: (t) => {
+            // Right after the incoterm — the standard way it is written and
+            // said. Stops at a clause end so "CIF Busan, 21 MT" does not take
+            // the quantity with it.
+            const m = /\b(?:cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat)\s+([A-Za-z][A-Za-z\s.'-]{1,28}?)(?=\s*(?:$|[,.;]|\band\b|\bat\b|\brate\b|\bpayment\b|\d))/i.exec(t);
+            if (m) {
+                const v = m[1].trim().replace(/[.,]$/, '');
+                // "CIF terms" / "FOB basis" are not places. Nor is a second
+                // incoterm, which is what "change from FOB to CIF" produces.
+                if (!/^(terms?|basis|price|value|only|now|instead|to|from|and)$/i.test(v)
+                    && !INCOTERM.test(v)) return v.toUpperCase();
+            }
+            // Said on its own — "port of discharge is Busan", "discharge
+            // Busan". Deliberately NOT a bare "to Busan": that collides with
+            // the consignee's own "to X", and getting the buyer wrong is a
+            // worse failure than leaving a port blank.
+            const p = /\b(?:port\s+of\s+discharge|discharge\s+port|discharge|pod)\s*(?:is\s+|:\s*|at\s+)?([A-Za-z][A-Za-z\s.'-]{1,28}?)(?=\s*(?:$|[,.;]|\band\b|\bat\b|\d))/i.exec(t);
+            if (p) {
+                const v = p[1].trim().replace(/[.,]$/, '');
+                if (v && !/^(is|the|a|an|port)$/i.test(v)) return v.toUpperCase();
+            }
+            return null;
         },
     },
 ];
@@ -656,6 +710,7 @@ function payload() {
         material_said: f.material || '',
         payment_terms: f.payment_terms || fallbackFor('payment_terms'),
         shipment_terms: f.shipment_terms || fallbackFor('shipment_terms'),
+        port_discharge: f.port_discharge || '',
         shipment_allowance: DEFAULT_ALLOWANCE,
         total: Math.round(mt * rate * 100) / 100,
         // Which values she gave and which are standing defaults. Shown in the
@@ -694,7 +749,7 @@ function pdfPayload(opts = {}) {
         consignee_sheet_tag: p.consignee,
         consignee_address: Array.isArray(opts.addressLines) ? opts.addressLines : [],
         trade_terms: trade,
-        port_discharge: opts.port_discharge || '',
+        port_discharge: opts.port_discharge || p.port_discharge || '',
         payment_term: p.payment_terms,
         freight_label: /^FOB/i.test(trade) ? 'FOB (freight excluded)' : 'CIF (freight included)',
         buyer_po: '', buyer_po_date: '',
@@ -748,10 +803,11 @@ function brainDraft() {
         // document with container numbers that do not exist.
         containerCount: 1,
         trade_terms: p.shipment_terms,
-        // The voice flow never asks for a discharge port and must not invent
-        // one — an empty field on the document is a gap she can see, a
-        // guessed port is a gap she cannot.
-        port_discharge: '',
+        // Read from "CIF Busan" now, rather than hardcoded empty. Still never
+        // INVENTED: if she did not say a port, this stays blank, because an
+        // empty field on the document is a gap she can see and a guessed port
+        // is a gap she cannot.
+        port_discharge: p.port_discharge || '',
         payment_term: p.payment_terms,
     };
 }
@@ -803,11 +859,17 @@ function summary() {
     const swapped = p.material_said && shown
         && shown.toLowerCase() !== String(p.material_said).toLowerCase();
 
+    // The term and its port read as one thing, because that is what an
+    // incoterm IS — "CIF Busan", not "CIF" with a port hidden elsewhere. She
+    // said the terms were not updating; half the reason was that the port
+    // never appeared anywhere she could see.
+    const terms = p.shipment_terms + (p.port_discharge ? ` ${p.port_discharge}` : '');
+
     return `${p.items[0].qty} MT of ${shown}`
         + (swapped ? ` (your "${p.material_said}")` : '')
         + ` for ${p.consignee} `
         + `at ${money(p.items[0].rate)} per MT — ${money(p.total)} total, `
-        + `${p.shipment_terms}, ${p.payment_terms}.`;
+        + `${terms}, ${p.payment_terms}.`;
 }
 
 // ── THE WHOLE DECISION, IN ONE TESTABLE PLACE ────────────────────────────
@@ -922,7 +984,7 @@ module.exports = {
     materialIn, catalogMaterials, catalogPattern, describeFor, KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
-    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, START_VERB, NOT_A_START, CREATE_VERB,
+    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
     namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
