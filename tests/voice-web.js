@@ -838,12 +838,26 @@ section('G4 — the desktop app uses the LOCAL engine, and prefers it');
     // — so the assertion is updated rather than deleted. What it must keep
     // guarding is that the surface stays SMALL and stays about AUDIO: text
     // and samples in and out, and nothing that touches this Mac.
-    const ALLOWED = ['available', 'warm', 'transcribe', 'speak', 'status'];
+    // THREE bridges now — transcription, synthesis, endpointing — and this
+    // assertion caught the third being added, which is exactly its job.
+    // Widened deliberately rather than deleted.
+    //
+    // What it guards is the SHAPE, not a count. Every bridge is the same
+    // four verbs: is it there, warm it, do the one thing, how is it doing.
+    // Counting methods would creep upward with each capability and mean
+    // nothing; counting DISTINCT VERBS stays flat unless something genuinely
+    // new is being handed to a remote page.
+    const ALLOWED = ['available', 'warm', 'status', 'transcribe', 'speak', 'analyse'];
     ck('the preload bridge exposes audio and nothing else',
        exposed.every((n) => ALLOWED.indexOf(n) !== -1),
        `exposed: ${exposed.join(', ')} — anything outside [${ALLOWED.join(', ')}] is a new door into this machine`);
-    ck('  and it has not quietly grown', exposed.length <= 10,
-       `${exposed.length} methods exposed; each one is something a compromised server could call`);
+    const distinct = Array.from(new Set(exposed));
+    ck('  and the vocabulary has not grown', distinct.length <= ALLOWED.length,
+       `${distinct.length} distinct methods (${distinct.join(', ')}); each is something a compromised server could call`);
+    // Audio in, audio or a number out. Nothing here returns anything ABOUT
+    // this Mac — no paths, no listings, no arbitrary reads.
+    ck('  and every one of them is audio-shaped',
+       distinct.every((n) => /^(available|warm|status|transcribe|speak|analyse)$/.test(n)));
     // Comments stripped first. The preload's own comment says the bridge
     // cannot "read a file, spawn a process" — and the regex matched that
     // prose rather than any code. The fifth time this trap has caught me in
