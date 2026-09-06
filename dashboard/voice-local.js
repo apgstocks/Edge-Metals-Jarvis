@@ -137,6 +137,7 @@
         this._pre = [];
         this._asking = false;
         this._turnSaidDone = false;
+        this._deafUntil = 0;
         this._stopped = false;
         // Starts at the absolute floor and adapts downward to a quiet room or
         // upward to a noisy one.
@@ -166,6 +167,13 @@
             var msPerBuf = (4096 / ctx.sampleRate) * 1000;
 
             proc.onaudioprocess = function (ev) {
+                // Deaf for the length of our own acknowledgement. Checked
+                // FIRST, before the level arithmetic: letting the ack through
+                // to the floor estimator would teach it that the room is as
+                // loud as a speaker 30cm away, and the trigger would sit
+                // above her voice for the next several seconds.
+                if (self._deafUntil && Date.now() < self._deafUntil) return;
+
                 var buf = ev.inputBuffer.getChannelData(0);
                 var sum = 0;
                 for (var i = 0; i < buf.length; i += 1) sum += buf[i] * buf[i];
@@ -309,6 +317,32 @@
     // The whole turn so far is sent, not the newest fragment: the model
     // reasons about how an utterance is ENDING, and its documentation calls
     // running it on a fragment an explicit anti-pattern.
+    // ── DEAFEN IT BRIEFLY, ON PURPOSE ────────────────────────────────────
+    // Called by voice.js when it plays the "Mm-hm" acknowledgement, with the
+    // exact length of that sound.
+    //
+    // The acknowledgement has to play while the microphone is OPEN — the
+    // whole point of it is "go ahead, I am listening", and closing the mic
+    // to say so would defeat it. So the sound goes into the room with a live
+    // recogniser in it, and without this the first thing Whisper hears on
+    // every single wake is Jarvis humming.
+    //
+    // echoCancellation is on in getUserMedia and helps, but it is a
+    // best-effort DSP guess about what the speakers played. This is not a
+    // guess: we generated the sound, we know precisely how long it lasts,
+    // and we ignore exactly that. Certainty is available here, so it is used.
+    //
+    // The whole collection state resets too. Half an utterance captured
+    // before the ack and half after is not a sentence.
+    LocalRecognition.prototype.ignoreFor = function (ms) {
+        this._deafUntil = Date.now() + Math.max(0, Number(ms) || 0);
+        this._collecting = false;
+        this._chunks = [];
+        this._pre = [];
+        this._quietFor = 0; this._heldMs = 0; this._voicedMs = 0;
+        this._asking = false; this._turnSaidDone = false;
+    };
+
     LocalRecognition.prototype._askTurn = function (rate) {
         var self = this;
         var pcm = resample(flatten(this._chunks), rate);

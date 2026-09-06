@@ -728,10 +728,102 @@
         try { r.onend = null; r.stop(); } catch (e) {}
     }
 
+    // ── "Mm-hm" — the sound that says it is listening ────────────────────
+    // Apsara, 2026-09-06: "When i say Hey Jarvis, it should speak back HMM..
+    // acknowldegeing that it is listening."
+    //
+    // There WAS an acknowledgement here. It played a base64 WAV whose data
+    // chunk is zero bytes long — literally silence. So the intent existed
+    // and the sound never did, and the only feedback was three small grey
+    // characters changing in a pill.
+    //
+    // WHY IT IS NOT ROUTED THROUGH speak()
+    // ------------------------------------
+    // Because speak() dispatches SPEAK_START, which CLOSES THE MICROPHONE —
+    // correctly, that is the rule that stops Jarvis hearing itself. But an
+    // acknowledgement whose whole job is "go ahead, I'm listening" must not
+    // deafen the thing while she goes ahead. Siri overlaps its chime with
+    // listening for exactly this reason.
+    //
+    // So the ack plays OUTSIDE the state machine, the mic stays open, and
+    // the recogniser is told to ignore audio for precisely as long as the
+    // sound lasts. We know that length exactly, because we generated it —
+    // which is a far better defence than hoping echo cancellation catches
+    // it. Without that, the first thing Whisper hears every single time is
+    // Jarvis humming, and "Mm-hm" becomes the command.
+    var ackPcm = null;
+    var ackRate = 24000;
+
+    // Rendered ONCE, at startup, not on every wake. Kokoro takes a few
+    // hundred milliseconds, which is fine to spend at boot and hopeless in
+    // the gap between her saying the name and expecting a reply.
+    function warmAck() {
+        if (!ttsBridge || !ttsBridge.speak) return;
+        ttsBridge.speak('Mm hm?', null).then(function (r) {
+            if (r && r.ok && r.pcm && r.pcm.length) {
+                ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
+                ackRate = r.sampleRate || 24000;
+                console.log('[VOICE] acknowledgement ready — '
+                    + Math.round((ackPcm.length / ackRate) * 1000) + 'ms');
+            }
+        }).catch(function () {});
+    }
+
+    // A two-note hum, synthesised on the spot. This is the fallback for the
+    // website, where there is no local synthesiser — and it is genuinely
+    // better than a TTS call there, because speechSynthesis takes long
+    // enough to start that the acknowledgement would arrive after she had
+    // already begun speaking. Falling then rising is the shape of a spoken
+    // "mm-hm"; a single flat beep reads as an error tone.
+    function humAck(ctx) {
+        var t0 = ctx.currentTime;
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, t0);
+        osc.frequency.setValueAtTime(255, t0 + 0.13);
+        osc.frequency.setValueAtTime(340, t0 + 0.26);
+        // Shaped rather than switched: an abrupt start and stop on a sine
+        // is an audible click at both ends.
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.03);
+        gain.gain.setValueAtTime(0.18, t0 + 0.34);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.40);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t0); osc.stop(t0 + 0.42);
+        return 420;
+    }
+
+    function playAck() {
+        var ms = 420;
+        try {
+            if (!ttsCtx) ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ackPcm) {
+                var buf = ttsCtx.createBuffer(1, ackPcm.length, ackRate);
+                buf.getChannelData(0).set(ackPcm);
+                var src = ttsCtx.createBufferSource();
+                src.buffer = buf;
+                src.connect(ttsCtx.destination);
+                src.start();
+                ms = Math.round((ackPcm.length / ackRate) * 1000);
+            } else {
+                ms = humAck(ttsCtx);
+            }
+        } catch (e) { /* an inaudible ack is not worth an exception */ }
+
+        // Deafen the recogniser for exactly the length of the sound, plus a
+        // small tail for the speaker settling. This is why the ack can play
+        // with the microphone open at all.
+        try {
+            if (rec && typeof rec.ignoreFor === 'function') rec.ignoreFor(ms + 120);
+        } catch (e) {}
+    }
+
     function openCapture() {
         heardDuringCapture = '';
-        say('Yes?');
-        try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=').play(); } catch (e) {}
+        say('Listening');
+        showCard('', 'Go ahead…', true);
+        playAck();
         clearTimeout(captureTimer);
         captureTimer = setTimeout(finishCapture, CAPTURE_MS);
     }
@@ -841,6 +933,8 @@
         document.body.appendChild(card);
         document.body.appendChild(voiceSheet);
         el('jvvClose').addEventListener('click', closeVoices);
+        // Rendered now, so the first "Hey Jarvis" does not wait on it.
+        warmAck();
         el('jvVoiceBtn').addEventListener('click', function (e) {
             e.stopPropagation();
             if (voiceSheet.classList.contains('hidden')) openVoices(); else closeVoices();

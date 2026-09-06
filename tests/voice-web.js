@@ -328,6 +328,43 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
            'a fallback that forgets SPEAK_END leaves the mic shut for ever');
     }
 
+    // ── IT ANSWERS THE WAKE WORD OUT LOUD ────────────────────────────────
+    // Apsara: "When i say Hey Jarvis, it should speak back HMM..
+    // acknowldegeing that it is listening."
+    //
+    // There WAS an acknowledgement here, and it played a base64 WAV with a
+    // zero-length data chunk — silence. The intent had been in the code for
+    // weeks and the sound never existed, so the only feedback was three grey
+    // characters changing in a pill.
+    //
+    // A mutation deleting playAck() survived the whole suite until this
+    // existed, which is the same shape of gap: something that is supposed to
+    // happen, that nothing checks happens.
+    {
+        const b = withKokoro();
+        b.w.jarvisTTS = {
+            available: true,
+            speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(9600) }),
+        };
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        await new Promise((r) => setTimeout(r, 5));      // warmAck renders it
+
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        const before = b.played.length;
+        b.mic().hear('hey jarvis');                       // the wake, nothing more
+        await new Promise((r) => setTimeout(r, 5));
+
+        ck('the wake word makes a SOUND', b.played.length === before + 1,
+           'the old acknowledgement was a zero-length WAV — the intent was there, the sound was not');
+        ck('  and the microphone stays OPEN while it plays', !!b.mic(),
+           'closing the mic to say "go ahead" defeats the entire point of saying it');
+        ck('  and the card tells her to go ahead',
+           /go ahead/i.test(b.doc.getElementById('jvCardA').textContent),
+           'got: ' + b.doc.getElementById('jvCardA').textContent);
+    }
+
     // ── SILENCING IT MUST SILENCE *IT*, NOT JUST THE BROWSER ─────────────
     // The dangerous omission. STOP_SPEAKING is the effect that guarantees
     // Jarvis is quiet before the microphone reopens. It used to call only

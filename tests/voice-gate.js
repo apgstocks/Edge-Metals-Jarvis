@@ -498,6 +498,104 @@ section('H — the turn model decides, and can never hang the microphone');
     }
 }
 
+section('I — it does not transcribe its own "Mm-hm"');
+{
+    // Apsara, 2026-09-06: "When i say Hey Jarvis, it should speak back HMM..
+    // acknowldegeing that it is listening."
+    //
+    // The acknowledgement plays with the MICROPHONE OPEN, on purpose: its
+    // whole job is "go ahead, I'm listening", and closing the mic to say so
+    // would defeat it. Siri overlaps its chime for the same reason.
+    //
+    // Which means the sound goes into a room containing a live recogniser.
+    // Without ignoreFor(), the first thing Whisper hears on EVERY wake is
+    // Jarvis humming — and "Mm-hm" becomes the command, every single time.
+    // echoCancellation helps but is a best-effort guess; this is not a
+    // guess, because we generated the sound and know its exact length.
+
+    async function withAck(before, deafMs, during, after) {
+        const h = harness();
+        const rec = new h.w.JarvisLocalRecognition();
+        h.delivered = [];
+        rec.onresult = (ev) => h.delivered.push(ev.results[0][0].transcript);
+        rec.start();
+        await new Promise((r) => setTimeout(r, 0));
+        const fn = h.frame();
+        for (const lv of before) fn(frameAt(lv));
+        if (deafMs) rec.ignoreFor(deafMs);
+        for (const lv of during) fn(frameAt(lv));
+        // Wall-clock, because the deaf window is a real timestamp.
+        await new Promise((r) => setTimeout(r, deafMs ? deafMs + 20 : 0));
+        for (const lv of after) fn(frameAt(lv));
+        await new Promise((r) => setTimeout(r, 5));
+        return h;
+    }
+
+    // The ack is LOUD — it is a speaker inches from the microphone — and
+    // lasts about 420ms. Four frames is roughly that.
+    {
+        const h = await withAck(
+            rep(20, 0.002),            // quiet room
+            420,                       // the ack starts
+            rep(5, 0.20),              // Jarvis humming, very loud
+            rep(QUIET_TO_END + 2, 0.002));
+        ck('the acknowledgement is not captured', h.log.sent.length === 0,
+           'without ignoreFor, every wake would transcribe Jarvis humming as her command');
+        ck('  and nothing was delivered to voice.js', h.delivered.length === 0);
+    }
+
+    // And it must not deafen it for a moment longer than the sound.
+    {
+        const h = await withAck(
+            rep(20, 0.002),
+            200,                       // a short ack
+            rep(2, 0.20),              // the ack itself
+            [...rep(14, 0.05), ...rep(QUIET_TO_END + 2, 0.002)]);   // then she speaks
+        ck('she is heard the moment the sound ends', h.log.sent.length === 1,
+           'a deaf window that outlasts the ack eats the start of her command');
+    }
+
+    // THE ONE THAT WOULD HAVE BEEN SUBTLE. If the ack reached the noise-floor
+    // estimator, the gate would conclude the room is as loud as a speaker at
+    // 30cm, and the trigger would sit above her voice for seconds afterwards
+    // — she would say "Hey Jarvis", hear the hum, speak, and be ignored.
+    {
+        const h = await withAck(
+            rep(30, 0.002),
+            300,
+            rep(4, 0.30),              // extremely loud ack
+            [...rep(14, 0.012), ...rep(QUIET_TO_END + 2, 0.002)]);  // then QUIET speech
+        ck('the ack does not raise the noise floor', h.log.sent.length === 1,
+           'if the ack teaches the floor, her next sentence is below the trigger and vanishes');
+    }
+
+    // A capture already in progress is DISCARDED, not spliced across the
+    // acknowledgement. Half a sentence from before joined to half from after
+    // is not a sentence, and Whisper would transcribe the join as if it were.
+    //
+    // My first version of this asserted "nothing was captured", and passed
+    // even with the discard removed — because the same reset also zeroes
+    // _voicedMs, so the spliced audio was thrown away as a blip for an
+    // unrelated reason. Passing for the wrong reason is not passing. So this
+    // now speaks on BOTH sides of the ack and checks the LENGTH: correct
+    // behaviour captures only the second half, a splice captures both.
+    {
+        const h = await withAck(
+            [...rep(20, 0.002), ...rep(8, 0.05)],   // she had started talking
+            300,
+            rep(3, 0.20),                            // the ack
+            [...rep(10, 0.05), ...rep(QUIET_TO_END + 2, 0.002)]);   // she starts again
+        ck('one capture, from after the acknowledgement', h.log.sent.length === 1,
+           'got ' + h.log.sent.length);
+        const ms = Number((( h.log.lines.filter((l) => /captured/.test(l)).pop() || '')
+            .match(/captured (\d+)ms/) || [])[1] || 0);
+        // 10 frames (~930ms) + ~700ms tail + ~800ms pre-roll ≈ 2400ms.
+        // Splicing the earlier 8 frames in would add ~750ms on top.
+        ck('  and it does NOT include the audio from before the ack', ms < 2900,
+           'captured ' + ms + 'ms — the pre-ack half was glued on, producing a sentence she never said');
+    }
+}
+
 section('G — the ceiling still holds');
 {
     // Someone leaves a radio on. MAX_MS (9000) must end the capture rather
