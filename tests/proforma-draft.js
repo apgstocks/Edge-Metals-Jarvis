@@ -26,6 +26,7 @@ const ck = (n, c, extra) => {
 };
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
+const ROOT2 = path.join(__dirname, '..');
 const d = require(path.join(__dirname, '../helpers/proformaDraft.js'));
 
 console.log('\n─ building a proforma by being asked ────────────────────────');
@@ -404,6 +405,97 @@ section('I3 — when the catalog grows a word that is also a company tail');
     d._clearMaterialCache();
 }
 
+section('I4 — the customer\'s own name for it goes on the document');
+{
+    // Apsara, 2026-09-07: "customers can have it different name than my
+    // description."
+    //
+    // This makes a decision from an hour earlier wrong. materialIn()
+    // normalises what she says to HER catalog spelling — "autocasting"
+    // becomes "Auto cast" — and that spelling was then printed. But "Auto
+    // cast" is yard shorthand; Daekwang's purchase order says "Aluminium Auto
+    // Casting Scrap", and a proforma whose description does not match the PO
+    // is a document their accounts team queries.
+    //
+    // RECOGNISE in her words, PRINT in theirs. Two jobs I had collapsed into
+    // one. Their wording is already on file: proformaPricing keeps a
+    // display_desc per customer per item from every proforma generated.
+    const fs2 = require('fs'), os = require('os');
+    const dir = fs2.mkdtempSync(path.join(os.tmpdir(), 'jv-price-'));
+    // A REAL temp dir. I seeded her actual data/proforma_pricing.json while
+    // exploring this and had to delete it — a test that writes to the live
+    // store is a test that edits her business records.
+    const realDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = dir;
+    for (const k of Object.keys(require.cache)) {
+        if (/helpers\/(json|proformaPricing|proformaDraft)|config\.js$/.test(k)) delete require.cache[k];
+    }
+    const pp = require(path.join(ROOT2, 'helpers/proformaPricing.js'));
+    const pd = require(path.join(ROOT2, 'helpers/proformaDraft.js'));
+
+    return (async () => {
+        // BOTH forms on file, which is what actually happens over time: the
+        // early proformas used her shorthand, then their PO arrived and the
+        // later ones used the full description. The fuller one is what their
+        // accounts team matches against, so it has to win — and with no
+        // longest-first sort the shorthand comes back and the mutation
+        // survived every other assertion here.
+        await pp.upsert('Daekwang', { tradeTerms: 'CIF', portDischarge: 'Busan', items: [
+            { desc: 'Auto cast', rate: 2050, unit: 'MT' },
+            { desc: 'Aluminium Auto Casting Scrap', rate: 2100, unit: 'MT' }] });
+
+        ck('the FULLER of two past descriptions wins',
+           pd.describeFor('Daekwang', 'autocasting') === 'Aluminium Auto Casting Scrap',
+           'got ' + pd.describeFor('Daekwang', 'autocasting')
+           + ' — the shorthand is hers, the long one is on their purchase order');
+        ck('their wording is used when we have sent them one before',
+           pd.describeFor('Daekwang', 'Auto cast') === 'Aluminium Auto Casting Scrap',
+           'got ' + pd.describeFor('Daekwang', 'Auto cast'));
+        ck('  matched through the same pattern that recognised hers',
+           pd.describeFor('Daekwang', 'autocasting') === 'Aluminium Auto Casting Scrap'
+           || pd.describeFor('Daekwang', 'Auto cast') === 'Aluminium Auto Casting Scrap',
+           '"Auto cast" has to match "Aluminium Auto Casting Scrap" — the -ing ending is why');
+
+        ck('  a NEW customer gets her tidy catalog name',
+           pd.describeFor('Brand New Ltd', 'Auto cast') === 'Auto cast',
+           'not whatever whisper heard');
+        ck('  and no consignee changes nothing',
+           pd.describeFor('', 'Auto cast') === 'Auto cast');
+        ck('  a material they have never been sent is left alone',
+           pd.describeFor('Daekwang', 'copper') === 'copper',
+           'got ' + pd.describeFor('Daekwang', 'copper') + ' — inventing a description they have not seen is worse than a plain one');
+
+        // IT MUST NOT BE SILENT. She said "autocast"; the paper will say
+        // "Aluminium Auto Casting Scrap". Finding that out by reading the PDF
+        // is a small betrayal.
+        pd.clear();
+        pd.start('create a proforma for Daekwang, 21 MT of autocasting at 2100');
+        const pay = pd.payload();
+        ck('the document carries THEIR wording',
+           pay.items[0].description === 'Aluminium Auto Casting Scrap', pay.items[0].description);
+        ck('  and what she said is kept alongside',
+           pay.material_said === 'Auto cast', pay.material_said);
+        const sum = pd.summary();
+        ck('  the read-back names both', /Aluminium Auto Casting Scrap/.test(sum) && /Auto cast/.test(sum), sum);
+        ck('  once, not twice',
+           (sum.match(/Aluminium Auto Casting Scrap/g) || []).length === 1, sum);
+
+        // ...and says nothing extra when they agree, which is the common case.
+        pd.clear();
+        pd.start('create a proforma for Brand New Ltd, 21 MT of autocasting at 2100');
+        ck('  and stays quiet when the wording is the same',
+           !/\(your /.test(pd.summary()), pd.summary());
+
+        process.env.DATA_DIR = realDir;
+        for (const k of Object.keys(require.cache)) {
+            if (/helpers\/(json|proformaPricing|proformaDraft)|config\.js$/.test(k)) delete require.cache[k];
+        }
+        rest();
+    })();
+}
+
+function rest() {
+
 section('J — the consignee stops at the end of the name');
 {
     // FOUND BY WIDENING THE MATERIAL PARSER, not by looking for it. The
@@ -429,3 +521,5 @@ section('J — the consignee stops at the end of the name');
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
+
+}

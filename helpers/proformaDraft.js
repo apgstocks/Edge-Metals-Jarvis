@@ -470,6 +470,76 @@ function fallbackFor(key) {
     return f ? f.fallback : undefined;
 }
 
+// ── WHAT THE CUSTOMER CALLS IT ───────────────────────────────────────────
+// Apsara, 2026-09-07: "customers can have it different name than my
+// description."
+//
+// She is right, and it makes a decision I took an hour ago wrong. materialIn()
+// now normalises what she says to HER catalog spelling — "autocasting" becomes
+// "Auto cast" — and I then put that on the document. But "Auto cast" is yard
+// shorthand. Daekwang's purchase order says something like "Aluminium Auto
+// Casting Scrap", and a proforma whose description does not match the PO is a
+// document their accounts team queries.
+//
+// So: RECOGNISE in her words, PRINT in theirs. Those are two different jobs
+// and I had collapsed them into one.
+//
+// The customer's wording is already in her data. proformaPricing records
+// {desc, rate, unit} per customer on every proforma generated, keeping a
+// `display_desc` — so the description Daekwang has actually been sent before
+// is on file, and it is the right thing to send again. Same principle as the
+// ports and the item catalog: the vocabulary exists in her files, and my job
+// is to look it up rather than invent one.
+//
+// Falls back to the catalog spelling, and then to exactly what she said. The
+// order matters: a new customer with no history gets her tidy catalog name
+// rather than whatever whisper heard, and a customer with history gets the
+// words they already recognise.
+function describeFor(consignee, material) {
+    const raw = String(material || '').trim();
+    if (!raw || !consignee) return raw;
+    // NORMALISED HERE, not assumed of the caller. payload() happens to pass a
+    // material that materialIn() already tidied, but a raw "autocasting" has
+    // to work too — and it did not: catalogPattern("autocasting") does not
+    // match "Aluminium Auto Casting Scrap", so the customer's own wording was
+    // missed for exactly the spoken form this whole change is about. A
+    // function that only works when its caller pre-processes the argument is
+    // a trap for the next caller.
+    const said = materialIn(raw) || raw;
+    try {
+        const past = require('./proformaPricing').lookup(consignee);
+        const seen = Object.keys((past && past.items) || {});
+        // No early-out for an empty history: the filter below already returns
+        // nothing and falls through to `said`. A mutation deleting the guard
+        // changed no behaviour at all, which is the definition of code nobody
+        // is maintaining — so it is gone rather than sitting here looking
+        // load-bearing.
+
+        // Their wording is matched against the SAME catalog pattern that
+        // recognised hers — "Auto cast" matches "Aluminium Auto Casting
+        // Scrap", because the pattern already allows an -ing ending and
+        // ignores what sits around it. Longest first: if a customer has been
+        // sent both "Auto cast" and "Aluminium Auto Casting Scrap", the fuller
+        // description is the one their PO carries.
+        const pat = catalogPattern(said);
+        const hit = seen
+            .filter((d) => pat.test(d) || catalogPattern(d).test(said))
+            .sort((a, b) => b.length - a.length)[0];
+        if (hit && hit.toLowerCase() !== said.toLowerCase()) {
+            console.log(`[PROFORMA] ${consignee} calls "${said}" → "${hit}" — using their wording`);
+            return hit;
+        }
+        // Their history had nothing closer, so her tidied catalog name is
+        // what goes on the paper — not the raw "autocasting" whisper heard.
+        return said;
+    } catch (e) {
+        // No pricing history is the normal case for a new customer, and an
+        // unreadable store must not cost her the document.
+        console.warn('[PROFORMA] could not read the customer price history:', e.message);
+    }
+    return said;
+}
+
 function payload() {
     if (!draft) return null;
     const f = draft.fields;
@@ -478,10 +548,15 @@ function payload() {
     return {
         consignee: f.consignee || '',
         items: [{
-            description: f.material || '',
+            // What the CUSTOMER calls it, when we have sent them one before.
+            // Recognition normalises to her catalog; the document does not.
+            description: describeFor(f.consignee, f.material) || '',
             qty: mt,
             rate: rate,
         }],
+        // Kept alongside, so the preview can say "you said X, they call it Y"
+        // and she is never surprised by a word she did not choose.
+        material_said: f.material || '',
         payment_terms: f.payment_terms || fallbackFor('payment_terms'),
         shipment_terms: f.shipment_terms || fallbackFor('shipment_terms'),
         shipment_allowance: DEFAULT_ALLOWANCE,
@@ -618,7 +693,22 @@ function summary() {
     const p = payload();
     if (!p) return '';
     const money = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `${p.items[0].qty} MT of ${p.items[0].description} for ${p.consignee} `
+    const shown = p.items[0].description;
+
+    // ── SAID IN HER WORDS, WRITTEN IN THEIRS, AND SHE IS TOLD ────────────
+    // Apsara: "customers can have it different name than my description."
+    // The document now carries the customer's own wording, taken from what
+    // they have been sent before. That is right for the document and would be
+    // wrong to do SILENTLY — she said "autocast" and the paper says
+    // "Aluminium Auto Casting Scrap", and finding that out by reading the PDF
+    // is a small betrayal. So the read-back names both, once, and only when
+    // they actually differ.
+    const swapped = p.material_said && shown
+        && shown.toLowerCase() !== String(p.material_said).toLowerCase();
+
+    return `${p.items[0].qty} MT of ${shown}`
+        + (swapped ? ` (your "${p.material_said}")` : '')
+        + ` for ${p.consignee} `
         + `at ${money(p.items[0].rate)} per MT — ${money(p.total)} total, `
         + `${p.shipment_terms}, ${p.payment_terms}.`;
 }
@@ -732,7 +822,7 @@ function handle(text) {
 }
 
 module.exports = {
-    materialIn, catalogMaterials, catalogPattern, KNOWN_METALS, NOT_A_MATERIAL,
+    materialIn, catalogMaterials, catalogPattern, describeFor, KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, START, NOT_A_START, CREATE_VERB,
