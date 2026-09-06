@@ -5624,6 +5624,78 @@ function proformaFilename(invNo, containerNos, consignee) {
 // The pricing-memory and Edge Metals sheet writes mirror what
 // POST /api/proforma/generate does, and fail soft the same way: a Sheets
 // hiccup must never lose a document that has already been generated and sent.
+// ── THE COVERING NOTE, IN HER VOICE ──────────────────────────────────────
+// Apsara, 2026-09-07, asked for the proforma email to sound like her rather
+// than like a template.
+//
+// helpers/writingStyle.js has existed for weeks and IS wired into
+// draft_email and reply_email — this was the one compose path that bypassed
+// it and used a hardcoded "Dear X ... Best regards, Edge Trading".
+//
+// THE FALLBACK IS THE OLD TEMPLATE, ON EVERY FAILURE PATH, and that matters
+// more than the feature: no style profile learned yet (which is the case
+// today — data/writing_style.json does not exist, so getStyleGuidance()
+// returns ''), Gemini unreachable, a reply that comes back empty or absurdly
+// long. A covering note is not worth risking a document that does not go out.
+//
+// The invoice number and consignee are NOT left to the model. They are the
+// two facts in the message and they are checked in the result — a covering
+// note quoting the wrong invoice number is worse than a plain one.
+function proformaTemplateNote(consignee, invNo) {
+    return `Dear ${consignee},\n\nPlease find attached our proforma invoice ${invNo}.\n\nBest regards,\nEdge Trading`;
+}
+
+async function proformaCoveringNote(draft, invNo) {
+    const fallback = proformaTemplateNote(draft.consignee, invNo);
+    let guidance = '';
+    try {
+        guidance = require('../helpers/writingStyle').getStyleGuidance();
+    } catch (e) {
+        console.warn('[PROFORMA-MAIL] style profile unreadable:', e.message);
+    }
+    // Nothing learned yet: the template IS the honest answer. Asking a model
+    // to "write in her voice" with no profile just produces generic business
+    // English with more ways to go wrong.
+    if (!guidance) return fallback;
+
+    try {
+        const { callGeminiJSON } = require('../helpers/gemini');
+        const res = await callGeminiJSON([
+            guidance, '',
+            'Write the covering email for an attached proforma invoice. Nothing else.',
+            '',
+            `Recipient company: ${draft.consignee}`,
+            `Invoice number: ${invNo}`,
+            '',
+            'RULES:',
+            '- Three or four lines. It is a covering note for an attachment, not a letter.',
+            `- Say the invoice number exactly as given: ${invNo}`,
+            '- Do NOT restate prices, quantities, terms or dates. They are on the attachment,',
+            '  and a figure repeated wrongly in the body is a dispute.',
+            '- No subject line, no signature block beyond how she signs off.',
+            '',
+            'Reply as JSON: {"body": "<the email text>"}',
+        ].join('\n'), 1);
+
+        const body = res && typeof res.body === 'string' ? res.body.trim() : '';
+        // Every check below sends the template instead. A covering note is a
+        // nicety; a wrong invoice number on a customer email is not.
+        if (!body) return fallback;
+        if (body.length > 1200) {
+            console.warn('[PROFORMA-MAIL] covering note too long — using the template');
+            return fallback;
+        }
+        if (invNo && !body.includes(invNo)) {
+            console.warn('[PROFORMA-MAIL] covering note omitted or changed the invoice number — using the template');
+            return fallback;
+        }
+        return body;
+    } catch (e) {
+        console.warn('[PROFORMA-MAIL] covering note failed, sending the template:', e.message);
+        return fallback;
+    }
+}
+
 async function generateProformaFromPending(chatId, pending) {
     const { draft, invNo, containerNos, replyTo, who } = pending;
     const documentsSaved = require('../helpers/documentsSaved');
@@ -5696,7 +5768,7 @@ async function generateProformaFromPending(chatId, pending) {
         await require('../helpers/gmail').sendEmail({
             to,
             subject: `Proforma Invoice ${payload.inv_no} — Edge Trading`,
-            body: `Dear ${draft.consignee},\n\nPlease find attached our proforma invoice ${payload.inv_no}.\n\nBest regards,\nEdge Trading`,
+            body: await proformaCoveringNote(draft, payload.inv_no),
             attachments: [{ filename, content: pdf, mimeType: 'application/pdf' }],
         });
     } catch (err) {
@@ -5796,4 +5868,5 @@ showMutes,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
     learnWritingStyle, showWritingStyle, rescanMail, prepareProformaNumbers,
+    proformaCoveringNote, proformaTemplateNote,
 };

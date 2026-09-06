@@ -225,6 +225,12 @@ function isStart(text) { return START.test(String(text || '')); }
 // Pulls out everything the sentence already contains. Called on the opening
 // request AND on every answer, so "actually make it 25 MT at 4200" fills two
 // fields in one go rather than being read as an answer to one question.
+// Deliberately NOT a member of FIELDS. It is never asked for as a question
+// (the consignee answers it in almost every case, see recipient()), and
+// adding it there would list it under `defaulted` in the preview as though it
+// were a standing default she should check.
+const SEND_TO = /\b(?:send|mail|email|e-mail)\s+(?:it|this|that|the\s+(?:proforma|pi|invoice))?\s*to\s+([A-Za-z][\w&.@\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bplease\b|\band\b))/i;
+
 function absorb(text) {
     const t = String(text || '');
     const got = {};
@@ -232,6 +238,11 @@ function absorb(text) {
         const v = f.parse(t);
         if (v !== null && v !== undefined && v !== '') got[f.key] = v;
     }
+    // "email it to Yurim" — an explicit recipient that is NOT the consignee.
+    // Broker-shipped orders are the case: the document is made out to the
+    // buyer and sent to the agent who placed it.
+    const m = SEND_TO.exec(t);
+    if (m) got.send_to = m[1].trim().replace(/[.,]$/, '');
     return got;
 }
 
@@ -370,6 +381,80 @@ function pdfPayload(opts = {}) {
     };
 }
 
+// ── THE SHAPE THE *SENDER* WANTS, WHICH IS A THIRD ONE ───────────────────
+// Apsara, 2026-09-06: "it should be able to send the proforma in mail."
+//
+// It could not. The preview said 'say "send it" when you are happy' and
+// NOTHING ANYWHERE CONSUMED "send it" — the draft stayed open and simply
+// re-previewed itself for ever. My own test asserted that the preview text
+// contained the string "send it", which is a test that the lie is spelled
+// correctly. That is the exact failure I have spent this whole session
+// pointing at in other people's code.
+//
+// WHAT I AM DELIBERATELY NOT DOING: writing a second sender.
+// workflow/actions.js:generateProformaFromPending already builds the PDF,
+// archives a copy, records the price in the pricing memory, logs it to the
+// sheet and emails it — and it is the path her existing proformas go
+// through. A voice-only copy of that would be a second set of rules to keep
+// in step, and the one that drifts is the one that puts a wrong document in
+// front of a customer. Same argument I made for not reimplementing
+// forwardBooking.
+//
+// So this returns the `draft` that generateProformaFromPending expects, the
+// voice flow stages the SAME `confirm_proforma` pending the email flow
+// stages, and her "yes" is resolved by the code that already resolves it.
+// Nothing about sending lives in this file.
+function brainDraft() {
+    const p = payload();
+    if (!p) return null;
+    return {
+        consignee: p.consignee,
+        // `desc`, not `description` — the two shapes differ by that one word,
+        // and pdfPayload() above exists because I once handed a generator an
+        // object shaped the way I imagined. Copied from the email path, not
+        // guessed.
+        items: [{ desc: p.items[0].description, qty: p.items[0].qty, rate: p.items[0].rate }],
+        // One container unless she said otherwise. prepareProformaNumbers()
+        // mints one container number per count, so a wrong number here is a
+        // document with container numbers that do not exist.
+        containerCount: 1,
+        trade_terms: p.shipment_terms,
+        // The voice flow never asks for a discharge port and must not invent
+        // one — an empty field on the document is a gap she can see, a
+        // guessed port is a gap she cannot.
+        port_discharge: '',
+        payment_term: p.payment_terms,
+    };
+}
+
+// Who the mail goes to. Almost always the consignee, so it is NOT asked as a
+// seventh question — deriving it from a name she already gave is the whole
+// point of "my user doesnt know about nouns", and reading an email address
+// aloud ("purchasing at daekwang dot com") is miserable.
+//
+// resolveContact() is the same address book draft_email uses, so a contact
+// saved once works everywhere. It returns null rather than a guess when the
+// name is unknown, and ambiguous when several match — both of which must
+// reach her as a question, never as a send.
+function recipient(spoken) {
+    const f = (draft && draft.fields) || {};
+    const who = String(spoken || f.consignee || '').trim();
+    if (!who) return { ok: false, why: 'no-name' };
+    try {
+        const hit = require('./emailContacts').resolveContact(who);
+        if (!hit) return { ok: false, why: 'unknown', who };
+        if (hit.type === 'ambiguous') {
+            return { ok: false, why: 'ambiguous', who, matches: hit.matches || [] };
+        }
+        const email = hit.contact && hit.contact.email;
+        if (!email) return { ok: false, why: 'unknown', who };
+        return { ok: true, who, email, name: (hit.contact.name || who) };
+    } catch (e) {
+        console.warn('[PROFORMA] address book unreadable:', e.message);
+        return { ok: false, why: 'error', who, error: e.message };
+    }
+}
+
 // A sentence for reading back before it is built. Deliberately short: this
 // is spoken, and past a couple of lines nobody is listening any more.
 function summary() {
@@ -403,20 +488,43 @@ function handle(text) {
 
     const p = payload();
     const line = summary();
+
+    // ── THE PREVIEW NOW ASKS A QUESTION IT CAN ACT ON ────────────────────
+    // It used to say 'say "send it" when you are happy' and nothing listened.
+    // What it says now depends on whether there is somewhere to send it, and
+    // each branch is a question with a real answer behind it.
+    const to = recipient(draft.fields.send_to);
+    if (!to.ok) {
+        // NOT a send with a missing address, and not a silent preview-only
+        // that leaves her thinking it went. She is told what is in the way.
+        const why = to.why === 'ambiguous'
+            ? `I have ${to.matches.length} contacts matching ${to.who} — which one?`
+            : `I don't have an email address for ${to.who || 'them'}. Add the contact, or tell me the address.`;
+        return {
+            stage: 'preview', ready: false, blocked: to.why,
+            say: `${line} ${why}`,
+            summary: line, recipient: to,
+            fields: Object.assign({}, draft.fields),
+            defaulted: p.defaulted, pdf: pdfPayload(), draft: brainDraft(),
+        };
+    }
+
     return {
-        stage: 'preview',
-        say: line + ' Have a look — say "send it" when you are happy.',
-        summary: line,
+        stage: 'preview', ready: true,
+        say: `${line} Send it to ${to.name}? Say yes and it goes.`,
+        summary: line, recipient: to,
         fields: Object.assign({}, draft.fields),
         defaulted: p.defaulted,
         pdf: pdfPayload(),
+        // Handed to workflow/actions.js's existing confirm_proforma pending.
+        draft: brainDraft(),
     };
 }
 
 module.exports = {
     materialIn, catalogMaterials, KNOWN_METALS, NOT_A_MATERIAL,
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; },
-    handle,
+    handle, brainDraft, recipient, SEND_TO,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
 };

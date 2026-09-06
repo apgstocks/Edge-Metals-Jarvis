@@ -168,7 +168,16 @@ section('F0 — the decision, EXECUTED');
     ck('  with a payload the generator can render',
        !!buildProformaDc2Html(s4.pdf).html, 'the preview must be the real document');
     ck('  naming the total', /177,450/.test(s4.summary), s4.summary);
-    ck('  and telling her how to send it', /send it/i.test(s4.say), s4.say);
+    // THIS ASSERTION USED TO BE A LIE. It matched /send it/i against a
+    // preview that said 'say "send it" when you are happy' — and NOTHING
+    // ANYWHERE CONSUMED "send it". It tested that the lie was spelled
+    // correctly, and passed for a week. It now asserts on `ready`, which is
+    // set only when there is a resolved address to send to, and on the draft
+    // being handed over. tests/proforma-send.js does the rest.
+    ck('  and it either offers a real send, or says what is in the way',
+       typeof s4.ready === 'boolean' && !!s4.draft
+       && (s4.ready ? /say yes/i.test(s4.say) : /email address|which one/i.test(s4.say)),
+       s4.say);
 
     // Once previewed, the draft is still open — she may correct it.
     const s5 = pro.handle('actually make it 25 MT');
@@ -215,9 +224,15 @@ section('F — the wiring in api.js');
     // The wording lives with the decision now, in helpers/proformaDraft.js,
     // and F0 above asserts it on the value actually returned. Checking api.js
     // for it would only assert where the code happens to sit.
-    const draftSrc = require('fs').readFileSync(path.join(ROOT, 'helpers/proformaDraft.js'), 'utf8');
-    ck('  the preview says how to confirm', /say "send it"/.test(draftSrc),
-       'a preview with no stated way forward is a dead end');
+    // Was: grep the source for the string 'say "send it"'. That asserted the
+    // presence of a phrase nothing listened to. What matters is that the
+    // preview always states a next step AND that the step exists — the
+    // second half is tests/proforma-send.js's job.
+    const last = pro.handle('and the rate is 8450');
+    ck('  the preview always states a next step',
+       !!last && last.stage === 'preview'
+       && (/say yes/i.test(last.say) || /email address|which one|address book/i.test(last.say)),
+       last && last.say);
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

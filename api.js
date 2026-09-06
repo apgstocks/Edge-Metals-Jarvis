@@ -2028,6 +2028,70 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         console.error('[PROFORMA] preview failed:', e.message);
                     }
                 }
+
+                // ── HANDING IT TO THE CODE THAT ALREADY SENDS ────────────
+                // Apsara: "it should be able to send the proforma in mail."
+                //
+                // It could not. The preview said 'say "send it" when you are
+                // happy' and nothing consumed "send it" — the draft simply
+                // re-previewed itself for ever. My test asserted the preview
+                // CONTAINED the string "send it", which tested only that the
+                // lie was spelled correctly.
+                //
+                // No second sender is written here. The voice flow stages the
+                // SAME `confirm_proforma` pending the email flow stages, and
+                // her "yes" is resolved by workflow/actions.js's existing
+                // resolvePending → generateProformaFromPending, which builds
+                // the PDF, archives it, records the price, logs the sheet and
+                // emails it. One path, one set of rules.
+                //
+                // Once staged, `answeringBrain` is true on the NEXT utterance
+                // (there is now a pending), so the guard above sends her "yes"
+                // straight to the brain. That is the whole handover.
+                if (step.stage === 'preview' && step.ready && step.draft) {
+                    try {
+                        const acts = require('./workflow/actions');
+                        const chatId = `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`;
+                        // Invoice number, container numbers and the postal
+                        // address come from her real invoice history and
+                        // address book — the SAME helper the email path uses,
+                        // so a proforma raised by voice is not a different
+                        // document from one raised from an order.
+                        const nums = await acts.prepareProformaNumbers(step.draft);
+                        await acts.setPending(chatId, {
+                            type: 'confirm_proforma',
+                            draft: step.draft,
+                            invNo: nums.invNo,
+                            containerNos: nums.containerNos,
+                            addressLines: nums.addressLines,
+                            replyTo: step.recipient.email,
+                            subject: '',
+                            who: step.recipient.name,
+                        });
+                        // The voice draft is cleared on hand-off, deliberately.
+                        // Two modules owning one draft is the "second set of
+                        // rules to keep in step" problem again. The cost is
+                        // real and worth naming: saying "no" cancels the
+                        // pending and she starts the proforma over rather than
+                        // amending it. Fix that by teaching the brain to amend
+                        // a confirm_proforma, not by keeping a shadow copy here.
+                        pro.clear();
+                        // An address-book warning is the one thing that must
+                        // survive the hand-off — a proforma going out with no
+                        // address on it is not something to discover later.
+                        if (nums.addressWarning) {
+                            step.say += ` One thing: ${nums.addressWarning}`;
+                        }
+                        if (nums.invNo) step.say += ` It'll be ${nums.invNo}.`;
+                    } catch (e) {
+                        // Staging failed: say so rather than leaving her with a
+                        // preview that looks ready and a "yes" that lands
+                        // nowhere. That silence is the bug being fixed here.
+                        console.error('[PROFORMA] could not stage the send:', e.message);
+                        step.say = `${step.summary} I built it, but I couldn't set up the send: ${e.message}. It's in Documents > Saved.`;
+                    }
+                }
+
                 mem.remember('bot', step.say);
                 return res.json({
                     agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
