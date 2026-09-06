@@ -1666,6 +1666,46 @@ async function assess(email) {
         res.asked_for_quote = null;
         askedForWasDropped = true;
     }
+
+    // ── EVIDENCE, NOT CONFIDENCE, GATES THE POSITIVE CLASS (2026-09-06) ─────
+    //
+    // Apsara: "make it more efficient without any false positive."
+    //
+    // WHY THE CONFIDENCE NUMBER CANNOT BE THE GATE. Verbalised self-confidence
+    // is systematically overconfident — the well-documented finding behind the
+    // selective-prediction literature, and independently MEASURED here: a live
+    // 16-email sweep came back 1.0 on every single decision, including one
+    // judged from a 51-character body with six unread attachments (see the
+    // confidenceCaps block below). A field that is always 1.0 carries no
+    // information, so a threshold on it filters nothing.
+    //
+    // WHAT WORKS INSTEAD is the same idea as Chain-of-Verification (Dhuliawala
+    // et al., arXiv:2309.11495): do not re-ask "are you sure", ask for
+    // something INDEPENDENTLY CHECKABLE. Here that already exists and costs
+    // nothing extra — asked_for_quote is the sender's own words, and
+    // quoteAppearsIn verifies three things a model cannot fake: the span is
+    // ≥8 chars, it is a LITERAL SUBSTRING of the body, and it carries an
+    // actual request signal.
+    //
+    // The hole this closes: that verification only ever ran when the model
+    // HAD claimed an asked_for. A response saying needs_reply true with
+    // asked_for null skipped the check entirely and sailed through at whatever
+    // confidence it asserted. "She must reply" with nothing to point at is
+    // exactly the Andy Park case she sent in — he stated when the container
+    // was due back, and it was rendered as "Confirm container return date".
+    // There is no request sentence in that email to quote, because he was not
+    // asking.
+    //
+    // NOT a drop. An unevidenced claim is DEMOTED to the unsure bucket: still
+    // shown, still numbered, just not asserted as her job. Selective
+    // prediction abstains from the CLAIM, not from the mail.
+    const evidenceBacked = !!res.asked_for;   // survived the grounding check above
+    const unevidencedRequest = waiting_on === 'her'
+        && (res.needs_reply === true || res.needs_reply === 'true')
+        && !evidenceBacked;
+    if (unevidencedRequest) {
+        console.warn(`[REPLYWATCH] needs_reply asserted with no quotable request in the body — demoting to unsure: "${String(res.summary || '').slice(0, 70)}"`);
+    }
     // ── CONFIDENCE IS CAPPED BY EVIDENCE (2026-08-29) ────────────────────
     // MEASURED, not suspected: a live 16-email sweep came back with
     // confidence 1.0 on every single decision — including "Rabiya confirms no
@@ -1863,6 +1903,9 @@ async function assess(email) {
         // the ask may well be theirs. Hedged, not hidden.
         third_party_addressed: thirdPartyAddressed,
         third_party_label: thirdPartyLabel,
+        // The model said she must reply but could not point at words in the
+        // email that ask Edge Metals for anything. Hedged, not hidden.
+        unevidenced_request: unevidencedRequest,
         asked_for_quote: typeof res.asked_for_quote === 'string' ? res.asked_for_quote : null,
         confidence,
         // Kept so a digest line can be traced back to what the model was NOT
@@ -2736,6 +2779,10 @@ function buildDigest(matters, emailCount) {
         // the ask may be theirs — the Tiffany/Schneider shape. She is still
         // shown it; it is just not asserted as her job.
         || f.third_party_addressed === true
+        // Or nothing in the email actually asks Edge Metals for anything — the
+        // Andy Park shape, a statement of fact rendered as a request. This is
+        // the evidence gate, and it is the one that costs no extra API call.
+        || f.unevidenced_request === true
     );
     const unsure = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && unsureItem(f));
     const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && !unsure.includes(f));
