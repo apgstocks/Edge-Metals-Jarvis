@@ -6373,6 +6373,9 @@ boot();
        browsers refuse the microphone over plain HTTP. -->
   <script src="voice-machine.js"></script>
   <script src="voice.js"></script>
+  <!-- The orb. Reads the SAME voice state, so it cannot say "listening"
+       while the microphone is shut. -->
+  <script src="orb.js"></script>
 
 <!-- Trucker bill + Pay modals. TOP-LEVEL, not inside the Loads tab's
      template string: the first port of these put them beside #payModal,

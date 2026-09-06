@@ -221,10 +221,18 @@
     // instruction can no more write to the ledger than a typed one.
     function ask(q) {
         say('Thinking…');
+        // `thinking` is not in the reducer: it is about the network, not about
+        // whether the microphone may be open, and putting it there would mean
+        // a state that can never affect the one decision that file exists to
+        // make. The orb is told directly, and cleared on BOTH outcomes below —
+        // an orb left churning after a failed request is a spinner that never
+        // stops.
+        if (window.JarvisOrb) window.JarvisOrb.setThinking(true);
         var api = window.api;
         if (typeof api !== 'function') { say('Assistant unavailable'); return; }
         api('/api/yard/ask', { method: 'POST', body: JSON.stringify({ question: q }) })
             .then(function (r) {
+                if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 var answer = (r && r.answer) || 'No answer.';
                 say(answer.slice(0, 60));
                 // A PROPOSAL IS NEVER SPOKEN AND CONFIRMED BY VOICE. The card
@@ -238,7 +246,10 @@
                     speak(answer);
                 }
             })
-            .catch(function (e) { say('Failed: ' + (e && e.message)); });
+            .catch(function (e) {
+                if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
+                say('Failed: ' + (e && e.message));
+            });
     }
 
     // ── wiring ────────────────────────────────────────────────────────────

@@ -1,0 +1,29 @@
+{
+  "name": "jarvis-desktop",
+  "productName": "Jarvis",
+  "version": "1.0.0",
+  "description": "Edge Metals yard assistant, on the desktop",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.edgemetals.jarvis",
+    "productName": "Jarvis",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "package.json"],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": ["dmg"],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Jarvis listens for \"Hey Jarvis\" so you can ask about loads and payments without typing."
+      }
+    }
+  }
+}
