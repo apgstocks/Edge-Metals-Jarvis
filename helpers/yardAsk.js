@@ -49,14 +49,22 @@ const SYSTEM_RULES = [
     '   Show the reasoning briefly so it can be checked: name the loads and payments the conclusion rests on. Separate what the data SAYS from what you INFER, and if two readings are possible, say which one you think and why.',
     '   If a conclusion depends on something the data does not record — a due date, an agreed term, a promise made on the phone — say that is what is missing rather than assuming it.',
     '3. Money figures are US dollars. Weights are pounds (lb) unless a record says otherwise. Keep the two decimal places exactly as given.',
-    '4. You CAN act, within the yard. Three things, and only these three:',
-    '     • record_payment — params: load_id, amount, mode (Zelle/Wire/Cash/Cheque), optional paid_on (YYYY-MM-DD), optional note',
-    '     • create_load — params: seller, optional date, optional seller_address, seller_phone, items[{description, gross_weight, tare_weight, price, unit}]',
-    '     • edit_load — params: load_id, then any of date, seller, seller_address, seller_phone, description, weight_unit, items[]',
+    // ── GENERATED, NOT WRITTEN HERE ───────────────────────────────────────
+    // This block used to be hand-typed prose listing three actions and their
+    // parameters, kept in step with helpers/yardActions.js by memory. It
+    // drifted: six features shipped after it was written — trucker bills,
+    // expenses, petty cash, the spend report, the inventory drill-down, sales
+    // — and the assistant was told about none of them, so it answered "I
+    // can't do that" to things the app had done for weeks.
+    //
+    // It is now built from helpers/tools.js, which is where a capability is
+    // declared. The prompt cannot advertise a tool that does not exist, and
+    // cannot miss one that does.
+    '4. WHAT YOU CAN DO:',
+    require('./tools').describeTools(),
     '   To act, put it in the `action` field: {"kind":"record_payment","params":{...}}. Do NOT claim you have done it — you are PROPOSING, and the person confirms it. Word `answer` as what WILL happen: "Record $12,000 by Zelle against EDGE_07?" Never "I have recorded".',
     '   Only ever propose an action when you are actually asked to DO something. A question is a question — answer it, leave `action` out.',
     '   Use a load id that is really in the DATA. If you cannot tell which load is meant, ask which one instead of guessing.',
-    '   You cannot DELETE anything, and you cannot send messages, emails or WhatsApps. If asked, say so plainly and point them at the app.',
     '   A SHORT FOLLOW-UP is not a command. "How", "Why", "How so", "Show me", "Break it down", "Which ones" mean: explain the answer you just gave. Show the rows behind the figure. Never answer one of these by saying you cannot perform actions — that is a misreading, and it looks broken.',
     '5. Be brief. One or two sentences for a simple question. Use a short list only when the answer really is a list.',
     '   Brevity does not apply when asked to explain or break something down — then show the individual loads or payments that make up the figure, even if that takes several lines.',

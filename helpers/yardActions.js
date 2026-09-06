@@ -64,52 +64,12 @@ const money = (n) => `$${(Math.round(Number(n) * 100) / 100).toFixed(2)}`;
 const EDITABLE_LOAD_FIELDS = ['date', 'seller', 'seller_address', 'seller_phone', 'description', 'weight_unit'];
 
 const ACTIONS = {
-    // ── record a payment ──────────────────────────────────────────────────
-    async record_payment(p) {
-        const { getLoad } = require('./loads');
-        const { PAYMENT_MODES, paymentSummary } = require('./payments');
-
-        const loadId = String(p.load_id || '').trim();
-        if (!loadId) throw new Error('which load the payment is against was not specified');
-        const load = await getLoad(loadId);
-        // The single most valuable check here. A hallucinated load id is the
-        // most likely way this goes wrong, and it dies at this line.
-        if (!load) throw new Error(`there is no load ${loadId} in the records`);
-
-        const amount = Math.round(Number(p.amount) * 100) / 100;
-        if (!Number.isFinite(amount) || amount <= 0) throw new Error('a payment needs an amount greater than zero');
-
-        const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(p.mode || '').trim().toLowerCase());
-        if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
-
-        // Recomputed from the ledger, NOT from anything the model said, so the
-        // pending figure on the card is the same arithmetic the invoice uses.
-        const before = paymentSummary(loadId, load.amount);
-        const after = Math.round((before.pending - amount) * 100) / 100;
-
-        const paidOn = /^\d{4}-\d{2}-\d{2}$/.test(String(p.paid_on || '')) ? p.paid_on : require('./time').todayLocal();
-
-        const warnings = [];
-        // Overpayment is allowed but never silent — it is usually a typo, and
-        // it is far cheaper to question here than to unpick from the ledger.
-        if (after < 0) warnings.push(`This is ${money(-after)} MORE than the ${money(before.pending)} still outstanding on this load.`);
-        if (before.pending === 0) warnings.push('This load is already fully paid.');
-
-        return {
-            summary: `Record a ${mode} payment of ${money(amount)} against ${loadId} (${load.seller || 'no seller'}), dated ${paidOn}.`,
-            details: [
-                ['Load', `${loadId} — ${load.seller || 'no seller'}, ${money(load.amount || 0)}`],
-                ['Already paid', money(before.paid)],
-                ['This payment', `${money(amount)} by ${mode}`],
-                ['Left pending after', money(Math.max(after, 0))],
-            ],
-            warnings,
-            run: async (ctx) => {
-                const { addPayment } = require('./payments');
-                return addPayment({ load_id: loadId, amount, mode, paid_on: paidOn, note: p.note, created_by: ctx.role || 'yard-assistant' });
-            },
-        };
-    },
+    // record_payment MOVED to helpers/tools.js on 2026-09-05, and the copy
+    // that was here is deleted rather than left as a fallback. Two
+    // implementations of the same write is precisely the drift this whole
+    // change is about: proposeAction prefers the registry, so this copy would
+    // never have run again, and a dead second version of a money path is a
+    // trap for whoever edits the wrong one.
 
     // ── start a load ──────────────────────────────────────────────────────
     // Creates a DRAFT, not a finished load, and that is on purpose rather than
@@ -229,7 +189,15 @@ const ACTIONS = {
 // Names the model is told about. Kept next to the implementations so the two
 // cannot drift — a prompt advertising an action that does not exist produces
 // confident nonsense, which is the worst of both.
-const ACTION_NAMES = Object.keys(ACTIONS);
+// Every write capability, from both places, with no duplicates. Exported so
+// the prompt and any caller read ONE list — the old failure was a prompt that
+// advertised three actions while the code had a different set.
+const ACTION_NAMES = (() => {
+    try {
+        const t = require('./tools');
+        return t.writeToolNames().concat(Object.keys(ACTIONS)).filter((n, i, a) => a.indexOf(n) === i);
+    } catch (e) { return Object.keys(ACTIONS); }
+})();
 
 // ── propose ───────────────────────────────────────────────────────────────
 // Takes whatever the model produced. Returns something safe to show, or throws
@@ -244,11 +212,33 @@ async function proposeAction(raw, ctx = {}) {
     if (/delete|remove|void|cancel/.test(kind)) {
         throw new Error('I will not delete anything. Deleting a load or a payment has no undo, so it has to be done by hand in the app.');
     }
-    if (!Object.prototype.hasOwnProperty.call(ACTIONS, kind)) {
-        throw new Error(`I can only record a payment, start a draft load, or edit a load. I cannot do "${kind || 'that'}".`);
-    }
 
-    const built = await ACTIONS[kind](raw.params || raw);
+    // ── THE REGISTRY IS CONSULTED FIRST ───────────────────────────────────
+    // helpers/tools.js is now the single place a capability is declared, and
+    // the prompt is generated from it. This file keeps the propose/confirm
+    // machinery — the TTL, the single-use id, the pending map — because that
+    // is about SAFETY rather than about what the tools are, and none of it
+    // should be duplicated per tool.
+    //
+    // The local ACTIONS object below is still consulted as a fallback so that
+    // create_load and edit_load, which have not been moved across yet, keep
+    // working unchanged. When they move, this falls away.
+    const tools = require('./tools');
+    let built = null;
+    if (tools.TOOLS[kind] && tools.TOOLS[kind].kind === 'write') {
+        built = await tools.buildWrite(kind, raw.params || raw, ctx);
+    } else if (tools.TOOLS[kind]) {
+        // A read tool arrived down the propose path. That is not an error the
+        // person should see as a refusal — it is something the assistant can
+        // simply do — so it is named as a routing mistake rather than a limit.
+        throw new Error(`${kind} only looks something up; it does not need confirming.`);
+    } else if (Object.prototype.hasOwnProperty.call(ACTIONS, kind)) {
+        built = await ACTIONS[kind](raw.params || raw);
+    } else {
+        const names = tools.writeToolNames().concat(Object.keys(ACTIONS))
+            .filter((n, i, a) => a.indexOf(n) === i);
+        throw new Error(`I cannot do "${kind || 'that'}". I can: ${names.join(', ')}.`);
+    }
     const id = crypto.randomBytes(16).toString('hex');
     pending.set(id, { id, kind, created: Date.now(), built, role: ctx.role || null });
     return {

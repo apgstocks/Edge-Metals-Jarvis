@@ -49,8 +49,21 @@ async function refuses(fn) {
     ck('a load exists to act on', !!load && load.amount === 2000);
 
     // ── the boundary: what it may even attempt ────────────────────────────
-    ck('exactly three actions are allowlisted', ACTION_NAMES.length === 3);
-    ck('deletion is not one of them', !ACTION_NAMES.some((n) => /delete|remove/.test(n)));
+    // Was "exactly three actions are allowlisted". That number was the point
+    // when three was the whole vocabulary; from 2026-09-05 the registry in
+    // helpers/tools.js is the single place a capability is declared and the
+    // prompt is generated from it, so the list is MEANT to grow — pinning the
+    // count would fail on every new tool and teach whoever hits it to bump the
+    // number without thinking.
+    //
+    // What must not change is the SHAPE of the boundary, so that is what is
+    // asserted: it is a closed allowlist, and the two irreversible categories
+    // are absent from it.
+    ck('the vocabulary is a closed allowlist', Array.isArray(ACTION_NAMES) && ACTION_NAMES.length > 0);
+    ck('deletion is not one of them', !ACTION_NAMES.some((n) => /delete|remove|void/i.test(n)));
+    ck('and neither is sending anything',
+       !ACTION_NAMES.some((n) => /send|email|whatsapp|message/i.test(n)),
+       'a sent message cannot be unsent — that category stays out entirely, not behind a confirm');
 
     for (const kind of ['delete_load', 'delete_payment', 'remove_load', 'void_payment']) {
         const e = await refuses(() => proposeAction({ kind, params: { load_id: load.id } }));
@@ -58,7 +71,13 @@ async function refuses(fn) {
     }
     for (const kind of ['send_whatsapp', 'email_seller', 'generate_pdf', 'run_shell', '']) {
         const e = await refuses(() => proposeAction({ kind, params: {} }));
-        ck(`"${kind || '(no kind)'}" is refused`, !!e && /I can only record a payment/.test(e.message));
+        // The refusal used to read "I can only record a payment, start a draft
+        // load, or edit a load" — a sentence typed by hand that went stale the
+        // moment a fourth capability existed. It is now built from the live
+        // registry, so what it offers is always what there is.
+        ck(`"${kind || '(no kind)'}" is refused`, !!e && /I cannot do/.test(e.message));
+        ck(`  and the refusal names what IS possible`, !!e && /I can: .*record_payment/.test(e.message),
+           'naming the boundary beats a bare refusal, which just invites a rephrase');
     }
 
     // ── the model's parameters are untrusted input ────────────────────────
@@ -73,7 +92,14 @@ async function refuses(fn) {
     }
     for (const bad of ['Bitcoin', 'IOU', '', 'venmo']) {
         const e = await refuses(() => proposeAction({ kind: 'record_payment', params: { load_id: load.id, amount: 10, mode: bad } }));
-        ck(`payment mode "${bad}" is rejected`, !!e && /mode must be one of/.test(e.message));
+        // Empty now fails one step EARLIER than the rest: the registry's
+        // schema check sees `mode` is required and missing before the handler
+        // runs, so it says "record_payment needs mode" rather than listing the
+        // valid modes. Both are correct refusals and both name the field —
+        // which is what the person needs — so either message passes.
+        ck(`payment mode "${bad}" is rejected`,
+           !!e && (/mode must be one of/.test(e.message) || /needs mode/.test(e.message)),
+           `got: ${e && e.message}`);
     }
     ck('nothing has been written yet', listPayments().length === 0);
 
