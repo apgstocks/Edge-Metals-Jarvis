@@ -744,6 +744,31 @@ section('A0c — interrupting whoever is talking');
        'stops ' + kStops + '->' + k.stops() + ' speaking=' + k.w.JarvisVoice.state().speaking
        + ' mic=' + !!k.mic());
 
+    // ── A MISSING VOICE BORROWS THE OTHER ────────────────────────────────
+    // A mutation making the fallback point at itself — so a missing
+    // acknowledgement produced silence — survived until this existed. Wrong
+    // voice is a far smaller problem than no sound, which reads as "it did
+    // not hear me" and makes her say it again.
+    {
+        const f = withKokoro();
+        f.w.jarvisTTS = { available: true, speak: async () => ({ ok: false }) };
+        // Only Scout's acknowledgement resolves; Jarvis's fails.
+        f.w.fetch = async (p) => {
+            if (/Charon/.test(p)) throw new Error('500');
+            f.w.__ackFetches.push(p);
+            return { ok: true, arrayBuffer: async () => ({ __rate: 22050 }) };
+        };
+        remount(f);
+        f.doc.getElementById('jvToggle').click();
+        await new Promise((r) => setTimeout(r, 10));
+        const before = f.played.length;
+        f.mic().hear('hey jarvis');          // the one with NO acknowledgement
+        await new Promise((r) => setTimeout(r, 10));
+        ck('a missing acknowledgement borrows the other assistant\'s voice',
+           f.played.length > before,
+           'silence reads as "it did not hear me" and makes her repeat herself');
+    }
+
     // And a tap when it is NOT speaking just dismisses — it must not open a
     // microphone she did not ask for.
     const q = withKokoro();

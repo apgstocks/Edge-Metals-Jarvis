@@ -281,8 +281,12 @@
         // order. Doing it by hand here would be a second, subtly different
         // path to the same state — which is how the original self-trigger
         // bug got in.
+        // CAPTURE_START alone. The reducer answers it with STOP_SPEAKING,
+        // START_MIC and OPEN_CAPTURE, in that order, and dispatch() performs
+        // all three — so calling openCapture() here as well was a second
+        // path to the same place. A mutation removing it survived every
+        // test, which is how redundant code announces itself.
         dispatch('CAPTURE_START');
-        openCapture();
         console.log('[VOICE] interrupted — go ahead');
     }
 
