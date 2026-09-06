@@ -60,12 +60,30 @@
     if (!VM) { console.warn('[VOICE] voice-machine.js must load first'); return; }
 
     // ── what this browser can actually do ─────────────────────────────────
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    // ── WHICH ENGINE ─────────────────────────────────────────────────────
+    // Three possibilities, in order of preference:
+    //
+    //   1. LOCAL (voice-local.js) — the desktop app. Audio is captured here
+    //      and transcribed by whisper.cpp inside the app's own Node process.
+    //      Nothing leaves the Mac. Preferred wherever it exists, because it
+    //      is both the only thing that works there AND more private than the
+    //      alternative.
+    //   2. Chrome's SpeechRecognition — real Chrome only. Works, but uploads
+    //      the audio to Google to be transcribed.
+    //   3. Nothing usable — Safari, whose continuous mode misbehaves.
+    //
+    // Preferring local was not the original design. It became the design
+    // after the desktop app was shipped claiming "Electron bundles Chromium
+    // so the wake word works", which was wrong: SpeechRecognition in Chrome
+    // is a GOOGLE SERVICE reached with keys Electron does not have. Proved on
+    // her machine — "SPEECH ERROR: network", instantly — rather than argued.
+    var LOCAL = window.JarvisLocalRecognition || null;
+    var SR = LOCAL || window.SpeechRecognition || window.webkitSpeechRecognition || null;
     // Safari reports webkitSpeechRecognition and then handles `continuous`
-    // badly. Detected by engine rather than by user-agent string where
-    // possible: Chrome and Edge expose window.chrome, Safari does not.
+    // badly. Irrelevant when the local engine is present, which is why this is
+    // checked second.
     var isSafari = /^((?!chrome|android|crios|edg).)*safari/i.test(navigator.userAgent);
-    var canWake = !!SR && !isSafari;
+    var canWake = !!LOCAL || (!!SR && !isSafari);
 
     var WAKE = /\b(hey |ok |okay )?jarvis\b/i;
     // How long a command may run before it is cut off. Long enough for
@@ -216,7 +234,16 @@
             // transient error. Retrying would spin for ever while the pill
             // said "Listening", which is the same lie the old "HEY JARVIS"
             // label told — the UI claiming a state that is not true.
-            if (err === 'network') {
+            if (err === 'engine') {
+                // The LOCAL engine failed — a missing model, usually. It says
+                // what is wrong; repeating "use Chrome" here would be advice
+                // for a different problem.
+                say('Speech engine: ' + (ev.message || 'failed'));
+                console.warn('[VOICE] local engine error:', ev.message);
+                dispatch('RECOGNISER_STOPPED');
+                return;
+            }
+            if (err === 'network' && !LOCAL) {
                 speechUnavailable = true;
                 dispatch('USER_DISABLE');
                 say('Voice needs Google Chrome — this app cannot do speech');

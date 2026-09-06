@@ -346,6 +346,72 @@ section('G3 — no speech engine is admitted, not papered over');
        'silence in a yard is normal and must not switch the feature off');
 }
 
+section('G4 — the desktop app uses the LOCAL engine, and prefers it');
+{
+    // The desktop app has no browser speech engine at all. It now ships its
+    // own: audio captured in the window, transcribed by whisper.cpp inside
+    // the app's Node process, nothing leaving the Mac.
+    //
+    // voice.js must PREFER it wherever it exists — not merely fall back to it
+    // — because it is both the only thing that works there and more private
+    // than Chrome's, which uploads the audio to Google.
+    const src = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
+    const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+    ck('the local engine is checked FIRST', /var SR = LOCAL \|\| window\.SpeechRecognition/.test(nc),
+       'falling back to it would mean Chrome wins on a machine where local is more private');
+    ck('  and it enables the wake word by itself', /var canWake = !!LOCAL \|\|/.test(nc),
+       'the Safari check is irrelevant when we own the engine');
+
+    // The Chrome-specific "network" diagnosis must not fire against the local
+    // engine — "use Chrome" is advice for a different problem.
+    ck('the "use Chrome" advice is Chrome-path only', /err === 'network' && !LOCAL/.test(nc));
+    ck('  and the local engine reports its own failures', /err === 'engine'/.test(nc));
+
+    // The bridge is deliberately one function. Every API exposed to a remote
+    // page is one that page could call.
+    const pre = fs.readFileSync(path.join(ROOT, 'desktop/preload.js'), 'utf8');
+    const exposed = (pre.match(/^\s{4}(\w+):/gm) || []).map((m) => m.trim().replace(':', ''));
+    ck('the preload bridge exposes only speech', exposed.every((n) => /available|warm|transcribe|status/.test(n)),
+       `exposed: ${exposed.join(', ')}`);
+    // Comments stripped first. The preload's own comment says the bridge
+    // cannot "read a file, spawn a process" — and the regex matched that
+    // prose rather than any code. The fifth time this trap has caught me in
+    // this repo; a comment describing the thing being asserted is not
+    // evidence about the code.
+    const preCode = pre.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    ck('  and no filesystem or process access', !/readFile|writeFile|spawn|exec|shell/.test(preCode),
+       'the window shows a remote site; giving it those would hand the server this Mac');
+
+    // The local recogniser must present the SAME shape voice.js already uses,
+    // or the flow file would need to know which engine it has.
+    const loc = fs.readFileSync(path.join(ROOT, 'dashboard/voice-local.js'), 'utf8');
+    for (const m of ['start', 'stop', 'onresult', 'onerror', 'onend']) {
+        ck(`  it implements ${m}, like the browser API`, new RegExp(m).test(loc));
+    }
+    ck('  and it announces itself under its own name',
+       /window\.JarvisLocalRecognition = LocalRecognition/.test(loc),
+       'masquerading as SpeechRecognition would make the choice invisible');
+
+    // THE ENERGY GATE. Running Whisper continuously would keep a fan on all
+    // day for a room that is silent most of it.
+    ck('Whisper only sees audio that might be speech', /SPEECH_LEVEL/.test(loc) && /rms > SPEECH_LEVEL/.test(loc),
+       'transcribing silence continuously is a battery bug with a model attached');
+    ck('  an utterance is capped', /MAX_MS/.test(loc),
+       'a noisy room must not grow the buffer without bound');
+    ck('  and very short noises are dropped', /held >= MIN_MS/.test(loc),
+       'a slammed door is not a sentence');
+
+    // The audio buffer is REUSED by the audio thread. Keeping the reference
+    // would hand Whisper the last frame repeated N times.
+    ck('audio frames are copied, not referenced', /new Float32Array\(buf\)/.test(loc),
+       'the audio thread reuses that buffer on the very next callback');
+
+    // And the processor must not be audible.
+    ck('the capture node is routed at zero gain', /mute\.gain\.value = 0/.test(loc),
+       'connecting it to the speakers at full volume plays the room back at itself');
+}
+
 section('H — Safari degrades to a button instead of half-working');
 {
     // Safari supports SpeechRecognition and then handles `continuous` badly:

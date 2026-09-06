@@ -6372,6 +6372,10 @@ boot();
        Only possible since the site got a real certificate this morning —
        browsers refuse the microphone over plain HTTP. -->
   <script src="voice-machine.js"></script>
+  <!-- Local speech, for the desktop app. MUST load before voice.js, which
+       checks for window.JarvisLocalRecognition when choosing an engine. In a
+       browser this file returns immediately — there is no bridge to use. -->
+  <script src="voice-local.js"></script>
   <script src="voice.js"></script>
   <!-- The orb. Reads the SAME voice state, so it cannot say "listening"
        while the microphone is shut. -->

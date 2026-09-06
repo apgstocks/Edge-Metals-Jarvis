@@ -5,7 +5,42 @@ window.
 
 ## Why this exists rather than a bookmark
 
-**NOT the wake word — I was wrong about that, and it is worth being blunt.**
+## Voice, with the engine inside the app
+
+The app transcribes speech itself, using whisper.cpp on this Mac. **Nothing
+leaves the machine** — which is better than the Chrome path, where the audio
+is uploaded to Google to be transcribed.
+
+Two things before it works:
+
+```
+cd desktop
+npm install          # pulls smart-whisper (builds whisper.cpp)
+npm run model        # downloads ggml-tiny.en.bin, ~75 MB, once
+npm start
+```
+
+`npm run model` puts the model in
+`~/Library/Application Support/Jarvis/models/` — outside the .app bundle,
+because that bundle is read-only once signed.
+
+Then click **Turn on voice** and say "Hey Jarvis".
+
+### How it listens without cooking the battery
+
+The microphone is always open, which is cheap. Whisper is not, so it does not
+run continuously. An energy gate measures loudness every frame — arithmetic
+on a buffer, no model — and only hands Whisper audio once the level crosses a
+threshold and then falls quiet again. A silent yard costs nothing.
+
+That is the same shape as a wake-word engine with a much dumber trigger. If
+it fires too often on doors and radios, **openWakeWord** (MIT, free, custom
+wake words) replaces the level check with a real model. Worth doing when the
+false triggers actually annoy you — measured, not assumed.
+
+## And the thing I got wrong
+
+**NOT Chromium's speech — I was wrong about that, and it is worth being blunt.**
 
 I built this app justifying it with "Electron bundles Chromium, so the wake
 word works even though Safari is the default browser". That is false.
@@ -20,11 +55,9 @@ the app's own devtools:
     SPEECH ERROR: network
     MIC ENDED
 
-No configuration fixes this. **"Hey Jarvis" needs real Google Chrome.**
-
-The app now detects that failure and says so — the button changes to "Use
-Chrome" and it stops pretending to listen — rather than sitting there with a
-red dot hearing nothing.
+No configuration fixes this — which is why the app now carries its own
+engine instead, as described above. The "Use Chrome" message remains for the
+case where the local model has not been downloaded.
 
 ## So what is this app still good for
 
@@ -32,10 +65,9 @@ A Dock icon, its own window that survives quitting the browser, and no
 address bar to lose the tab behind. Everything except the wake word works in
 it, including the orb and the typed assistant.
 
-If the wake word is what you want, open **https://jarvis.edgemetals.com in
-Google Chrome**. Making it work inside this app would mean paying for a cloud
-speech API (Deepgram, OpenAI, Google Cloud Speech) with a key you own — real
-work and a real bill, and worth discussing rather than assuming.
+I also said fixing this would mean paying for a cloud speech API. That was
+sloppy and wrong twice over: whisper.cpp is MIT-licensed, runs locally, costs
+nothing, and is what the app now uses.
 
 Then the ordinary reasons: a Dock icon, its own window, and no address bar to
 lose the tab behind.

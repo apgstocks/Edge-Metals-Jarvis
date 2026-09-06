@@ -21,7 +21,7 @@
 // other two. The whole reason the phone app and the website keep drifting is
 // that they are separate copies; this deliberately is not one.
 
-const { app, BrowserWindow, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, shell, systemPreferences, ipcMain } = require('electron');
 const path = require('path');
 
 // ── where it points ───────────────────────────────────────────────────────
@@ -94,6 +94,30 @@ function create() {
 
     win.on('closed', () => { win = null; });
 }
+
+// ── the speech service ────────────────────────────────────────────────────
+// Registered before any window exists, so a renderer that asks early is never
+// answered by a missing handler. Every one returns a RESULT OBJECT rather
+// than throwing across IPC: a rejected invoke surfaces in the renderer as an
+// opaque "Error invoking remote method", which tells the person nothing. The
+// whole point of this rewrite is that failures explain themselves.
+const speech = require('./speech');
+
+ipcMain.handle('speech:warm', async () => {
+    try { await speech.load(); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('speech:transcribe', async (_e, pcm) => {
+    try {
+        // Arrives as a copy across the bridge; smart-whisper wants Float32Array.
+        const audio = pcm instanceof Float32Array ? pcm : new Float32Array(pcm);
+        const text = await speech.transcribe(audio);
+        return { ok: true, text: text };
+    } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('speech:status', async () => speech.status());
 
 app.whenReady().then(async () => {
     console.log(`[JARVIS] loading ${APP_URL}${DEV ? '  (dev, devtools open)' : ''}`);
