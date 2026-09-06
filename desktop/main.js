@@ -128,8 +128,15 @@ function create() {
     // Read-only: it looks at three globals and the script tags, and changes
     // nothing. It exists so "voice is silent" resolves to a specific cause
     // instead of another round of guessing.
+    //
+    // AND IT RETRIES BEFORE IT COMPLAINS. The first version fired on every
+    // did-finish-load and announced "VOICE WILL NOT WORK" against a document
+    // that was merely still loading its scripts — one second later everything
+    // was fine. A check that cries wolf is worse than no check, because the
+    // next real warning gets ignored. So: look, and if the answer is "not
+    // yet", look again a few times before saying anything at all.
     win.webContents.on('did-finish-load', async () => {
-        try {
+        const probe = async () => {
             const r = await win.webContents.executeJavaScript(`(function () {
                 var tags = Array.prototype.slice.call(document.scripts)
                     .map(function (s) { return (s.src || '').split('/').pop(); })
@@ -142,8 +149,22 @@ function create() {
                     swControlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
                 };
             }())`, true);
+            return r;
+        };
 
-            if (r.bridge && r.localEngine) {
+        try {
+            // Up to ~6s. Long enough for a slow first paint over a bad
+            // connection, short enough that a real failure is reported while
+            // she is still looking at the terminal.
+            let r = null;
+            for (let i = 0; i < 6; i += 1) {
+                r = await probe();
+                if (r.bridge && r.localEngine) break;
+                await new Promise((res) => setTimeout(res, 1000));
+                if (win.isDestroyed()) return;
+            }
+
+            if (r && r.bridge && r.localEngine) {
                 console.log('[JARVIS] page check: OK — local engine wired up');
                 return;
             }
