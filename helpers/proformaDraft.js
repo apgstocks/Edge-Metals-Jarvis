@@ -86,6 +86,7 @@ function catalogMaterials() {
     } catch (e) {
         console.warn('[PROFORMA] could not read the item catalog:', e.message);
     }
+    _patCache.clear();
     _matCache = list
         .map((s) => String(s || '').trim())
         .filter((s) => s.length >= 3 && !NOT_A_MATERIAL.test(s))
@@ -94,14 +95,40 @@ function catalogMaterials() {
     return _matCache;
 }
 
+// "Auto cast" → /\bauto[\s\-]*cast(?:ing|ed|s|es)?\b/i, so "auto cast",
+// "autocast", "Auto-cast" and "autocasting" all resolve to the one catalog
+// entry. Built once per entry and cached with the list, because this runs on
+// every utterance and RegExp compilation is not free.
+const _patCache = new Map();
+function catalogPattern(name) {
+    if (_patCache.has(name)) return _patCache.get(name);
+    const words = String(name).trim().split(/\s+/).map(
+        (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    // [\s\-]* between words, NOT \s+ — that is what lets the spoken
+    // run-together form match the written two-word one.
+    const re = new RegExp(
+        '(?:^|[^A-Za-z0-9])' + words.join('[\\s\\-]*') + '(?:ing|ed|es|s)?(?![A-Za-z0-9])', 'i');
+    _patCache.set(name, re);
+    return re;
+}
+
 function materialIn(text) {
     const t = String(text || '');
     if (!t.trim()) return null;
 
-    // 1. Her catalog, matched as written.
+    // 1. HER CATALOG, matched the way it is SAID rather than the way it is
+    //    typed. "Auto cast" is the catalog entry; she says "autocast", and
+    //    whisper writes "autocasting". The exact-spelling match failed all
+    //    three variants and she was asked "What material?" about a sentence
+    //    that named it.
+    //
+    //    So the space between words becomes optional, and a plain English
+    //    suffix is allowed on the end. Returning the CATALOG's spelling, not
+    //    hers, is the point: the description line on the document then reads
+    //    "Auto cast" like every other document she has ever raised, instead
+    //    of "autocasting".
     for (const name of catalogMaterials()) {
-        const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (new RegExp('(?:^|[^A-Za-z0-9])' + esc + '(?![A-Za-z0-9])', 'i').test(t)) return name;
+        if (catalogPattern(name).test(t)) return name;
     }
 
     // 2. The metals floor.
@@ -133,6 +160,13 @@ function materialIn(text) {
 // Incoterms and the names of the other fields on the document. Anchored at
 // the start of the captured name so "change it to FOB and payment terms"
 // resolves to no consignee at all rather than to a company called that.
+// The words that turn a material into a company. Only consulted on a
+// MULTI-WORD name, so a bare "chrome" stays goods while "Chrome Metals" is a
+// customer. "Steel" and "Iron" are in here precisely because they are the
+// commonest company tails in this trade — Hyundai Steel, POSCO — and the
+// commonest way a buyer gets mistaken for its own cargo.
+const COMPANY_TAIL = /\b(metals?|trading|traders?|steel|iron|corp|corporation|co|ltd|limited|inc|llc|gmbh|industries|industrial|impex|international|resources|recycling|group|enterprises?|holdings?)\b/i;
+
 const NOT_A_CONSIGNEE = /^(?:cif|fob|cfr|cnf|exw|ddp|dap|fca|fas|dat|payment|shipment|trade|delivery|the\s+rate|rate|it|that|this|them|us|me|him|her|mt|\d)/i;
 
 // Order matters: this is the order the document reads, so the conversation
@@ -248,9 +282,50 @@ const REQUIRED = FIELDS.filter((f) => !f.optional).map((f) => f.key);
 // session is the change to make if that ever stops being true.
 let draft = null;
 
-const START = /\b(create|make|raise|draw up|prepare|generate|new)\b[^.]{0,20}\b(proforma|pi|p\.i\.|invoice)\b/i;
+// ── THE VERBS SHE ACTUALLY USES ──────────────────────────────────────────
+// Apsara, 2026-09-07: "when i say Hey Jarvis..send a proforma for autocasting
+// tense..still it asks what is the material".
+//
+// "send" was not in this list. Her exact sentence did not start a draft AT
+// ALL — handle() returned null and the whole thing fell through to the
+// router. Seven verbs I thought of, and the first one she reached for was not
+// among them. This is the noun problem again wearing a verb.
+//
+// "send" is the interesting one, because it means BOTH "make me one" (here)
+// and "post the one on screen" (the confirm). That is not a conflict: while a
+// draft is staged, handle() only answers a correction or a brand-new start,
+// and a bare "send it" is neither — it reaches the brain, which is what
+// actually sends. The overlap resolves by which of them has a document.
+const START = /\b(create|make|raise|draw\s+up|prepare|prep|generate|issue|send|do|put\s+together|draft|new)\b[^.]{0,24}\b(proforma|pi|p\.i\.|invoice)\b/i;
 
-function isStart(text) { return START.test(String(text || '')); }
+// ── "SEND A PROFORMA" MAKES ONE. "SEND THE PROFORMA" POSTS ONE. ──────────
+// Adding "send" to the verbs above created a real collision, and the article
+// is what resolves it: "send A proforma for autocasting" is a new document,
+// "send THE proforma to Joey" is the one that already exists, which is
+// startProformaFromEmail's job and not this module's at all.
+//
+// Without this, "send the proforma to Joey" started a blank draft and began
+// asking her for a consignee she had just named. Caught by an assertion that
+// already existed and that my widening broke — which is the whole reason it
+// was written.
+const NOT_A_START = /\b(?:send|mail|email|forward|resend|post)\s+(?:the|that|this|it|him|her|them)\b/i;
+
+// Verbs that can ONLY mean "make me one". No article test is needed for
+// these, and applying one to them was a bug: "create a proforma for Daekwang,
+// 21 MT of copper at 8450, email it to Yurim" contains "email it", so the
+// blanket veto killed a sentence that unambiguously creates a document. The
+// veto exists for the ambiguous verbs only.
+const CREATE_VERB = /\b(create|make|raise|draw\s+up|prepare|prep|generate|put\s+together|draft|new)\b/i;
+
+function isStart(text) {
+    const t = String(text || '');
+    if (!START.test(t)) return false;
+    // "create ... email it to Yurim" — unambiguous, whatever else it says.
+    if (CREATE_VERB.test(t)) return true;
+    // Only send/do/issue are ambiguous, and the article decides: "send A
+    // proforma" makes one, "send THE proforma" posts the one that exists.
+    return !NOT_A_START.test(t);
+}
 
 // Pulls out everything the sentence already contains. Called on the opening
 // request AND on every answer, so "actually make it 25 MT at 4200" fills two
@@ -275,7 +350,39 @@ function absorb(text) {
     // every other field is read from. Blanking rather than reordering,
     // because the name can sit anywhere in the sentence.
     const consigneeField = FIELDS.find((f) => f.key === 'consignee');
-    const who = consigneeField ? consigneeField.parse(t) : null;
+    let who = consigneeField ? consigneeField.parse(t) : null;
+
+    // ── "A PROFORMA FOR AUTOCASTING" IS NOT A COMPANY CALLED AUTOCASTING ──
+    // Apsara, 2026-09-07: "send a proforma for autocasting tense..still it
+    // asks what is the material".
+    //
+    // "for X" is how she names BOTH the buyer and the goods — "a proforma for
+    // Daekwang" and "a proforma for autocasting" are the same shape. The
+    // consignee parser took the first one it saw, so the MATERIAL became the
+    // buyer, the material field stayed empty, and she was asked "What
+    // material?" about a sentence whose whole subject was the material.
+    //
+    // THE DISCRIMINATOR IS HER CATALOG, NOT THE METALS LIST. My first version
+    // used materialIn(), which includes the plain metals — and half her
+    // buyers are named after metals, so "change the consignee to Hyundai
+    // Steel" turned the buyer into goods and put "Steel" on the description
+    // line. Her item catalog is curated: it contains "Auto cast" and "Al
+    // rims(Dirty)", which no company is called, and NOT bare "steel" or
+    // "iron", which many are.
+    //
+    // Plus a company-suffix escape, because "Chrome" IS a catalog entry and
+    // "Chrome Metals" is a customer. A trailing Metals/Trading/Corp/Steel on
+    // a multi-word name means a company, whatever the first word is.
+    if (who) {
+        const inCatalog = catalogMaterials().some((n) => catalogPattern(n).test(who));
+        const multiWord = /\s/.test(who.trim());
+        const looksLikeCompany = multiWord && COMPANY_TAIL.test(who);
+        if (inCatalog && !looksLikeCompany) {
+            console.log(`[PROFORMA] "${who}" is in the item catalog — reading it as the goods, not the buyer`);
+            who = null;
+        }
+    }
+
     let rest = t;
     if (who) {
         got.consignee = who;
@@ -625,10 +732,10 @@ function handle(text) {
 }
 
 module.exports = {
-    materialIn, catalogMaterials, KNOWN_METALS, NOT_A_MATERIAL,
-    _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; },
+    materialIn, catalogMaterials, catalogPattern, KNOWN_METALS, NOT_A_MATERIAL,
+    _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     handle, brainDraft, recipient, SEND_TO,
-    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE,
+    isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, START, NOT_A_START, CREATE_VERB,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,
     absorb, FIELDS, REQUIRED, DEFAULT_MT, DEFAULT_PAYMENT_TERMS, DEFAULT_SHIPMENT_TERMS,
 };

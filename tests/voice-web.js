@@ -1457,6 +1457,126 @@ section('H — Safari degrades to a button instead of half-working');
        'a wake word without continuous mode is just a button with extra steps');
 }
 
+section('FOLLOW — a question keeps the microphone open');
+{
+    // Apsara, 2026-09-07: "it is not waiting for follow up. i have to say hey
+    // jarvis..then this loop restarts"
+    //
+    // Jarvis asked "What material?" and then STOPPED LISTENING. She had to
+    // say the wake word again to answer a question it had just asked — which
+    // is not how anyone talks, and saying "Hey Jarvis" again felt like
+    // starting over. A person who asks a question does not need to be
+    // addressed by name to hear the answer.
+    const b = browser({ reply: (body) => (/material/i.test(body.text || '')
+        ? { answer: 'Auto cast it is.', awaiting: false }
+        : { answer: 'What material?', awaiting: true }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis send a proforma for autocasting');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+
+    ck('the question was asked', /what material/i.test(b.log.spoken.join(' ')),
+       JSON.stringify(b.log.spoken));
+    // THE POINT. The pill says Listening again, with no second wake word.
+    ck('  and it is listening again straight after',
+       /listening|go ahead/i.test(b.doc.getElementById('jvText').textContent),
+       'pill says "' + b.doc.getElementById('jvText').textContent + '" — she should not have to say the wake word to answer a question it just asked');
+    ck('  it says so in the log',
+       b.log.console.some((l) => /listening again without the wake word/i.test(l)),
+       'a silent reopen is indistinguishable from a broken one');
+
+    // And she can just answer.
+    const before = b.log.asked.length;
+    b.mic() && b.mic().hear('auto cast');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  and her bare answer reaches the server',
+       b.log.asked.length === before + 1 && /auto cast/i.test(b.log.asked[before]),
+       JSON.stringify(b.log.asked.slice(before)));
+    ck('  with no wake word in it',
+       !/hey jarvis/i.test(b.log.asked[before] || ''), b.log.asked[before]);
+}
+
+section('FOLLOW2 — and it does not hold the microphone open for ever');
+{
+    // The reopen is ONCE, and silence ends it. An unanswered question that
+    // kept reopening would be a microphone that never closes — the exact
+    // invariant voice-machine.js exists to protect.
+    const b = browser({ reply: () => ({ answer: 'What material?', awaiting: true }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis send a proforma');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('it reopened once', /listening|go ahead/i.test(b.doc.getElementById('jvText').textContent));
+
+    // She says nothing. finishCapture with an empty transcript must stop.
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  and silence ends it rather than looping',
+       /say .hey jarvis.|hold to talk/i.test(b.doc.getElementById('jvText').textContent),
+       'pill says "' + b.doc.getElementById('jvText').textContent + '"');
+
+    // An ordinary answer with no question in it must NOT reopen.
+    const b2 = browser({ reply: () => ({ answer: 'Acme is owed six hundred dollars.', awaiting: false }) });
+    b2.w.eval(MACHINE); b2.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b2.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b2.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b2.mic() && b2.mic().hear('hey jarvis how much do we owe acme');
+    b2.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  a plain answer does not reopen the microphone',
+       !/listening|go ahead/i.test(b2.doc.getElementById('jvText').textContent),
+       'pill says "' + b2.doc.getElementById('jvText').textContent + '" — an open mic after every answer is the self-trigger');
+}
+
+section('FOLLOW3 — a question is not a reason to break the invariants');
+{
+    // voice-machine.js exists to guarantee two things: the microphone is
+    // never open while Jarvis is speaking, and NEVER while the app is not in
+    // front. An outstanding question does not get to override either — a
+    // background tab that starts listening because something asked a question
+    // an hour ago is exactly the failure that rule was written for.
+    //
+    // Nothing covered this: mutating the guard to `true` left all 198
+    // assertions green, because every other test in this file runs enabled
+    // and in the foreground.
+    const hidden = browser({ reply: () => ({ answer: 'What material?', awaiting: true }) });
+    hidden.w.eval(MACHINE); hidden.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    hidden.w.JarvisVoice.dispatch('USER_TOGGLE');
+    hidden.w.JarvisVoice.dispatch('WAKE_HEARD');
+    hidden.mic() && hidden.mic().hear('hey jarvis send a proforma');
+    hidden.w.JarvisVoice.finish();
+    // The tab goes away while Jarvis is still speaking.
+    hidden.w.JarvisVoice.dispatch('APP_BACKGROUND');
+    await new Promise((r) => setTimeout(r, 30));
+    ck('a backgrounded tab does not reopen the microphone',
+       !/listening|go ahead/i.test(hidden.doc.getElementById('jvText').textContent),
+       'pill says "' + hidden.doc.getElementById('jvText').textContent + '" — invariant 2, never listen unseen');
+
+    const off = browser({ reply: () => ({ answer: 'What material?', awaiting: true }) });
+    off.w.eval(MACHINE); off.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    off.w.JarvisVoice.dispatch('USER_TOGGLE');
+    off.w.JarvisVoice.dispatch('WAKE_HEARD');
+    off.mic() && off.mic().hear('hey jarvis send a proforma');
+    off.w.JarvisVoice.finish();
+    // She switches the assistant off while it is answering.
+    off.w.JarvisVoice.dispatch('USER_DISABLE');
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  nor one she has switched off',
+       !/listening|go ahead/i.test(off.doc.getElementById('jvText').textContent),
+       'pill says "' + off.doc.getElementById('jvText').textContent + '"');
+}
+
 section('DOC — the document, on screen, before she says yes');
 {
     // Apsara, 2026-09-07: "Send it to Daekwang? --> show preview. post my

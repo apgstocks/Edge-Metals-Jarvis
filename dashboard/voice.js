@@ -158,6 +158,13 @@
 
     var state = VM.initial({ enabled: false, foreground: !document.hidden });
     var rec = null, captureTimer = null, heardDuringCapture = '';
+    // Set from the server's `awaiting` flag on every response, and consumed
+    // exactly once by the speak() finish handler below. A variable rather
+    // than state in voice-machine.js deliberately: that reducer exists to
+    // decide ONE thing — whether the microphone may be open — and "is there
+    // a question outstanding" does not change that answer, it changes what
+    // happens next.
+    var awaitingReply = false;
     var origTitle = document.title;
 
     // ── the DOM ───────────────────────────────────────────────────────────
@@ -911,7 +918,45 @@
         // feature is built around preventing; zero would leave `speaking`
         // true for ever and the mic shut permanently.
         var done = false;
-        var finish = function () { if (done) return; done = true; dispatch('SPEAK_END'); };
+        // ── AN OPEN QUESTION KEEPS THE MICROPHONE OPEN ───────────────────
+        // Apsara, 2026-09-07: "it is not waiting for follow up. i have to say
+        // hey jarvis..then this loop restarts"
+        //
+        // Jarvis asked "What material?" and then STOPPED LISTENING. She had
+        // to say the wake word again to answer a question it had just asked
+        // — which is not how anyone talks, and worse, saying "Hey Jarvis"
+        // again felt like starting over.
+        //
+        // A person who asks a question does not need to be addressed by name
+        // to hear the answer. So when the server says it is waiting for one,
+        // the microphone reopens the instant Jarvis stops speaking, and the
+        // wake word is not required.
+        //
+        // It reopens ONCE, and silence ends it: finishCapture() with nothing
+        // heard falls back to "Say Hey Jarvis" and stops. That is what stops
+        // an unanswered question from holding the microphone open for ever.
+        var finish = function () {
+            if (done) return; done = true;
+            dispatch('SPEAK_END');
+            if (awaitingReply) {
+                awaitingReply = false;
+                // Guarded on the same conditions as a wake: she has not
+                // switched the assistant off, and the tab is in front. A
+                // microphone opening in a background tab is the thing the
+                // foreground check exists to prevent, and an open question
+                // is not a reason to make an exception.
+                // `state.foreground`, NOT a bare `foreground` — which is what
+                // I wrote first, and it does not exist. It would have thrown
+                // a ReferenceError inside the speak-finish handler, on the
+                // one path that reopens the microphone, and node --check sees
+                // nothing wrong with it.
+                if (state.enabled && state.foreground && !speechUnavailable) {
+                    console.log('[VOICE] question outstanding — listening again without the wake word');
+                    dispatch('WAKE_HEARD');
+                    openCapture();
+                }
+            }
+        };
         if (speakLocal(text, finish)) return;
         speakBrowser(text, finish);
     }
@@ -1395,6 +1440,10 @@
                 // same paint as the panel and the card so the column settles
                 // once rather than jumping as each piece arrives.
                 showDoc(r && r.proforma);
+                // Does Jarvis expect an answer? Read BEFORE speak() is called,
+                // because the finish handler consumes it the moment the audio
+                // ends — and on a short reply that is almost immediately.
+                awaitingReply = !!(r && r.awaiting);
                 // The colour follows the ANSWERING agent, which can differ
                 // from the one addressed — she says "Hey Jarvis" and asks
                 // about loads, and the router hands it to Scout. Showing the

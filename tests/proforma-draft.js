@@ -175,6 +175,38 @@ section('H — terms are defaults she can override');
     ck('  and not marked as a default', d.payload().defaulted.indexOf('shipment_terms') === -1);
 }
 
+section('H2 — the verbs she actually reaches for');
+{
+    // Apsara, 2026-09-07: "when i say Hey Jarvis..send a proforma for
+    // autocasting tense..still it asks what is the material".
+    //
+    // "send" was not in the START list. Her exact sentence did not start a
+    // draft AT ALL — handle() returned null and the whole thing fell through
+    // to the router. Seven verbs I thought of; the first one she reached for
+    // was not among them.
+    for (const t of [
+        'send a proforma for autocasting tense',
+        'create a proforma for Daekwang',
+        'make a proforma for Daekwang',
+        'raise a PI for Yurim',
+        'issue a proforma for Daekwang',
+        'do a proforma for Daekwang',
+        'put together a proforma for Daekwang',
+        'draft a proforma for Daekwang',
+        'prepare an invoice for Daekwang',
+    ]) ck(`"${t}" starts a draft`, d.isStart(t) === true);
+
+    // And what must NOT start one. "send" is now a start verb AND the word
+    // she uses to post a finished document — the noun is what keeps them
+    // apart.
+    for (const t of [
+        'send the booking to Sher Trucking',
+        'send it', 'send that to Yurim',
+        'do we have any bookings from Houston',
+        'make it 25 MT',
+    ]) ck(`  "${t}" does not`, d.isStart(t) === false);
+}
+
 section('I — the material is whatever she calls it');
 {
     // Apsara, 2026-09-06: "my user doesnt know about nouns."
@@ -227,6 +259,18 @@ section('I — the material is whatever she calls it');
 
     // 2. THE METALS FLOOR — nobody writes a load ticket for "copper" in the
     //    abstract, so the catalog will not carry it.
+    // SAID, not typed. "Auto cast" is the catalog entry; she says "autocast"
+    // and whisper writes "autocasting". All three failed the exact-spelling
+    // match and she was asked "What material?" about a sentence that named it.
+    for (const said of ['autocast', 'autocasting', 'auto cast', 'Auto-cast', 'auto casts']) {
+        ck(`  "${said}" resolves to the catalog entry`,
+           d.materialIn(`21 MT of ${said} at 900`) === 'Auto cast',
+           'got ' + d.materialIn(`21 MT of ${said} at 900`));
+    }
+    ck('  and the CATALOG spelling is what goes on the document',
+       d.materialIn('21 MT of autocasting at 900') === 'Auto cast',
+       'the description line should read like every other document she has raised');
+
     ck('the plain metals still work', d.materialIn('21 MT of copper at 8450') === 'copper');
 
     // 3. A POSITION ONLY A MATERIAL CAN OCCUPY. This is the part that means
@@ -263,6 +307,101 @@ section('I — the material is whatever she calls it');
     const noRate = d.start('create a proforma for Daekwang, 21 MT of Taldon');
     ck('  and an unstated rate is still asked for, never guessed',
        noRate.fields.rate === undefined && d.missing().includes('rate'));
+}
+
+section('I2 — "a proforma for autocasting" is not a company called that');
+{
+    // "for X" names BOTH the buyer and the goods. The consignee parser took
+    // the first one it saw, so the MATERIAL became the buyer, the material
+    // stayed empty, and she was asked "What material?" about a sentence whose
+    // entire subject was the material.
+    d.clear();
+    const r = d.handle('send a proforma for autocasting tense');
+    // `!!r &&` on every one of these: without it a regression makes handle()
+    // return null, the test THROWS, node exits, and the run prints no totals
+    // at all — which reads as a broken suite rather than a caught bug.
+    ck('the sentence starts a draft at all', !!r,
+       'handle() returned null — "send" is missing from the START verbs again');
+    ck('the material is read as the material', !!r && r.have && r.have.material === 'Auto cast',
+       JSON.stringify(r && r.have));
+    ck('  and NOT as the buyer',
+       !!r && !r.have.consignee,
+       'got consignee "' + r.have.consignee + '" — that name would print at the top of the document');
+    ck('  so it asks the one thing genuinely missing',
+       !!r && /consignee/i.test(r.say), r && r.say);
+
+    // The failure direction is deliberate: losing a consignee costs one
+    // question, which the flow exists to ask. Losing the material puts a
+    // company name on the description line.
+    d.clear();
+    ck('a real buyer is still a buyer',
+       d.handle('create a proforma for Daekwang, 21 MT of copper at 8450').fields.consignee === 'Daekwang');
+
+    // AND THE COMPANIES NAMED AFTER METALS, which is half of them.
+    // The discriminator is HER CATALOG, not the metals list. My first version
+    // used materialIn(), which includes the plain metals — and "change the
+    // consignee to Hyundai Steel" turned the buyer into goods and put "Steel"
+    // on the description line. The catalog contains "Auto cast" and "Al
+    // rims(Dirty)", which no company is called; it does NOT contain bare
+    // "steel" or "iron", which many are.
+    for (const [sentence, buyer] of [
+        ['create a proforma for Chrome Metals, 21 MT of copper at 8450', 'Chrome Metals'],
+        ['create a proforma for Steel Co, 21 MT of copper at 8450', 'Steel Co'],
+        ['create a proforma for Motors Trading, 21 MT of copper at 8450', 'Motors Trading'],
+        ['create a proforma for Hyundai Steel, 21 MT of copper at 8450', 'Hyundai Steel'],
+        ['create a proforma for Mixed Metals Inc, 21 MT of copper at 8450', 'Mixed Metals Inc'],
+        // NO COMPANY SUFFIX, but a metal in the name. This is the case that
+        // separates the catalog from the metals list: with materialIn() as
+        // the discriminator "Copper Bay" becomes goods and the buyer vanishes,
+        // and the company-suffix escape does not save it because there is no
+        // suffix to find.
+        ['create a proforma for Copper Bay, 21 MT of brass at 4000', 'Copper Bay'],
+        ['create a proforma for Iron Bridge, 21 MT of brass at 4000', 'Iron Bridge'],
+    ]) {
+        d.clear();
+        // Guarded: with the discriminator wrong, handle() returns an ASKING
+        // stage (no consignee, so it asks for one) and `.fields` is undefined
+        // — the assertion threw instead of failing, and a throw prints no
+        // totals, so the run looked broken rather than the check looking
+        // wrong. Same guard I have had to add three times today.
+        const step = d.handle(sentence);
+        const got = step && (step.fields || step.have) && (step.fields || step.have).consignee;
+        ck(`  "${buyer}" is a buyer, not goods`, got === buyer,
+           'got ' + got + (step ? ' (stage ' + step.stage + ')' : ' — handle() returned null'));
+    }
+}
+
+section('I3 — when the catalog grows a word that is also a company tail');
+{
+    // Her catalog is hers to edit. The moment she adds "Steel" as an item
+    // type, a bare "steel" is goods AND "Hyundai Steel" is still a buyer —
+    // which is exactly what the multi-word guard on the company-suffix test
+    // is for. Nothing covered it, because her catalog happens to contain no
+    // such entry today, so a mutation making the suffix test apply to single
+    // words changed nothing.
+    const itPath = require.resolve(path.join(__dirname, '../helpers/itemTypes.js'));
+    const real = require.cache[itPath];
+    require.cache[itPath] = {
+        id: itPath, filename: itPath, loaded: true,
+        exports: { loadCustomItemTypes: () => ['Steel', 'Auto cast', 'Chrome'] },
+    };
+    d._clearMaterialCache();
+
+    d.clear();
+    const goods = d.handle('create a proforma for steel, 21 MT at 4000');
+    ck('a bare catalog word is goods', (goods.fields || goods.have).material === 'Steel',
+       JSON.stringify(goods.fields || goods.have));
+    ck('  and does not become the buyer', !(goods.fields || goods.have).consignee,
+       'got ' + (goods.fields || goods.have).consignee);
+
+    d.clear();
+    const buyer = d.handle('create a proforma for Hyundai Steel, 21 MT of brass at 4000');
+    ck('while the same word inside a company name is the buyer',
+       (buyer.fields || buyer.have).consignee === 'Hyundai Steel',
+       JSON.stringify(buyer.fields || buyer.have));
+
+    if (real) require.cache[itPath] = real; else delete require.cache[itPath];
+    d._clearMaterialCache();
 }
 
 section('J — the consignee stops at the end of the name');

@@ -124,10 +124,16 @@ section('B — who it goes to, without her reading out an address');
         : known('Daekwang', 'purchasing@daekwang.co.kr')(q)));
     d.clear();
     const s2 = d.handle('create a proforma for Daekwang, 21 MT of copper at 8450, email it to Yurim');
+    // Guarded, because this THREW rather than failed when a too-broad
+    // NOT_A_START veto made handle() return null on a sentence containing
+    // "email it" — and a throw prints no totals, so the whole suite looked
+    // broken instead of one assertion looking wrong.
+    ck('the sentence still starts a draft', !!s2,
+       'handle() returned null — the "send the proforma" veto is too broad');
     ck('an explicit recipient overrides the consignee',
-       s2.ready && s2.recipient.email === 'yurim@example.com', JSON.stringify(s2.recipient));
+       !!s2 && s2.ready && s2.recipient.email === 'yurim@example.com', JSON.stringify(s2 && s2.recipient));
     ck('  while the document is still made out to the consignee',
-       s2.draft.consignee === 'Daekwang',
+       !!s2 && s2.draft.consignee === 'Daekwang',
        'got ' + s2.draft.consignee + ' — the buyer and the agent are not the same company');
 }
 

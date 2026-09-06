@@ -1943,6 +1943,45 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const agent = AGENTS[route.agent];
             const mem = require('./helpers/voiceMemory');
 
+            // ── IS JARVIS WAITING FOR AN ANSWER? ─────────────────────────
+            // Apsara, 2026-09-07: "it is not waiting for follow up. i have to
+            // say hey jarvis..then this loop restarts"
+            //
+            // Jarvis asked "What material?" and then stopped listening. She
+            // had to say the wake word again to answer a question it had just
+            // asked. The dashboard reopens the microphone on this flag.
+            //
+            // ONE RULE, computed in one place, rather than a flag set by hand
+            // in each of the six branches below — those drift, and the one
+            // that gets forgotten is the one that leaves her talking to a
+            // microphone that is not on. Three signals, any of which means an
+            // answer is expected:
+            //
+            //   · a pending exists — the brain is holding a question open,
+            //     which is the authoritative signal and covers every confirm,
+            //     trucker choice and supplier choice it has ever asked
+            //   · the reply ends in a question mark. Crude, and deliberately
+            //     so: it needs no cooperation from the six different things
+            //     that can produce an answer, and a question mark at the end
+            //     of a spoken sentence means the same thing everywhere
+            //   · a proforma is mid-flow, where even the preview ("Send it to
+            //     Daekwang?") is waiting on her
+            const answering = (payload) => {
+                let awaiting = false;
+                try {
+                    const acts = require('./workflow/actions');
+                    awaiting = !!acts.getPending(
+                        `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`);
+                } catch (e) { /* no pending machinery is not a reason to fail a reply */ }
+                if (!awaiting && typeof payload.answer === 'string'
+                    && /\?["'”)]*\s*$/.test(payload.answer.trim())) awaiting = true;
+                if (!awaiting && payload.proforma && payload.proforma.stage) awaiting = true;
+                // Merged UNDER the payload so an explicit awaiting on a
+                // branch always wins over the inferred one.
+                return res.json(Object.assign({ awaiting }, payload));
+            };
+
+
             // ── RESOLVE THE REFERENCE BEFORE ANYTHING BLIND SEES IT ──────
             // Apsara: "if I say forward that to trucker" — after three
             // bookings were on screen.
@@ -1985,7 +2024,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 const which = `Which one — there are ${ref.ambiguous} on screen. `
                     + (mem.distinguishers() || 'Give me the booking number.');
                 mem.remember('bot', which);
-                return res.json({
+                return answering({
                     agent: route.agent, agent_name: agent.name, voice: agent.voice,
                     routed_because: 'a reference I could not pin down',
                     answer: which, ok: true, cards: null,
@@ -2149,7 +2188,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 }
 
                 mem.remember('bot', step.say);
-                return res.json({
+                return answering({
                     agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                     routed_because: 'building a proforma',
                     answer: step.say, ok: true, cards: null,
@@ -2231,7 +2270,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (quick) {
                 console.log(`[VOICE] follow-up answered from the list: ${asked}`);
                 mem.remember('bot', quick);
-                return res.json({
+                return answering({
                     agent: route.agent, agent_name: agent.name, voice: agent.voice,
                     routed_because: 'following on from what you just asked',
                     answer: quick, ok: true,
@@ -2272,7 +2311,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 if (said) {
                     console.log(`[VOICE] answering from the list: ${cards.rows.length} row(s)`);
                     mem.remember('bot', said);
-                    return res.json({
+                    return answering({
                         agent: route.agent, agent_name: agent.name, voice: agent.voice,
                         routed_because: 'reading the bookings',
                         answer: said, ok: true, cards,
@@ -2299,7 +2338,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // "what is the ERD" needs to know which booking was just
                 // discussed.
                 mem.remember('bot', out && out.answer);
-                return res.json({
+                return answering({
                     agent: 'scout', agent_name: agent.name, voice: agent.voice,
                     routed_because: route.why,
                     answer: out.answer, proposal: out.proposal || null, ok: out.ok !== false,
@@ -2347,7 +2386,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 .filter((t) => typeof t === 'string' && t.trim());
             const spoken = replies.join('\n\n') || 'Done.';
             mem.remember('bot', spoken);
-            return res.json({
+            return answering({
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                 routed_because: route.why,
                 answer: spoken, replies, ok: true,
