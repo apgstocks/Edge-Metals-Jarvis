@@ -63,6 +63,18 @@ function browser({ chrome = true } = {}) {
     Object.defineProperty(w.document, 'hidden', { value: false, configurable: true });
     Object.defineProperty(w.document, 'visibilityState', { value: 'visible', configurable: true });
 
+    // The page's own console, captured. Needed because several of voice.js's
+    // decisions are now REPORTED rather than silent — and "it says which way
+    // it went" is a behaviour worth testing, not a comment. A mutation that
+    // deleted the no-wake-word line survived the whole suite until this
+    // existed.
+    log.console = [];
+    w.console = {
+        log: (...a) => log.console.push(a.join(' ')),
+        warn: (...a) => log.console.push(a.join(' ')),
+        error: (...a) => log.console.push(a.join(' ')),
+    };
+
     w.SpeechRecognition = FakeRecognition;
     if (chrome) w.chrome = {};                       // what canWake keys off
     else Object.defineProperty(w.navigator, 'userAgent', {
@@ -162,6 +174,65 @@ section('B — the wake word, and only the wake word');
     near.mic().hear('travis brought the load in');
     ck('  but "travis" does not', near.w.JarvisVoice.state().capturing === false,
        'a name that merely rhymes must not open a microphone');
+
+    // ── WHAT tiny.en ACTUALLY WRITES ─────────────────────────────────────
+    // The local model is 77MB and "Jarvis" is not a common word in its
+    // training data, so it guesses. On her Mac a clear "Hey Jarvis" came
+    // back as "I'll see you later" — and with a matcher that admitted only
+    // the correct spelling, every mis-hearing became silence, which looked
+    // exactly like the microphone being dead.
+    //
+    // The near-misses now count, but ONLY after an address. That is what
+    // keeps the case above passing: "hey travis" is someone talking to a
+    // laptop, "travis brought the load in" is someone talking about a
+    // driver, and only grammar separates them.
+    for (const phrase of ['hey travis', 'hey jervis', 'ok jarvez', 'hey service', 'jervis']) {
+        const b = browser();
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear(phrase);
+        ck(`  "${phrase}" wakes it too`, b.w.JarvisVoice.state().capturing === true,
+           'a miss costs her the whole feature; a false wake costs one visible 8s window');
+    }
+    // And the bare near-misses must still be inert, because these are words
+    // a freight office says all day.
+    for (const phrase of ['travis is outside', 'the service was late', 'javis called']) {
+        const b = browser();
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear(phrase);
+        ck(`  but "${phrase}" stays quiet`, b.w.JarvisVoice.state().capturing === false,
+           'without the "hey", these are ordinary yard talk');
+    }
+    // The name must not match INSIDE another word either. Without a leading
+    // word boundary this passes everything above and still wakes on any
+    // string that happens to end in the name.
+    for (const phrase of ['open myjarvis account', 'the nonjarvis path']) {
+        const b = browser();
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear(phrase);
+        ck(`  and "${phrase}" does not wake it`, b.w.JarvisVoice.state().capturing === false,
+           'a pattern with no leading boundary matches inside longer words');
+    }
+
+    // ── IT MUST SAY WHICH WAY THE DECISION WENT ──────────────────────────
+    // The failure this is written for: she says "Hey Jarvis", the model
+    // writes down "I'll see you later", the wake does not fire, and NOTHING
+    // is printed. A mis-transcription and a dead microphone then look
+    // identical, and they need completely different fixes.
+    {
+        const b = browser();
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear("I'll see you later");
+        ck('a mis-heard wake word is reported, not swallowed',
+           b.log.console.some((l) => /no wake word in "I'll see you later"/.test(l)),
+           'this exact transcript is what her Mac produced from a clear "Hey Jarvis"');
+
+        const b2 = browser();
+        b2.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b2.mic().hear('hey jarvis');
+        ck('  and so is a successful one',
+           b2.log.console.some((l) => /wake word matched/.test(l)),
+           'silence on success is just as unreadable as silence on failure');
+    }
 
     // A LOOSE PATTERN passes the test above and is still wrong. /jarvis/i
     // with no word boundaries matches inside other words, so these exist to

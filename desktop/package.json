@@ -9,7 +9,9 @@
     "dev": "JARVIS_URL=http://localhost:8080 JARVIS_DEV=1 electron .",
     "build": "electron-builder --mac --publish never",
     "build:win": "electron-builder --win --publish never",
-    "model": "mkdir -p \"$HOME/Library/Application Support/Jarvis/models\" && curl -L -o \"$HOME/Library/Application Support/Jarvis/models/ggml-tiny.en.bin\" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+    "model": "mkdir -p \"$HOME/Library/Application Support/Jarvis/models\" && curl -L -o \"$HOME/Library/Application Support/Jarvis/models/ggml-tiny.en.bin\" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+    "model:base": "mkdir -p \"$HOME/Library/Application Support/Jarvis/models\" && curl -L -o \"$HOME/Library/Application Support/Jarvis/models/ggml-base.en.bin\" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+    "start:base": "JARVIS_WHISPER_MODEL=base.en electron ."
   },
   "devDependencies": {
     "electron": "^44.2.0",

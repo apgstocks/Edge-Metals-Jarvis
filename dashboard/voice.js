@@ -85,7 +85,37 @@
     var isSafari = /^((?!chrome|android|crios|edg).)*safari/i.test(navigator.userAgent);
     var canWake = !!LOCAL || (!!SR && !isSafari);
 
-    var WAKE = /\b(hey |ok |okay )?jarvis\b/i;
+    // ── THE WAKE WORD, AND WHAT THE MODEL ACTUALLY WRITES DOWN ───────────
+    // This was /\b(hey |ok |okay )?jarvis\b/i — one spelling, exactly. That
+    // is fine against Chrome's cloud recogniser and much too strict against
+    // tiny.en, which is a 77MB model doing its best with a name that is not
+    // common in its training data. On her Mac it produced "I'll see you
+    // later" and worse from a clear "Hey Jarvis", and a matcher that admits
+    // only the correct spelling turns every mis-hearing into silence.
+    //
+    // So the near-misses are admitted too. The cost of a FALSE match is
+    // small and visible: an 8-second capture window opens, she sees it, it
+    // closes. The cost of a MISS is that the whole feature appears dead,
+    // which is what she has been living with all afternoon. Asymmetric, so
+    // the matcher should be generous.
+    //
+    // THE NEAR-MISSES ONLY COUNT AFTER "HEY". My first attempt at this put
+    // "travis" in the flat alias list, and tests/voice-web.js caught it
+    // immediately: there is already a case asserting that "travis brought
+    // the load in" must NOT open a microphone, written earlier because a
+    // driver named Travis is entirely ordinary in a freight yard. That test
+    // was right and the change was wrong.
+    //
+    // So the split is: the correct spellings wake it on their own, and the
+    // sloppy ones only when preceded by an address — "hey travis" is
+    // someone talking to a laptop, "travis brought the load in" is someone
+    // talking about a driver. Grammar does the disambiguating that a
+    // spelling list could not.
+    var WAKE = new RegExp(
+        '\\b(?:'
+        + '(?:hey|ok|okay|hi)\\s+(?:jarvis|jarviss|jervis|jarvez|javis|charvis|travis|jarvie|service)'
+        + '|jarvis|jarviss|jervis|jarvez'
+        + ')\\b', 'i');
     // How long a command may run before it is cut off. Long enough for
     // "record a twelve thousand dollar zelle payment against edge zero seven",
     // short enough that an open mic in a noisy office closes on its own.
@@ -203,7 +233,20 @@
                 return;
             }
             // Not capturing: the only thing worth hearing is the wake word.
-            if (WAKE.test(txt)) dispatch('WAKE_HEARD');
+            //
+            // ── AND IT SAYS WHICH WAY IT WENT ────────────────────────────
+            // This was one line with no else. When Apsara said "Hey Jarvis"
+            // and the recogniser returned "I'll see you later", the wake
+            // simply did not fire and NOTHING WAS PRINTED — the fifth place
+            // in this feature where a decision was taken in silence. From
+            // where she sat, a mis-transcription and a dead microphone
+            // looked identical. They need completely different fixes.
+            if (WAKE.test(txt)) {
+                console.log('[VOICE] wake word matched — listening for your command');
+                dispatch('WAKE_HEARD');
+            } else {
+                console.log('[VOICE] no wake word in "' + txt + '" — say "Jarvis" to start');
+            }
         };
 
         rec.onerror = function (ev) {
