@@ -34,7 +34,7 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 
 // A fake browser with a fake microphone and a fake voice, so every open and
 // close is observable.
-function browser({ chrome = true, voices = null } = {}) {
+function browser({ chrome = true, voices = null, pref = null } = {}) {
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
     // its own globals. Without it window.eval is Node's, and voice.js dies on
@@ -121,6 +121,14 @@ function browser({ chrome = true, voices = null } = {}) {
     // reducer would attach itself there and window.VoiceMachine would be
     // undefined — voice.js then bails out with a warning and mounts nothing.
     // Attached explicitly so the harness tests the browser path.
+    // Seeded BEFORE voice.js runs, because that is what a reload looks like:
+    // the preference is already on disk when the page starts. Setting it
+    // afterwards tests nothing — voice.js reads and caches its choice during
+    // load, so a post-hoc write would only prove the setter works.
+    if (pref !== null) {
+        try { w.localStorage.setItem('jarvisVoiceName', pref); } catch (e) {}
+    }
+
     w.eval(MACHINE);
     if (!w.VoiceMachine) w.VoiceMachine = require(path.join(ROOT, 'dashboard/voice-machine.js'));
     w.eval(VOICE);
@@ -226,6 +234,97 @@ section('A0 — it does not answer in the 1990s robot voice');
     ck('  and a better voice arriving later replaces the early poor one',
        late.log.spokenAs[0] === 'Samantha',
        'picked ' + late.log.spokenAs[0] + ' — without re-picking on voiceschanged she is stuck on Fred');
+}
+
+section('A1 — she can choose the voice, and the choice sticks');
+{
+    // Apsara, 2026-09-06: "set different voice."
+    //
+    // The wishlist in voice.js is my OPINION about which macOS voices sound
+    // human. It should lose to hers every time, and it should lose across
+    // reloads, or she has to re-pick it every morning.
+    const b = browser();
+    ck('there is a way in', !!b.doc.getElementById('jvVoiceBtn'),
+       'a preference with no control is not a preference');
+
+    b.doc.getElementById('jvVoiceBtn').click();
+    const sheet = b.doc.getElementById('jvVoices');
+    ck('  the picker opens', sheet && !sheet.classList.contains('hidden'));
+
+    const rows = Array.from(b.doc.querySelectorAll('.jvvRow'));
+    ck('  it lists the installed voices', rows.length > 1);
+    // "System default" must be FIRST and must be a real option: passing no
+    // voice at all is the only way Chromium will use a Premium voice set in
+    // System Settings. Selecting one by name gets the compact version.
+    ck('  with System default at the top',
+       /system default/i.test(rows[0].textContent),
+       'this entry is not cosmetic — it is the only route to a macOS Premium voice');
+    ck('  and it only offers English voices',
+       !rows.some((r) => /ko-KR/.test(r.textContent)),
+       'the list had a Korean voice in it; offering it would be a trap');
+
+    // Pick Alex — deliberately NOT what my ranking would choose, so this
+    // proves her choice overrides my opinion rather than coinciding with it.
+    const alex = rows.filter((r) => /^\s*Alex\b/.test(r.children[1].textContent))[0];
+    ck('  a non-default voice is offered', !!alex);
+    alex.click();
+
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.mic().hear('hey jarvis');
+    b.mic().hear('what is in inventory');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    // spokenAs[0] is the sample played on selection; the last is the answer.
+    ck('  and Jarvis then answers in it',
+       b.log.spokenAs[b.log.spokenAs.length - 1] === 'Alex',
+       'answered as ' + b.log.spokenAs[b.log.spokenAs.length - 1] + ' — my ranking prefers Google US English, and it must lose to her');
+    ck('  she hears a sample the moment she picks', b.log.spoken.length > 1,
+       'choosing a voice you cannot hear is choosing blind');
+
+    // Stored by NAME, not by index: getVoices() order is not stable across
+    // launches, so an index would quietly become a different voice.
+    ck('  the choice is remembered by name, not position',
+       b.w.localStorage.getItem('jarvisVoiceName') === 'Alex');
+
+    // ── AND IT SURVIVES A RELOAD ─────────────────────────────────────────
+    // A fresh page, same storage. This is the actual requirement: "set
+    // different voice" means set it ONCE.
+    const again = browser({ pref: 'Alex' });
+    again.w.JarvisVoice.dispatch('USER_TOGGLE');
+    again.mic().hear('hey jarvis');
+    again.mic().hear('what is in inventory');
+    again.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  and a reload keeps it', again.log.spokenAs[0] === 'Alex');
+
+    // A voice chosen on another machine, or one she has since removed. It
+    // must fall back to the ranking rather than going silent.
+    const gone = browser({ pref: 'A Voice That Is Not Installed' });
+    gone.w.JarvisVoice.dispatch('USER_TOGGLE');
+    gone.mic().hear('hey jarvis');
+    gone.mic().hear('what is in inventory');
+    gone.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  a missing saved voice falls back instead of going silent',
+       gone.log.spoken.length > 0 && gone.log.spokenAs[0] === 'Google US English',
+       'a stale preference must not be able to mute the assistant');
+
+    // Choosing "System default" means passing NO voice — see above.
+    // Started WITH a preference set, or clearing and not-clearing look the
+    // same and the assertion proves nothing. (It did, and a mutation that
+    // removed the clear survived until this line changed.)
+    const dflt = browser({ pref: 'Alex' });
+    ck('  (a preference is set to begin with)',
+       dflt.w.localStorage.getItem('jarvisVoiceName') === 'Alex');
+    dflt.doc.getElementById('jvVoiceBtn').click();
+    Array.from(dflt.doc.querySelectorAll('.jvvRow'))[0].click();
+    dflt.w.JarvisVoice.dispatch('USER_TOGGLE');
+    dflt.mic().hear('hey jarvis');
+    dflt.mic().hear('what is in inventory');
+    dflt.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 5));
+    ck('  and "System default" clears the preference',
+       !dflt.w.localStorage.getItem('jarvisVoiceName'));
 }
 
 section('A — nothing listens until she says so');

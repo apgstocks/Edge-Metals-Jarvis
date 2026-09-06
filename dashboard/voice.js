@@ -136,6 +136,9 @@
         '<button id="jvToggle" type="button"></button>',
         '<span id="jvDot"></span>',
         '<span id="jvText"></span>',
+        // Deliberately small and grey. It is a setting she will touch once,
+        // sitting beside a control she uses constantly.
+        '<button id="jvVoiceBtn" type="button" title="Choose the voice Jarvis speaks in">●●●</button>',
     ].join('');
     var css = document.createElement('style');
     css.textContent = [
@@ -151,6 +154,9 @@
         '#jarvisVoiceBar.hearing{border-color:#B4703A;}',
         '@keyframes jvPulse{0%,100%{opacity:1;}50%{opacity:.25;}}',
         '#jarvisVoiceBar.hidden{display:none;}',
+        '#jvVoiceBtn{background:transparent;border:none;color:#5A6169;cursor:pointer;padding:0 2px;',
+        '  font-size:9px;letter-spacing:1px;line-height:1;}',
+        '#jvVoiceBtn:hover{color:#B4703A;}',
     ].join('');
 
     function el(id) { return document.getElementById(id); }
@@ -214,6 +220,111 @@
     }
     function hideCard() { clearTimeout(cardTimer); card.classList.add('hidden'); }
     card.addEventListener('click', hideCard);
+
+    // ── CHOOSING THE VOICE ───────────────────────────────────────────────
+    // Apsara, 2026-09-06: "set different voice."
+    //
+    // A picker rather than another guess from me. My ranking is an opinion
+    // about which of macOS's voices sound human, and the one thing it
+    // cannot know is which one she wants to hear all day.
+    //
+    // It matters more than it looks, because of a Chromium limitation worth
+    // recording here: Chromium's macOS TTS bridge discards the native voice
+    // identifier and matches voices BY NAME. Compact "Samantha" and Premium
+    // "Samantha" have identical names and languages, so from JavaScript
+    // they are the same voice and the compact one wins. In the desktop app
+    // there are no Google voices at all. So this list is honestly limited —
+    // and the note under it points at the one lever that does reach the
+    // good voices, which is the macOS system setting.
+    var voiceSheet = document.createElement('div');
+    voiceSheet.id = 'jvVoices';
+    voiceSheet.className = 'hidden';
+    voiceSheet.innerHTML = [
+        '<div class="jvvHead">Jarvis speaks as</div>',
+        '<div id="jvvList"></div>',
+        '<div class="jvvNote">Not enough? macOS has far better voices than a browser can reach: '
+        + '<b>System Settings → Accessibility → Spoken Content → System voice</b>, pick the ⓘ beside a voice '
+        + 'and download a <b>Premium</b> one. Set it as the system voice and choose '
+        + '<b>System default</b> above.</div>',
+        '<button id="jvvClose" type="button">Done</button>',
+    ].join('');
+
+    var voiceCss = [
+        '#jvVoices{position:fixed;right:18px;bottom:132px;z-index:903;width:320px;max-width:calc(100vw - 36px);',
+        '  max-height:60vh;overflow-y:auto;padding:14px 16px;border-radius:16px;background:#14181B;',
+        '  border:1px solid rgba(255,255,255,.16);box-shadow:0 14px 38px rgba(0,0,0,.6);',
+        '  font-family:system-ui,-apple-system,sans-serif;}',
+        '#jvVoices.hidden{display:none;}',
+        '.jvvHead{font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:#B4703A;',
+        '  font-weight:700;margin-bottom:10px;}',
+        '.jvvRow{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:9px;cursor:pointer;',
+        '  font-size:13.5px;color:#E7ECEF;}',
+        '.jvvRow:hover{background:rgba(255,255,255,.06);}',
+        '.jvvRow.on{background:rgba(180,112,58,.18);color:#F3C08A;}',
+        '.jvvRow .jvvTick{width:12px;flex:none;color:#B4703A;}',
+        '.jvvRow small{color:#8A9299;margin-left:auto;font-size:11px;}',
+        '.jvvNote{margin-top:12px;font-size:11.5px;line-height:1.55;color:#8A9299;}',
+        '.jvvNote b{color:#B9C0C6;font-weight:600;}',
+        '#jvvClose{margin-top:12px;width:100%;padding:9px;border-radius:9px;cursor:pointer;',
+        '  background:#B4703A;border:none;color:#12161A;font:inherit;font-size:13px;font-weight:700;}',
+    ].join('');
+
+    function renderVoiceList() {
+        var box = el('jvvList');
+        if (!box) return;
+        var list = [];
+        try { list = window.speechSynthesis.getVoices() || []; } catch (e) {}
+        var english = list.filter(function (v) { return /^en(-|_|$)/i.test(v.lang || ''); });
+        var pool = english.length ? english : list;
+        var current = savedVoiceName();
+
+        box.innerHTML = '';
+        // "System default" first, and it is not a cosmetic entry — passing
+        // NO voice is the only way Chromium will use the Premium voice she
+        // set in System Settings, because it hoists that one to index 0.
+        // Selecting "Samantha" by name gets the compact one instead.
+        var rows = [{ name: '', label: 'System default', hint: 'follows macOS' }];
+        pool.forEach(function (v) {
+            rows.push({ name: v.name, label: v.name, hint: v.lang });
+        });
+
+        rows.forEach(function (r) {
+            var row = document.createElement('div');
+            row.className = 'jvvRow' + (r.name === current ? ' on' : '');
+            row.innerHTML = '<span class="jvvTick">' + (r.name === current ? '✓' : '') + '</span>'
+                + '<span></span><small></small>';
+            row.children[1].textContent = r.label;
+            row.children[2].textContent = r.hint || '';
+            row.addEventListener('click', function () {
+                try {
+                    if (r.name) window.localStorage.setItem(VOICE_PREF_KEY, r.name);
+                    else window.localStorage.removeItem(VOICE_PREF_KEY);
+                } catch (e) {}
+                chosenVoice = null;             // re-pick with the new preference
+                renderVoiceList();
+                // Speak a sample immediately. Choosing a voice you cannot
+                // hear is choosing blind, and the whole complaint was about
+                // how it sounds.
+                sample();
+            });
+            box.appendChild(row);
+        });
+    }
+
+    // Deliberately NOT speak(): that dispatches SPEAK_START and closes the
+    // microphone, which is right for an answer and wrong for a preview.
+    function sample() {
+        if (!window.speechSynthesis) return;
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+        var u = new SpeechSynthesisUtterance('Two loads from Acme are still unpaid.');
+        var v = pickVoice();
+        if (v) { u.voice = v; u.lang = v.lang || 'en-US'; }
+        u.rate = 1.0;
+        try { window.speechSynthesis.speak(u); } catch (e) {}
+    }
+
+    function openVoices() { renderVoiceList(); voiceSheet.classList.remove('hidden'); }
+    function closeVoices() { voiceSheet.classList.add('hidden'); }
 
     function paint() {
         var open = VM.micShouldBeOpen(state);
@@ -546,10 +657,16 @@
         if (mounted) return;
         mounted = true;
         if (!SR) return;                       // no recogniser at all: show nothing
-        css.textContent += cardCss;
+        css.textContent += cardCss + voiceCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
         document.body.appendChild(card);
+        document.body.appendChild(voiceSheet);
+        el('jvvClose').addEventListener('click', closeVoices);
+        el('jvVoiceBtn').addEventListener('click', function (e) {
+            e.stopPropagation();
+            if (voiceSheet.classList.contains('hidden')) openVoices(); else closeVoices();
+        });
         paint();
 
         if (!canWake) {
