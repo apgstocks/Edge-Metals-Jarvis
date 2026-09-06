@@ -118,6 +118,57 @@ function create() {
         done(from === ALLOWED && (permission === 'media' || permission === 'audioCapture'));
     });
 
+    // ── does the PAGE have what it needs? ────────────────────────────────
+    // Asked from here, not from the page, because the failure being chased
+    // was the page not running our code at all — and code that is not running
+    // cannot report that it is not running. This probe ships with the app, so
+    // it works against any version of the site, including a stale one served
+    // out of a service-worker cache.
+    //
+    // Read-only: it looks at three globals and the script tags, and changes
+    // nothing. It exists so "voice is silent" resolves to a specific cause
+    // instead of another round of guessing.
+    win.webContents.on('did-finish-load', async () => {
+        try {
+            const r = await win.webContents.executeJavaScript(`(function () {
+                var tags = Array.prototype.slice.call(document.scripts)
+                    .map(function (s) { return (s.src || '').split('/').pop(); })
+                    .filter(Boolean);
+                return {
+                    bridge: !!(window.jarvisSpeech && window.jarvisSpeech.available),
+                    localEngine: !!window.JarvisLocalRecognition,
+                    voiceJs: !!window.__jarvisVoiceLoaded,
+                    hasTag: tags.indexOf('voice-local.js') !== -1,
+                    swControlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+                };
+            }())`, true);
+
+            if (r.bridge && r.localEngine) {
+                console.log('[JARVIS] page check: OK — local engine wired up');
+                return;
+            }
+            console.error('[JARVIS] page check: VOICE WILL NOT WORK');
+            // Each branch names the ONE thing to do about it. A diagnostic
+            // that lists symptoms and leaves you to infer the cause is how
+            // this took four rounds the first time.
+            if (!r.bridge) {
+                console.error('  · the preload bridge is missing — desktop/preload.js did not run.');
+            } else if (!r.hasTag) {
+                console.error('  · the page has no <script src="voice-local.js">.');
+                console.error(r.swControlled
+                    ? '    A SERVICE WORKER is serving this page from cache — almost certainly a stale copy.'
+                      + ' Fix: in the window, Cmd+Shift+R. If that fails, devtools > Application > Unregister.'
+                    : '    The server is serving an older dashboard/index.html. Fix: deploy, then reload.');
+            } else if (!r.localEngine) {
+                console.error('  · voice-local.js is on the page but did not register an engine —'
+                    + ' it threw, or ran before the preload. Open devtools (Cmd+Alt+I) for the error.');
+            }
+            if (!r.voiceJs) console.error('  · voice.js has not initialised either — the whole voice bundle is stale.');
+        } catch (e) {
+            console.error('[JARVIS] page check failed to run:', e.message);
+        }
+    });
+
     // Links to anywhere else open in the real browser rather than replacing
     // the app with a web page it cannot navigate back from.
     win.webContents.setWindowOpenHandler(({ url }) => {

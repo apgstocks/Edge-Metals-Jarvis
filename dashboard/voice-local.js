@@ -45,8 +45,22 @@
     if (window.__jarvisLocalSpeechLoaded) return;
     window.__jarvisLocalSpeechLoaded = true;
 
+    // ── say which path this is, even when the answer is "not here" ───────
+    // This used to be a bare `return`. In the desktop app, where the bridge
+    // was expected and absent, that produced a page which was silent, a
+    // terminal which was silent, and a microphone which did nothing — three
+    // symptoms and no cause. Announcing the branch costs one console line and
+    // removes an entire class of debugging session.
+    //
+    // In an ordinary browser this line is INFORMATIONAL, not a warning: no
+    // bridge is the correct and expected state there, and dressing it up as a
+    // problem would train the reader to ignore it.
     var bridge = window.jarvisSpeech;
-    if (!bridge || !bridge.available) return;      // not the desktop app
+    if (!bridge || !bridge.available) {
+        console.log('[VOICE] no desktop bridge — using the browser\'s own speech engine');
+        return;
+    }
+    console.log('[VOICE] desktop bridge found — speech will run locally');
 
     var TARGET_HZ = 16000;
     // Loudness above which we start collecting. RMS on a normalised buffer, so
