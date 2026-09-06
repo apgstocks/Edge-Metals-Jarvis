@@ -116,8 +116,19 @@ section('A — nothing listens until she says so');
     ck('  and the setting is off', w.JarvisVoice.state().enabled === false);
     ck('  the dot is not live', !w.document.getElementById('jarvisVoiceBar').classList.contains('live'));
 
+    // ── THE LABEL, WHICH COST HER AN AFTERNOON ────────────────────────────
+    // The off state used to read "HEY JARVIS" — the phrase she is meant to
+    // SAY — so she said it, repeatedly, at a switch that was off. An off
+    // switch must name the action, not the incantation.
+    ck('the OFF label tells her what to DO', /turn on/i.test(w.document.getElementById('jvToggle').textContent),
+       'labelling an off switch "HEY JARVIS" invites exactly the thing that does not work');
+    ck('  and it does not just say the wake phrase',
+       !/^hey jarvis$/i.test(w.document.getElementById('jvToggle').textContent.trim()));
+
     w.JarvisVoice.dispatch('USER_TOGGLE');
     ck('turning it on opens the microphone', log.starts === 1 && !!mic());
+    ck('  and NOW it says what to say', /listening/i.test(w.document.getElementById('jvToggle').textContent),
+       'once it is on, naming the phrase is exactly right');
     ck('  and the dot goes live', w.document.getElementById('jarvisVoiceBar').classList.contains('live'),
        'an always-listening mic in an office has to be visibly on');
     ck('  and the tab title says so', /🎙/.test(w.document.title),

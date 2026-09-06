@@ -108,7 +108,17 @@
         var open = VM.micShouldBeOpen(state);
         bar.classList.toggle('live', open);
         bar.classList.toggle('hearing', !!state.capturing);
-        el('jvToggle').textContent = state.enabled ? 'Listening' : (canWake ? 'Hey Jarvis' : 'Hold to talk');
+        // ── THE LABEL IS A SWITCH, NOT AN INSTRUCTION ────────────────────
+        // This read "HEY JARVIS" when off, and Apsara spent a while saying
+        // "Hey Jarvis" at it and reporting that nothing happened. She was
+        // doing exactly what the button appeared to ask. Labelling an OFF
+        // switch with the phrase the user is supposed to SAY is a trap, and it
+        // was mine — the state was "Off" in small grey text beside a large
+        // amber "HEY JARVIS", so the prompt shouted and the state whispered.
+        //
+        // The off state now names the ACTION. The on state names what to say,
+        // because at that point saying it is exactly what to do.
+        el('jvToggle').textContent = state.enabled ? 'Listening' : (canWake ? 'Turn on voice' : 'Hold to talk');
         // The tab title, because a dot in the corner is invisible the moment
         // she switches tabs — and "is it still listening?" must be answerable
         // without coming back to look.
@@ -262,7 +272,9 @@
         if (!canWake) {
             say('Press and hold — Chrome for “Hey Jarvis”');
         } else {
-            say('Off');
+            // Not "Off". "Off" describes a state; this has to tell her what to
+            // do about it.
+            say('Click to start listening');
         }
 
         var t = el('jvToggle');
