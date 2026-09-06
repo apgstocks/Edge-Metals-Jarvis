@@ -113,6 +113,141 @@ section('E — the ports she actually says');
     ck('  no port named → no filter', portIn('what bookings are there') === '');
 }
 
+section('E2 — the port vocabulary comes from the bookings, not from me');
+{
+    // Apsara, 2026-09-06: "my user doesnt know about nouns."
+    //
+    // PORT_ALIASES was fifteen ports I typed from memory. Mobile,
+    // Jacksonville, Nhava Sheva, Qingdao — every port she ships through that
+    // I did not think of — hit namesSomewhere(), returned null, and she got
+    // no panel. A hardcoded port list in a freight app whose booking store
+    // already records every port it uses is me deciding in advance which
+    // places her business may trade with.
+    const cards = require(path.join(ROOT, 'helpers/answerCards.js'));
+    const derived = cards.knownPorts();
+
+    ck('every port in bookings.json is a word she can say',
+       derived.size > 0 && [...derived.values()].includes('HOUSTON'),
+       [...derived.values()].join(','));
+
+    // A port that is in the DATA but was never in my list. This is the whole
+    // point: it must work without anyone editing this file.
+    const notMine = [...derived.keys()].filter((k) => !(k in cards.PORT_ALIASES));
+    ck('  including ones never in PORT_ALIASES',
+       notMine.length === 0 || portIn('anything going to ' + notMine[0]) === derived.get(notMine[0]),
+       notMine.length ? 'failed on ' + notMine[0] : '(every current port happens to be in the alias list too)');
+
+    // Mixed case in the store — "Busan" and "BUSAN" both appear in her real
+    // bookings.json — must not produce two different vocabulary entries or a
+    // filter that matches neither.
+    ck('  case in the store does not matter',
+       portIn('what have we got heading to busan') === 'BUSAN'
+       && portIn('heading to BUSAN') === 'BUSAN');
+
+    // Aliases survive. "LA" is spoken and never written, so no amount of
+    // reading the data supplies it.
+    ck('  and the spoken-only aliases still work',
+       portIn('anything out of LA') === 'LOS ANGELES',
+       'data cannot teach it a form that appears nowhere in the data');
+
+    // THE COLLISION. Real ports are also ordinary English words. If MOBILE
+    // ever enters the bookings, "send it to my mobile" must not become a
+    // port filter — and the stoplist is the only thing standing between
+    // those two readings.
+    ck('  a port that is also an ordinary word is stoplisted',
+       cards.PORT_STOPWORDS.has('MOBILE') && cards.PORT_STOPWORDS.has('READING'));
+
+    // And the length floor, which is the "atlanta"/"LA" collision one size
+    // down: a three-letter port code inside another word.
+    const fs = require('fs'), os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jv-ports-'));
+    fs.writeFileSync(path.join(dir, 'bookings.json'), JSON.stringify({
+        X: { booking_number: 'X', port_of_loading: 'MOBILE', port_of_discharge: 'NHAVA SHEVA' },
+        Y: { booking_number: 'Y', port_of_loading: 'RIO', port_of_discharge: 'QINGDAO' },
+        // BUSAN and BUSAN NEW PORT together — the case that makes the
+        // longest-first sort load-bearing. Both are real Korean terminals and
+        // she ships to Korea constantly. Without the sort, "to busan new
+        // port" matches BUSAN first and filters to the wrong terminal, with a
+        // full-looking table to hide it. My earlier fixture had no overlapping
+        // pair at all, so the sort was untested and a mutation removing it
+        // left everything green.
+        Z: { booking_number: 'Z', port_of_loading: 'HOUSTON', port_of_discharge: 'BUSAN' },
+        W: { booking_number: 'W', port_of_loading: 'HOUSTON', port_of_discharge: 'BUSAN NEW PORT' },
+    }));
+    const realDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = dir;
+    // json.js caches by path; clearing both caches is what makes this real
+    // rather than a re-read of the same fixture.
+    for (const k of Object.keys(require.cache)) {
+        // config.js too — it resolves BOOKINGS_FILE from DATA_DIR AT MODULE
+        // LOAD, so clearing only json.js re-reads the same old path and the
+        // fixture is silently ignored. Which is exactly what happened: two
+        // assertions below passed against the real bookings.json, "proving"
+        // a stoplist and a length floor that were never exercised.
+        if (/(helpers\/(json|answerCards)|config)\.js$/.test(k)) delete require.cache[k];
+    }
+    const fresh = require(path.join(ROOT, 'helpers/answerCards.js'));
+    const fp = fresh.knownPorts();
+    ck('a genuinely new port is learned from the store',
+       fp.has('nhava sheva') && fp.has('qingdao'), [...fp.keys()].join(','));
+    ck('  a two-word port is matched whole',
+       fresh.portIn('bookings to nhava sheva') === 'NHAVA SHEVA');
+    ck('  and the longer of two overlapping ports wins',
+       fresh.portIn('anything going to busan new port') === 'BUSAN NEW PORT',
+       'matching BUSAN first filters to the wrong terminal, under a full-looking table');
+    ck('  while plain "busan" still means BUSAN',
+       fresh.portIn('anything going to busan') === 'BUSAN');
+    ck('  MOBILE is refused even though it is in the store',
+       !fp.has('mobile') && fresh.portIn('send it to my mobile') === '',
+       'a port that is also an ordinary word turns a sentence about a phone into a filter');
+    ck('  and "RIO" is below the length floor',
+       !fp.has('rio'), 'three letters inside another word is the atlanta/LA collision again');
+
+    process.env.DATA_DIR = realDir;
+    for (const k of Object.keys(require.cache)) {
+        // config.js too — it resolves BOOKINGS_FILE from DATA_DIR AT MODULE
+        // LOAD, so clearing only json.js re-reads the same old path and the
+        // fixture is silently ignored. Which is exactly what happened: two
+        // assertions below passed against the real bookings.json, "proving"
+        // a stoplist and a length floor that were never exercised.
+        if (/(helpers\/(json|answerCards)|config)\.js$/.test(k)) delete require.cache[k];
+    }
+}
+
+section('E3 — she does not have to say the word "booking"');
+{
+    // ABOUT_BOOKINGS is nine nouns I chose. Everything below is how a person
+    // actually asks, and every one of them used to get no panel.
+    for (const q of [
+        "what's going out of Houston this week",
+        'anything loading in Oakland',
+        'what have we got heading to Busan',
+        'anything from LA',
+    ]) {
+        const r = cardsFor(q);
+        ck(`"${q}" shows the panel`, !!r && r.rows.length > 0,
+           'a question naming a port we ship through is a question about bookings');
+    }
+
+    // The widening must not swallow things it has no business in. An
+    // instruction still redraws nothing — and this is why the instruction
+    // check now runs BEFORE the port test: "forward it to Houston" names a
+    // port, and under the old order it would have redrawn the very list she
+    // is acting on, changing what "the first one" means mid-sentence.
+    ck('"forward it to Houston" still redraws nothing',
+       cardsFor('forward it to Houston') === null,
+       'redrawing under an instruction is how "the first one" comes to mean something else');
+    ck('  and "send the Houston one to Sher" too',
+       cardsFor('send the Houston one to Sher Trucking') === null);
+
+    // And a question with no port and no booking word is still not about
+    // bookings. The widening is "a port implies bookings", not "anything
+    // implies bookings".
+    for (const q of ['what is in inventory', 'how much do we owe Sher', 'what time is it']) {
+        ck(`  "${q}" has no panel`, cardsFor(q) === null);
+    }
+}
+
 section('F — what each row carries for the next step');
 {
     const rows = bookingRows('HOUSTON');

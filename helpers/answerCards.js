@@ -70,12 +70,75 @@ const ymd = (s) => {
 // list will grow ("newark" beside "new york", say) and the failure it
 // prevents is silent: the wrong port, quietly, with a full-looking table.
 // Recorded rather than dressed up as something the tests prove.
+// ── THE PORTS WE ACTUALLY SHIP TO, NOT THE ONES I THOUGHT OF ─────────────
+// Apsara, 2026-09-06: "my user doesnt know about nouns."
+//
+// PORT_ALIASES is fifteen ports I typed out from memory. Everything else —
+// Mobile, Jacksonville, Nhava Sheva, Qingdao, every discharge port in Asia
+// she actually ships to — hit namesSomewhere(), returned null, and showed
+// her no panel at all. A hardcoded port list in a freight application whose
+// booking store already records every port it uses is me deciding in advance
+// which places her business is allowed to trade with.
+//
+// So the vocabulary is DERIVED FROM THE DATA. Every port_of_loading and
+// port_of_discharge in bookings.json is a word she can say, automatically,
+// for ever. PORT_ALIASES stays on top of it for the spoken forms that are
+// not written anywhere ("LA" for LOS ANGELES) — data cannot supply those.
+//
+// Two things stop this widening into nonsense:
+//   · a stoplist, because real ports are also ordinary English words. MOBILE
+//     is a port in Alabama; "send it to my mobile" must not become a port
+//     filter. So is READING, and BAR HARBOR, and PROGRESO.
+//   · a length floor, because a two-letter port code inside another word is
+//     exactly the "atlanta"/"LA" collision the word boundary is there for,
+//     and short strings collide far more often than they help.
+const PORT_STOPWORDS = new Set([
+    'MOBILE', 'READING', 'PROGRESS', 'PROGRESO', 'RICHMOND', 'VICTORIA',
+    'ALBANY', 'SALEM', 'CONCORD', 'DOVER', 'MADISON', 'FRANKLIN', 'MARION',
+]);
+
+let _portCache = null;
+let _portCacheAt = 0;
+const PORT_CACHE_MS = 30 * 1000;
+
+// Ports as written in the bookings, normalised. Cached briefly — cardsFor
+// runs on every utterance and loadBookings() reads a file.
+function knownPorts() {
+    if (_portCache && Date.now() - _portCacheAt < PORT_CACHE_MS) return _portCache;
+    const out = new Map();                       // lowercase spoken → UPPERCASE stored
+    try {
+        const all = loadBookings() || {};
+        for (const b of Object.values(all)) {
+            for (const v of [b && b.port_of_loading, b && b.port_of_discharge]) {
+                const s = String(v || '').trim();
+                if (s.length < 4) continue;                    // too short to match safely
+                const up = s.toUpperCase();
+                if (PORT_STOPWORDS.has(up)) continue;          // also an ordinary word
+                out.set(up.toLowerCase(), up);
+            }
+        }
+    } catch (e) {
+        // A missing or unreadable store means no derived vocabulary, not a
+        // crash on every question she asks.
+        console.warn('[CARDS] could not read the ports from bookings:', e.message);
+    }
+    _portCache = out; _portCacheAt = Date.now();
+    return out;
+}
+
 function portIn(text) {
     const t = String(text || '').toLowerCase();
-    const keys = Object.keys(PORT_ALIASES).sort((a, b) => b.length - a.length);
-    for (const k of keys) {
+    // Aliases and derived ports in ONE list, longest first — so "long beach"
+    // beats "beach" and a derived "NHAVA SHEVA" beats a derived "NHAVA",
+    // whichever list each came from. Sorting the two separately would let a
+    // short alias win over a longer real port name.
+    const cands = [
+        ...Object.entries(PORT_ALIASES),
+        ...knownPorts().entries(),
+    ].sort((a, b) => b[0].length - a[0].length);
+    for (const [k, v] of cands) {
         // Word-bounded: "la" must not match inside "atlanta".
-        if (new RegExp('\\b' + k.replace('.', '\\.') + '\\b').test(t)) return PORT_ALIASES[k];
+        if (new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(t)) return v;
     }
     return '';
 }
@@ -142,11 +205,32 @@ function bookingRows(port) {
 function cardsFor(question) {
     const q = String(question || '');
     if (!q.trim()) return null;
-    if (!ABOUT_BOOKINGS.test(q)) return null;
+
     // An instruction is acting ON something already on screen. Redrawing the
     // panel underneath her at that moment is how "the first one" comes to
     // mean a different booking than the one she is looking at.
+    //
+    // Moved above the port lookup for readability, NOT for behaviour — I
+    // first wrote a comment here claiming the reorder was load-bearing, and
+    // mutation said otherwise: moving it back below leaves every test
+    // passing, because it still returns before any rows are built. Recorded
+    // as it is rather than as the tidier story.
     if (IS_INSTRUCTION.test(q)) return null;
+
+    const port = portIn(q);
+
+    // ── SHE DOES NOT HAVE TO SAY "BOOKING" ───────────────────────────────
+    // ABOUT_BOOKINGS is nine nouns I chose. "What's going out of Houston
+    // this week", "anything loading in Savannah", "what have we got moving"
+    // — none of them contain one, and every one of them got no panel.
+    //
+    // The widening is deliberately NOT a longer list of verbs, which is the
+    // same mistake one size up. It is: a question that names a port we
+    // actually ship through, and is not an instruction, is a question about
+    // bookings. Nothing else in this system is organised by port, so there
+    // is no other thing she could mean — and the port came from the data, so
+    // the vocabulary grows on its own.
+    if (!ABOUT_BOOKINGS.test(q) && !port) return null;
 
     // ── A PLACE WE DO NOT KNOW IS NOT "NO PLACE" ─────────────────────────
     // portIn() returns '' both when no port was named and when one was named
@@ -159,7 +243,6 @@ function cardsFor(question) {
     // somewhere and it is not a port in the bookings, the honest panel is no
     // panel — Jarvis still answers in words, and the words can say there is
     // nothing there.
-    const port = portIn(q);
     if (!port && namesSomewhere(q)) return null;
 
     const rows = bookingRows(port);
@@ -171,4 +254,9 @@ function cardsFor(question) {
     };
 }
 
-module.exports = { cardsFor, bookingRows, portIn, namesSomewhere, PORT_ALIASES };
+module.exports = {
+    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts,
+    PORT_ALIASES, PORT_STOPWORDS,
+    // Tests need to defeat the 30s cache after writing a fixture store.
+    _clearPortCache: () => { _portCache = null; _portCacheAt = 0; },
+};
