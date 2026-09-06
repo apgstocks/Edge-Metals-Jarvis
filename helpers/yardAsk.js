@@ -60,7 +60,30 @@ const SYSTEM_RULES = [
     // It is now built from helpers/tools.js, which is where a capability is
     // declared. The prompt cannot advertise a tool that does not exist, and
     // cannot miss one that does.
-    '4. WHAT YOU CAN DO:',
+    // ── AND IT CAN NOW ACTUALLY CALL THEM ─────────────────────────────────
+    // Apsara, 2026-09-06: "when i ask jarvis what bookings that we have from
+    // houston, its saying that it doesnt have any idea about this."
+    //
+    // It did not, and the reason was structural. This prompt has DESCRIBED
+    // the read tools since the registry was written, and nothing has ever
+    // EXECUTED one: runRead() in helpers/tools.js had no caller outside its
+    // own tests. So the model was handed a list of instruments it could not
+    // pick up, plus a fixed digest of loads and stock, and asked to answer
+    // from that. Anything outside the digest — bookings, containers, cutoffs
+    // — was genuinely unknowable to it, and "I don't have any idea" was the
+    // honest answer to a question it had no way to look up.
+    //
+    // Adding a find_bookings tool did not fix that and could not have. The
+    // tool worked when called directly; nothing called it.
+    '4. LOOKING THINGS UP. The DATA below is a SUMMARY, not everything there is.'
+        + ' When the answer needs something it does not contain — a specific booking,'
+        + ' container, port, cutoff, a load by seller, a bill — ASK FOR IT with the'
+        + ' `tool` field instead of saying you do not know:',
+    '   {"tool": {"name": "find_bookings", "params": {"port": "houston"}}, "answer": "", "have_data": false}',
+    '   You will be given the result and asked again. Use it. Only say something'
+        + ' is not in the records after you have looked with the right tool and it'
+        + ' came back empty.',
+    '5. WHAT YOU CAN DO:',
     require('./tools').describeTools(),
     '   To act, put it in the `action` field: {"kind":"record_payment","params":{...}}. Do NOT claim you have done it — you are PROPOSING, and the person confirms it. Word `answer` as what WILL happen: "Record $12,000 by Zelle against EDGE_07?" Never "I have recorded".',
     '   Only ever propose an action when you are actually asked to DO something. A question is a question — answer it, leave `action` out.',
@@ -110,17 +133,42 @@ async function askYard(question, opts = {}) {
           + 'This is a request to EXPLAIN, not to perform an action.'
         : q;
 
-    const prompt = [
-        SYSTEM_RULES,
-        '',
-        'DATA (this is the complete set of facts available to you):',
-        JSON.stringify(brief),
-        historyText,
-        '',
-        `QUESTION: ${asked}`,
-        '',
-        'Reply as JSON: {"answer": "...", "have_data": true|false, "action": null | {"kind": "...", "params": {...}}}. Plain sentences in `answer`, no markdown. Set have_data to false when the DATA does not contain what was asked. Leave `action` null unless you were asked to do something.',
-    ].join('\n');
+    // ── THE LOOKUP LOOP ──────────────────────────────────────────────────
+    // Bounded at three rounds. Each one is a round trip to Gemini plus a
+    // local query, so the ceiling is what keeps a confused model from
+    // turning one question into a minute of tool calls and a bill. Three is
+    // enough for the realistic chains here — find the booking, then the
+    // loads against it, then answer — and a model that has not got there by
+    // the third round is not going to.
+    const MAX_LOOKUPS = 3;
+    const found = [];        // what the tools returned, fed back each round
+
+    function buildPrompt() {
+        return [
+            SYSTEM_RULES,
+            '',
+            'DATA (a summary — ask for anything else with `tool`):',
+            JSON.stringify(brief),
+            found.length
+                ? '\nWHAT YOU LOOKED UP:\n' + found.map((f) => (
+                    `${f.name}(${JSON.stringify(f.params)}) -> ${JSON.stringify(f.result).slice(0, 4000)}`
+                )).join('\n')
+                : '',
+            historyText,
+            '',
+            `QUESTION: ${asked}`,
+            '',
+            'Reply as JSON: {"answer": "...", "have_data": true|false, '
+            + '"tool": null | {"name": "...", "params": {...}}, '
+            + '"action": null | {"kind": "...", "params": {...}}}. '
+            + 'Plain sentences in `answer`, no markdown. '
+            + 'Use `tool` to LOOK SOMETHING UP — leave `answer` empty when you do. '
+            + 'Set have_data to false only after looking and finding nothing. '
+            + 'Leave `action` null unless you were asked to do something.',
+        ].join('\n');
+    }
+
+    let prompt = buildPrompt();
 
     try {
         // callGeminiJSON, not a text call. helpers/gemini.js records that
@@ -143,9 +191,42 @@ async function askYard(question, opts = {}) {
         // The shape is small enough to check here, which also avoids making
         // this file depend on zod loading, something helpers/gemini.js already
         // guards defensively.
-        const res = await callGeminiJSON(prompt, 1);
+        let res = await callGeminiJSON(prompt, 1);
+
+        // ── run whatever it asked to look up, then ask again ─────────────
+        for (let round = 0; round < MAX_LOOKUPS; round += 1) {
+            const want = res && res.tool;
+            if (!want || typeof want !== 'object' || !want.name) break;
+
+            const name = String(want.name);
+            const params = (want.params && typeof want.params === 'object') ? want.params : {};
+            let result;
+            try {
+                const { runRead } = require('./tools');
+                result = await runRead(name, params, { role: opts.role });
+            } catch (e) {
+                // The failure is handed BACK to the model rather than thrown.
+                // "there is no tool called find_container" is something it can
+                // recover from by picking the right one; an exception here
+                // would turn a recoverable mistake into a 500.
+                result = { error: e.message };
+            }
+            console.log(`[YARD-ASK] looked up ${name}(${JSON.stringify(params)})`);
+            found.push({ name, params, result });
+
+            prompt = buildPrompt();
+            res = await callGeminiJSON(prompt, 1);
+        }
+
         const text = String((res && res.answer) || '').trim();
         if (!text) {
+            // Distinguished from a plain empty answer: if it was still asking
+            // for tools when the budget ran out, saying "try rephrasing" would
+            // be misleading — it was working, just not fast enough.
+            if (res && res.tool) {
+                console.warn('[YARD-ASK] still looking things up after ' + MAX_LOOKUPS + ' rounds');
+                return { ok: false, answer: "I looked in a few places and couldn't pin that down. Can you narrow it a little?" };
+            }
             return { ok: false, answer: "I couldn't work out an answer to that. Try asking it a different way." };
         }
         // ── an action was asked for ───────────────────────────────────────
