@@ -272,13 +272,16 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
                 b.w.__ctxMadeOnClick = !!b.w.__inClick;
             }
             resume() {
-                this.state = 'running'; b.w.__ctxState = 'running';
-                // WHO resumed it. Creation can happen at mount (warmAck
-                // fetches the acknowledgement then), and that is fine — what
-                // a browser actually requires is that a USER GESTURE starts
-                // it. So the invariant is about the resume, not the
-                // constructor.
-                if (b.w.__inClick) b.w.__resumedByGesture = true;
+                // A REAL BROWSER REFUSES THIS OUTSIDE A GESTURE. My first
+                // fake resumed unconditionally, which made the harness
+                // useless for the exact bug it was written for: the context
+                // came back "running" whether or not a gesture had ever
+                // touched it, so a build that could never make a sound
+                // looked identical to one that could.
+                if (!b.w.__inClick) return Promise.resolve();   // stays suspended
+                this.state = 'running';
+                b.w.__ctxState = 'running';
+                b.w.__resumedByGesture = true;
                 return Promise.resolve();
             }
             decodeAudioData() {
