@@ -5930,7 +5930,7 @@ const itemCodeFor = (desc) => require('../helpers/itemCode').itemCodeFor(desc);
 // requested by hand came out complete. Two paths to one document is exactly
 // where that kind of divergence hides.
 async function prepareProformaNumbers(draft) {
-    let invNo = '', containerNos = [];
+    let invNo = '', containerNos = [], numbersWarning = null;
     try {
         const sug = await require('../helpers/nextInvoiceNo').suggestNextInvNo(draft.consignee);
         if (sug && sug.inv_no) {
@@ -5956,7 +5956,21 @@ async function prepareProformaNumbers(draft) {
             // look right, which is why it went unnoticed.
             invNo = require('../helpers/containerCodes').combineInvNo(invNo, containerNos);
         }
-    } catch (e) { /* no history — she can supply the number on confirm */ }
+    } catch (e) {
+        // ── REPORTED, NOT SWALLOWED ──────────────────────────────────────
+        // Apsara, 2026-09-07: "both invoice nd container no - not updated."
+        //
+        // This bare catch turned EVERY failure into empty numbers and total
+        // silence: a missing INVOICE_SHEET_ID, a network blip, a renamed
+        // column in the sheet. Its comment said "no history — she can supply
+        // the number on confirm", which is true for a genuinely new consignee
+        // and wrong for the other four reasons this can fire.
+        //
+        // A consignee with no rows is the NORMAL case and returns null
+        // without throwing, so anything reaching here is a real fault.
+        numbersWarning = `Couldn't reach the invoice sheet: ${e.message}`;
+        console.error('[PROFORMA] invoice numbering failed:', e.message);
+    }
 
     let addressLines = [], addressWarning = null;
     try {
@@ -5970,7 +5984,7 @@ async function prepareProformaNumbers(draft) {
         }
     } catch (e) { addressWarning = `Couldn't read the address book: ${e.message}`; }
 
-    return { invNo, containerNos, addressLines, addressWarning };
+    return { invNo, containerNos, addressLines, addressWarning, numbersWarning };
 }
 
 // Filename per Apsara 2026-08-24: "it should be 260824_AC_26JY90,91_Daekwang.pdf".

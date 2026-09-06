@@ -954,13 +954,29 @@ function pdfPayload(opts = {}) {
         buyer_po: '', buyer_po_date: '',
         country_of_origin: 'USA',
         shipment_allowance: p.shipment_allowance,
-        containers: [{
-            container_no: '',
-            item_code: null,
-            items: p.items.map((i) => ({
-                desc: i.description, qty: i.qty, rate: i.rate, unit: 'MT',
+        // ── ONE BLOCK PER CONTAINER, WITH ITS NUMBER ─────────────────────
+        // Apsara, 2026-09-07: "both invoice nd container no - not updated."
+        //
+        // This was hardcoded to a SINGLE block with container_no: '' — so the
+        // preview she was shown carried an empty container number and, with
+        // inv_no also defaulting to '', an empty invoice number too. The
+        // numbering itself was working the whole time; it was minted AFTER
+        // the preview was built and never reached it.
+        //
+        // A preview that shows blanks where the two identifying numbers go is
+        // worse than no preview: it is a document that looks wrong for a
+        // reason she cannot see, and the only thing to do with it is not
+        // trust it.
+        containers: (Array.isArray(opts.containerNos) && opts.containerNos.length
+            ? opts.containerNos
+            : new Array(Math.max(1, Number(p.containers) || 1)).fill(''))
+            .map((no) => ({
+                container_no: no,
+                item_code: opts.item_code || null,
+                items: p.items.map((i) => ({
+                    desc: i.description, qty: i.qty, rate: i.rate, unit: 'MT',
+                })),
             })),
-        }],
     };
 }
 

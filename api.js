@@ -2105,13 +2105,50 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // simply be missing from the panel header with nothing
                 // logged, which is the silent-failure shape I keep hitting.
                 let stagedInvNo = null;
+                let nums = null;
+                let numsError = null;
+
+                // ── THE NUMBERS ARE MINTED BEFORE THE PREVIEW IS DRAWN ───
+                // Apsara, 2026-09-07: "both invoice nd container no - not
+                // updated."
+                //
+                // They were minted AFTER. The preview was built from
+                // pdfPayload() called with NO ARGUMENTS, so inv_no defaulted
+                // to '' and the single container block carried container_no:
+                // ''. The numbering worked perfectly the whole time and
+                // simply never reached the document she was looking at.
+                //
+                // A preview showing blanks where the two identifying numbers
+                // go is worse than no preview: it is a document that looks
+                // wrong for a reason she cannot see.
+                if (step.stage === 'preview' && step.draft) {
+                    try {
+                        nums = await require('./workflow/actions')
+                            .prepareProformaNumbers(step.draft);
+                    } catch (e) {
+                        // REPORTED, not swallowed. prepareProformaNumbers has
+                        // its own bare catch around the sheet lookup, so a
+                        // broken INVOICE_SHEET_ID or a renamed column comes
+                        // back as empty numbers and no explanation — which is
+                        // exactly what "not updated" looks like from her side.
+                        numsError = e.message;
+                        console.error('[PROFORMA] could not mint the numbers:', e.message);
+                    }
+                }
                 if (step.stage === 'preview') {
                     // The SAME generator her existing proformas go through.
                     // A preview rendered by a different path is not a preview
                     // of what will be sent.
                     try {
+                        // Rebuilt WITH the numbers rather than using step.pdf,
+                        // which handle() produced before they existed.
+                        const withNums = pro.pdfPayload({
+                            inv_no: (nums && nums.invNo) || '',
+                            containerNos: (nums && nums.containerNos) || [],
+                            addressLines: (nums && nums.addressLines) || [],
+                        });
                         const built = require('./helpers/proformaPdf')
-                            .buildProformaDc2Html(step.pdf);
+                            .buildProformaDc2Html(withNums || step.pdf);
                         previewHtml = built && built.html ? built.html : null;
                     } catch (e) {
                         console.error('[PROFORMA] preview failed:', e.message);
@@ -2146,7 +2183,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         // address book — the SAME helper the email path uses,
                         // so a proforma raised by voice is not a different
                         // document from one raised from an order.
-                        const nums = await acts.prepareProformaNumbers(step.draft);
+                        // Already minted above, before the preview. Minting
+                        // again would spend a second sheet fetch AND could
+                        // hand her a different number from the one on screen.
+                        if (!nums) nums = await acts.prepareProformaNumbers(step.draft);
                         await acts.setPending(chatId, {
                             type: 'confirm_proforma',
                             draft: step.draft,
@@ -2178,6 +2218,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         }
                         stagedInvNo = nums.invNo || null;
                         if (nums.invNo) step.say += ` It'll be ${nums.invNo}.`;
+                        // SAID OUT LOUD when there is no number. Silence here
+                        // is indistinguishable from a number she did not catch,
+                        // and the document would go out with the field blank.
+                        else step.say += ' I could not work out the invoice number'
+                            + (numsError ? ` — ${numsError}`
+                                : nums.numbersWarning ? ` — ${nums.numbersWarning}`
+                                : ' — the sheet had no earlier invoice for them')
+                            + ', so it will go out blank unless you give me one.';
                     } catch (e) {
                         // Staging failed: say so rather than leaving her with a
                         // preview that looks ready and a "yes" that lands

@@ -255,6 +255,93 @@ section('E — a new year starts at one');
        ni.nextFromRows([{ consignee: 'x', invNo: 'not-a-code' }]) === null);
 }
 
+section('F — the numbers reach the document she is shown');
+{
+    // Apsara, 2026-09-07: "both invoice nd container no - not updated."
+    //
+    // They were minted AFTER the preview was built. handle() called
+    // pdfPayload() with NO ARGUMENTS, so inv_no defaulted to '' and the
+    // single container block carried container_no: ''. The numbering worked
+    // perfectly the whole time and never reached the document on her screen.
+    //
+    // A preview showing blanks where the two identifying numbers go is worse
+    // than no preview: it is a document that looks wrong for a reason she
+    // cannot see, and the only sane thing to do with it is distrust it.
+    const ppP = require.resolve(path.join(ROOT, 'helpers/proformaPricing.js'));
+    const realPp = require.cache[ppP];
+    require.cache[ppP] = { id: ppP, filename: ppP, loaded: true, exports: { lookup: () => ({}) } };
+    const pro = require(path.join(ROOT, 'helpers/proformaDraft.js'));
+
+    pro.clear();
+    pro.start('create a proforma for Daekwang, 2 containers, 21 MT of auto cast at 8450');
+
+    const withNums = pro.pdfPayload({
+        inv_no: '260907_AC_26JY104,105',
+        containerNos: ['26JY104', '26JY105'],
+        addressLines: ['Daekwang Metal Co., Ltd.'],
+    });
+    ck('the invoice number reaches the payload',
+       withNums.inv_no === '260907_AC_26JY104,105', withNums.inv_no);
+    ck('  and there is ONE block per container',
+       withNums.containers.length === 2, String(withNums.containers.length));
+    ck('  each carrying its own number',
+       withNums.containers.map((c) => c.container_no).join(',') === '26JY104,26JY105',
+       JSON.stringify(withNums.containers.map((c) => c.container_no)));
+    ck('  and the address', withNums.consignee_address.length === 1);
+
+    // AND IT RENDERS. buildProformaDc2Html is the same generator the sent
+    // document goes through, so if the number is not in this HTML it is not
+    // on the paper either.
+    const html = require(path.join(ROOT, 'helpers/proformaPdf.js'))
+        .buildProformaDc2Html(withNums).html;
+    ck('the invoice number is in the rendered document',
+       html.includes('260907_AC_26JY104,105'));
+    ck('  and both container numbers',
+       html.includes('26JY104') && html.includes('26JY105'));
+
+    // WITHOUT numbers it still renders one block per container rather than
+    // collapsing to a single blank — otherwise a two-container proforma looks
+    // like a one-container proforma with a missing number.
+    const bare = pro.pdfPayload();
+    ck('with no numbers yet, the blocks still match the count',
+       bare.containers.length === 2, String(bare.containers.length));
+
+    // THE ORDER IN api.js. Minting after the preview is the bug; the source
+    // has to show the mint happening first.
+    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const iMint = api.indexOf('prepareProformaNumbers(step.draft)');
+    const iDraw = api.indexOf('buildProformaDc2Html');
+    ck('the numbers are minted BEFORE the preview is drawn',
+       iMint !== -1 && iDraw !== -1 && iMint < iDraw,
+       'mint at ' + iMint + ', draw at ' + iDraw);
+    // Asserted on the payload being PASSED, not merely built. My first
+    // version matched the construction of `withNums` and a mutation that
+    // built it and then rendered step.pdf anyway left the test green — the
+    // exact bug, reintroduced, undetected.
+    ck('  and the preview is rebuilt with them, not from step.pdf',
+       /buildProformaDc2Html\(withNums/.test(api),
+       'step.pdf was built by handle() before the numbers existed');
+    ck('  and they are not minted twice',
+       /if \(!nums\) nums = await acts\.prepareProformaNumbers/.test(api),
+       'a second fetch could hand her a different number from the one on screen');
+
+    // THE SILENCE THAT HID IT. prepareProformaNumbers swallowed every sheet
+    // failure into empty numbers with no explanation.
+    const acts = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+    // The ASSIGNMENT inside the catch, not the declaration. `let invNo = '',
+    // containerNos = [], numbersWarning = null` also matches /numbersWarning
+    // = /, so my first assertion passed with the catch gutted.
+    ck('a failed sheet lookup is reported, not swallowed',
+       /numbersWarning = `Couldn't reach the invoice sheet/.test(acts)
+       && !/catch \(e\) \{ \/\* no history/.test(acts),
+       'the bare catch turned a broken INVOICE_SHEET_ID into "no numbers, no reason"');
+    ck('  and the reply says so when there is no number',
+       /could not work out the invoice number/.test(api),
+       'silence is indistinguishable from a number she did not catch');
+
+    if (realPp) require.cache[ppP] = realPp; else delete require.cache[ppP];
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
