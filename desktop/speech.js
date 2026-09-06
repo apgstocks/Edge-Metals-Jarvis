@@ -94,15 +94,59 @@ async function load() {
     return loading;
 }
 
+// ── turning whatever came back into a sentence ────────────────────────────
+// This used to be `(result || []).map(s => s.text).join(' ')`, written from
+// smart-whisper's TYPINGS, which declare `task.result` as
+// `Promise<TranscribeResult[]>`. On her M2 it threw:
+//
+//     [VOICE] local engine error: (result || []).map is not a function
+//
+// So the shipped .d.ts and the native binding disagree, and the .d.ts is a
+// hand-written description of a C++ addon rather than anything the compiler
+// checked. Believing it was the mistake.
+//
+// Rather than guess a second time, this accepts every shape the addon
+// plausibly returns and LOGS the one it actually saw, once. The alternative —
+// another round of me picking a shape and her running it — is how the last
+// hour went.
+let shapeLogged = false;
+function sentence(raw) {
+    if (raw == null) return '';
+    if (typeof raw === 'string') return raw.trim();
+
+    if (!shapeLogged) {
+        shapeLogged = true;
+        const keys = (raw && typeof raw === 'object' && !Array.isArray(raw))
+            ? Object.keys(raw).join(',') : '';
+        console.log(`[SPEECH] result shape: ${Array.isArray(raw) ? 'array' : typeof raw}`
+            + (keys ? ` {${keys}}` : '')
+            + ` — sample ${JSON.stringify(raw).slice(0, 200)}`);
+    }
+
+    // Segments, the documented shape.
+    if (Array.isArray(raw)) {
+        return raw.map((s) => (s && typeof s === 'object' ? (s.text || '') : String(s || '')))
+            .join(' ').replace(/\s+/g, ' ').trim();
+    }
+    if (typeof raw === 'object') {
+        // A single segment, or a wrapper around the real list. Checked in that
+        // order because a wrapper that ALSO has .text would otherwise be
+        // reduced to its own summary field.
+        for (const k of ['segments', 'results', 'result', 'transcription']) {
+            if (Array.isArray(raw[k])) return sentence(raw[k]);
+        }
+        if (typeof raw.text === 'string') return raw.text.trim();
+    }
+    return '';
+}
+
 // pcm is Float32 mono at 16 kHz — resampled in the renderer, because the
 // AudioContext there already has the machinery and shipping 44.1 kHz over IPC
 // would be nearly three times the bytes for no gain.
 async function transcribe(pcm) {
     const model = await load();
     const task = await model.transcribe(pcm, { language: 'en', suppress_non_speech_tokens: true });
-    const result = await task.result;
-    // smart-whisper returns segments; the caller wants a sentence.
-    return (result || []).map((s) => s.text).join(' ').trim();
+    return sentence(await task.result);
 }
 
 function status() {
