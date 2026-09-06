@@ -75,16 +75,44 @@ let _matCache = null;
 let _matCacheAt = 0;
 const MAT_CACHE_MS = 30 * 1000;
 
-// Her own item descriptions, longest first so "Al rims(Dirty)" wins over
-// "Al". Punctuation in a catalog entry is escaped, not assumed away — "Al
-// rims(Dirty)" has parentheses in it and would otherwise be a broken regex.
+// ── TWO CATALOGUES, IN ORDER ─────────────────────────────────────────────
+// Apsara, 2026-09-07: "maintain a separate catalogue for edge metals. keep on
+// appending to that new catalogue as i generate proforma and keep the
+// existing workflow catalogue for yard."
+//
+// The TRADE catalogue first — the selling words, learned from documents that
+// have actually gone out (helpers/tradeCatalog.js). The YARD catalogue after
+// it, READ ONLY, because on day one the trade list is empty and dropping the
+// yard list would put us straight back into the bug she reported an hour ago:
+// "send a proforma for autocasting tense" going unrecognised because nothing
+// in the vocabulary matched.
+//
+// Nothing here writes to the yard list. That is the whole point of the
+// separation: the yard's dropdown does not fill up with export phrasing, and
+// her export documents stop carrying scale-house shorthand.
+//
+// Sorted LONGEST FIRST, so "Aluminium Auto Casting Scrap" wins over "Auto
+// cast" and "Al rims(Dirty)" over "Al". Punctuation in an entry is escaped by
+// catalogPattern rather than assumed away — "Al rims(Dirty)" has parentheses
+// in it and would otherwise compile as a capture group.
 function catalogMaterials() {
     if (_matCache && Date.now() - _matCacheAt < MAT_CACHE_MS) return _matCache;
     let list = [];
     try {
-        list = require('./itemTypes').loadCustomItemTypes() || [];
+        list = require('./tradeCatalog').list() || [];
     } catch (e) {
-        console.warn('[PROFORMA] could not read the item catalog:', e.message);
+        console.warn('[PROFORMA] could not read the trade catalogue:', e.message);
+    }
+    try {
+        // Appended, not merged-and-sorted-together: the sort below is by
+        // LENGTH, so both lists end up interleaved by specificity anyway, and
+        // an entry that appears in both is deduplicated here rather than
+        // producing two identical patterns.
+        const yard = require('./itemTypes').loadCustomItemTypes() || [];
+        const seen = new Set(list.map((x) => String(x).toLowerCase()));
+        for (const y of yard) if (!seen.has(String(y).toLowerCase())) list.push(y);
+    } catch (e) {
+        console.warn('[PROFORMA] could not read the yard item catalog:', e.message);
     }
     _patCache.clear();
     _matCache = list

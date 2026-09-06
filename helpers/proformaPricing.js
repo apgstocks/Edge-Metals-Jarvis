@@ -186,6 +186,25 @@ async function recordFromGeneration(customerName, tradeTerms, portDischarge, lin
         return;
     }
     await upsert(customerName, { tradeTerms, portDischarge, paymentTerms, items });
+
+    // ── THE SELLING CATALOGUE LEARNS HERE ────────────────────────────────
+    // Apsara, 2026-09-07: "keep on appending to that new catalogue as i
+    // generate proforma."
+    //
+    // Hooked INSIDE this function rather than at its two call sites — the
+    // Documents page (api.js) and the WhatsApp/voice flow (actions.js) —
+    // because two call sites are two things to keep in step, and the one that
+    // drifts is the one that stops learning without anyone noticing. This
+    // function is called from those two places and nowhere else, and it is
+    // already the "record what was generated" hook.
+    //
+    // NON-FATAL, like the pricing memory itself: a catalogue that fails to
+    // learn a word is a smaller problem than a proforma that fails to send.
+    try {
+        await require('./tradeCatalog').addMany(items.map((it) => it.desc));
+    } catch (err) {
+        console.error('[PRICING] trade catalogue append failed (non-fatal):', err.message);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

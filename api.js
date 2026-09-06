@@ -3777,6 +3777,36 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // a typing convenience, not a record. Descriptions are stored as text on
     // each load, so nothing here can delete, reprice, or reword a saved
     // load, an issued PDF, or a monthly sheet.
+    // ── THE SELLING CATALOGUE ────────────────────────────────────────────
+    // Apsara, 2026-09-07: "maintain a separate catalogue for edge metals.
+    // keep on appending to that new catalogue as i generate proforma and keep
+    // the existing workflow catalogue for yard."
+    //
+    // Deliberately a DIFFERENT path from /api/item-types below, not a mode of
+    // it. The yard's list feeds the load form at the scale; this one feeds
+    // proforma descriptions. Sharing a route would mean one flag standing
+    // between the yard's dropdown and a buyer's document.
+    //
+    // It fills itself from generated proformas (helpers/tradeCatalog.js), so
+    // POST is not how entries normally arrive — it is here, with PUT and
+    // DELETE, only so she can fix a typo that has already been sent once.
+    app.get('/api/trade-catalog', (req, res) => {
+        try { res.json(require('./helpers/tradeCatalog').list()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/trade-catalog', async (req, res) => {
+        try { res.json(await require('./helpers/tradeCatalog').add(req.body.description)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.put('/api/trade-catalog', async (req, res) => {
+        try { res.json(await require('./helpers/tradeCatalog').rename(req.body.from, req.body.to)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.delete('/api/trade-catalog', async (req, res) => {
+        try { res.json(await require('./helpers/tradeCatalog').remove(req.body.description)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.get('/api/item-types', (req, res) => {
         try { res.json(require('./helpers/itemTypes').loadCustomItemTypes()); }
         catch (e) { res.status(500).json({ error: e.message }); }

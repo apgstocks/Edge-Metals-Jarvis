@@ -179,6 +179,16 @@ const FILES = {
     // typed once becomes a normal selectable option afterward instead of
     // requiring "Others…" every time.
     ITEM_TYPES_FILE: path.join(DATA_DIR, 'item_types.json'),
+    // Apsara, 2026-09-07: "maintain a separate catalogue for edge metals.
+    // keep on appending to that new catalogue as i generate proforma and keep
+    // the existing workflow catalogue for yard."
+    //
+    // The SELLING vocabulary, distinct from ITEM_TYPES_FILE above, which is
+    // the yard's. "Auto cast" goes on a load ticket at the scale; "Aluminium
+    // Auto Casting Scrap" goes on a proforma read by a buyer in Busan. Filled
+    // automatically from descriptions that have actually gone out on a
+    // generated document — see helpers/tradeCatalog.js.
+    TRADE_CATALOG_FILE: path.join(DATA_DIR, 'trade_catalog.json'),
     // Petty cash — the physical cash box, per Apsara 2026-09-02: "a new tab
     // called Petty cash. Date and cash amount needs to be entered here. So it
     // is like cash reserve. If i click pay in load and select cash, the
