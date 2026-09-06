@@ -905,7 +905,33 @@
     // The tone is the last resort rather than the first, which is the wrong
     // way round from how it was built.
     function warmAck() {
-        var api = window.api;
+        // GUARDED, because this runs during mount. An exception here — no
+        // fetch, a blocked request, a CSP rule — would abort mount partway
+        // and leave the voice bar on screen with no click handler attached:
+        // a switch that does nothing, over a missing acknowledgement. Found
+        // by the test harness, which has no fetch, and it would have been
+        // true of any browser without one.
+        if (typeof fetch !== 'function') {
+            console.log('[VOICE] no fetch — acknowledgement will use the local voice or the tone');
+            warmAckLocal();
+            return;
+        }
+        try { warmAckFromServer(); } catch (e) { warmAckLocal(); }
+    }
+
+    function warmAckLocal() {
+        if (!ttsBridge || !ttsBridge.speak) return;
+        ttsBridge.speak('Mm hm?', null).then(function (r) {
+            if (r && r.ok && r.pcm && r.pcm.length) {
+                ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
+                ackRate = r.sampleRate || 24000;
+                console.log('[VOICE] acknowledgement ready — Kokoro, '
+                    + Math.round((ackPcm.length / ackRate) * 1000) + 'ms');
+            }
+        }).catch(function () {});
+    }
+
+    function warmAckFromServer() {
         // fetch, not api(): this returns a WAV, not JSON.
         fetch('/api/voice/phrase/ack', { credentials: 'same-origin' })
             .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
@@ -922,18 +948,7 @@
             })
             .catch(function (e) {
                 console.log('[VOICE] no server acknowledgement (' + (e && e.message) + ') — trying locally');
-                if (!ttsBridge || !ttsBridge.speak) {
-                    console.log('[VOICE] falling back to the tone');
-                    return;
-                }
-                ttsBridge.speak('Mm hm?', null).then(function (r) {
-                    if (r && r.ok && r.pcm && r.pcm.length) {
-                        ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
-                        ackRate = r.sampleRate || 24000;
-                        console.log('[VOICE] acknowledgement ready — Kokoro, '
-                            + Math.round((ackPcm.length / ackRate) * 1000) + 'ms');
-                    }
-                }).catch(function () {});
+                warmAckLocal();
             });
     }
 

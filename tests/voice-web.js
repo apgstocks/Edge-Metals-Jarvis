@@ -126,6 +126,15 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
         };
     };
     w.Audio = class { play() {} };
+    // The server's cached acknowledgement. Present so the PREFERRED path is
+    // tested — without it the suite only ever saw the fallback, and a mount
+    // that threw on a missing fetch went unnoticed until the whole file
+    // crashed.
+    w.__ackFetches = [];
+    w.fetch = async (p) => {
+        w.__ackFetches.push(p);
+        return { ok: true, arrayBuffer: async () => new ArrayBuffer(2048) };
+    };
 
     // voice-machine.js is UMD: it prefers module.exports when it sees one.
     // Inside window.eval that check can still find Node's `module`, so the
@@ -262,7 +271,22 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
                 // never be started by any browser.
                 b.w.__ctxMadeOnClick = !!b.w.__inClick;
             }
-            resume() { this.state = 'running'; b.w.__ctxState = 'running'; return Promise.resolve(); }
+            resume() {
+                this.state = 'running'; b.w.__ctxState = 'running';
+                // WHO resumed it. Creation can happen at mount (warmAck
+                // fetches the acknowledgement then), and that is fine — what
+                // a browser actually requires is that a USER GESTURE starts
+                // it. So the invariant is about the resume, not the
+                // constructor.
+                if (b.w.__inClick) b.w.__resumedByGesture = true;
+                return Promise.resolve();
+            }
+            decodeAudioData() {
+                return Promise.resolve({
+                    duration: 0.4, sampleRate: 24000,
+                    getChannelData: () => new Float32Array(9600),
+                });
+            }
             createGain() { return { gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
             createOscillator() {
                 return { type: '', frequency: { setValueAtTime() {} }, connect() {}, start() {}, stop() {} };
@@ -393,9 +417,15 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         ck('  and the audio clock is running, not suspended',
            b.w.__ctxState === 'running',
            'state is "' + b.w.__ctxState + '" — a suspended context plays silently and reports no error');
-        ck('  it was created on the CLICK, the only gesture there is',
-           b.w.__ctxMadeOnClick === true,
-           'created later, in the wake handler, it can never be started');
+        // WHO STARTED IT, not when it was constructed. The first version of
+        // this asserted the context was created during the click, and that
+        // became wrong the moment warmAck() started fetching the
+        // acknowledgement at mount — which is legitimate. What a browser
+        // actually requires is that a USER GESTURE resumes it; construction
+        // can happen whenever.
+        ck('  and a USER GESTURE is what started it',
+           b.w.__resumedByGesture === true,
+           'the wake word is not a gesture — only the click can start the clock');
         ck('  and the microphone stays OPEN while it plays', !!b.mic(),
            'closing the mic to say "go ahead" defeats the entire point of saying it');
         ck('  and the card tells her to go ahead',
