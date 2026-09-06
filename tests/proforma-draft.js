@@ -645,6 +645,63 @@ section('I6 — HER words beat my tidying');
     if (realPp) require.cache[ppP] = realPp; else delete require.cache[ppP];
 }
 
+section('I7 — more than one container');
+{
+    // Apsara, 2026-09-07: "Multiple containers each take the next number, not
+    // the same one repeated. 5 loads → 95, 96, 97, 98, 99."
+    //
+    // prepareProformaNumbers has minted one number per container all along;
+    // the voice flow hardcoded containerCount to 1, so that loop always ran
+    // once and her rule was structurally unreachable from here.
+    const ppP = require.resolve(path.join(ROOT2, 'helpers/proformaPricing.js'));
+    const realPp = require.cache[ppP];
+    require.cache[ppP] = { id: ppP, filename: ppP, loaded: true, exports: { lookup: () => ({}) } };
+
+    d.clear();
+    d.start('create a proforma for Daekwang, 21 MT of copper at 8450');
+    ck('one container is still the default', d.payload().containers === 1);
+    ck('  and the total is one container\'s worth', d.payload().total === 21 * 8450);
+    ck('  the read-back does not mention a count', !/container/i.test(d.summary()), d.summary());
+
+    d.clear();
+    d.start('create a proforma for Daekwang, 2 containers, 21 MT of copper at 8450');
+    const two = d.payload();
+    ck('"2 containers" is heard', two.containers === 2, String(two.containers));
+    // THE FIGURE. Two containers of 21 MT at 8450 is $354,900, not $177,450,
+    // and the read-back is the last place she sees it before a customer does.
+    ck('  and the total is per container, times the count',
+       two.total === 21 * 8450 * 2, String(two.total));
+    ck('  the count is SAID', /2 containers of 21 MT/.test(d.summary()), d.summary());
+    ck('  and handed to the numbering', d.brainDraft().containerCount === 2);
+
+    // Her own example.
+    d.clear();
+    d.start('create a proforma for Daekwang, 5 containers of copper, 21 MT at 8450');
+    ck('five containers', d.payload().containers === 5, String(d.payload().containers));
+    ck('  which is what mints 95,96,97,98,99', d.brainDraft().containerCount === 5);
+
+    // IT MUST NOT INVENT A COUNT. The parser is the booking-request one,
+    // which already refuses a bare number in a sentence — "21 MT" is a
+    // tonnage and "8450" is a price, and neither is a container count.
+    for (const t of [
+        'create a proforma for Daekwang, 21 MT of copper at 8450',
+        'create a proforma for Daekwang, copper at 8450 per MT',
+    ]) {
+        d.clear(); d.start(t);
+        ck(`  "${t.slice(24, 60)}..." stays at one`, d.payload().containers === 1,
+           String(d.payload().containers) + ' — a tonnage is not a container count');
+    }
+
+    // ONE parser, shared with the booking-request flow. Two implementations
+    // of "how many boxes" would drift.
+    const src = require('fs').readFileSync(path.join(ROOT2, 'helpers/proformaDraft.js'), 'utf8');
+    ck('  it reuses the booking-request container parser',
+       /require\('\.\/bookingRequest'\)\.containersIn/.test(src),
+       'a second "how many boxes" would drift from the first');
+
+    if (realPp) require.cache[ppP] = realPp; else delete require.cache[ppP];
+}
+
 section('I5 — the consignee is matched against the address book');
 {
     // Apsara, 2026-09-07: "when i say consignee name, try matching it with

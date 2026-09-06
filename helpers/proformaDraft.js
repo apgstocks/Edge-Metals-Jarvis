@@ -352,6 +352,36 @@ const FIELDS = [
         },
     },
     {
+        // ── HOW MANY CONTAINERS ──────────────────────────────────────────
+        // Apsara, 2026-09-07: "Multiple containers each take the next number,
+        // not the same one repeated. 5 loads → 95, 96, 97, 98, 99."
+        //
+        // prepareProformaNumbers has minted one number per container all
+        // along; the voice flow hardcoded the count to 1, so that loop always
+        // ran once and her rule was structurally unreachable from here.
+        //
+        // Optional, defaulting to one, because most proformas are one
+        // container and asking every time would be the form-in-disguise this
+        // flow exists to avoid. She says "2 containers" when it is two.
+        key: 'containers',
+        optional: true,
+        fallback: 1,
+        parse: (t) => {
+            // The SAME parser the booking-request flow uses. A container
+            // count is a container count, and two implementations of "how
+            // many boxes" would drift — this one already knows "2x40HC",
+            // "two 40 high cubes" and "a couple", and already refuses a bare
+            // number in a sentence.
+            try {
+                const { count } = require('./bookingRequest').containersIn(t);
+                return count;
+            } catch (e) {
+                console.warn('[PROFORMA] container parser unavailable:', e.message);
+                return null;
+            }
+        },
+    },
+    {
         key: 'payment_terms',
         optional: true,
         fallback: DEFAULT_PAYMENT_TERMS,
@@ -877,7 +907,11 @@ function payload() {
             (k) => !f[k] && (k === 'shipment_terms' ? past.trade_terms
                 : k === 'payment_terms' ? past.payment_terms : past.port_discharge)),
         shipment_allowance: DEFAULT_ALLOWANCE,
-        total: Math.round(mt * rate * 100) / 100,
+        containers: f.containers != null ? Number(f.containers) : Number(fallbackFor('containers')),
+        // PER CONTAINER, times the count. 2 containers of 21 MT at 8450 is
+        // $354,900, not $177,450 — and the read-back is the last place she
+        // sees the figure before it goes to a customer.
+        total: Math.round(mt * rate * (f.containers != null ? Number(f.containers) : Number(fallbackFor('containers'))) * 100) / 100,
         // Which values she gave and which are standing defaults. Shown in the
         // preview so a default is never mistaken for something she said.
         defaulted: FIELDS.filter((x) => x.optional && (f[x.key] == null)).map((x) => x.key),
@@ -964,10 +998,11 @@ function brainDraft() {
         // object shaped the way I imagined. Copied from the email path, not
         // guessed.
         items: [{ desc: p.items[0].description, qty: p.items[0].qty, rate: p.items[0].rate }],
-        // One container unless she said otherwise. prepareProformaNumbers()
-        // mints one container number per count, so a wrong number here is a
-        // document with container numbers that do not exist.
-        containerCount: 1,
+        // One container unless she said otherwise — and she can now say
+        // otherwise. prepareProformaNumbers() mints one number per count, so
+        // a wrong number here is a document with container numbers that do
+        // not exist.
+        containerCount: p.containers,
         trade_terms: p.shipment_terms,
         // Read from "CIF Busan" now, rather than hardcoded empty. Still never
         // INVENTED: if she did not say a port, this stays blank, because an
@@ -1037,7 +1072,11 @@ function summary() {
     // and in the preview panel, which is where it matters.
     const buyer = p.consignee_said || p.consignee;
 
-    return `${p.items[0].qty} MT of ${shown}`
+    // The container count is SAID when it is more than one. "$354,900 total"
+    // with no mention of two containers is a figure she cannot check.
+    const boxes = p.containers > 1 ? `${p.containers} containers of ` : '';
+
+    return `${boxes}${p.items[0].qty} MT of ${shown}`
         + (swapped ? ` (your "${p.material_said}")` : '')
         + ` for ${buyer} `
         + `at ${money(p.items[0].rate)} per MT — ${money(p.total)} total, `

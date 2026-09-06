@@ -176,6 +176,85 @@ section('D — the two callers both use the shared combiner');
        'itemCodeFor now delegates to helpers/itemCode.js');
 }
 
+section('E — a new year starts at one');
+{
+    // Apsara, 2026-09-07: "Numbering restarts each year. 25JY ran to 106
+    // while 26JY runs its own 01→95. It only ever looks at rows whose year
+    // prefix matches, so it can't jump onto last year's tail."
+    //
+    // suggestNextInvNo used to fall back to the newest PRIOR year and
+    // continue ITS count, so a consignee whose last invoice was 25JY106 got
+    // 25JY107 as their first invoice of 2026 — last year's prefix on this
+    // year's document. The comment defending it said the alternative was
+    // "guessing a fresh restart at 1"; restarting is not a guess, it is the
+    // rule she has now stated twice.
+    //
+    // fetchInvoiceSheetRows pulls a Google Sheet as CSV, so it is stubbed —
+    // the rule is what is being tested, not the transport.
+    // nextFromRows, NOT suggestNextInvNo. My first version stubbed the
+    // exported fetchInvoiceSheetRows and it did NOTHING — suggestNextInvNo
+    // calls the LOCAL function, so the test read the real Google Sheet and
+    // reported numbers that had nothing to do with its fixture. A seam that
+    // cannot be reached is not a seam, so the decision was split out from the
+    // transport and this tests the decision.
+    const ni = require(path.join(ROOT, 'helpers/nextInvoiceNo.js'));
+    const yy = String(new Date().getFullYear()).slice(-2);
+    const last = String(new Date().getFullYear() - 1).slice(-2);
+
+    // ONLY LAST YEAR'S ROWS. Her exact example: 25JY ran to 106.
+    const fresh = ni.nextFromRows([
+        { consignee: 'Joey/Taewon', invNo: `${last}JY104` },
+        { consignee: 'Joey/Daekwang', invNo: `${last}JY106` },
+    ]);
+    ck('the first invoice of a new year restarts at 1',
+       !!fresh && fresh.next_number === 1, fresh ? String(fresh.next_number) : 'null');
+    ck('  under THIS year\'s prefix', !!fresh && fresh.year_prefix === yy,
+       fresh ? fresh.year_prefix : 'null');
+    ck('  so 25JY106 does NOT become 25JY107',
+       !!fresh && fresh.code_only === `${yy}JY01`,
+       fresh ? fresh.code_only : 'null');
+    // THE LETTER CODE STILL COMES FROM THE PRIOR YEAR. "JY" is Joey's
+    // whatever the year; losing it gives a sequence nobody can identify the
+    // consignee by.
+    ck('  while the letter code survives the rollover',
+       !!fresh && fresh.letter_code === 'JY', fresh ? fresh.letter_code : 'null');
+    ck('  and it says the count restarted',
+       !!fresh && fresh.restarted_for_new_year === true,
+       'a jump from 106 to 01 looks like a mistake unless something says so');
+    // Her spec writes it as 01, not 1 — the prior year's unpadded 3-digit
+    // rows are no guide to how a restart should read.
+    ck('  padded to two, as her spec writes it',
+       !!fresh && /01$/.test(fresh.code_only), fresh ? fresh.code_only : 'null');
+
+    // THIS YEAR ALREADY HAS ROWS — unchanged behaviour, highest + 1.
+    const running = ni.nextFromRows([
+        { consignee: 'Joey/Taewon', invNo: `${last}JY106` },
+        { consignee: 'Joey/Taewon', invNo: `${yy}JY94` },
+        { consignee: 'Joey/Daekwang', invNo: `${yy}JY95` },
+    ]);
+    ck('a year already running continues from its own highest',
+       !!running && running.next_number === 96, running ? String(running.next_number) : 'null');
+    ck('  and never jumps onto last year\'s tail',
+       !!running && running.next_number !== 107);
+    ck('  nor is it flagged as restarted',
+       !!running && running.restarted_for_new_year === false);
+    // HER RULE 2: everything before the "/" shares one count. Joey/Daekwang's
+    // 95 is why Joey/Taewon gets 96 — the caller filters by agent prefix and
+    // hands both rows in.
+    ck('  agent-tagged consignees share one sequence',
+       !!running && running.code_only === `${yy}JY96`, running ? running.code_only : 'null');
+
+    // A padded prior year restarts padded too.
+    const padded = ni.nextFromRows([{ consignee: 'MK Trading', invNo: `${last}MK09` }]);
+    ck('a padded prior year restarts padded', !!padded && padded.code_only === `${yy}MK01`,
+       padded ? padded.code_only : 'null');
+
+    // Nothing at all on file is still nothing — she supplies the number.
+    ck('no history at all is still null', ni.nextFromRows([]) === null);
+    ck('  and an unparseable row is not a number',
+       ni.nextFromRows([{ consignee: 'x', invNo: 'not-a-code' }]) === null);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
