@@ -93,8 +93,36 @@ function harness() {
 // N repetitions of the last 93ms of silence. Which is what would really
 // happen, and is a genuinely horrible bug to diagnose from a bad transcript.
 const SHARED = new Float32Array(FRAME);
+// ── AND THE SIGNAL IS SPEECH-SHAPED, NOT A NYQUIST BUZZ ──────────────────
+// This used to be `i % 2 ? rms : -rms` — alternating every sample, which is
+// a 22,050 Hz tone: the highest frequency the format can represent, and one
+// no human produces. It made the harness lie in a specific way. Once
+// voice-local.js started LOW-PASS FILTERING before downsampling (as it must,
+// or 44.1k audio aliases into gibberish at 16k), a correct filter removes a
+// 22kHz tone almost entirely — so the "loud speech" fixture would have gone
+// silent and the tests would have failed on the fix.
+//
+// A 220 Hz tone is in the range of a human voice, survives the filter as it
+// should, and keeps its phase across frames so the frames join smoothly
+// rather than clicking at every boundary.
+const TONE_HZ = 220;
+let phase = 0;
 function frameAt(rms) {
-    for (let i = 0; i < FRAME; i += 1) SHARED[i] = (i % 2 ? rms : -rms);
+    const amp = rms * Math.SQRT2;          // RMS of a sine is amplitude/√2
+    for (let i = 0; i < FRAME; i += 1) {
+        SHARED[i] = amp * Math.sin(2 * Math.PI * TONE_HZ * (phase + i) / RATE);
+    }
+    phase += FRAME;
+    return { inputBuffer: { getChannelData: () => SHARED } };
+}
+// A tone ABOVE the 8kHz limit of 16kHz audio. Anything up here must be
+// filtered out rather than folded down into the speech band.
+function frameAtHigh(rms, hz) {
+    const amp = rms * Math.SQRT2;
+    for (let i = 0; i < FRAME; i += 1) {
+        SHARED[i] = amp * Math.sin(2 * Math.PI * hz * (phase + i) / RATE);
+    }
+    phase += FRAME;
     return { inputBuffer: { getChannelData: () => SHARED } };
 }
 
@@ -270,6 +298,45 @@ section('F2 — the resampling is real, not just the right LENGTH');
        rmsOf(tail) < 0.01,
        'a loud tail means the output only covers the START of the audio — i.e. it was never resampled');
     ck('  and still contains the loud speech', rmsOf(head) > 0.02);
+}
+
+section('F3 — high frequencies are filtered, not folded into the speech');
+{
+    // THE BUG THAT PRODUCED "Hmm. You get number up on me. Who's like this?"
+    // from a clear sentence. Dropping 1 sample in 2.76 without filtering does
+    // not remove the high frequencies, it ALIASES them: everything above 8kHz
+    // reappears inside the speech band as noise, and Whisper transcribes the
+    // noise along with the words.
+    //
+    // Driven with a 14kHz tone — sibilance, keyboard, fan — which cannot
+    // survive honestly in 16kHz audio and must come out quiet. With the old
+    // nearest-neighbour code it comes out at nearly full strength, disguised
+    // as a low tone.
+    const h = harness();
+    const rec = new h.w.JarvisLocalRecognition();
+    h.delivered = [];
+    rec.onresult = () => {};
+    rec.start();
+    await new Promise((r) => setTimeout(r, 0));
+    const fn = h.frame();
+    for (let i = 0; i < 20; i += 1) fn(frameAtHigh(0.05, 14000));
+    for (let i = 0; i < QUIET_TO_END; i += 1) fn(frameAt(0.0005));
+    await new Promise((r) => setTimeout(r, 0));
+
+    ck('the capture happened', h.log.sent.length === 1);
+    const pcm = h.log.sent[0];
+    const rmsOf = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
+    const got = rmsOf(Array.from(pcm.slice(0, Math.floor(pcm.length * 0.5))));
+    ck('  a 14kHz tone is attenuated, not aliased down into the voice band',
+       got < 0.05 * 0.5,
+       'came through at ' + got.toFixed(4) + ' of 0.05 — unfiltered decimation folds it into the speech');
+
+    // And the speech band must NOT be attenuated, or the fix would just be
+    // making everything quiet.
+    const h2 = await run([...rep(20, 0.002), ...rep(20, 0.05), ...rep(QUIET_TO_END, 0.0005)]);
+    const kept = rmsOf(Array.from(h2.log.sent[0].slice(0, Math.floor(h2.log.sent[0].length * 0.5))));
+    ck('  but a 220Hz voice tone comes through intact', kept > 0.05 * 0.7,
+       'came through at ' + kept.toFixed(4) + ' of 0.05 — a filter that eats speech is no better');
 }
 
 section('G — the ceiling still holds');

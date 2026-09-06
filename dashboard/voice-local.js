@@ -247,12 +247,42 @@
         var at = 0;
         for (i = 0; i < chunks.length; i += 1) { flat.set(chunks[i], at); at += chunks[i].length; }
 
-        // Linear resample to 16 kHz. Crude, and correct enough: Whisper is
-        // trained on speech at this rate and the artefacts of linear
-        // interpolation sit far above the band that carries words.
+        // ── DOWNSAMPLE 44.1k → 16k, WITH A FILTER ────────────────────────
+        // This was `out[i] = flat[Math.floor(i * ratio)]` — nearest-neighbour
+        // decimation, keeping roughly one sample in every 2.76 and throwing
+        // the rest away. The comment above it claimed the artefacts "sit far
+        // above the band that carries words". THAT IS BACKWARDS, and it is
+        // the whole reason Whisper produced:
+        //
+        //     "Hmm. You get number up on me. Who's like this?"
+        //
+        // from a clear sentence. Decimating without filtering does not
+        // discard high frequencies, it FOLDS them down into the audible band
+        // — aliasing. Everything above 8kHz in the room (consonants,
+        // sibilance, fan noise, keyboard) reappears as a low-frequency
+        // rumble mixed on top of the speech. The model then transcribes the
+        // rumble along with the words, which is exactly what those garbled
+        // sentences are.
+        //
+        // The fix is to LOW-PASS before decimating. A box filter — the mean
+        // of the samples spanned by each output sample — is the cheapest
+        // one that works, a few adds per output sample, and it removes most
+        // of what would otherwise fold over. A windowed-sinc would be
+        // textbook-correct and is not worth it here: the difference between
+        // "no filter" and "a crude filter" is enormous, the difference
+        // between "crude" and "ideal" is small, and this runs on every
+        // utterance.
         var ratio = rate / TARGET_HZ;
-        var out = new Float32Array(Math.floor(flat.length / ratio));
-        for (i = 0; i < out.length; i += 1) out[i] = flat[Math.floor(i * ratio)] || 0;
+        var outLen = Math.floor(flat.length / ratio);
+        var out = new Float32Array(outLen);
+        for (i = 0; i < outLen; i += 1) {
+            var from = Math.floor(i * ratio);
+            var to = Math.min(flat.length, Math.floor((i + 1) * ratio));
+            if (to <= from) to = Math.min(flat.length, from + 1);
+            var acc = 0;
+            for (var j = from; j < to; j += 1) acc += flat[j];
+            out[i] = (to > from) ? acc / (to - from) : 0;
+        }
 
         bridge.transcribe(out).then(function (r) {
             if (!r || !r.ok) {
