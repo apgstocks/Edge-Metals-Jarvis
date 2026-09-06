@@ -4,11 +4,19 @@
 //
 // WHY THIS IS WORTH DOING RATHER THAN A BOOKMARK
 // ---------------------------------------------
-// One reason above all the others: ELECTRON BUNDLES CHROMIUM. The "Hey
-// Jarvis" wake word needs continuous speech recognition, which Safari does
-// badly — and Safari is her default browser. Inside this window the engine is
-// always Chromium, so the wake word works without her having to remember to
-// open the right browser first.
+// The original answer here was: "Electron bundles Chromium, so the wake word
+// works." THAT WAS WRONG, and it is left recorded rather than deleted because
+// it cost her most of a day. Chrome's SpeechRecognition is not part of
+// Chromium — it is a GOOGLE SERVICE reached with private API keys that Chrome
+// ships and Electron does not. Proved on her Mac in one line: "SPEECH ERROR:
+// network", instantly, every time. Electron is in fact WORSE at speech than
+// the browser was, out of the box.
+//
+// The real reason this app is worth having is the opposite of the first one:
+// because it has a Node process behind the window, it can run whisper.cpp
+// locally (see speech.js). So voice here is not "the same as Chrome" — it is
+// better, because her audio never leaves the machine. The window is the part
+// that could have been a bookmark; the process behind it is the feature.
 //
 // After that: a Dock icon, its own window that survives quitting the browser,
 // and no address bar to lose the tab behind.
@@ -59,6 +67,33 @@ function create() {
 
     win.loadURL(APP_URL);
     if (DEV) win.webContents.openDevTools({ mode: 'right' });
+
+    // ── the renderer's console, in the terminal ───────────────────────────
+    // Added after a long debugging loop that this would have ended on the
+    // first pass. `npm start` shows only MAIN-process output, so every
+    // diagnostic that mattered — whether the speech engine loaded, why it
+    // did not — was printed into devtools that nobody had opened, and the
+    // terminal looked identical whether the feature worked or was completely
+    // dead. A window whose only failure report is somewhere you have to know
+    // to look is a window that cannot be debugged over a phone call.
+    //
+    // FILTERED, not forwarded wholesale: the dashboard is chatty, and a
+    // terminal scrolling with routine logs is as useless as a silent one.
+    // Voice lines and real errors only.
+    win.webContents.on('console-message', (...args) => {
+        // Electron changed this signature: newer versions pass one details
+        // object, older ones pass (event, level, message, line, sourceId).
+        // Both are handled because getting this wrong makes the diagnostic
+        // channel itself the thing that is broken.
+        const d = (args[0] && typeof args[0] === 'object' && 'message' in args[0])
+            ? args[0]
+            : { level: args[1], message: args[2] };
+        const msg = String(d.message == null ? '' : d.message);
+        const lvl = String(d.level == null ? '' : d.level);
+        const bad = lvl === 'error' || lvl === 'warning' || lvl === '2' || lvl === '3';
+        if (!bad && !/\[VOICE\]|\[SPEECH\]|SPEECH ERROR/i.test(msg)) return;
+        console.log(`[page${bad ? ' ' + lvl : ''}] ${msg}`);
+    });
 
     // A page that fails to load must SAY SO. Without this the window is just
     // black — which looks identical to "the app is broken" and sends someone
@@ -130,6 +165,21 @@ app.whenReady().then(async () => {
     }
     create();
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) create(); });
+
+    // ── prove the engine at boot, in the terminal ─────────────────────────
+    // The renderer already warms the model, but ONLY IF voice-local.js
+    // loaded — and the failure being debugged was precisely that it had not,
+    // because the server was serving an older page. In that state the
+    // renderer warms nothing, prints nothing, and the terminal is silent, so
+    // "the model is broken" and "the page never asked for the model" look
+    // exactly alike. Warming here separates them: this line appears whatever
+    // the page does.
+    //
+    // The cost is ~75MB of resident model in an app that exists mostly to
+    // listen, and it removes the first-utterance delay. Worth it.
+    speech.load().then(
+        () => console.log(`[JARVIS] speech ready — ${speech.MODEL}, local, nothing uploaded`),
+        (e) => console.error(`[JARVIS] speech NOT ready — ${e.message}`));
 });
 
 // Standard on macOS: closing the window does not quit the app.
