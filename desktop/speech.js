@@ -217,12 +217,37 @@ async function transcribe(pcm) {
         // a new one — which, on short independent commands, produces
         // confident nonsense rather than a blank.
         no_context: true,
-        // Greedy decoding takes the first plausible word; beam search keeps
-        // several candidates and picks the best whole sentence. On a 2-3
-        // second clip with a tiny model that difference is worth far more
-        // than the few hundred milliseconds it costs.
-        beam_size: 5,
+        // ── GREEDY, NOT BEAM ─────────────────────────────────────────────
+        // This was beam_size: 5, added an hour ago on the reasoning that a
+        // wider search is worth "a few hundred milliseconds". Then Apsara
+        // said "jarvis is taking more time to answer", and the literature
+        // says the trade is bad: beam search buys UNDER 1.5 PERCENTAGE
+        // POINTS of word error rate for roughly FIVE TIMES the decoder
+        // compute, and most entries on the Open ASR Leaderboard decode
+        // greedily for that reason.
+        //
+        // So the compute goes into a bigger MODEL instead, which is where it
+        // actually buys accuracy: greedy base.en beats beam-5 tiny.en on
+        // both counts at once. MODEL_PREFERENCE above already picks the
+        // largest she has downloaded.
+        beam_size: 1,
+        // Greedy with NO fallback is the one way this gets worse — it raises
+        // hallucination on marginal audio. So the standard guard rails come
+        // with it: retry at rising temperature only when the first pass
+        // looks degenerate, and treat a highly compressible transcript as
+        // the repetition loop it almost always is.
         temperature: 0,
+        temperature_inc: 0.2,
+        // zlib ratio of the output. A transcript that compresses this well is
+        // "the the the the" — whisper's classic failure — not a sentence.
+        compression_ratio_threshold: 1.35,
+        logprob_thold: -1.0,
+        // Whisper hallucinates confidently on silence: a study of 13,000
+        // clips found ~1% of transcriptions were entirely invented, and a
+        // third of those contained fabricated harmful content. On a system
+        // that hears prices and payment details, an invented sentence is
+        // worse than a blank one.
+        no_speech_thold: 0.6,
     });
     return sentence(await task.result);
 }

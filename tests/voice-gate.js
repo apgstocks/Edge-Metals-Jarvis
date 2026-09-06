@@ -217,7 +217,9 @@ section('D — a long sentence is not cut off by its own loudness');
        'more than one here means the floor climbed into the speaker\'s own voice');
     const captured = h.log.lines.filter((l) => /captured/.test(l))[0] || '';
     const ms = Number((captured.match(/captured (\d+)ms/) || [])[1] || 0);
-    ck('  and it is roughly the length actually spoken', ms > 3000 && ms < 5200, 'got ' + ms + 'ms');
+    // 40 frames of speech (~3.7s) + ~700ms silence tail + ~800ms pre-roll.
+    ck('  and it is roughly the length actually spoken, plus the pre-roll',
+       ms > 3700 && ms < 5600, 'got ' + ms + 'ms');
 }
 
 section('D2 — background noise must not deafen it');
@@ -240,6 +242,38 @@ section('D2 — background noise must not deafen it');
     ]);
     ck('she is still heard over sustained background noise', h.log.sent.length === 1,
        'symmetric adaptation lets the floor chase the noise up past her voice');
+}
+
+section('D3 — the first word is not clipped off');
+{
+    // ADDED FROM THE RESEARCH, not from a failure — Apple's always-on
+    // processor keeps a ring buffer and GLaDOS keeps 800ms, both for the
+    // same reason: a capture that begins on the frame which CROSSED the
+    // threshold has already lost the attack of the first word, which is
+    // quiet by definition. "Hey Jarvis" reaching whisper as "ey Jarvis"
+    // is a plausible share of the misses she has been living with.
+    //
+    // Driven by making the audio BEFORE the trigger identifiable: a quiet
+    // but non-silent lead-in, then speech. If the pre-roll works, that
+    // lead-in is in the buffer handed over.
+    const h = await run([...rep(20, 0.0004), ...rep(14, 0.05), ...rep(QUIET_TO_END, 0.0004)]);
+    ck('one capture', h.log.sent.length === 1);
+    const ms = Number((( h.log.lines.find((l) => /captured/.test(l)) || '')
+        .match(/captured (\d+)ms/) || [])[1] || 0);
+    // 14 frames of speech is ~1300ms; +700ms tail is ~2000ms. Anything at
+    // or above ~2600ms means the pre-roll frames were prepended.
+    ck('  the capture starts BEFORE the trigger fired', ms > 2500,
+       'got ' + ms + 'ms — without a pre-roll this would be about 2000ms');
+    ck('  and the extra audio is at the FRONT, not the end',
+       (() => {
+           const pcm = h.log.sent[0];
+           const rmsOf = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
+           // First ~8% is pre-roll: quiet, but present.
+           const head = Array.from(pcm.slice(0, Math.floor(pcm.length * 0.08)));
+           const mid = Array.from(pcm.slice(Math.floor(pcm.length * 0.3), Math.floor(pcm.length * 0.5)));
+           return rmsOf(head) < rmsOf(mid);
+       })(),
+       'the pre-roll must be prepended, not appended — audio in the wrong order transcribes as nonsense');
 }
 
 section('E — blips are discarded, and say so');

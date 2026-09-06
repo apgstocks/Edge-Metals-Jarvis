@@ -94,6 +94,9 @@
     // exists so "I said Hey Jarvis and nothing happened" produces a NUMBER
     // rather than another round of guessing.
     var REPORT_MS = 4000;
+    // ~800ms of audio kept before the trigger, so the first word's quiet
+    // attack is not lost. 4096 frames at 44.1kHz is ~93ms each.
+    var PREROLL_FRAMES = 9;
     // How long it must stay quiet before we decide the sentence ended. Shorter
     // than this and it cuts people off mid-pause; longer and every command
     // feels laggy.
@@ -113,6 +116,7 @@
         this._ctx = null; this._stream = null; this._node = null;
         this._chunks = []; this._collecting = false; this._quietFor = 0; this._heldMs = 0;
         this._voicedMs = 0;
+        this._pre = [];
         this._stopped = false;
         // Starts at the absolute floor and adapts downward to a quiet room or
         // upward to a noisy one.
@@ -152,9 +156,28 @@
                 var trigger = Math.max(self._floor * TRIGGER_OVER_FLOOR, ABSOLUTE_FLOOR);
                 if (rms > self._peak) self._peak = rms;
 
+                // ── THE PRE-ROLL ─────────────────────────────────────────
+                // Kept whether or not anything is happening, and thrown at
+                // the front of the next capture.
+                //
+                // Without it the recording starts on the frame that CROSSED
+                // the threshold — so the attack of the first word, the part
+                // that is quiet by definition, is already gone. "Hey Jarvis"
+                // arrives as "ey Jarvis" or "Jarvis", which is a decent
+                // share of today's misses. Apple keeps a ring buffer on the
+                // always-on processor for exactly this; GLaDOS keeps 800ms.
+                //
+                // Costs three frames of memory. There is no argument against
+                // it beyond not having thought of it.
+                self._pre.push(new Float32Array(buf));
+                while (self._pre.length > PREROLL_FRAMES) self._pre.shift();
+
                 if (rms > trigger) {
                     if (!self._collecting) {
-                        self._collecting = true; self._chunks = []; self._heldMs = 0;
+                        self._collecting = true;
+                        // The pre-roll IS the start of the capture.
+                        self._chunks = self._pre.slice();
+                        self._heldMs = self._pre.length * msPerBuf;
                         self._voicedMs = 0;
                         console.log('[VOICE] hearing something — level '
                             + rms.toFixed(4) + ', trigger ' + trigger.toFixed(4));
@@ -313,7 +336,7 @@
         try { if (this._stream) this._stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
         try { if (this._ctx) this._ctx.close(); } catch (e) {}
         this._node = null; this._stream = null; this._ctx = null;
-        this._collecting = false; this._chunks = [];
+        this._collecting = false; this._chunks = []; this._pre = [];
         if (this.onend) this.onend();
     };
     LocalRecognition.prototype.abort = LocalRecognition.prototype.stop;

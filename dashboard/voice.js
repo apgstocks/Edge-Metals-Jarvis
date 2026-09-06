@@ -156,6 +156,65 @@
     function el(id) { return document.getElementById(id); }
     function say(msg) { var t = el('jvText'); if (t) t.textContent = msg; }
 
+    // ── THE ANSWER CARD ──────────────────────────────────────────────────
+    // Apsara, 2026-09-06: "a chat box with text is coming but it is half
+    // cut. Also jarvis is taking more time to answer. I want to mimic siri."
+    //
+    // Both complaints had one cause. The answer was being written into the
+    // status pill — a single-line flex row, no wrapping — after
+    // `answer.slice(0, 60)`. So every reply was literally cut off, twice:
+    // once by the slice and once by the pill's width.
+    //
+    // AND IT IS WHY IT FELT SLOW. Siri and Alexa do not answer faster than
+    // this; they show your words the instant you stop talking, so the wait
+    // has something in it. Here the screen said "Thinking…" in eight-point
+    // grey and nothing else, which makes two seconds feel like ten. The
+    // question now appears immediately, the answer fills in underneath.
+    // That is a perceived-latency fix, and it is the honest one available —
+    // the real time is the server's LLM call, not anything the page does.
+    var card = document.createElement('div');
+    card.id = 'jvCard';
+    card.className = 'hidden';
+    card.innerHTML = '<div id="jvCardQ"></div><div id="jvCardA"></div>';
+    var cardTimer = null;
+
+    var cardCss = [
+        '#jvCard{position:fixed;right:18px;bottom:132px;z-index:902;width:340px;max-width:calc(100vw - 36px);',
+        '  max-height:46vh;overflow-y:auto;padding:14px 16px;border-radius:16px;background:#14181B;',
+        '  border:1px solid rgba(255,255,255,.14);box-shadow:0 12px 34px rgba(0,0,0,.55);',
+        '  font-family:system-ui,-apple-system,sans-serif;cursor:pointer;',
+        '  opacity:1;transition:opacity .22s ease,transform .22s ease;}',
+        '#jvCard.hidden{opacity:0;transform:translateY(8px);pointer-events:none;}',
+        /* The question, quiet and above — the same shape Siri uses. Seeing
+           what it THINKS you said is also the fastest way to spot a
+           mis-transcription, which has been most of today. */
+        '#jvCardQ{font-size:12.5px;color:#8A9299;margin-bottom:8px;line-height:1.45;}',
+        '#jvCardQ:empty{display:none;}',
+        /* The answer WRAPS. This is the actual bug fix. */
+        '#jvCardA{font-size:14.5px;color:#E7ECEF;line-height:1.55;white-space:pre-wrap;word-break:break-word;}',
+        '#jvCard.thinking #jvCardA{color:#8A9299;font-style:italic;}',
+    ].join('');
+
+    function showCard(question, answer, thinking) {
+        if (!card.isConnected) return;
+        if (question !== null && question !== undefined) {
+            el('jvCardQ').textContent = question ? '“' + question + '”' : '';
+        }
+        el('jvCardA').textContent = answer || '';
+        card.classList.toggle('thinking', !!thinking);
+        card.classList.remove('hidden');
+        clearTimeout(cardTimer);
+        // Long answers get longer on screen. Reading speed, roughly, with a
+        // floor — an answer that vanishes before it is read is no better
+        // than one that was cut off.
+        if (!thinking) {
+            var ms = Math.min(30000, Math.max(7000, String(answer || '').length * 55));
+            cardTimer = setTimeout(hideCard, ms);
+        }
+    }
+    function hideCard() { clearTimeout(cardTimer); card.classList.add('hidden'); }
+    card.addEventListener('click', hideCard);
+
     function paint() {
         var open = VM.micShouldBeOpen(state);
         bar.classList.toggle('live', open);
@@ -408,6 +467,10 @@
     // instruction can no more write to the ledger than a typed one.
     function ask(q) {
         say('Thinking…');
+        // Shown IMMEDIATELY, before the request goes out. This is the whole
+        // perceived-speed fix: the wait now contains her own words instead
+        // of an empty pill.
+        showCard(q, 'Thinking…', true);
         // `thinking` is not in the reducer: it is about the network, not about
         // whether the microphone may be open, and putting it there would mean
         // a state that can never affect the one decision that file exists to
@@ -421,12 +484,17 @@
             .then(function (r) {
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 var answer = (r && r.answer) || 'No answer.';
-                say(answer.slice(0, 60));
+                // The pill keeps a short status; the CARD carries the answer,
+                // in full, wrapped. Writing a 60-character slice of a real
+                // answer into a one-line pill was the "half cut" bug.
+                say('Answered');
+                showCard(undefined, answer, false);
                 // A PROPOSAL IS NEVER SPOKEN AND CONFIRMED BY VOICE. The card
                 // is shown and she taps it. Confirming a payment by saying
                 // "yes" to a machine that mishears names is the one shortcut
                 // this whole design refuses to take.
                 if (r && r.proposal) {
+                    showCard(undefined, answer + '\n\nCheck the card below and confirm it.', false);
                     speak('I can do that. Check the card and confirm it.');
                     if (typeof window.renderYardProposal === 'function') window.renderYardProposal(r.proposal);
                 } else {
@@ -435,7 +503,8 @@
             })
             .catch(function (e) {
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
-                say('Failed: ' + (e && e.message));
+                say('Failed');
+                showCard(undefined, 'Could not reach the assistant: ' + (e && e.message), false);
             });
     }
 
@@ -453,8 +522,10 @@
         if (mounted) return;
         mounted = true;
         if (!SR) return;                       // no recogniser at all: show nothing
+        css.textContent += cardCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
+        document.body.appendChild(card);
         paint();
 
         if (!canWake) {
