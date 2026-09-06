@@ -230,6 +230,8 @@
         '#jvCardQ:empty{display:none;}',
         /* The answer WRAPS. This is the actual bug fix. */
         '#jvCardA{font-size:14.5px;color:#E7ECEF;line-height:1.55;white-space:pre-wrap;word-break:break-word;}',
+        '#jvCard.speaking::after{content:"tap or press Esc to interrupt";display:block;margin-top:9px;',
+        '  font-size:10.5px;letter-spacing:.04em;color:#5A6169;}',
         '#jvCard.thinking #jvCardA{color:#8A9299;font-style:italic;}',
     ].join('');
 
@@ -250,8 +252,44 @@
             cardTimer = setTimeout(hideCard, ms);
         }
     }
+    // ── INTERRUPTING ─────────────────────────────────────────────────────
+    // Apsara, 2026-09-06: "if scout is answering and i want jarvis
+    // intervention immediately .. how should i do that."
+    //
+    // THE HONEST ANSWER, AND WHY IT IS NOT "just say Hey Jarvis":
+    // while either assistant is speaking THE MICROPHONE IS SHUT. That is
+    // not an oversight, it is the single rule voice-machine.js exists to
+    // enforce — an open mic during playback hears the reply, finds the name
+    // in it, and re-triggers itself in a loop that only stops when the
+    // battery does. So there is physically nothing listening for a spoken
+    // interruption at that moment.
+    //
+    // Barge-in by voice is possible — it needs the mic left open with echo
+    // cancellation carrying the load, and it means deliberately weakening
+    // that rule. That is a real decision with a known failure mode behind
+    // it, not something to slip in.
+    //
+    // So the interruption is a TAP, which is instant, unambiguous and
+    // carries no risk: clicking the card stops whoever is talking and
+    // reopens the microphone, ready for whoever she wants next.
+    function interrupt() {
+        var wasSpeaking = !!state.speaking;
+        hideCard();
+        if (!wasSpeaking) return;
+        // CAPTURE_START rather than a bare stop: the reducer's own barge-in
+        // rule cancels the speech FIRST and then opens the capture, in that
+        // order. Doing it by hand here would be a second, subtly different
+        // path to the same state — which is how the original self-trigger
+        // bug got in.
+        dispatch('CAPTURE_START');
+        openCapture();
+        console.log('[VOICE] interrupted — go ahead');
+    }
+
     function hideCard() { clearTimeout(cardTimer); card.classList.add('hidden'); }
-    card.addEventListener('click', hideCard);
+    card.addEventListener('click', function () {
+        if (state.speaking) interrupt(); else hideCard();
+    });
 
     // ── THE SCREEN ───────────────────────────────────────────────────────
     // Apsara, 2026-09-06: "like JARVIS in iron man, a screen should appear,
@@ -550,6 +588,7 @@
 
     function paint() {
         var open = VM.micShouldBeOpen(state);
+        card.classList.toggle('speaking', !!state.speaking);
         bar.classList.toggle('live', open);
         bar.classList.toggle('hearing', !!state.capturing);
         // ── THE LABEL IS A SWITCH, NOT AN INSTRUCTION ────────────────────
@@ -1062,9 +1101,38 @@
                         + Math.round(decoded.duration * 1000) + 'ms, ' + v);
                 })
                 .catch(function (e) {
-                    console.log('[VOICE] no server acknowledgement for '
-                        + AGENT_LOOK[who].name + ' (' + (e && e.message) + ')');
-                    if (who === 'jarvis') warmAckLocal();
+                    // NAMED, AND LOUD. Apsara, 2026-09-06: "scout is
+                    // answering back with proper mm hmm while jarvis
+                    // doesnt." One assistant working and the other not is
+                    // information, and it was being logged at the same
+                    // level as everything else and lost. Whichever one fails
+                    // now says so with its voice, its URL and the reason.
+                    console.warn('[VOICE] ' + AGENT_LOOK[who].name
+                        + ' acknowledgement FAILED (voice ' + v + '): '
+                        + (e && e.message)
+                        + ' — /api/voice/phrase/ack?voice=' + v);
+                    // ONE retry. The first request for a voice that was not
+                    // pre-warmed at boot has to synthesise it, and that can
+                    // outrun a cold request while the cached one returns
+                    // instantly — which is exactly the shape of "one works,
+                    // the other does not".
+                    setTimeout(function () {
+                        if (ackBuf[who]) return;
+                        window.fetch('/api/voice/phrase/ack?voice=' + encodeURIComponent(v),
+                            { credentials: 'same-origin' })
+                            .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
+                            .then(function (buf) { var c = audio(); return c ? c.decodeAudioData(buf) : Promise.reject(new Error('no ctx')); })
+                            .then(function (decoded) {
+                                ackBuf[who] = decoded;
+                                console.log('[VOICE] ' + AGENT_LOOK[who].name
+                                    + ' acknowledgement ready on retry — ' + v);
+                            })
+                            .catch(function (e2) {
+                                console.warn('[VOICE] ' + AGENT_LOOK[who].name
+                                    + ' acknowledgement still failing: ' + (e2 && e2.message));
+                                if (who === 'jarvis') warmAckLocal();
+                            });
+                    }, 2500);
                 });
         });
     }
@@ -1102,7 +1170,20 @@
             // The assistant she CALLED, not a default. Hearing a different
             // voice is the fastest possible confirmation that the right one
             // is listening — faster than reading anything.
+            // Prefer the assistant she called. Failing that, the OTHER
+            // one's voice — wrong voice is a far smaller problem than no
+            // acknowledgement at all, which reads as "it did not hear me"
+            // and makes her say it again. The tone is the last resort, and
+            // any substitution says so.
             var decoded = ackBuf[addressed] || null;
+            if (!decoded) {
+                var other = addressed === 'jarvis' ? 'scout' : 'jarvis';
+                if (ackBuf[other]) {
+                    decoded = ackBuf[other];
+                    console.warn('[VOICE] ' + AGENT_LOOK[addressed].name
+                        + ' has no acknowledgement — using ' + AGENT_LOOK[other].name + "'s");
+                }
+            }
             var pcmNow = decoded ? decoded.getChannelData(0) : ackPcm;
             var rateNow = decoded ? decoded.sampleRate : ackRate;
             if (pcmNow) {
@@ -1262,6 +1343,12 @@
         document.body.appendChild(stack);
         document.body.appendChild(voiceSheet);
         el('jvvClose').addEventListener('click', closeVoices);
+        // Escape interrupts too. Her hands are already on the keyboard, and
+        // it does not ask her to hit a small target while something talks
+        // over her.
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && state.speaking) { e.preventDefault(); interrupt(); }
+        });
         // Rendered now, so the first "Hey Jarvis" does not wait on it.
         warmAck();
         el('jvVoiceBtn').addEventListener('click', function (e) {

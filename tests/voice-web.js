@@ -287,9 +287,26 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
     // speechSynthesis, breaks the one rule this feature is built on: Jarvis
     // must be silent before the microphone reopens.
 
+    // Re-evaluating voice.js mounts a SECOND copy of every element, and
+    // getElementById returns the FIRST — which belongs to the inert first
+    // instance, with its own state and its own handlers. Clicks landed on a
+    // card that was not the one on screen, and the interrupt tests failed
+    // against working code. The previous mount is removed first.
+    function remount(b) {
+        ['jvStack', 'jarvisVoiceBar', 'jvVoices'].forEach(function (id) {
+            const el = b.doc.getElementById(id);
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+        });
+        b.w.__jarvisVoiceLoaded = false;
+        b.w.eval(VOICE);
+        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+    }
+
     function withKokoro(opts) {
         const b = browser(opts || {});
         const played = [];
+        const started = [];
+        const stops = [];
         let ended = null;
         b.played = played;
         // A fake AudioContext that records what was played and lets the test
@@ -337,14 +354,23 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
             createBufferSource() {
                 const node = {
                     buffer: null, onended: null,
-                    connect() {}, start() { played.push(node.buffer); ended = node; },
-                    stop() { node.stopped = true; },
+                    connect() {}, start() { played.push(node.buffer); ended = node; started.push(node); },
+                    // COUNTED, not tracked on one node. `ended` records the
+                    // last node STARTED — which is the acknowledgement's,
+                    // because it plays after the answer begins. stop() is
+                    // called on the node the speech path owns. Watching one
+                    // and asserting about the other reported "still playing"
+                    // against code that had correctly stopped.
+                    stop() { node.stopped = true; stops.push(node); },
                 };
                 return node;
             }
         };
         b.finishAudio = () => { if (ended && ended.onended) ended.onended(); };
-        b.playing = () => ended && !ended.stopped;
+        // "Is anything still playing" = something was started and nothing has
+        // been stopped since.
+        b.playing = () => started.length > stops.length;
+        b.stops = () => stops.length;
         return b;
     }
 
@@ -357,9 +383,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         };
         // Re-evaluate voice.js so it sees the bridge, exactly as a page
         // loaded inside the desktop app would.
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
 
         b.w.JarvisVoice.dispatch('USER_TOGGLE');
         b.mic().hear('hey jarvis');
@@ -390,9 +414,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
     ]) {
         const b = withKokoro();
         b.w.jarvisTTS = bridge;
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
         b.w.JarvisVoice.dispatch('USER_TOGGLE');
         b.mic().hear('hey jarvis');
         b.mic().hear('what is in inventory');
@@ -426,9 +448,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
             available: true,
             speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(9600) }),
         };
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
         await new Promise((r) => setTimeout(r, 5));      // warmAck renders it
 
         // Through the real button, because the fix is about WHICH moment
@@ -498,9 +518,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
             available: true,
             speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(24000) }),
         };
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
 
         b.w.JarvisVoice.dispatch('USER_TOGGLE');
         b.mic().hear('hey jarvis');
@@ -529,9 +547,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
             available: true,
             speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(24000) }),
         };
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
         b.w.JarvisVoice.dispatch('USER_TOGGLE');
         b.mic().hear('hey jarvis');
         b.mic().hear('what is in inventory');
@@ -551,9 +567,7 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         // reopen can land while audio is still playing.
         const b = withKokoro();
         b.w.jarvisTTS = { available: true, speak: async () => ({ ok: false, error: 'nope' }) };
-        b.w.__jarvisVoiceLoaded = false;
-        b.w.eval(VOICE);
-        b.w.document.dispatchEvent(new b.w.Event('DOMContentLoaded'));
+        remount(b);
         b.w.JarvisVoice.dispatch('USER_TOGGLE');
         b.mic().hear('hey jarvis');
         b.mic().hear('what is in inventory');
@@ -663,6 +677,83 @@ section('A0b — Scout has a name, a colour and a voice of its own');
     await new Promise((r) => setTimeout(r, 10));
     ck('  and Jarvis in his', jv.w.__playedRates.indexOf(24000) !== -1,
        'played at ' + JSON.stringify(jv.w.__playedRates));
+}
+
+section('A0c — interrupting whoever is talking');
+{
+    // Apsara, 2026-09-06: "if scout is answering and i want jarvis
+    // intervention immediately .. how should i do that."
+    //
+    // She cannot say it: while either assistant speaks the MICROPHONE IS
+    // SHUT, and that is the one rule voice-machine.js exists to enforce. So
+    // the interruption is a tap, and what it must do is stop the audio AND
+    // reopen the microphone — stopping without listening again would just
+    // be a mute button.
+    const b = withKokoro();
+    b.w.jarvisTTS = {
+        available: true,
+        speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(48000) }),
+    };
+    remount(b);
+    b.doc.getElementById('jvToggle').click();
+    b.mic().hear('hey jarvis');
+    b.mic().hear('what is in inventory');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 10));
+
+    ck('it is speaking', b.w.JarvisVoice.state().speaking === true);
+    ck('  and the microphone is shut, as the rule requires', !b.mic(),
+       'this is why she cannot simply say the other name');
+    ck('  the card says how to interrupt',
+       b.doc.getElementById('jvCard').className.indexOf('speaking') !== -1,
+       'an escape route nobody is told about is folklore');
+
+    const stopsBefore = b.stops();
+    b.doc.getElementById('jvCard').click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // COUNTED ACROSS THE CLICK. "Is anything playing" cannot be answered by
+    // watching one node: the acknowledgement starts after the answer does
+    // and finishes on its own, so a naive tracker always reports something
+    // outstanding. What matters is that the tap CAUSED a stop.
+    ck('a tap stops the audio', b.stops() > stopsBefore,
+       'stops ' + stopsBefore + ' -> ' + b.stops() + ' — still talking over her is the whole complaint');
+    ck('  and the state agrees it is no longer speaking',
+       b.w.JarvisVoice.state().speaking === false);
+    ck('  AND reopens the microphone', !!b.mic(),
+       'stopping without listening again is a mute button, not an interruption');
+    ck('  ready for whoever she wants next',
+       b.w.JarvisVoice.state().capturing === true,
+       'she should not have to say a wake word again to finish the thought she interrupted for');
+
+    // Escape does the same, because her hands are already on the keyboard.
+    const k = withKokoro();
+    k.w.jarvisTTS = { available: true, speak: async () => ({ ok: true, sampleRate: 24000, pcm: new Float32Array(48000) }) };
+    remount(k);
+    k.doc.getElementById('jvToggle').click();
+    k.mic().hear('hey jarvis');
+    k.mic().hear('what is in inventory');
+    k.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 10));
+    const kStops = k.stops();
+    const esc = new k.w.KeyboardEvent('keydown', { key: 'Escape' });
+    k.w.dispatchEvent(esc);
+    await new Promise((r) => setTimeout(r, 10));
+    ck('Escape interrupts too',
+       k.stops() > kStops && k.w.JarvisVoice.state().speaking === false && !!k.mic(),
+       'stops ' + kStops + '->' + k.stops() + ' speaking=' + k.w.JarvisVoice.state().speaking
+       + ' mic=' + !!k.mic());
+
+    // And a tap when it is NOT speaking just dismisses — it must not open a
+    // microphone she did not ask for.
+    const q = withKokoro();
+    remount(q);
+    q.doc.getElementById('jvToggle').click();
+    const before = q.w.JarvisVoice.state().capturing;
+    q.doc.getElementById('jvCard').click();
+    ck('a tap while silent does not open a capture',
+       q.w.JarvisVoice.state().capturing === before,
+       'dismissing a card must not start listening');
 }
 
 section('A0 — it does not answer in the 1990s robot voice');
