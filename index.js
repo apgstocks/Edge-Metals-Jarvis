@@ -8,6 +8,11 @@ const fs   = require('fs');
 const path = require('path');
 const cfg  = require('./config');
 
+// FIRST, before anything can throw. On 2026-09-01 this process died at 06:22
+// and stayed dead 10.5 hours with data/logs/ completely empty — there was no
+// evidence of any kind to diagnose from. See helpers/crashlog.js.
+require('./helpers/crashlog').install();
+
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const waState = require('./helpers/wa-state');
@@ -604,7 +609,10 @@ async function shutdown(signal) {
 }
 process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('unhandledRejection', (err) => console.error('[BOOT] Unhandled rejection:', err));
+// unhandledRejection is handled in helpers/crashlog.js now — it writes a
+// stack to data/logs/ as well as the console. Console output goes nowhere
+// once the terminal is closed, which is precisely how the 2026-09-01 outage
+// left nothing to look at.
 
 // Clear stale Chromium singleton-instance lock files before launching.
 // If the previous process didn't shut down cleanly (crash, kill -9, OS sleep

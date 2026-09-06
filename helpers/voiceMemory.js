@@ -170,7 +170,123 @@ function resolve(text) {
     };
 }
 
+// ── UNDERSTANDING IT, RATHER THAN MATCHING IT ────────────────────────────
+// Apsara, 2026-09-06: "my user doesnt know about nouns. you can try to
+// understand what he says like any ai does."
+//
+// She is right, and it is the same objection as "i dont want any fixed
+// intent" — I had kept the referent resolution on a phrasebook. The patterns
+// above understand "the first one" and "that booking". A yard manager says
+// "the Maersk one", "the Korea one", "the urgent one", "the one cutting off
+// first", "send it". None of those match, and a reference that does not
+// match means the booking number never reaches the brain.
+//
+// SO THE MODEL DECIDES WHICH ROW, AND THE CODE PROVES IT EXISTS
+// -------------------------------------------------------------
+// The safety argument for keeping this deterministic was never "models are
+// bad at language". It was that a model asked to COUNT ROWS in prose fails
+// silently, and the next sentence sends a truck. That argument survives
+// intact under a different arrangement:
+//
+//   the model returns `n` — WHICH ROW, from a numbered list it was given
+//   the code looks up rows[n-1] and takes the booking number from THERE
+//
+// So the model never writes a booking number. It picks a row, out of the
+// rows actually on screen, and if it picks one that does not exist or
+// declines to pick, nothing is resolved and she is asked. The identifier
+// still comes from the data every time — which is the whole guarantee, and
+// it is now compatible with her saying it however she likes.
+const PICK_RULES = [
+    'The manager is looking at this numbered list on her screen.',
+    'She just said something. Work out WHICH ROW she means, if any.',
+    '',
+    'She will not use the words in the data. She says "the Maersk one",',
+    '"the Korea one", "the urgent one", "the one cutting off first", or just',
+    '"it". Understand her the way a person standing next to her would.',
+    '',
+    'Reply as JSON: {"n": <the row number>, "why": "<a few words>"}',
+    'or {"n": null} if she did not mean a particular row, or if two rows fit',
+    'equally well and you would be guessing.',
+    '',
+    'RETURN null RATHER THAN A GUESS. Getting this wrong sends a container to',
+    'the wrong trucker. "It" with one row on screen is that row; "it" with',
+    'three is a guess.',
+].join('\n');
+
+async function pickRow(text, set) {
+    if (!set || !Array.isArray(set.rows) || !set.rows.length) return null;
+    const q = String(text || '').trim();
+    if (!q) return null;
+
+    // Only what she can see. Sending fields that are not on screen invites a
+    // pick she could not have meant.
+    const rows = set.rows.map((r) => ({
+        n: r.n,
+        booking: r.booking_number,
+        carrier: r.carrier || null,
+        from: r.from || null,
+        to: r.to || null,
+        vessel: r.vessel || null,
+        cutoff: r.cutoff || null,
+    }));
+
+    try {
+        const { callGeminiJSON } = require('./gemini');
+        const res = await callGeminiJSON([
+            PICK_RULES, '', 'ROWS:', JSON.stringify(rows), '',
+            `SHE SAID: ${q}`,
+        ].join('\n'), 1);
+
+        const n = res && res.n;
+        if (n === null || n === undefined) return null;
+        const num = Number(n);
+        if (!Number.isFinite(num)) return null;
+
+        // THE GUARANTEE. The row is looked up in OUR data by index; the
+        // model's own words are never used as an identifier. A number
+        // outside the list resolves to nothing rather than to something.
+        const row = set.rows.find((r) => r.n === num) || null;
+        if (!row) {
+            console.warn(`[MEMORY] model picked row ${num}, which is not on screen — ignoring`);
+            return null;
+        }
+        return { row, why: String((res && res.why) || '').slice(0, 60) };
+    } catch (e) {
+        console.warn('[MEMORY] model unreachable for the reference:', e.message);
+        return null;
+    }
+}
+
+// What the endpoint calls. Model first, patterns second — and the patterns
+// remain because an assistant that cannot resolve "the first one" because
+// the network blipped is worse than one that only knows six phrasings.
+async function resolveSmart(text) {
+    const set = currentReferents();
+    if (!set) return { text: String(text || ''), resolved: null };
+
+    // The patterns are tried FIRST when they are certain. "The second one"
+    // is not a judgement call, and spending a round trip to have a model
+    // agree with a counted index is latency for nothing.
+    const exact = resolve(text);
+    if (exact.resolved) return exact;
+
+    const picked = await pickRow(text, set);
+    if (picked && picked.row && picked.row.booking_number) {
+        const id = picked.row.booking_number;
+        console.log(`[MEMORY] "${text}" → booking ${id} (${picked.why})`);
+        return {
+            text: `${text} (booking ${id})`,
+            resolved: { from: text, to: id, n: picked.row.n, row: picked.row, why: picked.why },
+        };
+    }
+
+    // Unresolved, including the deliberate refusal when the patterns found
+    // an ambiguity. She is asked rather than guessed at.
+    return exact;
+}
+
 module.exports = {
-    remember, setReferents, currentReferents, history, resolve, reset,
+    remember, setReferents, currentReferents, history, resolve, resolveSmart,
+    pickRow, reset, PICK_RULES,
     TURN_CAP, REFERENT_TTL_MS,
 };

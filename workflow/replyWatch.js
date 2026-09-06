@@ -59,7 +59,7 @@
 const { getGmailRead, getGmailSenderRead, parseAddressList, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
 const { callGeminiJSON } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
-const { loadJson, saveJson } = require('../helpers/json');
+const { loadJson, saveJson, mutateJson } = require('../helpers/json');
 const { getLADate } = require('../helpers/time');
 
 // Routes a manager notification through helpers/managerOutbox.js so that a
@@ -357,11 +357,24 @@ function bulkMailSignal(headers) {
 //
 // Reads tolerate the older flat {id: at} shape this file shipped with earlier
 // on 2026-08-22, so upgrading does not re-flag every email already assessed.
+// P9 — see saveStore. A scan reads the store, works for minutes, then writes.
+// The write has to know what it CHANGED, not just what it holds, so the shape
+// as it was at read time is stashed on the returned object. Non-enumerable so
+// it never reaches disk and never shows up in a JSON.stringify of the store.
+function withSnapshot(store) {
+    try {
+        Object.defineProperty(store, '__snapshot', {
+            value: JSON.parse(JSON.stringify(store)), enumerable: false, writable: true, configurable: true,
+        });
+    } catch (e) { /* a store that cannot be cloned just merges more coarsely */ }
+    return store;
+}
+
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return withSnapshot({ muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} });
     if (raw.seen && typeof raw.seen === 'object') {
-        return {
+        return withSnapshot({
             seen: raw.seen,
             lastDigest: Array.isArray(raw.lastDigest) ? raw.lastDigest : [],
             muted: (raw.muted && typeof raw.muted === 'object') ? { senders: raw.muted.senders || {}, threads: raw.muted.threads || {} } : { senders: {}, threads: {} },
@@ -390,21 +403,125 @@ function loadStore() {
             // many times assessment has failed for a message we have not yet
             // given up on. See MAX_ASSESS_ATTEMPTS.
             failures: (raw.failures && typeof raw.failures === 'object') ? raw.failures : {},
-        };
+        });
     }
-    return { muted: { senders: {}, threads: {} }, seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} }; // legacy flat format
+    return withSnapshot({ muted: { senders: {}, threads: {} }, seen: raw, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} }); // legacy flat format
 }
-async function saveStore(store) {
-    // Keep only what the lookback window could still surface. Anything older
-    // can never be re-flagged, so retaining it just bloats the file.
-    const cutoff = Date.now() - (LOOKBACK_DAYS + 2) * 86400000;
-    const trimmed = {};
-    for (const [id, at] of Object.entries(store.seen || {})) {
-        const t = Date.parse(at);
-        if (!isNaN(t) && t >= cutoff) trimmed[id] = at;
+// ── P9 — merge at write time, never clobber ───────────────────────────────
+//
+// THE BUG. run() reads the store, scans for minutes, then writes what it
+// holds. The scan can outlast the 5-minute cron, so two scans overlap and the
+// second one's write erases everything the first one did — emails re-assessed
+// and re-billed, and worst of all, an `ignore 3` silently undone by a scan
+// that was already in flight when she typed it.
+//
+// WHY NOT JUST A LOCK. helpers/json.js has mutateJson with proper file
+// locking, and it is used here — but only around the write. A scan cannot
+// hold a lock for its whole multi-minute run: the second scan would block for
+// minutes and then still write stale state, and a crash mid-scan would leave
+// the lock held. So the write has to be a MERGE, not a replace.
+//
+// THE MERGE IS THREE-WAY, and it has to be. A two-way union of "what I hold"
+// with "what is on disk" looks right and is wrong in the one case that
+// matters: a deliberate REMOVAL. If she types `ignore 3` during scan B, B
+// removes that item; a union with disk (where it still exists, because A put
+// it back) re-adds it and the mute silently fails. So each field is merged
+// against the SNAPSHOT taken when this run loaded the store:
+//
+//     added   = mine - snapshot      (things this run created)
+//     removed = snapshot - mine      (things this run deliberately dropped)
+//     result  = (disk + added) - removed
+//
+// Anything this run never touched stays exactly as the other run left it.
+// Timestamps take the later of the two; counters prefer this run's value only
+// when this run actually changed it.
+//
+// If a store somehow has no snapshot (a hand-built object in a test), the
+// merge degrades to a plain union rather than throwing — a coarser merge is
+// still better than a clobber.
+
+// Union of two {key: value} maps, minus keys this run deliberately deleted.
+function mergeMap(snap, mine, disk, pick) {
+    snap = snap || {}; mine = mine || {}; disk = disk || {};
+    const out = { ...disk };
+    for (const k of Object.keys(mine)) {
+        if (!(k in snap)) { out[k] = mine[k]; continue; }              // added here
+        if (JSON.stringify(snap[k]) !== JSON.stringify(mine[k])) {      // changed here
+            out[k] = pick ? pick(mine[k], out[k]) : mine[k];
+        }
     }
-    await saveJson(cfg.REPLY_WATCH_FILE, {
-        seen: trimmed,
+    for (const k of Object.keys(snap)) {
+        if (!(k in mine)) delete out[k];                                // removed here
+    }
+    return out;
+}
+
+// Same, for arrays of objects identified by `idOf`.
+function mergeList(snap, mine, disk, idOf) {
+    snap = Array.isArray(snap) ? snap : [];
+    mine = Array.isArray(mine) ? mine : [];
+    disk = Array.isArray(disk) ? disk : [];
+    const snapIds = new Set(snap.map(idOf));
+    const mineIds = new Set(mine.map(idOf));
+    const removed = new Set([...snapIds].filter((id) => !mineIds.has(id)));
+
+    const out = [];
+    const seenOut = new Set();
+    const snapById = new Map(snap.map((x) => [idOf(x), x]));
+    for (const item of disk) {
+        const id = idOf(item);
+        if (removed.has(id) || seenOut.has(id)) continue;
+        const mineVersion = mine.find((m) => idOf(m) === id);
+        // This run's version wins ONLY if this run actually changed it.
+        //
+        // Caught by the P9 test, and it is the subtle half of the whole fix:
+        // taking "mine" unconditionally means a scan that never touched an
+        // item still writes its stale copy over the other scan's update — so
+        // a chase count bumped to 3 by run E was silently reset to 2 by run F,
+        // which had done nothing to it at all. Unchanged means defer.
+        const snapVersion = snapById.get(id);
+        const iChangedIt = mineVersion !== undefined
+            && JSON.stringify(mineVersion) !== JSON.stringify(snapVersion);
+        out.push(iChangedIt ? mineVersion : item);
+        seenOut.add(id);
+    }
+    for (const item of mine) {
+        const id = idOf(item);
+        if (seenOut.has(id)) continue;
+        out.push(item);            // added by this run
+        seenOut.add(id);
+    }
+    return out;
+}
+
+const laterOf = (a, b) => {
+    const ta = Date.parse(a || ''), tb = Date.parse(b || '');
+    if (isNaN(ta)) return b || null;
+    if (isNaN(tb)) return a || null;
+    return ta >= tb ? a : b;
+};
+
+// Keep only what the lookback window could still surface. Anything older can
+// never be re-flagged, so retaining it just bloats the file.
+//
+// Applied AFTER the merge, never before. Caught by the P9 test: trimming
+// first means an entry the merge would read as "present in the snapshot,
+// absent from mine" — i.e. a DELIBERATE removal — so one run's retention
+// sweep would delete `seen` entries the other run had just written, and those
+// emails would be re-assessed and re-billed.
+function trimSeen(seen) {
+    const cutoff = Date.now() - (LOOKBACK_DAYS + 2) * 86400000;
+    const out = {};
+    for (const [id, at] of Object.entries(seen || {})) {
+        const t = Date.parse(at);
+        if (!isNaN(t) && t >= cutoff) out[id] = at;
+    }
+    return out;
+}
+
+async function saveStore(store) {
+    const mine = {
+        seen: store.seen || {},
         lastDigest: store.lastDigest || [],
         undelivered: store.undelivered || [],
         lastDigestAt: store.lastDigestAt || null,
@@ -424,6 +541,43 @@ async function saveStore(store) {
         // silently swallowed by it before. A failure counter that resets on
         // every write can never reach its cap.
         failures: store.failures || {},
+    };
+
+    const snap = store.__snapshot || null;
+    if (!snap) {
+        // No snapshot to diff against (hand-built store, e.g. in a test).
+        // Still goes through the lock so two writers cannot interleave.
+        const flat = { ...mine, seen: trimSeen(mine.seen) };
+        await mutateJson(cfg.REPLY_WATCH_FILE, {}, () => flat);
+        return flat;
+    }
+
+    return mutateJson(cfg.REPLY_WATCH_FILE, {}, (disk) => {
+        disk = (disk && typeof disk === 'object' && !Array.isArray(disk)) ? disk : {};
+        // seen is {id -> ISO}: pure union, keeping the earlier sighting.
+        const seen = mergeMap(snap.seen, mine.seen, disk.seen,
+            (a, b) => (laterOf(a, b) === a ? b : a));
+        return {
+            seen: trimSeen(seen),
+            // The numbered list "reply to 1" resolves against. NOT merged —
+            // whichever digest actually went out most recently defines the
+            // numbering, and interleaving two of them would make "1" ambiguous.
+            ...(laterOf(mine.lastDigestAt, disk.lastDigestAt) === mine.lastDigestAt && mine.lastDigestAt !== null
+                ? { lastDigest: mine.lastDigest, lastDigestAt: mine.lastDigestAt }
+                : { lastDigest: disk.lastDigest || mine.lastDigest, lastDigestAt: disk.lastDigestAt || mine.lastDigestAt }),
+            undelivered: mergeList(snap.undelivered, mine.undelivered, disk.undelivered,
+                (x) => (x && (x.id || x.dedupeKey || JSON.stringify(x)))),
+            tracked: mergeList(snap.tracked, mine.tracked, disk.tracked, (x) => x && x.id),
+            senderStats: mergeMap(snap.senderStats, mine.senderStats, disk.senderStats),
+            lastScanAt: laterOf(mine.lastScanAt, disk.lastScanAt),
+            sentIndex: mergeMap(snap.sentIndex, mine.sentIndex, disk.sentIndex, (a, b) => laterOf(a, b)),
+            sentIndexUpdatedAt: laterOf(mine.sentIndexUpdatedAt, disk.sentIndexUpdatedAt),
+            muted: {
+                senders: mergeMap((snap.muted || {}).senders, (mine.muted || {}).senders, (disk.muted || {}).senders),
+                threads: mergeMap((snap.muted || {}).threads, (mine.muted || {}).threads, (disk.muted || {}).threads),
+            },
+            failures: mergeMap(snap.failures, mine.failures, disk.failures),
+        };
     });
 }
 
@@ -3547,7 +3701,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, mergeMap, mergeList, laterOf, withSnapshot, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
