@@ -184,6 +184,86 @@ section('H — one booking reads differently from three');
        !/[Ee]arliest/.test(said), said);
 }
 
+section('I — NO FIXED INTENTS: the model answers, the patterns are the net');
+{
+    // Apsara: "i dont want any fixed intent."
+    //
+    // The regex list answers the six questions I happened to think of and
+    // stares blankly at the seventh — which is the one she actually asks.
+    // So the model answers, and the patterns are only the offline net.
+    //
+    // Gemini is replaced in the require cache. What is under test is the
+    // WIRING and the DATA HANDED OVER, not the model's judgement.
+    const gp = require.resolve(path.join(ROOT, 'helpers/gemini.js'));
+    let seen = null;
+    require.cache[gp] = {
+        id: gp, filename: gp, loaded: true,
+        exports: { callGeminiJSON: async (prompt) => { seen = prompt; return { answer: 'Three of them, soonest next Wednesday.', have_data: true }; } },
+    };
+    delete require.cache[require.resolve(path.join(ROOT, 'helpers/followUp.js'))];
+    const fu2 = require(path.join(ROOT, 'helpers/followUp.js'));
+
+    return (async () => {
+        const set = { rows: THREE.rows };
+
+        // A question NO pattern covers. This is the whole point.
+        const novel = await fu2.answer('which of these could still make it if we move tomorrow', set, null, NOW);
+        ck('a question no pattern covers is still answered', !!novel, String(novel));
+        ck('  by the model, not a regex', /Three of them/.test(novel), String(novel));
+
+        // ── WHAT IT IS HANDED ────────────────────────────────────────────
+        ck('the model gets the rows on her screen', /AAA111/.test(seen));
+        // ASSERTED ON THE DATA, NOT THE RULES. My first version matched
+        // /next Wednesday/ anywhere in the prompt — and the RULES contain
+        // that phrase as an EXAMPLE, so a mutation stripping the converted
+        // dates out of the data survived. The check now reads the JSON.
+        const dataJson = seen.slice(seen.indexOf('DATA ('));
+        // No stripping. JSON.stringify emits no spaces between tokens, and
+        // removing whitespace turned "next Wednesday" into "nextWednesday"
+        // so the needle no longer matched the haystack — a test that failed
+        // on correct code, which is as bad as one that passes on broken code.
+        ck('  with the dates ALREADY converted, in the DATA',
+           /"cutoff_when":"next Wednesday"/.test(dataJson)
+           && /"cutoff_in":"in 7 days"/.test(dataJson),
+           'calendar arithmetic is what models are worst at and she would never catch');
+        ck('  and is told not to calculate one', /Never calculate a date/.test(seen));
+        // The WHOLE rule, not a fragment of its justification. A mutation
+        // replacing the instruction with "Be thorough." left the trailing
+        // explanation behind and survived a looser match.
+        ck('  nor to recite the table',
+           /Do NOT list fields she did not ask about/.test(seen),
+           'this is the complaint the whole file exists for');
+        ck('  nor to invent anything', /Never\s*\n?\s*invent a number/.test(seen) || /never invent/i.test(seen));
+        ck('  and to keep it to one sentence', /ONE SHORT SENTENCE/.test(seen));
+
+        // ── THE OFFLINE NET ──────────────────────────────────────────────
+        // An assistant that goes mute because a network call failed is worse
+        // than one that answers six questions well.
+        require.cache[gp].exports.callGeminiJSON = async () => { throw new Error('offline'); };
+        const netted = await fu2.answer('when is the next cutoff', set, null, NOW);
+        ck('with the model unreachable it still answers the common ones',
+           /next Wednesday/.test(String(netted)), String(netted));
+        const gone = await fu2.answer('which of these could still make it', set, null, NOW);
+        ck('  and falls through honestly on the rest', gone === null,
+           'inventing an answer offline is worse than handing it to the assistants');
+
+        // And an empty model reply must not become an empty spoken answer.
+        // Asked on a question the PATTERNS cover, so the two outcomes are
+        // distinguishable: correct code falls through to the pattern and
+        // answers; broken code returns the blank. My first version asked a
+        // question nothing covered, where both paths end in null.
+        require.cache[gp].exports.callGeminiJSON = async () => ({ answer: '   ' });
+        const blank = await fu2.answer('when is the next cutoff', set, null, NOW);
+        ck('  a blank model reply falls through rather than being spoken',
+           /next Wednesday/.test(String(blank)),
+           JSON.stringify(blank) + ' — an empty answer read aloud is silence with a pause in it');
+
+        console.log(`\n  ${pass} passed, ${fail} failed`);
+        if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
+        process.exit(fail ? 1 : 0);
+    })();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

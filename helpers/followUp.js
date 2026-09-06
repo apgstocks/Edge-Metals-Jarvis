@@ -122,9 +122,37 @@ function opening(cards, now) {
     return parts.join(' ');
 }
 
-// ── follow-ups ───────────────────────────────────────────────────────────
-// Each is a question a person would ask after hearing the opening, and each
-// is answerable from the rows already on screen.
+// ── NO FIXED INTENTS ─────────────────────────────────────────────────────
+// Apsara, 2026-09-06: "i dont want any fixed intent."
+//
+// She is right, and it is the same objection she opened with — "mimicing a
+// assistant behaviour not just restricted to standard template". A list of
+// regexes is exactly the template: it answers the six questions I thought
+// of and stares blankly at the seventh, which is the one she actually asks.
+//
+// WHERE THE LINE GOES, THOUGH, BECAUSE IT IS NOT "MODEL DECIDES EVERYTHING"
+// -------------------------------------------------------------------------
+// Two different jobs were tangled together in the patterns below:
+//
+//   WHICH ENTITY is meant — "the first one", "that booking". This stays
+//   DETERMINISTIC, in helpers/voiceMemory.js, and it is not timidity: asking
+//   a language model to count rows in prose it was handed fails silently,
+//   and the sentence after this one is "forward it to Sher Trucking". A
+//   miscount here is a truck at the wrong yard. The research says the same
+//   (Centering: rank in a ranked list predicts the referent — so use the
+//   rank, do not re-derive it).
+//
+//   WHAT TO SAY about it — the model's job, and it should have been from the
+//   start. It can answer questions I never anticipated, in the words she
+//   used, without me maintaining a phrasebook.
+//
+// So the rows are prepared here — with the DATES ALREADY CONVERTED to "next
+// Wednesday" and "in 7 days", so the model never does calendar arithmetic —
+// and then it is asked to answer from exactly those values and nothing else.
+//
+// The patterns below are kept ONLY as the offline fallback, for when the
+// model is unreachable. An assistant that goes mute because a network call
+// failed is worse than one that answers six questions well.
 const ASKS = [
     {
         // "when is the next cutoff", "what's the cutoff", "when does it cut off"
@@ -216,4 +244,99 @@ function answerFollowUp(text, referents, ref, now) {
     return null;
 }
 
-module.exports = { opening, answerFollowUp, relative, urgency, parseYmd, sentence, ASKS };
+// ── the rows, with the arithmetic already done ───────────────────────────
+// Handed to the model INSTEAD of raw records. Every date arrives already
+// converted — "next Wednesday", "in 7 days", "already passed" — so the model
+// is choosing what to say, never working out what day it is. Calendar
+// arithmetic is the thing language models are worst at and the thing she
+// would never catch: "cutoff is Thursday" is not obviously wrong until a
+// container misses a vessel.
+function forModel(referents, now) {
+    if (!referents || !Array.isArray(referents.rows)) return [];
+    return referents.rows.map((r) => ({
+        n: r.n,
+        booking: r.booking_number,
+        carrier: r.carrier || null,
+        from: r.from || null,
+        to: r.to || null,
+        vessel: r.vessel || null,
+        erd: r.erd || null,
+        erd_when: r.erd ? relative(r.erd, now) : null,
+        cutoff: r.cutoff || null,
+        cutoff_when: r.cutoff ? relative(r.cutoff, now) : null,
+        cutoff_in: r.cutoff ? urgency(r.cutoff, now) : null,
+        containers: (r.containers || []).map((c) => ({
+            seq: c.seq, size: c.size || null,
+            supplier: c.supplier || null, trucker: c.trucker || null,
+        })),
+    }));
+}
+
+const RULES = [
+    'You are a freight manager\'s assistant. She is LISTENING, not reading —',
+    'the full table is already on her screen.',
+    '',
+    'ANSWER IN ONE SHORT SENTENCE. Two at the very most.',
+    '',
+    'RULES:',
+    '1. Use ONLY the values in DATA. Never calculate a date — the relative',
+    '   ones are given to you as cutoff_when and cutoff_in. Use those words.',
+    '2. Do NOT list fields she did not ask about. No carriers, vessels,',
+    '   container counts or supplier status unless the question was about',
+    '   them. Reading out the table is the thing she asked you to stop.',
+    '3. If the answer is not in DATA, say so plainly in a few words. Never',
+    '   invent a number, a date or a name.',
+    '4. Sound like a person: "The earliest one cuts off next Wednesday, in 7',
+    '   days." Not "The cutoff date for booking AAA111 is 07/15/2026."',
+    '5. Offer the obvious next step only when it is genuinely the next step,',
+    '   and only as a short question.',
+].join('\n');
+
+// The dynamic path. Returns null when the model is unreachable or says
+// nothing usable, and the caller falls back — first to the patterns above,
+// then to the assistants.
+async function askModel(question, referents, ref, now) {
+    const rows = forModel(referents, now);
+    if (!rows.length) return null;
+
+    const prompt = [
+        RULES, '',
+        'DATA (the bookings currently on her screen):',
+        JSON.stringify(rows),
+        ref ? `\nSHE IS ASKING ABOUT booking ${ref.booking_number}.` : '',
+        '', `SHE ASKED: ${question}`, '',
+        'Reply as JSON: {"answer": "...", "have_data": true|false}.',
+        'have_data false means the answer is genuinely not in DATA.',
+    ].join('\n');
+
+    try {
+        const { callGeminiJSON } = require('./gemini');
+        const res = await callGeminiJSON(prompt, 1);
+        const said = String((res && res.answer) || '').trim();
+        if (!said) return null;
+        // A refusal is still an answer — "that is not in what I have" is the
+        // honest reply and far better than falling through to a second
+        // assistant that will say something different about the same rows.
+        return said;
+    } catch (e) {
+        console.warn('[FOLLOWUP] model unreachable, using the offline answers:', e.message);
+        return null;
+    }
+}
+
+// What the endpoint calls. Model first, patterns second, null last.
+async function answer(question, referents, ref, now) {
+    if (!referents || !Array.isArray(referents.rows) || !referents.rows.length) return null;
+    if (!String(question || '').trim()) return null;
+
+    const dynamic = await askModel(question, referents, ref, now);
+    if (dynamic) return dynamic;
+
+    // Offline fallback. Six questions answered well beats going mute.
+    return answerFollowUp(question, referents, ref, now);
+}
+
+module.exports = {
+    opening, answer, askModel, forModel, RULES,
+    answerFollowUp, relative, urgency, parseYmd, sentence, ASKS,
+};

@@ -2067,9 +2067,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // answer about a cutoff is worse than a slower right one.
             const fu = require('./helpers/followUp');
             const refSet = mem.currentReferents();
+            // ── NO FIXED INTENTS ─────────────────────────────────────────
+            // Apsara: "i dont want any fixed intent."
+            //
+            // fu.answer() asks the MODEL, handing it the rows already on her
+            // screen with the dates pre-converted, and falls back to the
+            // offline patterns only if the model is unreachable. So it can
+            // answer questions nobody anticipated, in her words — while the
+            // one thing that must not be guessed, WHICH booking she means,
+            // stays deterministic in helpers/voiceMemory.js.
             const quick = answeringBrain
                 ? null            // her answer belongs to whoever asked
-                : fu.answerFollowUp(asked, refSet, ref.resolved && ref.resolved.row);
+                : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
             if (quick) {
                 console.log(`[VOICE] follow-up answered from the list: ${asked}`);
                 mem.remember('bot', quick);
