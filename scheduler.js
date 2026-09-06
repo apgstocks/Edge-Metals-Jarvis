@@ -328,18 +328,19 @@ async function stallWatch() {
 // If /1 is ingated but /2 is still forwarded, the booking stays active so ops
 // can decide (recall /2, escalate, etc).
 async function autoArchive() {
-    const bookings = loadBookings();
-    const workflow = loadWorkflow();
-    const { allContainersTerminal } = require('./helpers/containers');
+    // ── THE RULE MOVED, THE BEHAVIOUR DID NOT ────────────────────────────
+    // Apsara, 2026-09-06 asked to be able to run this on demand. The scan is
+    // now helpers/cutoffScan.js so the nightly job and the on-demand version
+    // share ONE definition of "past cutoff" — two copies would mean the
+    // preview showing her one set of bookings and this job archiving another,
+    // with no way to tell which was right.
+    //
+    // This function keeps everything else it had: the archive writes, the
+    // team and manager messages, the alert. Only the loop that decided WHICH
+    // is gone.
     const archived = [];
 
-    for (const [bkgNo, b] of Object.entries(bookings)) {
-        if (!b.cutoff_date) continue;
-        const d  = daysUntil(b.cutoff_date);
-        const wf = workflow[bkgNo] || {};
-        if (d > -1) continue;                                  // archive anything 1+ days past cutoff
-        if (wf.keep_active) continue;
-
+    for (const { bkgNo, booking: b, wf } of require('./helpers/cutoffScan').pastCutoff()) {
         // Cutoff passed = strict archive regardless of container completion —
         // if any further movement happens, it happens under a NEW booking
         // (Apsara's correction, 2026-08-01): a container still shown as

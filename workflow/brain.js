@@ -1032,6 +1032,20 @@ function policyDecide(ctx) {
             return { intent: 'recall_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
         if ((m = t.match(/^archive\s+(\S+)$/)))
             return { intent: 'archive_booking', resolvedBy: 'policy', data: { bkg_no: m[1].toUpperCase() } };
+        // ── "RUN A SCAN FOR BOOKINGS PAST CUTOFF" ────────────────────────
+        // Apsara's own words, and the ways round them. Resolved by policy
+        // rather than left to the classifier because it is unambiguous and
+        // because "archive the ones past cutoff" sits one word away from
+        // "archive DALA123" — a misread there archives the wrong thing.
+        //
+        // Requires a CUTOFF/EXPIRED word, so "run a scan" on its own does not
+        // match: she has other things she might want scanned, and this one
+        // ends in a batch archive.
+        if (/\b(scan|check|find|look|any|which|show)\b/i.test(t)
+            && /\b(past|passed|expired|expiry|overdue|beyond|after)\b/i.test(t)
+            && /\b(cut\s*-?\s*off|cutoff|cutoffs)\b/i.test(t)) {
+            return { intent: 'scan_cutoffs', resolvedBy: 'policy', data: {} };
+        }
         // Any status-type phrasing containing a real booking number, anywhere
         // in the text — not anchored to an exact "status X" shape. A real
         // gap found by simulation testing: "status of 274150389" (natural
@@ -1857,7 +1871,7 @@ show_bookings_available, show_bookings_week, show_menu, show_contacts,
 empty_drop_confirmed, load_ready_received, picked_up_confirmed,
 scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_business_context,
 ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings, generate_proforma,
-learn_writing_style, show_writing_style, rescan_mail,
+learn_writing_style, show_writing_style, rescan_mail, scan_cutoffs,
 bookings_list_query, bookings_count_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies, summarize_email,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message, ignore_digest_item,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
@@ -2148,6 +2162,11 @@ async function route(decision, ctx, sendMessage) {
         case 'assign_supplier':        return bkg ? actions.assignSupplier(chatId, bkg, d.supplier_name, d.container_seq) : askBkg(chatId, 'Which booking should I assign? e.g. "assign BK123456"', 'assign_supplier');
         case 'recall_booking':         return bkg ? actions.recallBooking(chatId, bkg) : askBkg(chatId, 'Which booking should I recall?', 'recall_booking');
         case 'archive_booking':        return bkg ? actions.archiveNow(chatId, bkg) : askBkg(chatId, 'Which booking should I archive?', 'archive_booking');
+        // Apsara, 2026-09-06: "run a scan for booking that are past cut off
+        // date". Distinct from archive_booking above, which needs a booking
+        // number and archives exactly one — this asks the question "which are
+        // expired?" and takes no argument at all.
+        case 'scan_cutoffs':           return actions.scanPastCutoff(chatId);
         case 'schedule_followup':      return d.target_name ? actions.scheduleFollowup(chatId, d.target_name, d.minutes, bkg, ctx.senderName) : ask(chatId, 'Follow up with whom?');
         case 'draft_email':             return actions.draftEmailForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'search_mail':             return actions.searchMail(chatId, d.target_name, d.note, bkg);

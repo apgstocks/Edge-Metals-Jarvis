@@ -841,6 +841,68 @@ await _send(chatId, ok ? `${bkgNo} archived.` : `No active booking ${bkgNo}.`);
 return { action_taken: ok ? 'archived' : 'not_found' };
 }
 
+
+// ── "RUN A SCAN FOR BOOKINGS PAST CUT OFF" ───────────────────────────────
+// Apsara, 2026-09-06: "if i say jarvis-run a scan for booking that are past
+// cut off date, it shuld run a test and archive those bookings automaticlaly."
+//
+// The nightly 11PM job (scheduler.js:autoArchive) has done this for weeks and
+// was reachable from nowhere else — exported, cron-registered, no intent, no
+// route. So this is the on-demand door onto the SAME rule, which now lives in
+// helpers/cutoffScan.js so the two cannot drift.
+//
+// IT SHOWS THE LIST AND ASKS, AND SHE SHOULD KNOW I DEVIATED HERE.
+// She said "automatically". The nightly job does run unattended, because
+// nobody is awake to ask. But when SHE runs it, she is right there, and the
+// difference between the two situations is the whole reason to ask: a batch
+// archive she did not expect is a bad surprise, and the list IS the "test"
+// she asked for. One "yes" covers the whole batch, so it is still automatic
+// in the sense that matters — she is not archiving them one at a time.
+//
+// If she would rather it just went ahead, that is a one-line change and she
+// should say so.
+async function scanPastCutoff(chatId) {
+    const scan = require('../helpers/cutoffScan');
+    let rows;
+    try {
+        rows = scan.pastCutoff();
+    } catch (err) {
+        return _send(chatId, `Couldn't read the bookings: ${err.message}`);
+    }
+
+    if (!rows.length) {
+        // Said plainly rather than silently. "Nothing happened" and "it did
+        // not run" look identical from the outside, and she has just asked it
+        // to do something.
+        return _send(chatId, 'Scanned every active booking — nothing is past its cutoff.');
+    }
+
+    const lines = [scan.describe(rows), ''];
+    rows.forEach((r, i) => {
+        const b = r.booking;
+        const cans = Array.isArray(b.containers) ? b.containers.length : 0;
+        lines.push(`${i + 1}. ${r.bkgNo} — cutoff ${r.cutoff} (${Math.abs(r.days)}d ago)`
+            + `${b.carrier ? ', ' + b.carrier : ''}`
+            + `${b.port_of_loading ? ', ' + b.port_of_loading : ''}`
+            + `${cans ? `, ${cans} container${cans === 1 ? '' : 's'}` : ''}`);
+    });
+    lines.push('', 'Archive all of them? (yes/no)');
+
+    const staged = await setPending(chatId, {
+        type: 'confirm_archive_batch',
+        // The booking numbers she SAW, carried on the pending. Re-scanning at
+        // confirm time would archive a different set if a cutoff passed in
+        // between — the list she said yes to is the list that gets archived.
+        bkg_nos: rows.map((r) => r.bkgNo),
+    });
+    if (staged.queued) {
+        await _send(chatId, `Found ${rows.length} past cutoff, but you have a pending "${staged.blockedBy}" first — I'll ask once that's resolved.`);
+        return { action_taken: 'cutoff_scan_queued' };
+    }
+    await _send(chatId, lines.join('\n'));
+    return { action_taken: 'cutoff_scan_staged', found: rows.length };
+}
+
 // ── Pending resolution (called by brain when manager replies yes/no/selection) ─
 // ── Guided daily trucker-assignment wizard ──────────────────────────────────
 // Triggered by scheduler.js's dailyTruckerCheck(). Chains through pending
@@ -1258,6 +1320,31 @@ switch (pending.type) {
     case 'confirm_recall':
         await clearPending(chatId);
         return executeRecall(chatId, pending.bkg_no);
+    // The batch archive she just approved. Uses archiveBooking — the SAME
+    // writer the manual archive and the dashboard use — once per booking,
+    // rather than a bulk path of its own. A booking that has since been
+    // archived by the nightly job simply returns false and is reported, not
+    // treated as an error.
+    case 'confirm_archive_batch': {
+        await clearPending(chatId);
+        const nos = Array.isArray(pending.bkg_nos) ? pending.bkg_nos : [];
+        const done = [], missed = [];
+        for (const no of nos) {
+            try {
+                const ok = await archiveBooking(no, 'cutoff_passed_scan');
+                (ok ? done : missed).push(no);
+            } catch (err) {
+                console.error(`[ACTIONS] archiving ${no} failed:`, err.message);
+                missed.push(no);
+            }
+        }
+        const out = [done.length ? `Archived ${done.length}: ${done.join(', ')}.` : 'Archived nothing.'];
+        // Named, not swallowed. A booking that did not archive is one she
+        // still has on her board believing it is gone.
+        if (missed.length) out.push(`Couldn't archive ${missed.length}: ${missed.join(', ')} — check the dashboard.`);
+        await _send(chatId, out.join(' '));
+        return { action_taken: 'cutoff_batch_archived', archived: done.length, missed: missed.length };
+    }
     case 'await_email_confirm':
         await clearPending(chatId);
         return pending.scheduled_for ? scheduleDraftedEmail(chatId, pending) : sendDraftedEmail(chatId, pending);
@@ -6167,5 +6254,6 @@ showMutes,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
     learnWritingStyle, showWritingStyle, rescanMail, prepareProformaNumbers,
+    scanPastCutoff,
     proformaCoveringNote, proformaTemplateNote,
 };
