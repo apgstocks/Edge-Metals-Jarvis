@@ -201,10 +201,20 @@ function answer(text) {
 
 // Everything the PDF generator needs, with the defaults applied at the last
 // moment so they are visible in the preview rather than buried.
+// Every default comes from the FIELD that declares it. There used to be a
+// `fallback` on each optional field AND a separate constant used here, and a
+// mutation changing the fallback survived every test — because nothing read
+// it. Two places to state one default is one place too many; the one that is
+// wrong is always the one nobody is looking at.
+function fallbackFor(key) {
+    const f = FIELDS.find((x) => x.key === key);
+    return f ? f.fallback : undefined;
+}
+
 function payload() {
     if (!draft) return null;
     const f = draft.fields;
-    const mt = f.mt != null ? Number(f.mt) : DEFAULT_MT;
+    const mt = f.mt != null ? Number(f.mt) : Number(fallbackFor('mt'));
     const rate = Number(f.rate);
     return {
         consignee: f.consignee || '',
@@ -213,8 +223,8 @@ function payload() {
             qty: mt,
             rate: rate,
         }],
-        payment_terms: f.payment_terms || DEFAULT_PAYMENT_TERMS,
-        shipment_terms: f.shipment_terms || DEFAULT_SHIPMENT_TERMS,
+        payment_terms: f.payment_terms || fallbackFor('payment_terms'),
+        shipment_terms: f.shipment_terms || fallbackFor('shipment_terms'),
         shipment_allowance: DEFAULT_ALLOWANCE,
         total: Math.round(mt * rate * 100) / 100,
         // Which values she gave and which are standing defaults. Shown in the
