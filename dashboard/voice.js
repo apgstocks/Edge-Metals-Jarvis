@@ -751,15 +751,44 @@
         if (window.JarvisOrb) window.JarvisOrb.setThinking(true);
         var api = window.api;
         if (typeof api !== 'function') { say('Assistant unavailable'); return; }
-        api('/api/yard/ask', { method: 'POST', body: JSON.stringify({ question: q }) })
+        // ── /api/voice/ask, NOT /api/yard/ask ────────────────────────────
+        // Apsara, 2026-09-06: "yard ask is a different assistant restricted
+        // only to yard. Jarvis knows everything."
+        //
+        // This called /api/yard/ask, which is SCOUT — a narrow assistant over
+        // the yard ledger: loads, sellers, stock, payments. So every spoken
+        // question, whatever it was about, went to the assistant that only
+        // knows about scrap. Asked what bookings there were from Houston,
+        // Scout said it had no idea, and it was right: bookings are not its
+        // subject.
+        //
+        // /api/voice/ask is the router. It reads the question and sends it to
+        // whichever assistant owns it — Scout for the ledger, Jarvis
+        // (workflow/brain.js) for bookings, containers, ports, cutoffs,
+        // suppliers, truckers, email and WhatsApp. Jarvis has been able to
+        // answer that Houston question for weeks; nothing was asking it.
+        //
+        // The parameter is `text`, not `question`: the router needs the words
+        // as spoken to decide, and stripAgentName() on the server removes any
+        // "Scout," or "Jarvis," prefix afterwards.
+        api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q }) })
             .then(function (r) {
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 var answer = (r && r.answer) || 'No answer.';
-                // The pill keeps a short status; the CARD carries the answer,
-                // in full, wrapped. Writing a 60-character slice of a real
-                // answer into a one-line pill was the "half cut" bug.
-                say('Answered');
+                // WHICH ASSISTANT ANSWERED, shown rather than hidden. There
+                // are two behind this endpoint and they know different
+                // things, so "Scout doesn't know about bookings" is a
+                // complete explanation of an unhelpful answer — where an
+                // unattributed "I don't know" looks like the whole system
+                // being stupid. It is also the fastest way to see the router
+                // sending a question to the wrong one.
+                var who = (r && r.agent_name) || '';
+                say(who || 'Answered');
                 showCard(undefined, answer, false);
+                if (who) {
+                    var q = el('jvCardQ');
+                    if (q && q.textContent) q.textContent = who + ' · ' + q.textContent;
+                }
                 // A PROPOSAL IS NEVER SPOKEN AND CONFIRMED BY VOICE. The card
                 // is shown and she taps it. Confirming a payment by saying
                 // "yes" to a machine that mishears names is the one shortcut

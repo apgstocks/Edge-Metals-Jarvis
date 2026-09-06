@@ -62,25 +62,30 @@ const { askYard } = require(path.join(ROOT, 'helpers/yardAsk.js'));
 (async () => {
 console.log('\n─ can the assistant actually look things up? ────────────────');
 
-section('A — HER QUESTION, end to end');
+section('A — a lookup Scout OWNS, end to end');
 {
-    // The exact thing she asked, driven through the real askYard().
+    // This section used to drive find_bookings, which was my wrong fix —
+    // bookings are Jarvis's subject, not Scout's, and the tool has been
+    // removed (see helpers/tools.js and tests/voice-router.js section D).
+    //
+    // The MECHANISM being tested is unchanged and is the point: a read tool
+    // is genuinely executed and its result reaches the model. Driven now
+    // through find_loads, which Scout does own.
     SCRIPT = [
         // Round 1: the model does what the prompt now tells it to do.
-        { answer: '', have_data: false, tool: { name: 'find_bookings', params: { port: 'houston' } } },
+        { answer: '', have_data: false, tool: { name: 'find_loads', params: { unpaid_only: true } } },
         // Round 2: it has the result and answers from it.
         (p) => ({
-            answer: 'One booking from Houston: 274150389 with Maersk to Busan, cutoff 07/13/2026.',
+            answer: 'Two loads are still unpaid.',
             have_data: true,
-            _sawResult: /274150389|HOUSTON/i.test(p),
+            _sawResult: /"rows"/.test(p),
         }),
     ];
     PROMPTS = [];
-    const out = await askYard('what bookings do we have from houston');
+    const out = await askYard('which loads are still unpaid');
 
     ck('it answers instead of saying it has no idea', out.ok === true);
-    ck('  and the answer names the booking',
-       /274150389/.test(out.answer),
+    ck('  and the answer came from the lookup', /unpaid/i.test(out.answer),
        'got: ' + out.answer);
     ck('  have_data is true', out.have_data === true,
        'a false here is the model reporting a gap that no longer exists');
@@ -90,11 +95,11 @@ section('A — HER QUESTION, end to end');
     ck('the tool was actually executed', PROMPTS.length === 2,
        PROMPTS.length + ' calls to the model; 1 means the lookup never happened');
     ck('  and its REAL result was fed back',
-       /WHAT YOU LOOKED UP/.test(PROMPTS[1]) && /274150389/.test(PROMPTS[1]),
-       'the second prompt must contain the booking that came out of the store, not a placeholder');
-    ck('  from her actual data, not a fixture',
-       /MAERSK/i.test(PROMPTS[1]),
-       'this is read from data/bookings.json — if it changes, so does this');
+       /WHAT YOU LOOKED UP/.test(PROMPTS[1]) && /find_loads/.test(PROMPTS[1]),
+       'the second prompt must contain what the store returned, not a placeholder');
+    ck('  shaped by the registry, not invented',
+       /"rows"|"truncated"|"total"/.test(PROMPTS[1]),
+       'every read tool returns this envelope — see cap() in helpers/tools.js');
 }
 
 section('B — the prompt tells it the summary is not everything');
@@ -104,7 +109,7 @@ section('B — the prompt tells it the summary is not everything');
     await askYard('anything');
     const p = PROMPTS[0];
     ck('the tool field is offered', /"tool"/.test(p));
-    ck('  with a worked example', /find_bookings/.test(p) && /houston/i.test(p),
+    ck('  with a worked example', /"tool":\s*\{\s*"name"/.test(p) && /find_loads/.test(p),
        'an abstract instruction is much weaker than one concrete call it can copy');
     // BOTH places, separately. A loose /summary/i matched the DATA header
     // and let a mutation that deleted the actual instruction survive — the
@@ -116,7 +121,7 @@ section('B — the prompt tells it the summary is not everything');
        'calling it "the complete set of facts available to you" is what taught it to give up');
     ck('  and told not to claim absence before looking',
        /after you have looked|only say something is not in the records/i.test(p));
-    ck('  the tools are still described', /find_bookings|find_loads/.test(p));
+    ck('  the tools are still described', /find_loads/.test(p));
 }
 
 section('C — it cannot loop forever');
@@ -124,7 +129,7 @@ section('C — it cannot loop forever');
     // A model that keeps asking for tools must not be able to spend the
     // afternoon doing it. Each round is a Gemini call and a query.
     SCRIPT = new Array(20).fill(0).map(() => ({
-        answer: '', have_data: false, tool: { name: 'find_bookings', params: {} },
+        answer: '', have_data: false, tool: { name: 'find_loads', params: {} },
     }));
     PROMPTS = [];
     const out = await askYard('go round in circles');
@@ -157,12 +162,12 @@ section('E — a tool that legitimately finds nothing');
     // The honest "not in the records" case. It must still be reachable, or
     // the fix would just replace one wrong answer with another.
     SCRIPT = [
-        { answer: '', have_data: false, tool: { name: 'find_bookings', params: { port: 'reykjavik' } } },
-        (p) => ({ answer: 'Nothing from Reykjavik in the bookings.', have_data: false,
+        { answer: '', have_data: false, tool: { name: 'find_loads', params: { seller: 'nobodyxyz' } } },
+        (p) => ({ answer: 'No loads from that seller.', have_data: false,
                   _empty: /"rows":\s*\[\s*\]/.test(p) }),
     ];
     PROMPTS = [];
-    const out = await askYard('any bookings from reykjavik');
+    const out = await askYard('any loads from nobodyxyz');
     ck('an empty result still produces an answer', out.ok === true);
     ck('  have_data stays false', out.have_data === false,
        'this is the difference between "I looked and there is none" and "I cannot look"');

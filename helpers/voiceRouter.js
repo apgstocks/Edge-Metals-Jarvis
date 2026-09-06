@@ -46,12 +46,28 @@ const ADDRESSED = {
 
 // Things only the brain can do, and all of them reach outside the building.
 // Presence of one of these is the strongest signal there is.
+// ── PLURALS COUNT ────────────────────────────────────────────────────────
+// Apsara, 2026-09-06: "When i ask jarvis what bookings that we have from
+// houston, its saying that it doesnt have any idea about this."
+//
+// Half the reason was that this list did not match her words. `\bbooking\b`
+// does NOT match "bookings" — the word boundary falls before the s — and the
+// same held for container, port, vessel, supplier, driver, carrier and
+// quote. So "what bookings do we have from houston" scored ZERO on freight,
+// fell past rule 2, and landed on rule 4: "a question, and a wrong guess is
+// safer with Scout". Scout then correctly said it does not know about
+// bookings, because it does not.
+//
+// Nobody says "what booking do we have from Houston". The singular-only
+// patterns were matching the way the words are written in code rather than
+// the way she actually speaks, and one letter routed the whole question to
+// the wrong assistant.
 const FREIGHT_ACTIONS = [
-    /\b(message|text|whatsapp|whats app|email|e-?mail|mail|call|ping|reply|respond|forward|send)\b/i,
-    /\b(book|booking|dispatch|schedule|arrange|chase|follow up)\b/i,
-    /\b(trucker|truckers|driver|carrier|supplier|quote|quotation)\b/i,
-    /\b(pickup|pick up|drop off|delivery|deliver|container|vessel|port|cutoff|cut-off)\b/i,
-    /\b(inbox|unread|draft an email|proforma)\b/i,
+    /\b(message|text|whatsapp|whats app|email|e-?mail|mail|call|ping|reply|respond|forward|send)s?\b/i,
+    /\b(book|booking|dispatch|schedule|arrange|chase|follow up)s?\b/i,
+    /\b(trucker|driver|carrier|supplier|quote|quotation)s?\b/i,
+    /\b(pickup|pick up|drop off|delivery|deliveries|deliver|container|vessel|port|cutoff|cut-off)s?\b/i,
+    /\b(inbox|unread|draft an email|proforma)s?\b/i,
 ];
 
 // The yard's own vocabulary. Not exhaustive by design — anything that is not

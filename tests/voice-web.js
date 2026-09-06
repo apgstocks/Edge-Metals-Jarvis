@@ -42,7 +42,7 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
     const dom = new JSDOM('<!doctype html><body></body>', {
         url: 'https://jarvis.edgemetals.com/', virtualConsole: vc, runScripts: 'outside-only' });
     const w = dom.window;
-    const log = { starts: 0, stops: 0, spoken: [], spokenAs: [], cancels: 0, asked: [], micOpenWhileSpeaking: [] };
+    const log = { starts: 0, stops: 0, spoken: [], spokenAs: [], cancels: 0, asked: [], paths: [], micOpenWhileSpeaking: [] };
     let live = null;
 
     class FakeRecognition {
@@ -111,8 +111,19 @@ function browser({ chrome = true, voices = null, pref = null } = {}) {
         cancel() { log.cancels++; },
     };
     w.api = async (p, opts) => {
-        log.asked.push(JSON.parse((opts && opts.body) || '{}').question);
-        return { ok: true, answer: 'Acme is owed six hundred dollars.' };
+        const body = JSON.parse((opts && opts.body) || '{}');
+        // BOTH the path and the words. Recording only the question meant a
+        // change of endpoint was invisible here and had to be caught by
+        // grepping the source — and the parameter is `text` now, not
+        // `question`, because the router reads the sentence to decide which
+        // assistant owns it. Reading the old field silently recorded
+        // `undefined` on every call.
+        log.paths.push(p);
+        log.asked.push(body.text || body.question);
+        return {
+            ok: true, answer: 'Acme is owed six hundred dollars.',
+            agent: 'scout', agent_name: 'Scout',
+        };
     };
     w.Audio = class { play() {} };
 
@@ -728,8 +739,26 @@ section('G — a spoken instruction is still only a proposal');
 
     const src = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
     const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-    ck('voice posts to /api/yard/ask like the typed bot', /\/api\/yard\/ask/.test(nc));
-    ck('  it has no endpoint of its own', !/\/api\/voice\//.test(nc),
+    // ── UPDATED: /api/voice/ask, and the reason matters ──────────────────
+    // This asserted /api/yard/ask, and the intent behind it was right —
+    // spoken and typed questions must go through the same rules, not two
+    // paths that drift. But it named the wrong path, and that was the bug.
+    //
+    // /api/yard/ask is SCOUT, one of two assistants. Scout knows the yard
+    // ledger and nothing else. So every spoken question, whatever it was
+    // about, reached the assistant that only knows about scrap — and asked
+    // what bookings there were from Houston, it correctly said it had no
+    // idea, because bookings are Jarvis's subject.
+    //
+    // /api/voice/ask is the ROUTER over both. It is still ONE path with one
+    // set of rules; it is just the right one.
+    ck('voice posts to /api/voice/ask, the router over both assistants',
+       /\/api\/voice\/ask/.test(nc));
+    ck('  and not straight to one of them',
+       !/\/api\/yard\/ask/.test(nc),
+       'calling Scout directly is what sent every spoken question to the assistant that only knows the yard');
+    ck('  it still has no bespoke command path of its own',
+       !/\/api\/bot\/command/.test(nc),
        'a second path for spoken commands would be a second set of rules to keep in step');
 
     // THE LINE THAT MATTERS. A proposal is shown and tapped, never confirmed
@@ -759,7 +788,13 @@ section('G2 — the code that SPEAKS closes the mic itself');
     ck('  and the microphone was SHUT the instant audio began',
        log.micOpenWhileSpeaking.every((open) => open === false),
        'this is the self-trigger: an open mic hears the reply, finds "Jarvis" in it, and fires again');
-    ck('  the question reached the assistant', log.asked.length > 0 && /acme/i.test(log.asked[0]));
+    ck('  the question reached the assistant', log.asked.length > 0 && /acme/i.test(log.asked[0]),
+       'got: ' + JSON.stringify(log.asked[0]));
+    // Observed, not grepped. The source check earlier reads the file; this
+    // watches where the request actually went when the real flow ran.
+    ck('  and it went to the ROUTER, not to one assistant',
+       log.paths[0] === '/api/voice/ask',
+       'posted to ' + log.paths[0]);
 }
 
 section('G3 — no speech engine is admitted, not papered over');
