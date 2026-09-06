@@ -1904,8 +1904,40 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // router already honours an explicit address in TYPED text; this
             // carries the same thing from the wake word, where the name has
             // already been stripped off before the router ever sees it.
+            // ── AN OPEN QUESTION OWNS THE CONVERSATION ───────────────────
+            // Apsara: "finally when i say okay forward that to trucker, it
+            // should do that if it has knowledge about who to forward, else
+            // ask me."
+            //
+            // workflow/actions.js already does exactly that — forwardBooking
+            // refuses without a supplier, asks WHICH TRUCKER when none was
+            // named, then asks "Forward AAA111 to Sher Trucking? (yes/no)"
+            // and only sends on yes. The whole flow has existed for weeks.
+            //
+            // What broke it by voice is this: her answer to that question is
+            // "yes", or "Sher Trucking", or "the second one" — sentences
+            // with NO freight vocabulary in them. The router scores them as
+            // yard talk and hands them to Scout, so the confirmation for a
+            // real WhatsApp to a real driver disappears into the assistant
+            // that cannot act on it, and the question stays open for ever.
+            //
+            // So while the brain is holding a question, everything goes to
+            // the brain. Same rule as the proforma draft below, for the same
+            // reason: an answer belongs to whoever asked.
+            let brainPending = null;
+            try {
+                brainPending = require('./workflow/actions').getPending(
+                    `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`);
+            } catch (e) { /* no pending is the normal case */ }
+            const answeringBrain = !!brainPending;
+            if (answeringBrain) {
+                console.log(`[VOICE] answering the open "${brainPending.type}" question`);
+            }
+
             const named = String((req.body || {}).agent || '').toLowerCase();
-            const route = (named === 'scout' || named === 'jarvis')
+            const route = answeringBrain
+                ? { agent: 'jarvis', why: 'answering the question Jarvis just asked', addressed: true }
+                : (named === 'scout' || named === 'jarvis')
                 ? { agent: named, why: 'you called ' + named + ' by name', addressed: true }
                 : routeVoice(text);
             const agent = AGENTS[route.agent];
@@ -1966,7 +1998,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // restarting the draft on every answer so it could never finish.
             // api.js keeps the plumbing; the module keeps the thinking.
             const pro = require('./helpers/proformaDraft');
-            const step = pro.handle(asked);
+            // A brain question outranks a proforma draft: the brain's are
+            // the ones with a WhatsApp to a driver behind them.
+            const step = answeringBrain ? null : pro.handle(asked);
             if (step) {
                 let previewHtml = null;
                 if (step.stage === 'preview') {
@@ -2033,7 +2067,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // answer about a cutoff is worse than a slower right one.
             const fu = require('./helpers/followUp');
             const refSet = mem.currentReferents();
-            const quick = fu.answerFollowUp(asked, refSet, ref.resolved && ref.resolved.row);
+            const quick = answeringBrain
+                ? null            // her answer belongs to whoever asked
+                : fu.answerFollowUp(asked, refSet, ref.resolved && ref.resolved.row);
             if (quick) {
                 console.log(`[VOICE] follow-up answered from the list: ${asked}`);
                 mem.remember('bot', quick);

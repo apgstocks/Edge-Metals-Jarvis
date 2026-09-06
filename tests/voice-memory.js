@@ -108,6 +108,40 @@ section('B — IT DOES NOT GUESS');
     ck('with no list on screen, nothing is resolved', none.resolved === null);
 }
 
+section('B2 — "forward that to trucker", which is what she actually says');
+{
+    // HER EXACT WORDS, and they did not work. The deictic pattern required a
+    // NOUN after "that" — "that booking", "that one" — so the sentence she
+    // would really say was not recognised as a reference at all and the
+    // booking number never reached the brain.
+    mem.reset();
+    mem.setReferents({ kind: 'bookings', title: 'x', rows: [THREE.rows[0]] });
+
+    const r = mem.resolve('forward that to the trucker');
+    ck('"forward that" points at the booking on screen',
+       /AAA111/.test(r.text), r.text);
+    ck('  and the rest of the sentence survives', /to the trucker/.test(r.text), r.text);
+    ck('  "send it to Sher" too', /AAA111/.test(mem.resolve('send it to Sher').text));
+    ck('  and "assign that"', /AAA111/.test(mem.resolve('assign that').text));
+
+    // A bare "that" is far too common to treat as a pointer on its own. It
+    // counts only DIRECTLY after an action verb.
+    for (const q of [
+        'i thought that was fine',
+        'that is the one we discussed',
+        'was that the cutoff',
+    ]) {
+        ck(`"${q}" is left alone`, mem.resolve(q).resolved === null, mem.resolve(q).text);
+    }
+
+    // And with three on screen it still refuses rather than picking one.
+    mem.reset();
+    mem.setReferents(THREE);
+    const amb = mem.resolve('forward that to the trucker');
+    ck('with three on screen it refuses', amb.resolved === null);
+    ck('  and says how many it could mean', amb.ambiguous === 3, String(amb.ambiguous));
+}
+
 section('C — WHEN TO FORGET');
 {
     // workflow/brain.js carries a comment about menuContext never expiring,

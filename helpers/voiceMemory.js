@@ -106,9 +106,26 @@ const ORDINAL_RE = new RegExp(
     '\\b(?:the\\s+)?(' + Object.keys(ORDINALS).join('|') + '|last)\\s+'
     + '(?:one|booking|row|result|container)\\b', 'i');
 
-// "that booking", "that one", "it". Only counts when a list is live —
-// otherwise "it" is just a pronoun in an ordinary sentence.
-const DEICTIC_RE = /\b(?:that|this|the)\s+(?:booking|one|container)\b/i;
+// "that booking", "that one", "this container". Only counts when a list is
+// live — otherwise "it" is just a pronoun in an ordinary sentence.
+// "the one" is NOT in here, and that omission is deliberate. It was, and it
+// over-resolved: "that is the one we discussed" became "that is booking
+// AAA111 we discussed", turning an ordinary sentence into a command about a
+// specific container. "The one" is everyday English; "that booking" and
+// "this container" are people pointing at something.
+const DEICTIC_RE = /\b(?:(?:that|this)\s+(?:booking|one|container)|the\s+(?:booking|container))\b/i;
+
+// ── AND A BARE "THAT", AFTER AN INSTRUCTION ──────────────────────────────
+// Apsara's actual words: "forward that to trucker". Not "that booking" —
+// just "that". The pattern above requires a noun after it, so the sentence
+// she would really say was not recognised as a reference at all, and the
+// booking number never reached the brain.
+//
+// A bare "that" is far too common to treat as a reference on its own, so it
+// only counts DIRECTLY AFTER AN ACTION VERB and only while a list is on
+// screen. "Forward that", "send that", "assign that" are pointing at
+// something; "I thought that was fine" is not.
+const BARE_DEICTIC_RE = /\b(forward|send|assign|dispatch|book|do|use)\s+(that|this|it)\b/i;
 
 // Returns { text, resolved } — `resolved` is null when nothing was changed.
 // NEVER guesses: an unresolvable reference is returned untouched, so the
@@ -127,12 +144,18 @@ function resolve(text) {
         phrase = m[0];
         const word = m[1].toLowerCase();
         row = (word === 'last') ? set.rows[set.rows.length - 1] : set.rows[ORDINALS[word] - 1] || null;
-    } else if (DEICTIC_RE.test(q)) {
+    } else if (DEICTIC_RE.test(q) || BARE_DEICTIC_RE.test(q)) {
         // "that booking" is unambiguous ONLY when there is one thing it
         // could mean. With three on screen it is a genuine ambiguity, and
         // the honest response is to ask — the same refusal the brain already
         // makes for a bare digit with two possible sources.
-        if (set.rows.length === 1) { row = set.rows[0]; phrase = DEICTIC_RE.exec(q)[0]; }
+        if (set.rows.length === 1) {
+            row = set.rows[0];
+            // Whichever pattern matched — replacing the wrong span would
+            // leave the pronoun in the sentence alongside the number.
+            const m = DEICTIC_RE.exec(q);
+            phrase = m ? m[0] : BARE_DEICTIC_RE.exec(q)[2];
+        }
         else return { text: q, resolved: null, ambiguous: set.rows.length };
     }
 
