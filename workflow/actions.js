@@ -10,6 +10,8 @@ const { loadBookings, loadWorkflow, loadTruckers, loadSuppliers,
 const { getBooking, formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings, stepLabel } = require('../helpers/booking');
 const { getLATime, daysUntil } = require('../helpers/time');
+// Her words for a queued pending, never the identifier — see helpers/pendingLabel.js
+const { describePending } = require('../helpers/pendingLabel');
 const memory = require('../helpers/memory');
 const trust = require('../helpers/trust');
 const { updateSession }        = require('../helpers/context');
@@ -896,7 +898,7 @@ async function scanPastCutoff(chatId) {
         bkg_nos: rows.map((r) => r.bkgNo),
     });
     if (staged.queued) {
-        await _send(chatId, `Found ${rows.length} past cutoff, but you have a pending "${staged.blockedBy}" first — I'll ask once that's resolved.`);
+        await _send(chatId, `Found ${rows.length} past cutoff, but you have a pending ${describePending(staged.blockedBy)} first — I'll ask once that's resolved.`);
         return { action_taken: 'cutoff_scan_queued' };
     }
     await _send(chatId, lines.join('\n'));
@@ -2501,7 +2503,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
             scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         });
         if (staged.queued) {
-            await _send(chatId, `A few saved contacts match "${targetName}", but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+            await _send(chatId, `A few saved contacts match "${targetName}", but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask which one once that's resolved.\n${listText}`);
             return { action_taken: 'email_contact_ambiguous_queued' };
         }
         await _send(chatId, `A few saved contacts match "${targetName}" — which one?\n${listText}\n\nReply with the number (or "cancel").`);
@@ -2586,7 +2588,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
             scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         });
         if (staged.queued) {
-            await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to, and you already have a pending "${staged.blockedBy}" to answer first. I'll ask for ${targetName}'s address once that's resolved.`);
+            await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to, and you already have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask for ${targetName}'s address once that's resolved.`);
             return { action_taken: 'email_no_address_queued' };
         }
         await _send(chatId, `Couldn't find a past email from "${targetName}" — no address to send to. Give me the exact email address (or "cancel").`);
@@ -2679,7 +2681,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
                 scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
             });
             if (staged.queued) {
-                await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName}, but you have a pending "${staged.blockedBy}" first — I'll ask once that's resolved (and draft this email either way once it is).`);
+                await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName}, but you have a pending ${describePending(staged.blockedBy)} first — I'll ask once that's resolved (and draft this email either way once it is).`);
                 return { action_taken: 'cc_pattern_confirm_queued' };
             }
             await _send(chatId, `Noticed you always cc ${detectedCc.join(', ')} when emailing ${targetName} — save that as their standing cc for future emails? (yes/no — either way I'll draft this email next)`);
@@ -2749,7 +2751,7 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
                     scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
                 });
                 if (staged.queued) {
-                    await _send(chatId, `I'll ask how many containers for ${targetName} once your pending "${staged.blockedBy}" is resolved.`);
+                    await _send(chatId, `I'll ask how many containers for ${targetName} once your pending ${describePending(staged.blockedBy)} is resolved.`);
                     return { action_taken: 'booking_details_queued' };
                 }
                 await _send(chatId, br.ask(targetName));
@@ -2884,7 +2886,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         // isn't actually the active pending yet — see setPending's own
         // comment for why silently overwriting the real one is worse.
         await _send(chatId,
-            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`
+            `Drafted the email to ${targetName} <${to}>${toSource === 'contact' ? ' (saved contact)' : ''} — but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`
         );
         return { action_taken: 'email_draft_queued' };
     }
@@ -2985,7 +2987,7 @@ async function stageDomainProposal(chatId, term, domain, proposals, resume, intr
             needs_name: needsName.map((p) => p.addr),
         });
         if (staged.queued) {
-            await _send(chatId, `${intro || ''}Scanned ${domain} — found ${proposals.length} address(es), but you have a pending "${staged.blockedBy}" to answer first. I'll ask for the missing name once that's resolved.`);
+            await _send(chatId, `${intro || ''}Scanned ${domain} — found ${proposals.length} address(es), but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask for the missing name once that's resolved.`);
             return { action_taken: 'domain_learn_name_queued' };
         }
         await _send(chatId,
@@ -3009,7 +3011,7 @@ async function stageDomainLearnConfirm(chatId, term, domain, proposals, resume, 
     ).join('\n');
     const staged = await setPending(chatId, { type: 'await_domain_learn_confirm', term, domain, proposals, resume });
     if (staged.queued) {
-        await _send(chatId, `${intro || ''}Ready to save ${domain} contacts, but you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.`);
+        await _send(chatId, `${intro || ''}Ready to save ${domain} contacts, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask once that's resolved.`);
         return { action_taken: 'domain_learn_confirm_queued' };
     }
     await _send(chatId,
@@ -4146,7 +4148,7 @@ Return ONLY this JSON: { "address": "the email address, or null if you can't fin
                 mode: 'draft', target_name: targetName, details: details || '', bkg_no: bkgNo || null,
             });
             if (staged.queued) {
-                await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address (likely a forward without a clean quoted header), and nothing saved for them either — plus you already have a pending "${staged.blockedBy}" to answer first. I'll ask for the address once that's resolved.`);
+                await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address (likely a forward without a clean quoted header), and nothing saved for them either — plus you already have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask for the address once that's resolved.`);
                 return { action_taken: 'reply_forward_no_address_queued' };
             }
             await _send(chatId, `Found an email mentioning ${targetName}, but couldn't confidently pull their address out of it (likely a forward without a clean quoted header), and nothing saved for them either. Give me the exact email address (or "cancel").`);
@@ -4201,7 +4203,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         });
         const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
         if (staged.queued) {
-            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
+            await _send(chatId, `Drafted (via a forwarded email) to ${targetName} <${foundAddr}> — but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
             return { action_taken: 'reply_via_forward_queued' };
         }
         await _send(chatId,
@@ -4301,7 +4303,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
     });
     const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
-        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending "${staged.blockedBy}" to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
+        await _send(chatId, `Drafted a reply to ${targetName} <${replyToAddr}> — but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask you to confirm sending this${whenSuffix ? ` (scheduled${whenSuffix})` : ''} once that's resolved.`);
         return { action_taken: 'reply_draft_queued' };
     }
     // Say up front that a forward will happen. She is confirming what leaves
@@ -4742,7 +4744,7 @@ async function pauseForLaneAmbiguity(chatId, field, matches, state) {
     const query = field === 'origin' ? state.originQuery : state.destinationQuery;
     const listText = matches.map((e, i) => `${i + 1}. ${e.aliases[0]} — ${String(e.raw).split('\n')[0]}`).join('\n');
     if (staged.queued) {
-        await _send(chatId, `"${query}" matches more than one saved address, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+        await _send(chatId, `"${query}" matches more than one saved address, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask which one once that's resolved.\n${listText}`);
         return { action_taken: 'quote_lane_ambiguous_queued' };
     }
     await _send(chatId, `"${query}" matches more than one saved address — which one?\n${listText}\n\nReply with the number.`);
@@ -4758,7 +4760,7 @@ async function pauseForTruckerAmbiguity(chatId, ambiguousOne, state, resolvedSoF
     });
     const listText = matches.map((t, i) => `${i + 1}. ${t.name}${t.locality ? ` (${t.locality})` : ''}`).join('\n');
     if (staged.queued) {
-        await _send(chatId, `"${ambiguousOne.query}" matches more than one saved trucker, but you have a pending "${staged.blockedBy}" to answer first. I'll ask which one once that's resolved.\n${listText}`);
+        await _send(chatId, `"${ambiguousOne.query}" matches more than one saved trucker, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask which one once that's resolved.\n${listText}`);
         return { action_taken: 'quote_trucker_ambiguous_queued' };
     }
     await _send(chatId, `"${ambiguousOne.query}" matches more than one saved trucker — which one?\n${listText}\n\nReply with the number.`);
@@ -4774,7 +4776,7 @@ async function pauseForTruckerAmbiguity(chatId, ambiguousOne, state, resolvedSoF
 async function pauseForUnresolvedTrucker(chatId, unresolvedNames, state) {
     const staged = await setPending(chatId, { type: 'await_quote_trucker_retry', unresolvedNames, state });
     if (staged.queued) {
-        await _send(chatId, `Couldn't find a saved trucker named "${unresolvedNames.join(', ')}", but you have a pending "${staged.blockedBy}" to answer first. I'll ask again once that's resolved.`);
+        await _send(chatId, `Couldn't find a saved trucker named "${unresolvedNames.join(', ')}", but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask again once that's resolved.`);
         return { action_taken: 'quote_trucker_unresolved_queued' };
     }
     await _send(chatId, `Couldn't find a saved trucker named "${unresolvedNames.join(', ')}" — reply with the correct name, or their email address (or "cancel").`);
@@ -4809,7 +4811,7 @@ async function askWhichTruckers(chatId, state) {
     });
     const listText = reachable.map((t, i) => `${i + 1}. ${t.name}`).join('\n');
     if (staged.queued) {
-        await _send(chatId, `Ready to ask about ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask who once that's resolved.`);
+        await _send(chatId, `Ready to ask about ${state.originQuery} → ${state.destinationQuery}, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask who once that's resolved.`);
         return { action_taken: 'quote_awaiting_truckers_queued' };
     }
     await _send(chatId, `Who should I ask for ${state.originQuery} → ${state.destinationQuery}?\n${listText}\n\nReply with names or numbers — comma-separated for more than one.`);
@@ -4858,7 +4860,7 @@ async function resumeQuoteWithTruckerRetry(chatId, pending, text) {
 async function askForCargoDetails(chatId, state) {
     const staged = await setPending(chatId, { type: 'await_quote_cargo_details', state });
     if (staged.queued) {
-        await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask for cargo details once that's resolved.`);
+        await _send(chatId, `Ready to send for ${state.originQuery} → ${state.destinationQuery}, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask for cargo details once that's resolved.`);
         return { action_taken: 'quote_awaiting_cargo_queued' };
     }
     // Mandatory — no "skip". Per Apsara 2026-08-20: "its mandatory for every
@@ -4996,7 +4998,7 @@ async function startQuoteRequestFlow(chatId, originQuery, destinationQuery, name
 async function askForScaleTickets(chatId, state) {
     const staged = await setPending(chatId, { type: 'await_quote_scale_tickets', state });
     if (staged.queued) {
-        await _send(chatId, `Ready to start on ${state.originQuery} → ${state.destinationQuery}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask about scale tickets once that's resolved.`);
+        await _send(chatId, `Ready to start on ${state.originQuery} → ${state.destinationQuery}, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask about scale tickets once that's resolved.`);
         return { action_taken: 'quote_awaiting_scale_tickets_queued' };
     }
     await _send(chatId, `Do you need scale tickets for this haul? (yes/no)`);
@@ -5092,7 +5094,7 @@ async function pauseForContactQuoteRetry(chatId, recipientQuery, details, messag
         state: { recipientQuery, details },
     });
     if (staged.queued) {
-        await _send(chatId, `${message}, but you have a pending "${staged.blockedBy}" to answer first. I'll ask again once that's resolved.`);
+        await _send(chatId, `${message}, but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask again once that's resolved.`);
         return { action_taken: 'contact_quote_recipient_unresolved_queued' };
     }
     await _send(chatId, skipPrefix ? message : `${message} — reply with the exact contact name (or "cancel").`);

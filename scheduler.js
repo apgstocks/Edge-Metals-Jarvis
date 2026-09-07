@@ -8,6 +8,7 @@ const { usd } = require('./helpers/money');
 const { loadBookings, loadWorkflow, mutateBrain, loadBrain,
         mutateJson, loadHistory } = require('./helpers/json');
 const { daysUntil, getLADate }    = require('./helpers/time');
+const { describePending }         = require('./helpers/pendingLabel');
 const { getUrgentBookings }       = require('./helpers/booking');
 const { stepLabel }               = require('./helpers/booking');
 const { pushAlert }               = require('./alerts');
@@ -64,7 +65,7 @@ async function dailyTruckerCheck() {
         // Something on this chat is already unresolved (e.g. last night's
         // learning digest never got answered) — don't show a live yes/no
         // prompt for a wizard that isn't actually the active pending yet.
-        await _sendToTeam(`(Trucker check queued — you have a pending "${staged.blockedBy}" to answer first. I'll ask once that's resolved.)`);
+        await _sendToTeam(`(Trucker check queued — you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask once that's resolved.)`);
         return;
     }
     // TIME-OF-DAY WORDING (2026-08-22): these schedules are anchored to
@@ -611,7 +612,7 @@ async function taskRunner() {
                         // never learns the send was held, and the email
                         // simply never happens.
                         const heldMsg = staged.queued
-                            ? `${note}\n\n(You have a pending "${staged.blockedBy}" to answer first — I'll ask about this right after.)`
+                            ? `${note}\n\n(You have a pending ${describePending(staged.blockedBy)} to answer first — I'll ask about this right after.)`
                             : note;
                         // Delivered ONLY through the outbox — a second direct
                         // _sendMessage here would double-send whenever
