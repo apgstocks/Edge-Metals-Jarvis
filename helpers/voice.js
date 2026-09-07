@@ -329,17 +329,42 @@ async function phrase(name, opts = {}) {
 // second, which is the behaviour without a cache at all.
 async function warmUp() {
     if (!cfg.GEMINI_API_KEY) return { warmed: 0, skipped: 'no API key' };
+    // ── EVERY VOICE, NOT JUST THE DEFAULT ────────────────────────────────
+    // Apsara, 2026-09-07: "when i say hey jarvis its saying two yes boss."
+    //
+    // This warmed every phrase in VOICE and nothing else. There are TWO
+    // assistants with two voices, so half the acknowledgements were never
+    // pre-rendered: Scout's had to be synthesised on demand at first ask,
+    // taking seconds. And the moment Jarvis's voice changed from Charon to
+    // Orus, JARVIS'S became the cold one too — every cached file was keyed by
+    // the old voice, so the very first "Hey Jarvis" after the change had
+    // nothing to play and fell back to the other assistant's buffer.
+    //
+    // Which is how she ended up being answered "Yes, boss" by Jarvis.
+    //
+    // The list comes from voiceRouter, which is where the agent voices are
+    // declared, so adding a third assistant warms its voice automatically
+    // rather than silently shipping one that is always cold.
+    let agentVoices = [];
+    try {
+        const { AGENTS } = require('./voiceRouter');
+        agentVoices = Object.keys(AGENTS || {}).map((k) => AGENTS[k].voice).filter(Boolean);
+    } catch (e) { /* the default below still covers the common case */ }
+    const voices = [...new Set([VOICE, ...agentVoices])];
+
     let warmed = 0;
-    for (const name of Object.keys(PHRASES)) {
-        try {
-            const before = fs.existsSync(cachePath(cacheKey(PHRASES[name], VOICE)));
-            await phrase(name);
-            if (!before) warmed += 1;
-        } catch (e) {
-            console.warn(`[VOICE] could not warm "${name}":`, e.message);
+    for (const v of voices) {
+        for (const name of Object.keys(PHRASES)) {
+            try {
+                const before = fs.existsSync(cachePath(cacheKey(PHRASES[name], v)));
+                await phrase(name, { voice: v });
+                if (!before) warmed += 1;
+            } catch (e) {
+                console.warn(`[VOICE] could not warm "${name}" in ${v}:`, e.message);
+            }
         }
     }
-    if (warmed) console.log(`[VOICE] warmed ${warmed} spoken phrase(s) in the ${VOICE} voice.`);
+    if (warmed) console.log(`[VOICE] warmed ${warmed} spoken phrase(s) across ${voices.join(', ')}.`);
     return { warmed };
 }
 

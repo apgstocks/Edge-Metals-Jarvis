@@ -1905,6 +1905,69 @@ section('SHUTUP — silencing it actually silences it');
        ok.doc.body.textContent.slice(0, 140));
 }
 
+section('ACK — one acknowledgement, and never the other one\'s words');
+{
+    // Apsara, 2026-09-07: "when i say hey jarvis its saying two yes boss."
+    //
+    // TWO FAULTS IN ONE SENTENCE, and the first was mine from this morning.
+    //
+    // "YES BOSS" WHEN SHE CALLED JARVIS. playAck() fell back to the other
+    // assistant's buffer when its own was not ready, and the comment beside
+    // it argued that "wrong voice is a far smaller problem than no
+    // acknowledgement". That was true while BOTH buffers held the same
+    // wordless "Mm hm?" — the fallback swapped a timbre. The moment Scout's
+    // acknowledgement became the WORDS "Yes, boss", the same line started
+    // swapping a sentence, and Jarvis answered her as Scout.
+    //
+    // WHY JARVIS'S WAS COLD: warmUp() pre-rendered every phrase in VOICE and
+    // no other, so changing Jarvis's voice to Orus invalidated every cached
+    // file it had — first wake after the change had nothing to play.
+    const src = VOICE;
+    ck('the fallback never reaches for the other agent\'s buffer',
+       !/decoded = ackBuf\[other\]/.test(src),
+       'that line is what said "Yes, boss" in answer to "Hey Jarvis"');
+    ck('  and it still says out loud that it substituted',
+       /has no acknowledgement ready/.test(src),
+       'a silent fallback is how this went unnoticed for a day');
+    ck('  falling through to the tone, which claims nothing',
+       /ms = humAck\(ctx\);/.test(src));
+
+    // ONE PER WAKE. Several paths dispatch WAKE_HEARD — interim results, the
+    // continuation window, the guard mic — so rather than guess which one
+    // doubled, playAck refuses twice in a breath AND LOGS IT, so her console
+    // names the path next time.
+    ck('a second acknowledgement in the same breath is suppressed',
+       /if \(Date\.now\(\) - lastAckAt < ACK_GAP_MS\)/.test(src));
+    ck('  and it is reported, not swallowed',
+       /duplicate acknowledgement suppressed/.test(src),
+       'suppressing it silently would hide the path that caused it');
+    ck('  with a gap shorter than two real wake words',
+       (function () { const m = /var ACK_GAP_MS = (\d+)/.exec(src);
+                      return m && Number(m[1]) >= 600 && Number(m[1]) <= 2000; })(),
+       'too long and a genuine second "Hey Jarvis" goes unanswered');
+
+    // THE RETRY MUST NOT STACK. A cold cache makes the first synthesis take
+    // seconds, which is precisely when the 2.5s retry used to fire a second
+    // request underneath the first.
+    ck('the retry waits for the request already in flight',
+       /if \(ackBuf\[who\] \|\| ackPending\[who\]\) return;/.test(src),
+       'two requests for one acknowledgement is two chances to play it');
+    ck('  and the flag is cleared on every outcome',
+       (src.match(/ackPending\[who\] = false;/g) || []).length >= 4,
+       'a flag left set means the retry can never fire again');
+
+    // AND THE SERVER PRE-RENDERS BOTH VOICES, which is the root cause fix.
+    const hv = require('fs').readFileSync(path.join(ROOT, "helpers/voice.js"), "utf8");
+    ck('warmUp renders every phrase in every AGENT voice',
+       /const voices = \[\.\.\.new Set\(\[VOICE, \.\.\.agentVoices\]\)\]/.test(hv),
+       'warming only the default is why a voice change left Jarvis silent');
+    ck('  taking the list from where the voices are declared',
+       /require\('\.\/voiceRouter'\)/.test(hv),
+       'a hardcoded list ships a third assistant that is always cold');
+    ck('  and a failure names the voice it could not warm',
+       /could not warm "\$\{name\}" in \$\{v\}/.test(hv));
+}
+
 section('CUT — it does not cut her off mid-sentence');
 {
     // Apsara, 2026-09-07: "at the end of wavelegth timeout, if i start saying

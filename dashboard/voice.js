@@ -1417,6 +1417,9 @@
     // would mean Scout answering in Jarvis's voice, which is precisely the
     // signal she asked for.
     var ackBuf = { jarvis: null, scout: null };
+    // True while a fetch for that agent is outstanding, so the 2.5s retry
+    // does not stack a second request on top of a slow first one.
+    var ackPending = { jarvis: false, scout: false };
     var ackPcm = null;          // kept for the tone fallback path
     var ackRate = 24000;
 
@@ -1509,6 +1512,11 @@
         Object.keys(AGENT_LOOK).forEach(function (who) {
             var v = AGENT_LOOK[who].voice;
             var ph = AGENT_LOOK[who].ack || 'ack';
+            // Marked in flight so the 2.5s retry below can tell "nothing came
+            // back" from "nothing has come back YET". A cold cache after a
+            // voice change makes the first synthesis take seconds, which is
+            // exactly when the retry used to fire a second request underneath.
+            ackPending[who] = true;
             window.fetch('/api/voice/phrase/' + ph + '?voice=' + encodeURIComponent(v),
                 { credentials: 'same-origin' })
                 .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
@@ -1518,12 +1526,14 @@
                     return ctx.decodeAudioData(buf);
                 })
                 .then(function (decoded) {
+                    ackPending[who] = false;
                     ackBuf[who] = decoded;
                     if (who === 'jarvis') { ackPcm = decoded.getChannelData(0); ackRate = decoded.sampleRate; }
                     console.log('[VOICE] ' + AGENT_LOOK[who].name + ' acknowledgement ready — "' + ph + '", '
                         + Math.round(decoded.duration * 1000) + 'ms, ' + v);
                 })
                 .catch(function (e) {
+                    ackPending[who] = false;
                     // NAMED, AND LOUD. Apsara, 2026-09-06: "scout is
                     // answering back with proper mm hmm while jarvis
                     // doesnt." One assistant working and the other not is
@@ -1540,17 +1550,24 @@
                     // instantly — which is exactly the shape of "one works,
                     // the other does not".
                     setTimeout(function () {
-                        if (ackBuf[who]) return;
+                        // Still nothing AND nothing still trying. Without the
+                        // second half, a slow first synthesis (which is what a
+                        // cold cache after a voice change looks like) had a
+                        // duplicate request fired underneath it.
+                        if (ackBuf[who] || ackPending[who]) return;
+                        ackPending[who] = true;
                         window.fetch('/api/voice/phrase/' + ph + '?voice=' + encodeURIComponent(v),
                             { credentials: 'same-origin' })
                             .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
                             .then(function (buf) { var c = audio(); return c ? c.decodeAudioData(buf) : Promise.reject(new Error('no ctx')); })
                             .then(function (decoded) {
+                                ackPending[who] = false;
                                 ackBuf[who] = decoded;
                                 console.log('[VOICE] ' + AGENT_LOOK[who].name
                                     + ' acknowledgement ready on retry — ' + v);
                             })
                             .catch(function (e2) {
+                                ackPending[who] = false;
                                 console.warn('[VOICE] ' + AGENT_LOOK[who].name
                                     + ' acknowledgement still failing: ' + (e2 && e2.message));
                                 if (who === 'jarvis') warmAckLocal();
@@ -1624,8 +1641,28 @@
         } catch (e) { /* an inaudible earcon is not worth an exception */ }
     }
 
+    // How close together two acknowledgements have to be before the second
+    // is certainly a duplicate. Long enough to cover a doubled dispatch from
+    // interim results; far shorter than the gap between two real wake words.
+    var ACK_GAP_MS = 1200;
+    var lastAckAt = 0;
+
     function playAck() {
         var ms = 420;
+        // ── ONE PER WAKE ────────────────────────────────────────────────
+        // She heard it twice. I cannot reproduce her server from here, and
+        // there are several paths that dispatch WAKE_HEARD — interim results
+        // arriving as she is still saying the word, the continuation window,
+        // the guard mic — so rather than guess which one doubled, this
+        // refuses to play twice in the same breath AND SAYS SO. If it starts
+        // appearing in her console we will know exactly which path did it,
+        // which is more than the last hour of reasoning produced.
+        if (Date.now() - lastAckAt < ACK_GAP_MS) {
+            console.warn('[VOICE] duplicate acknowledgement suppressed — '
+                + (Date.now() - lastAckAt) + 'ms after the last one');
+            return;
+        }
+        lastAckAt = Date.now();
         try {
             var ctx = audio();
             if (!ctx) return 0;
@@ -1638,13 +1675,30 @@
             // and makes her say it again. The tone is the last resort, and
             // any substitution says so.
             var decoded = ackBuf[addressed] || null;
+            // ── AND IT NEVER BORROWS THE OTHER ONE'S WORDS ───────────────
+            // Apsara, 2026-09-07: "when i say hey jarvis its saying two yes
+            // boss."
+            //
+            // THIS WAS MINE, from this morning. The fallback here used to
+            // reach for the other assistant's buffer, and the comment beside
+            // it said "wrong voice is a far smaller problem than no
+            // acknowledgement at all". That was TRUE when both buffers held
+            // the same wordless "Mm hm?" — the only difference was timbre.
+            //
+            // The moment Scout's acknowledgement became the WORDS "Yes,
+            // boss", the same fallback stopped substituting a voice and
+            // started substituting a sentence. So Jarvis, with a cold cache
+            // after its own voice changed, answered her in Scout's voice with
+            // Scout's words. A degradation nobody could read as a degradation.
+            //
+            // The tone below is the right fallback: unmistakably a fallback,
+            // and it says nothing it does not mean.
             if (!decoded) {
                 var other = addressed === 'jarvis' ? 'scout' : 'jarvis';
-                if (ackBuf[other]) {
-                    decoded = ackBuf[other];
-                    console.warn('[VOICE] ' + AGENT_LOOK[addressed].name
-                        + ' has no acknowledgement — using ' + AGENT_LOOK[other].name + "'s");
-                }
+                console.warn('[VOICE] ' + AGENT_LOOK[addressed].name
+                    + ' has no acknowledgement ready'
+                    + (ackBuf[other] ? ' — using the tone, NOT '
+                        + AGENT_LOOK[other].name + "'s words" : ' — using the tone'));
             }
             var pcmNow = decoded ? decoded.getChannelData(0) : ackPcm;
             var rateNow = decoded ? decoded.sampleRate : ackRate;
