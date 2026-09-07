@@ -180,6 +180,15 @@
     // Consumed by the OPEN_CAPTURE effect above. One-shot: it must not leak
     // into the next wake word, which is the one thing the chime is for.
     var suppressAck = false;
+    // Set when Jarvis reopened the mic itself after asking a question — see
+    // finishCapture, which must not drop that turn in silence.
+    var captureWasFollowUp = false;
+    var captureRetried = false;
+    // A one-shot line to show WHEN the capture reopens, not before. Writing it
+    // straight into the pill was useless: openCapture() calls say('Listening')
+    // and showCard('Go ahead…') a millisecond later and wiped it — the retry
+    // happened and looked exactly like the silent drop it was fixing.
+    var pendingHint = '';
     var pendingSeed = '';
     var capturePrefix = '';
     var CONTINUE_MS = 2500;
@@ -758,7 +767,10 @@
                 // decision belongs to whoever dispatched rather than to a
                 // second call racing the effect.
                 var quiet = suppressAck; suppressAck = false;
-                openCapture(pendingSeed ? { ack: !quiet, seed: pendingSeed } : { ack: !quiet });
+                var hint = pendingHint; pendingHint = '';
+                openCapture(pendingSeed
+                    ? { ack: !quiet, seed: pendingSeed, hint: hint }
+                    : { ack: !quiet, hint: hint });
                 pendingSeed = '';
             }
         });
@@ -1018,6 +1030,9 @@
 
             if (state.capturing) {
                 heardDuringCapture = capturePrefix ? (capturePrefix + ' ' + txt) : txt;
+                // SHE HAS SPOKEN. From here the short end-of-utterance window
+                // applies; before this, the long waiting-to-start one did.
+                heardAnything = true;
                 // She is still talking, so the clock starts again. This is
                 // the whole fix for being cut off: the window measures
                 // SILENCE, not elapsed time.
@@ -1432,9 +1447,18 @@
         // again. Kept separately and prepended on every result instead.
         capturePrefix = o.seed ? String(o.seed).trim() : '';
         heardDuringCapture = capturePrefix;
-        say('Listening');
+        // A seed means she HAS already spoken — this is the tail of a sentence
+        // she is resuming, so the short silence window is the right one. With
+        // no seed she has not said anything yet and gets the long one.
+        heardAnything = !!capturePrefix;
+        // `ack:false` is only ever passed when Jarvis asked the question and
+        // reopened the mic itself. That is exactly the case where dropping her
+        // turn in silence is worst, because the question stays open and she
+        // has no way to tell it was lost.
+        captureWasFollowUp = (o.ack === false);
+        say(o.hint || 'Listening');
         paintAgent(addressed);
-        showCard(o.seed || '', o.seed ? '' : 'Go ahead…', true);
+        showCard(o.seed || '', o.seed ? '' : (o.hint ? o.hint + ' \u2014 go ahead' : 'Go ahead\u2026'), true);
         if (o.ack !== false) playAck();
         armCaptureTimers();
     }
@@ -1453,13 +1477,37 @@
     // that restarts on every word she says, and a hard cap so a stuck
     // recogniser cannot hold the microphone open for ever. She now stops when
     // she stops, not when the clock does.
+    // ── TWO TIMEOUTS, NOT ONE. THIS WAS MY BUG. ──────────────────────────
+    // Apsara, 2026-09-07: "on follow up, it says go ahead.. but nothing is
+    // recorded."
+    //
+    // Exactly right, and I caused it this morning. Replacing the fixed 8s
+    // window with a silence timer fixed being cut off mid-sentence and broke
+    // something worse: armCaptureTimers() is called by openCapture(), so the
+    // 1800ms clock started the instant the card said "Go ahead…" — BEFORE she
+    // had said a word. Any pause longer than one and four-fifths of a second
+    // and finishCapture() ran with nothing captured, hit the `if (!q)` return,
+    // and went quietly back to idle. Her turn vanished.
+    //
+    // It bites hardest on FOLLOW-UPS, which is where she found it: Jarvis has
+    // just asked "What rate per metric ton?" and she has to think, or look it
+    // up. Thinking took longer than the window. The old fixed 8s window was
+    // wrong about when to STOP but at least gave her 8 seconds to START.
+    //
+    // Every real endpointer carries two separate timeouts and I collapsed
+    // them into one:
+    //   LISTEN_MS  — how long to wait for her to BEGIN. Generous.
+    //   SILENCE_MS — how long after she STOPS to decide she has finished.
+    // The short one must not be armed until she has actually said something.
+    var LISTEN_MS = 8000;       // waiting for her to start — a thinking pause
     var SILENCE_MS = 1800;      // quiet long enough to mean "finished"
     var HARD_CAP_MS = 45000;    // a recogniser that never stops emitting
     var hardCapTimer = null;
+    var heardAnything = false;
 
     function armCaptureTimers() {
         clearTimeout(captureTimer);
-        captureTimer = setTimeout(finishCapture, SILENCE_MS);
+        captureTimer = setTimeout(finishCapture, heardAnything ? SILENCE_MS : LISTEN_MS);
         if (!hardCapTimer) hardCapTimer = setTimeout(function () {
             console.log('[VOICE] hard cap reached — closing the capture');
             finishCapture();
@@ -1480,7 +1528,35 @@
         var q = heardDuringCapture.replace(WAKE, '').trim();
         capturePrefix = '';
         dispatch('CAPTURE_END');
-        if (!q) { say(canWake ? 'Say “Hey Jarvis”' : 'Hold to talk'); return; }
+        if (!q) {
+            // ── AND IT NEVER DIES QUIETLY AGAIN ──────────────────────────
+            // This bare return is what made the bug invisible. On a follow-up
+            // the question Jarvis asked is still outstanding, so going back to
+            // idle leaves her looking at a card that says nothing while the
+            // draft waits for an answer she believes she gave.
+            //
+            // One retry, then stop. A capture that reopens for ever with a
+            // dead microphone is a worse failure than a lost turn, and it is
+            // one she cannot get out of.
+            if (captureWasFollowUp && !captureRetried) {
+                captureRetried = true;
+                console.log('[VOICE] nothing heard on a follow-up — reopening once');
+                pendingHint = 'Didn\u2019t catch that';
+                suppressAck = true;
+                dispatch('WAKE_HEARD');
+                return;
+            }
+            // GIVING UP CLEARS THE FOLLOW-UP FLAG, NOT THE RETRY FLAG. I had
+            // it the other way round and the third empty finish started the
+            // cycle again — retry, give up, retry, for ever. Caught by the
+            // assertion that finishes a third time, which is the only one in
+            // the suite that could have seen it.
+            captureWasFollowUp = false;
+            say(canWake ? 'Say “Hey Jarvis”' : 'Hold to talk');
+            return;
+        }
+        captureRetried = false;
+        captureWasFollowUp = false;
         // Remembered so a sentence she resumes a moment later can be joined
         // to it rather than starting a new one. See the continuation window
         // in the recogniser.

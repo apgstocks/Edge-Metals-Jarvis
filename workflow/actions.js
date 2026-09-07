@@ -234,7 +234,13 @@ if (promoted) {
         // top-level require here would be circular. Safe at call time since
         // brain.js is always fully loaded before any message is processed.
         const { pendingFullReminder } = require('./brain');
-        const text = (pendingFullReminder && pendingFullReminder(promoted)) || `You also have a pending "${promoted.type}" waiting on this chat — go ahead and reply.`;
+        // MISSED IN THE FIRST SWEEP. That pass replaced every
+        // `staged.blockedBy`, and this one reads `promoted.type` — same leak,
+        // different variable, and a grep for the first shape walked straight
+        // past it. Worth recording rather than quietly fixing: a search that
+        // finds every instance of a SPELLING is not a search that finds every
+        // instance of a BUG.
+        const text = (pendingFullReminder && pendingFullReminder(promoted)) || `You also have ${describePending(promoted.type)} waiting on this chat — go ahead and reply.`;
         await _send(chatId, `(Next up — this was queued behind what you just answered:)\n${text}`);
     } catch (e) { console.error('[ACTIONS] promote-queued notify failed:', e.message); }
 }

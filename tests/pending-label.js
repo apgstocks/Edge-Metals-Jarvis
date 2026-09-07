@@ -98,6 +98,22 @@ section('C — and no call site leaks the identifier again');
         ck(`${f} never interpolates blockedBy raw`,
            !/["'`]?\$\{staged\.blockedBy\}/.test(src),
            'this is the shape from her screenshot');
+        // ANY pending's .type, not just that one variable name. The first
+        // sweep replaced every `staged.blockedBy` and walked straight past
+        // `promoted.type` in the queue-promotion notice — same leak, different
+        // spelling. Matching the SHAPE catches the next one too.
+        //
+        // CONSOLE LINES ARE STRIPPED FIRST, and that is not a loophole: a log
+        // SHOULD carry the identifier, because a log is read by whoever is
+        // debugging and the symbol is the useful part. The rule is about text
+        // she reads. My first version scanned everything, flagged two
+        // console.warn calls, and would have taught the next person to widen
+        // the regex until it matched nothing.
+        const spoken = src.split('\n').filter((l) => !/console\.(log|warn|error|info|debug)\(/.test(l)).join('\n');
+        ck(`  ${f} never interpolates any pending .type into a message`,
+           !/\$\{[a-zA-Z_$][\w$]*\.type\}/.test(spoken),
+           (/.*\$\{[a-zA-Z_$][\w$]*\.type\}.*/.exec(spoken) || [''])[0].trim().slice(0, 120)
+           + ' — a search for one spelling is not a search for the bug');
         ck(`  ${f} routes it through describePending`,
            /describePending\(staged\.blockedBy\)/.test(src));
         ck(`  ${f} imports it`,

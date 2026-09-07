@@ -1516,11 +1516,30 @@ section('FOLLOW2 — and it does not hold the microphone open for ever');
     await new Promise((r) => setTimeout(r, 30));
     ck('it reopened once', /listening|go ahead/i.test(b.doc.getElementById('jvText').textContent));
 
-    // She says nothing. finishCapture with an empty transcript must stop.
+    // She says nothing. 2026-09-07: it now gives her ONE more go before
+    // giving up, because the turn it was dropping was an answer to a question
+    // Jarvis had itself asked — going silently back to idle left the draft
+    // waiting for something she believed she had said.
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  an empty follow-up is retried once, out loud',
+       /didn.t catch that/i.test(b.doc.getElementById('jvText').textContent
+           + ' ' + b.doc.body.textContent),
+       'pill says "' + b.doc.getElementById('jvText').textContent + '"');
+
+    // And then it STOPS. A capture that reopens for ever on a dead microphone
+    // is a worse failure than a lost turn, and one she cannot escape.
     b.w.JarvisVoice.finish();
     await new Promise((r) => setTimeout(r, 30));
     ck('  and silence ends it rather than looping',
        /say .hey jarvis.|hold to talk/i.test(b.doc.getElementById('jvText').textContent),
+       'pill says "' + b.doc.getElementById('jvText').textContent + '"');
+
+    // A THIRD finish must not start the cycle again — the retry flag has to
+    // be cleared on the way out, not left set or left true for ever.
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  and stays ended', /say .hey jarvis.|hold to talk/i.test(b.doc.getElementById('jvText').textContent),
        'pill says "' + b.doc.getElementById('jvText').textContent + '"');
 
     // An ordinary answer with no question in it must NOT reopen.
@@ -1636,9 +1655,26 @@ section('CUT — it does not cut her off mid-sentence');
     // The window was a FIXED eight seconds from the moment capture opened, so
     // a slow or considered sentence was guillotined at the same instant every
     // time whether or not she was still talking.
+    // 2026-09-07: this now checks BOTH timeouts. Apsara: "on follow up, it
+    // says go ahead.. but nothing is recorded." The silence timer alone was
+    // armed by openCapture(), so the 1800ms clock ran before she had said a
+    // word and a thinking pause dropped the whole turn. A real endpointer
+    // separates "waiting for her to begin" from "she has stopped", and this
+    // assertion is what stops them being collapsed back into one.
     ck('the window measures SILENCE, not elapsed time',
-       /var SILENCE_MS = \d+/.test(VOICE) && /captureTimer = setTimeout\(finishCapture, SILENCE_MS\)/.test(VOICE),
+       /var SILENCE_MS = \d+/.test(VOICE) && /var LISTEN_MS = \d+/.test(VOICE)
+       && /captureTimer = setTimeout\(finishCapture, heardAnything \? SILENCE_MS : LISTEN_MS\)/.test(VOICE),
        'a fixed window cuts a long sentence in half at the same point every time');
+    ck('  and waiting-to-start is far longer than end-of-utterance',
+       (function () {
+           const L = Number((/var LISTEN_MS = (\d+)/.exec(VOICE) || [])[1]);
+           const S = Number((/var SILENCE_MS = (\d+)/.exec(VOICE) || [])[1]);
+           return L >= 5000 && S <= 2500 && L > S * 2;
+       })(),
+       'she has to think before answering "what rate per metric ton?" — 1.8s is not thinking time');
+    ck('  and the short one is not armed until she has actually spoken',
+       /heardAnything = true;/.test(VOICE) && /heardAnything = !!capturePrefix;/.test(VOICE),
+       'arming the silence timer at open is the bug itself');
     // Matched on the ARMING call inside the capturing branch, not on the
     // assignment next to it — which I keyed off first and which broke the
     // moment the seed prefix changed that line. The behaviour is asserted
