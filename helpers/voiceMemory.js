@@ -92,6 +92,15 @@ function history() {
 
 function reset() { turns = []; referents = null; }
 
+// The sentence BEFORE the one being handled — which is what a retraction is
+// about. `remember('user', asked)` runs at the top of the handler, so by the
+// time helpers/repair.js asks, the current utterance is already the last
+// entry and the one it wants is the previous user turn.
+function previousUser() {
+    const mine = turns.filter((t) => t.role === 'user');
+    return mine.length > 1 ? mine[mine.length - 2].text : null;
+}
+
 // ── resolving a reference ────────────────────────────────────────────────
 const ORDINALS = {
     first: 1, '1st': 1, one: 1,
@@ -317,7 +326,7 @@ function distinguishers() {
 }
 
 module.exports = {
-    remember, setReferents, currentReferents, history, resolve, resolveSmart,
+    remember, setReferents, currentReferents, history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,
 };

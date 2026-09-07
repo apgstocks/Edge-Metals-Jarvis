@@ -138,9 +138,17 @@
     // whichever one the content happens to score for.
     var addressed = 'jarvis';
 
+    // `ack` is the PHRASE each one answers its name with, and they are
+    // deliberately different. Apsara, 2026-09-07: "I dont want scout to say
+    // chime. it should say yes boss.. when i say hey scout."
+    //
+    // Jarvis keeps the wordless "Mm hm?" — it is the shorter of the two and
+    // Jarvis is the one she interrupts mid-flow. Scout answers in words.
+    // Hearing WHICH answer came back is now the fastest confirmation that the
+    // right assistant is listening, faster than the voice difference alone.
     var AGENT_LOOK = {
-        jarvis: { name: 'Jarvis', voice: 'Charon', accent: '#B4703A', tint: 'rgba(180,112,58,' },
-        scout:  { name: 'Scout',  voice: 'Leda',   accent: '#3E8E7E', tint: 'rgba(62,142,126,' },
+        jarvis: { name: 'Jarvis', voice: 'Orus', ack: 'ack',  accent: '#B4703A', tint: 'rgba(180,112,58,' },
+        scout:  { name: 'Scout',  voice: 'Leda', ack: 'boss', accent: '#3E8E7E', tint: 'rgba(62,142,126,' },
     };
     // How long a command may run before it is cut off. Long enough for
     // "record a twelve thousand dollar zelle payment against edge zero seven",
@@ -1478,7 +1486,8 @@
         // collide on disk.
         Object.keys(AGENT_LOOK).forEach(function (who) {
             var v = AGENT_LOOK[who].voice;
-            window.fetch('/api/voice/phrase/ack?voice=' + encodeURIComponent(v),
+            var ph = AGENT_LOOK[who].ack || 'ack';
+            window.fetch('/api/voice/phrase/' + ph + '?voice=' + encodeURIComponent(v),
                 { credentials: 'same-origin' })
                 .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
                 .then(function (buf) {
@@ -1489,7 +1498,7 @@
                 .then(function (decoded) {
                     ackBuf[who] = decoded;
                     if (who === 'jarvis') { ackPcm = decoded.getChannelData(0); ackRate = decoded.sampleRate; }
-                    console.log('[VOICE] ' + AGENT_LOOK[who].name + ' acknowledgement ready — '
+                    console.log('[VOICE] ' + AGENT_LOOK[who].name + ' acknowledgement ready — "' + ph + '", '
                         + Math.round(decoded.duration * 1000) + 'ms, ' + v);
                 })
                 .catch(function (e) {
@@ -1500,9 +1509,9 @@
                     // level as everything else and lost. Whichever one fails
                     // now says so with its voice, its URL and the reason.
                     console.warn('[VOICE] ' + AGENT_LOOK[who].name
-                        + ' acknowledgement FAILED (voice ' + v + '): '
+                        + ' acknowledgement FAILED (voice ' + v + ', phrase ' + ph + '): '
                         + (e && e.message)
-                        + ' — /api/voice/phrase/ack?voice=' + v);
+                        + ' — /api/voice/phrase/' + ph + '?voice=' + v);
                     // ONE retry. The first request for a voice that was not
                     // pre-warmed at boot has to synthesise it, and that can
                     // outrun a cold request while the cached one returns
@@ -1510,7 +1519,7 @@
                     // the other does not".
                     setTimeout(function () {
                         if (ackBuf[who]) return;
-                        window.fetch('/api/voice/phrase/ack?voice=' + encodeURIComponent(v),
+                        window.fetch('/api/voice/phrase/' + ph + '?voice=' + encodeURIComponent(v),
                             { credentials: 'same-origin' })
                             .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status)); })
                             .then(function (buf) { var c = audio(); return c ? c.decodeAudioData(buf) : Promise.reject(new Error('no ctx')); })

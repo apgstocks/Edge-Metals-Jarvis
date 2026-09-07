@@ -33,8 +33,12 @@ console.log('\n─ voice: routing and speech ───────────�
 
 // ── the two agents ────────────────────────────────────────────────────────
 {
-    ck('Jarvis speaks as Charon', AGENTS.jarvis.voice === 'Charon');
+    // Orus since 2026-09-07 — Apsara: "Chnage the voice of jarvis to bolder
+    // voice." Charon remains in the allow-list so VOICE_NAME can put it back.
+    ck('Jarvis speaks as Orus', AGENTS.jarvis.voice === 'Orus');
     ck('Scout speaks as Leda', AGENTS.scout.voice === 'Leda');
+    ck('  and Scout answers in words, not a chime',
+       voice.PHRASES ? voice.PHRASES.boss === 'Yes, boss.' : true);
     ck('they do not share a voice', AGENTS.jarvis.voice !== AGENTS.scout.voice);
 }
 

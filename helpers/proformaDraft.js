@@ -709,6 +709,15 @@ function nextQuestion() {
 // "Daekwang" is.
 function answer(text) {
     if (!draft) return null;
+    // ── ONE STEP OF HISTORY, FOR "no, not that one" ──────────────────────
+    // Apsara, 2026-09-07: "what if i say something like jarvis ignore that."
+    // An undo needs somewhere to go back TO. Snapshotted before absorbing, so
+    // undoLast() restores the fields exactly as they were one sentence ago.
+    //
+    // Capped, because this is a voice session and not a document editor: ten
+    // steps is more than she will ever walk back by speaking, and an unbounded
+    // array on a long-lived draft is a leak nobody would ever notice.
+    draft.history = (draft.history || []).concat([Object.assign({}, draft.fields)]).slice(-10);
     const got = absorb(text);
     Object.assign(draft.fields, got);
 
@@ -1335,6 +1344,27 @@ function isAmendment(text, opts) {
 
 // api.js calls this after staging the pending, so a later correction has
 // something to correct.
+// Steps back one answer. Returns what it restored, or null when there is
+// nothing to go back to — which the caller must SAY rather than silently
+// treating as success.
+function undoLast() {
+    if (!draft || !draft.history || !draft.history.length) return null;
+    const before = draft.history.pop();
+    const changed = [];
+    for (const f of FIELDS) {
+        const a = draft.fields[f.key], b = before[f.key];
+        if (String(a === undefined ? '' : a) !== String(b === undefined ? '' : b)) {
+            changed.push(FIELD_LABEL[f.key] || f.key);
+        }
+    }
+    draft.fields = before;
+    // A staged draft that gets undone is no longer the thing she was asked to
+    // confirm, so it stops being confirmable — same rule as an amendment.
+    draft.staged = false;
+    console.log('[PROFORMA] undo: restored ' + (changed.join(', ') || 'nothing visible'));
+    return { changed, summary: summary() };
+}
+
 function markStaged() { if (draft) draft.staged = true; }
 function isStaged() { return !!(draft && draft.staged); }
 
@@ -1519,7 +1549,7 @@ module.exports = {
     _clearMaterialCache: () => { _matCache = null; _matCacheAt = 0; _patCache.clear(); },
     _clearParked: () => { parked = null; },
     handle, brainDraft, recipient, SEND_TO, contextLine, openContainerCount,
-    isPark, isResume, parkedDraft, transitionState, PARK, RESUME, PARK_TTL_MS,
+    isPark, isResume, parkedDraft, transitionState, undoLast, PARK, RESUME, PARK_TTL_MS,
     isAmendment, markStaged, isStaged, CORRECTION_CUE, NOT_A_CONSIGNEE, COMPANY_TAIL, INCOTERM, START_VERB, NOT_A_START, CREATE_VERB,
     namesProforma, looksLikeProforma, PROFORMA_STOP, PROFORMA_SHAPE,
     isStart, start, answer, current, clear, missing, nextQuestion, payload, pdfPayload, summary,

@@ -51,11 +51,35 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-// af_heart and af_bella are the two voices independently graded A and A- in
-// Kokoro's own voice table. The rest run down to F, and offering them would
-// only give her a way to make this sound worse than what it replaced.
-const VOICES = ['af_heart', 'af_bella'];
-const DEFAULT_VOICE = 'af_heart';
+// ── BOLDER, AND WHAT IT COSTS ────────────────────────────────────────────
+// Apsara, 2026-09-07: "Chnage the voice of jarvis to bolder voice."
+//
+// This comment used to say af_heart and af_bella were the only two worth
+// offering because they are the only A and A- in Kokoro's own voice table,
+// and everything else runs down to F. That is still true, and it is the
+// honest cost of what she asked for: EVERY male Kokoro voice is graded C+ or
+// below. am_michael is the best of them.
+//
+// So this is a real trade, not a free improvement — a bolder voice here is a
+// measurably lower-quality one, and she should know that rather than wonder
+// why it suddenly sounds rougher. The A-grade voices stay in the list so she
+// can put one back in a second, and the grade is written next to each so the
+// choice is visible at the point of choosing rather than buried in a table on
+// someone else's website.
+//
+// The GEMINI path (helpers/voice.js) is the one she hears on the web app and
+// it has no such penalty: Orus is a first-class voice there. This penalty is
+// specific to the local desktop model.
+const VOICE_GRADES = {
+    af_heart:  'A',    // female, the previous default
+    af_bella:  'A-',   // female
+    am_michael:'C+',   // male — the best-graded bold option
+    am_fenrir: 'C+',   // male, rougher
+    am_puck:   'C+',   // male, brighter
+    bm_george: 'C',    // British male — closest to the films, lowest grade of the four
+};
+const VOICES = Object.keys(VOICE_GRADES);
+const DEFAULT_VOICE = 'am_michael';
 
 // q8 rather than fp32: 86MB against 326MB, with no audible difference at this
 // model size. The download happens once.
@@ -146,4 +170,5 @@ function status() {
     };
 }
 
-module.exports = { load, speak, status, VOICES, DEFAULT_VOICE, cacheDir };
+module.exports = {
+    VOICE_GRADES, load, speak, status, VOICES, DEFAULT_VOICE, cacheDir };

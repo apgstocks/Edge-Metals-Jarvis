@@ -6,7 +6,7 @@
 //
 // Two agents now share one microphone:
 //
-//   JARVIS (voice Charon) — workflow/brain.js. Freight operations. It books
+//   JARVIS (voice Orus) — workflow/brain.js. Freight operations. It books
 //     loads, messages truckers, sends WhatsApp and email. It DOES things, to
 //     real people, immediately.
 //
@@ -181,7 +181,7 @@ function stripAgentName(text) {
 }
 
 const AGENTS = {
-    jarvis: { name: 'Jarvis', voice: 'Charon' },
+    jarvis: { name: 'Jarvis', voice: 'Orus' },   // bolder, 2026-09-07
     scout: { name: 'Scout', voice: 'Leda' },
 };
 

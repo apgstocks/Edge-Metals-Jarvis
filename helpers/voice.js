@@ -41,7 +41,22 @@ const crypto = require('crypto');
 const cfg = require('../config');
 
 const MODEL = process.env.VOICE_MODEL || 'gemini-2.5-flash-preview-tts';
-const VOICE = process.env.VOICE_NAME || 'Charon';
+// ── BOLDER, WITHOUT UNDOING THE PACE FIX ─────────────────────────────────
+// Apsara, 2026-09-07: "Chnage the voice of jarvis to bolder voice."
+//
+// Orus rather than Charon: both are real Gemini TTS prebuilt voices, Orus is
+// the firmer and lower of the two.
+//
+// THE TRAP, and it is written three paragraphs below in this same file: the
+// style direction used to be butler-ish and she rejected it — "i dont like
+// ironman jarvis. it is very slow speaking" — measured at 15.3s against 11.1s
+// for identical words. "Bolder" is one word away from that mistake, because
+// the adjectives that make a voice sound weighty (grave, measured, deliberate)
+// are all instructions to SLOW DOWN and the model obeys them literally.
+//
+// So bold is directed as TIMBRE only — firm, low, certain — and every pace
+// word in the direction stays exactly as it was. Boldness is not slowness.
+const VOICE = process.env.VOICE_NAME || 'Orus';
 const SAMPLE_RATE = 24000;
 
 // A spoken reply is not a written one. Past a couple of sentences nobody is
@@ -78,6 +93,17 @@ const CACHE_DIR = path.join(cfg.DATA_DIR, 'voice-cache');
 // adjectives. Both voices are now told to be brisk. In a yard nobody is
 // waiting through a dramatic pause to hear a weight.
 const STYLES = {
+    // The pace half of this sentence is UNCHANGED from the version she
+    // approved. Only the character half moved: "clear and efficient" became
+    // "firm and certain", which is a description of tone, not of speed. The
+    // three explicit prohibitions stay, and they are what keep bold from
+    // becoming the slow butler she rejected.
+    Orus: 'Read this briskly and naturally, at a quick conversational pace, as if giving a colleague a fast update. '
+        + 'Firm, low and certain — confident, not theatrical. '
+        + 'Do not slow down, do not pause dramatically, do not add gravitas. '
+        + 'Speak only the words after the colon: ',
+    // Kept so an override back to Charon still has its direction, and so the
+    // comparison is on the record if she wants the old one again.
     Charon: 'Read this briskly and naturally, at a quick conversational pace, as if giving a colleague a fast update. '
         + 'Clear and efficient. Do not slow down, do not pause dramatically, do not add gravitas. '
         + 'Speak only the words after the colon: ',
@@ -103,6 +129,15 @@ const PHRASES = {
     // Spelled "Mm hm" with a space because the synthesiser reads "Mmhm" as a
     // word and "Mm-hm" as two, hyphen and all.
     ack: 'Mm hm?',
+    // ── SCOUT ANSWERS, IT DOES NOT CHIME ─────────────────────────────────
+    // Apsara, 2026-09-07: "I dont want scout to say chime. it should say yes
+    // boss.. when i say hey scout."
+    //
+    // A NEW KEY, not an edit to `ack`, for the reason written above it: the
+    // WAV cache is keyed by phrase name, so changing the text of an existing
+    // phrase keeps serving the old audio from disk and looks exactly like the
+    // change never landed.
+    boss: 'Yes, boss.',
     wake: 'Yes?',
     working: 'On it.',
     done: 'Done.',

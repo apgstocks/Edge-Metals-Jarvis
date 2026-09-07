@@ -1864,7 +1864,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Safe to cache: cacheKey() already includes the voice and its
             // style prompt, so the two never collide on disk.
             const wanted = String(req.query.voice || '').trim();
-            const VOICES_ALLOWED = ['Charon', 'Leda'];
+            // Orus is Jarvis's voice as of 2026-09-07 ("bolder"); Charon stays
+            // allowed so VOICE_NAME can put it back without a code change.
+            const VOICES_ALLOWED = ['Orus', 'Charon', 'Leda'];
             const wav = await phrase(String(req.params.name || ''),
                 VOICES_ALLOWED.indexOf(wanted) !== -1 ? { voice: wanted } : {});
             res.set('Content-Type', 'audio/wav');
@@ -2066,6 +2068,69 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // it costs nothing on every other utterance.
             const transition = await require('./helpers/draftIntent')
                 .classify(asked, pro.transitionState());
+
+            // ── "JARVIS IGNORE THAT, I MADE A MISTAKE" ───────────────────
+            // Apsara, 2026-09-07. The reasoning, the papers and the Alexa
+            // comparison are in helpers/repair.js; the short version is that
+            // Heeman & Allen measured only 13.9% of real repairs carrying an
+            // editing term, so a keyword list misses six in seven by
+            // construction — and Amazon's own AMAZON.CancelIntent is exactly
+            // such a list.
+            //
+            // CHECKED BEFORE THE AMENDMENT AND THE DRAFT, because a
+            // retraction is about the sentence BEFORE this one, and anything
+            // that absorbs it first will read "ignore that" as a value.
+            //
+            // It is the CALLER's job to decide whether anything is actually
+            // retractable, so the scope below is matched against what is
+            // really open rather than trusted on its own.
+            const repair = require('./helpers/repair');
+            const repairState = pro.transitionState();
+            const scope = await repair.classify(asked, {
+                task: repairState.summary || (brainPending
+                    ? require('./helpers/pendingLabel').describePending(brainPending.type) : ''),
+                question: repairState.question || null,
+                // The sentence BEFORE this one — the reparandum, in Heeman &
+                // Allen's terms. Without it the model is judging "ignore
+                // that" with no idea what "that" was.
+                lastValue: mem.previousUser ? mem.previousUser() : null,
+            });
+            if (scope !== 'none') {
+                const hadDraft = repairState.open || repairState.parked;
+                const hadPending = !!brainPending;
+                let said = '';
+                if (!hadDraft && !hadPending) {
+                    // NOTHING TO TAKE BACK. Said out loud rather than
+                    // accepting the instruction and doing nothing, which
+                    // reads to her as done.
+                    said = repair.nothingToUndo(scope, null);
+                } else if (scope === 'undo' && repairState.open) {
+                    const back = pro.undoLast();
+                    said = back
+                        ? repair.confirm('undo', back.changed.join(', ')) + ' ' + back.summary
+                        : repair.nothingToUndo('undo', null);
+                } else {
+                    // cancel and restart both drop what is in flight. The
+                    // pending goes FIRST: a draft cleared while its
+                    // confirmation is still standing leaves a "yes" that
+                    // would confirm a document that no longer exists.
+                    const what = repairState.summary || (brainPending
+                        ? require('./helpers/pendingLabel').describePending(brainPending.type) : '');
+                    if (hadPending) {
+                        try {
+                            await require('./workflow/actions').clearPending(
+                                `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`);
+                        } catch (e) {
+                            console.error('[REPAIR] could not clear the pending:', e.message);
+                        }
+                    }
+                    pro.clear();
+                    try { pro._clearParked(); } catch (e) {}
+                    said = repair.confirm(scope, what);
+                }
+                console.log(`[REPAIR] ${scope}: "${asked}" — ${said}`);
+                return answering({ ok: true, answer: said, agent: 'jarvis', agent_name: 'Jarvis', repaired: scope });
+            }
 
             // ── "WAIT. CHANGE THESE AND CREATE" ──────────────────────────
             // Apsara, 2026-09-07: "what if i want change in cif and payment

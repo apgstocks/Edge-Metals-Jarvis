@@ -673,9 +673,21 @@ section('A0b — Scout has a name, a colour and a voice of its own');
     // this existed — because "a sound played" is not "the RIGHT sound
     // played", and the voice is the whole signal she asked for.
     ck('each assistant fetches its OWN voice',
-       b.w.__ackFetches.some((p) => /voice=Charon/.test(p))
+       b.w.__ackFetches.some((p) => /voice=Orus/.test(p))
        && b.w.__ackFetches.some((p) => /voice=Leda/.test(p)),
        'fetched: ' + JSON.stringify(b.w.__ackFetches));
+    // ── AND ITS OWN PHRASE ───────────────────────────────────────────────
+    // Apsara, 2026-09-07: "I dont want scout to say chime. it should say yes
+    // boss." So the difference is no longer only timbre — Jarvis hums, Scout
+    // answers in words, and WHICH answer comes back is now the fastest
+    // confirmation that the right assistant heard her.
+    ck('  and its own PHRASE',
+       b.w.__ackFetches.some((p) => /phrase\/ack\?voice=Orus/.test(p))
+       && b.w.__ackFetches.some((p) => /phrase\/boss\?voice=Leda/.test(p)),
+       'fetched: ' + JSON.stringify(b.w.__ackFetches));
+    ck('    and Scout never asks for the chime',
+       !b.w.__ackFetches.some((p) => /phrase\/ack\?voice=Leda/.test(p)),
+       'a hardcoded /ack in the URL fetches a chime however the agent table is set');
 
     // ── WHICH ONE ACTUALLY PLAYED ────────────────────────────────────────
     // Fetching two voices and then playing the same one for both is
