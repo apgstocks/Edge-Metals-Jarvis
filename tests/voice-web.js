@@ -1834,6 +1834,77 @@ section('BARGE2 — and it fails CLOSED');
     ck('  and stays off for the rest of the session', b.w.JarvisVoice.guard() === false);
 }
 
+section('SHUTUP — silencing it actually silences it');
+{
+    // Apsara, 2026-09-07: "if i say shut up... still goes on in a loop" and
+    // "when i say shutt up it still shows the next available cutoff is in 10
+    // days."
+    //
+    // ONE BUG, and it was not the barge word — "shut up" was already in
+    // BARGE_WORDS and matching fine. interrupt() stopped the SPEAKER. What it
+    // could not stop was the request already in flight: its .then() ran a
+    // moment later and unconditionally painted the panel, wrote the card and
+    // spoke. She silenced it and it answered anyway.
+    let release;
+    const held = new Promise((r) => { release = r; });
+    const b = browser({ reply: () => held });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis show me the bookings from houston');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 20));
+
+    // She changes her mind while it is still thinking.
+    b.doc.getElementById('jvCard').click();      // the same path "shut up" takes
+    await new Promise((r) => setTimeout(r, 10));
+
+    // NOW the answer arrives.
+    release({ ok: true, answer: 'Yes — 10 bookings from Houston. Earliest cutoff is in 10 days.',
+              agent: 'jarvis', agent_name: 'Jarvis',
+              cards: { kind: 'bookings', title: 'Bookings — HOUSTON',
+                       rows: [{ n: 1, booking_number: 'BK1', erd: '07/07/2026', cutoff: '07/13/2026' }] } });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const body = b.doc.body.textContent;
+    ck('the retracted answer never reaches the card',
+       !/10 days/.test(body),
+       'screen still says: ' + body.slice(0, 160));
+    ck('  nor is it spoken', !b.log.spoken.some((t) => /10 days/.test(t)),
+       JSON.stringify(b.log.spoken));
+    ck('  nor does its list take over the screen',
+       b.doc.getElementById('jvPanel').classList.contains('hidden')
+       || !/BK1/.test(b.doc.getElementById('jvPanel').textContent),
+       'a panel she cancelled is one she can say "the first one" about');
+
+    // THE MECHANISM, so a rewrite cannot lose it quietly.
+    ck('every ask takes a generation number', /var mySeq = \+\+askSeq;/.test(VOICE));
+    ck('  the response checks it before painting anything',
+       /if \(mySeq !== askSeq\) \{[\s\S]{0,200}return;\s*\n\s*\}\s*\n\s*if \(window\.JarvisOrb\)/.test(VOICE),
+       'the check has to come BEFORE setThinking, showPanel and speak');
+    ck('  the failure path checks it too', /if \(mySeq !== askSeq\) return;/.test(VOICE),
+       '"Failed" belongs to a question she retracted');
+    ck('  and interrupting retires what is in flight',
+       /askSeq \+= 1;\s*\n\s*dispatch\('CAPTURE_START'\)/.test(VOICE),
+       'this single line is the whole of "shut up actually shuts it up"');
+
+    // AND A NORMAL ANSWER STILL LANDS. A guard that drops everything is not
+    // a fix, it is the same bug pointing the other way.
+    const ok = browser({ reply: () => ({ ok: true, answer: 'Cutoff is next Wednesday.',
+                                         agent: 'jarvis', agent_name: 'Jarvis' }) });
+    ok.w.eval(MACHINE); ok.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    ok.w.JarvisVoice.dispatch('USER_TOGGLE');
+    ok.w.JarvisVoice.dispatch('WAKE_HEARD');
+    ok.mic() && ok.mic().hear('hey jarvis when is the cutoff');
+    ok.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('an answer she did NOT interrupt still arrives',
+       /next Wednesday/.test(ok.doc.body.textContent),
+       ok.doc.body.textContent.slice(0, 140));
+}
+
 section('CUT — it does not cut her off mid-sentence');
 {
     // Apsara, 2026-09-07: "at the end of wavelegth timeout, if i start saying

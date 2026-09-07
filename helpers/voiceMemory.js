@@ -74,7 +74,50 @@ function remember(role, text) {
 // Called only when a NEW list was rendered. answerCards returns null for
 // instructions, which is what stops "forward the first one" from replacing
 // the very list it refers to.
+// ── THE BACKWARD-LOOKING CENTER ──────────────────────────────────────────
+// Apsara, 2026-09-07: "On follow up, if i ask when is the erd of that booking.
+// Instead of linking the context, it just says there are 10 bookings on
+// screen. which one you want me to check?"
+//
+// She is right and the fix has a name. Grosz, Joshi & Weinstein, "Centering:
+// A Framework for Modeling the Local Coherence of Discourse" (Computational
+// Linguistics 21(2), 1995) — already cited further down this file for
+// pronoun resolution, and this is the half of it I had not implemented.
+//
+// Each utterance has a set of forward-looking centers (Cf) — everything it
+// mentions — and a single BACKWARD-looking center (Cb): the one entity the
+// utterance is actually ABOUT. The rule that matters here is Centering's
+// Rule 1: if anything is pronominalised, the Cb is. So "that booking" does
+// not mean "one of the ten on screen"; it means the one the last sentence was
+// about.
+//
+// And the last sentence WAS about one: "Earliest cutoff is next Wednesday"
+// is a statement about rows[0], not about the list. Ten rows were on screen
+// and resolve() counted them and refused, because the only thing recorded was
+// the Cf — the whole list — and never the Cb.
+//
+// Kept separate from `referents` rather than reordering them, because the
+// list order means something else entirely: "the first one" is soonest
+// cutoff, and moving the discussed row to the front would silently change
+// what that phrase points at.
+let center = null;
+
+// A new list is a new topic. Whatever was being discussed is no longer what
+// "that" means, and carrying it across is worse than having none — it would
+// resolve confidently to a booking that is not even on screen.
+function setCenter(row) {
+    center = row && row.booking_number ? { row, at: Date.now() } : null;
+    if (center) console.log(`[MEMORY] center: ${row.booking_number}`);
+}
+
+function currentCenter() {
+    if (!center) return null;
+    if (Date.now() - center.at > REFERENT_TTL_MS) { center = null; return null; }
+    return center.row;
+}
+
 function setReferents(cards) {
+    center = null;
     if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;
     referents = { kind: cards.kind, title: cards.title, ts: Date.now(), rows: cards.rows };
 }
@@ -90,7 +133,7 @@ function history() {
     return turns.map((t) => ({ role: t.role, text: t.text }));
 }
 
-function reset() { turns = []; referents = null; }
+function reset() { turns = []; referents = null; center = null; }
 
 // The sentence BEFORE the one being handled — which is what a retraction is
 // about. `remember('user', asked)` runs at the top of the handler, so by the
@@ -158,14 +201,31 @@ function resolve(text) {
         // could mean. With three on screen it is a genuine ambiguity, and
         // the honest response is to ask — the same refusal the brain already
         // makes for a bare digit with two possible sources.
+        const m2 = DEICTIC_RE.exec(q);
+        // Whichever pattern matched — replacing the wrong span would leave
+        // the pronoun in the sentence alongside the number.
+        const span = m2 ? m2[0] : BARE_DEICTIC_RE.exec(q)[2];
         if (set.rows.length === 1) {
             row = set.rows[0];
-            // Whichever pattern matched — replacing the wrong span would
-            // leave the pronoun in the sentence alongside the number.
-            const m = DEICTIC_RE.exec(q);
-            phrase = m ? m[0] : BARE_DEICTIC_RE.exec(q)[2];
+            phrase = span;
+        } else {
+            // CENTERING, Rule 1. The last answer was about one of these; a
+            // pronoun refers to that one. Checked against the CURRENT set, so
+            // a center left over from a list that has been replaced resolves
+            // to nothing rather than to a booking no longer on screen.
+            const cb = currentCenter();
+            const still = cb && set.rows.filter((r) => r.booking_number === cb.booking_number)[0];
+            if (still) {
+                row = still;
+                phrase = span;
+                console.log(`[MEMORY] "${span}" → ${still.booking_number} (the one just discussed)`);
+            } else {
+                // No center: genuinely ambiguous, and asking is right. The
+                // cost of asking is a sentence; the cost of guessing is an
+                // answer about the wrong booking, said with confidence.
+                return { text: q, resolved: null, ambiguous: set.rows.length };
+            }
         }
-        else return { text: q, resolved: null, ambiguous: set.rows.length };
     }
 
     if (!row) return { text: q, resolved: null };
@@ -326,7 +386,8 @@ function distinguishers() {
 }
 
 module.exports = {
-    remember, setReferents, currentReferents, history, previousUser, resolve, resolveSmart,
+    remember, setReferents, currentReferents, setCenter, currentCenter,
+    history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,
 };

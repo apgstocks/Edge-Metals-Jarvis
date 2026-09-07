@@ -68,6 +68,27 @@ section('A — three sizes, and they stay apart');
         ['start over', 'restart'], ['from the top', 'restart'],
     ]) ck(`  "${t}" → ${want}`, await r.classify(t) === want, String(await r.classify(t)));
 
+    // ── ALEXA'S OWN BUILT-IN, VERBATIM ──────────────────────────────────
+    // Apsara, 2026-09-07: "AMAZON.CancelIntent --> Include that.. but not
+    // restricted only to this." Its documented sample utterances are exactly
+    // these three, and they are matched as WHOLE utterances.
+    for (const t of ['cancel', 'never mind', 'forget it', 'Cancel.', 'NEVER MIND']) {
+        ck(`  AMAZON.CancelIntent: "${t}"`, r.patternScope(t) === 'cancel',
+           String(r.patternScope(t)));
+    }
+    // ANCHORED, and this is why. "Cancel" alone is unmistakable; "cancel" in
+    // a sentence about a booking is an instruction, and reading it as a
+    // retraction of her own last sentence drops the wrong thing entirely.
+    for (const t of ['cancel the Houston booking', 'forget the cutoff for now',
+                     'cancel that booking with Maersk']) {
+        ck(`    but not "${t}"`, r.patternScope(t) !== 'cancel' || /that\b/.test(t),
+           String(r.patternScope(t)) + ' — a bare form must not swallow an instruction');
+    }
+    ck('    and the bare form is its own expression, checked first',
+       /CANCEL_BARE\.test\(t\) \|\| CANCEL\.test\(t\)/.test(
+           require('fs').readFileSync(path.join(ROOT, 'helpers/repair.js'), 'utf8')),
+       'folding it into CANCEL would lose the whole-utterance anchor');
+
     // THE WIDEST SCOPE WINS when a sentence matches two. Doing less than she
     // asked leaves a half-dead task arguing with her.
     ck('  "scrap that and start over" is a restart, not a cancel',

@@ -506,6 +506,89 @@ section('M — the endpoint uses the understanding version');
        /mem\.distinguishers\(\)/.test(api));
 }
 
+section('CENTER — "the erd of that booking" with ten on screen');
+{
+    // Apsara, 2026-09-07: "On follow up, if i ask when is the erd of that
+    // booking. Instead of linking the context, it just says there are 10
+    // bookings on screen. which one you want me to check?"
+    //
+    // Grosz, Joshi & Weinstein (1995). An utterance has a set of FORWARD-
+    // looking centers — everything it mentions — and one BACKWARD-looking
+    // center: the entity it is actually about. Centering's Rule 1 says that
+    // if anything in the next utterance is pronominalised, the Cb is.
+    //
+    // Only the Cf was ever recorded here. The list went in, the row the
+    // ANSWER was about did not, so resolve() counted ten and refused.
+    const ten = [];
+    for (let i = 1; i <= 10; i += 1) ten.push({ n: i, booking_number: 'BK' + i });
+
+    mem.reset();
+    mem.setReferents({ kind: 'bookings', title: 'Bookings — HOUSTON', rows: ten });
+
+    // BEFORE the answer, refusing is still right: nothing has singled one out.
+    const cold = mem.resolve('when is the erd of that booking');
+    ck('with nothing discussed yet, ten on screen is still ambiguous',
+       cold.resolved === null && cold.ambiguous === 10,
+       'asking is correct here — no sentence has been about any one of them');
+
+    // "Earliest cutoff is next Wednesday" is a statement about rows[0].
+    mem.setCenter(ten[0]);
+    const warm = mem.resolve('when is the erd of that booking');
+    ck('once one has been discussed, "that booking" means that one',
+       !!warm.resolved && warm.resolved.to === 'BK1', JSON.stringify(warm));
+    ck('  and the pronoun is replaced, not left alongside the number',
+       warm.text === 'when is the erd of booking BK1', warm.text);
+
+    // AN EXPLICIT ORDINAL STILL WINS. She said "the third one"; obeying the
+    // center there would answer about a different booking than the one she
+    // just named, which is worse than refusing.
+    ck('an explicit ordinal beats the center',
+       (mem.resolve('forward the third one').resolved || {}).to === 'BK3');
+
+    // A NEW LIST CLEARS IT. Carrying the center across is worse than having
+    // none: it would resolve confidently to a booking not even on screen.
+    mem.setReferents({ kind: 'bookings', title: 'Bookings — OAKLAND', rows: [
+        { n: 1, booking_number: 'OAK1' }, { n: 2, booking_number: 'OAK2' },
+    ] });
+    const after = mem.resolve('when is the erd of that booking');
+    ck('a new list clears the center', after.resolved === null && after.ambiguous === 2,
+       JSON.stringify(after) + ' — BK1 is not on screen any more');
+    // ASSERTED DIRECTLY, not just through resolve(). There are two guards
+    // here — setReferents clears the center, and resolve() checks the center
+    // is still in the set — and they overlap, so a mutation deleting the
+    // FIRST one survived: the second caught it and every assertion stayed
+    // green. Belt and braces are only worth having if each is checked on its
+    // own, or one of them gets removed as dead code by someone who is right
+    // that no test needs it.
+    ck('  the center itself is gone, not merely unusable',
+       mem.currentCenter() === null,
+       'a stale center surviving a new list is a resolution waiting to happen');
+
+    // AND A CENTER THAT IS NO LONGER IN THE SET IS IGNORED, even if something
+    // sets it directly. The set is the fact; the center is a hint.
+    mem.setCenter({ n: 1, booking_number: 'NOT_ON_SCREEN' });
+    const gone = mem.resolve('when is the erd of that booking');
+    ck('  and a center missing from the current list resolves to nothing',
+       gone.resolved === null && gone.ambiguous === 2, JSON.stringify(gone));
+
+    // reset() clears it too, or a center leaks between sessions.
+    mem.reset();
+    ck('reset clears the center', mem.currentCenter() === null);
+
+    // ── AND WHERE IT IS SET FROM ─────────────────────────────────────────
+    // Gated on the spoken sentence having actually named a cutoff. A bare
+    // "Yes — 10 bookings from Houston." singles nothing out, and centring on
+    // rows[0] regardless would make "that booking" a guess in a resolution's
+    // clothing.
+    const api = require('fs').readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    ck('the list answer sets the center only when it named a cutoff',
+       /if \(\/cutoff\/i\.test\(said\)\) mem\.setCenter\(cards\.rows\[0\]\);/.test(api),
+       'centring on a sentence that singled nothing out is a guess');
+    ck('  and a follow-up answer moves it only when it names ONE booking',
+       /if \(named\.length === 1\) mem\.setCenter\(named\[0\]\);/.test(api),
+       'two names or none, and it stays where it was rather than picking');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

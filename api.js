@@ -2426,6 +2426,19 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (quick) {
                 console.log(`[VOICE] follow-up answered from the list: ${asked}`);
                 mem.remember('bot', quick);
+                // The follow-up answer moves the center too, so a THIRD
+                // question ("and its vessel?") lands on the same booking.
+                // Deterministic: the center moves only when the answer names
+                // exactly one booking that is on screen. Two names, or none,
+                // and it stays where it was rather than picking one.
+                try {
+                    if (refSet && Array.isArray(refSet.rows)) {
+                        const named = refSet.rows.filter(
+                            (r) => r.booking_number && quick.indexOf(r.booking_number) !== -1);
+                        if (named.length === 1) mem.setCenter(named[0]);
+                        else if (ref.resolved && ref.resolved.row) mem.setCenter(ref.resolved.row);
+                    }
+                } catch (e) { /* centring is a convenience, never a failure */ }
                 return answering({
                     agent: route.agent, agent_name: agent.name, voice: agent.voice,
                     routed_because: 'following on from what you just asked',
@@ -2467,6 +2480,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 if (said) {
                     console.log(`[VOICE] answering from the list: ${cards.rows.length} row(s)`);
                     mem.remember('bot', said);
+                    // ── WHAT THAT SENTENCE WAS ABOUT ─────────────────────
+                    // Apsara, 2026-09-07: "if i ask when is the erd of that
+                    // booking... it just says there are 10 bookings on screen."
+                    //
+                    // "Earliest cutoff is next Wednesday" is a statement about
+                    // rows[0] — the list is sorted by cutoff — not about the
+                    // list. That row is the backward-looking center, and
+                    // recording it is what lets "that booking" mean something
+                    // when ten are on screen. See helpers/voiceMemory.js.
+                    //
+                    // Gated on the sentence actually having named a cutoff: a
+                    // bare "Yes — 10 bookings from Houston." singles nothing
+                    // out, and centring on rows[0] anyway would make "that
+                    // booking" a guess dressed as a resolution.
+                    if (/cutoff/i.test(said)) mem.setCenter(cards.rows[0]);
                     return answering({
                         agent: route.agent, agent_name: agent.name, voice: agent.voice,
                         routed_because: 'reading the bookings',

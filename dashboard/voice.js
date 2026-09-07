@@ -193,6 +193,24 @@
     var captureWasFollowUp = false;
     var captureRetried = false;
     var capturePassive = false;
+    // ── "SHUT UP" HAS TO STOP THE ANSWER, NOT JUST THE AUDIO ─────────────
+    // Apsara, 2026-09-07: "if i say shut up... still goes on in a loop" and
+    // "when i say shutt up it still shows the next available cutoff is in 10
+    // days."
+    //
+    // Both are one bug and it is not the barge word — "shut up" was already in
+    // BARGE_WORDS and it was matching. interrupt() stopped the SPEAKER. What
+    // it could not stop was the request already in flight: its .then() ran a
+    // second later and unconditionally painted the panel, wrote the card, set
+    // awaitingReply and spoke the answer. She silenced it and it answered
+    // anyway, out of a promise nobody was holding a handle to.
+    //
+    // A generation counter is the fix. Every ask() takes the next number; a
+    // response whose number is stale is dropped on the floor. interrupt()
+    // simply bumps it, which retires everything outstanding without needing
+    // AbortController — the request may well complete, it just no longer owns
+    // the screen.
+    var askSeq = 0;
     // A one-shot line to show WHEN the capture reopens, not before. Writing it
     // straight into the pill was useless: openCapture() calls say('Listening')
     // and showCard('Go ahead…') a millisecond later and wiped it — the retry
@@ -356,8 +374,12 @@
         // all three — so calling openCapture() here as well was a second
         // path to the same place. A mutation removing it survived every
         // test, which is how redundant code announces itself.
+        // EVERY ANSWER IN FLIGHT IS NOW STALE. This line is the whole of
+        // "shut up actually shuts it up": without it the reply she just
+        // silenced still arrives and repaints the screen.
+        askSeq += 1;
         dispatch('CAPTURE_START');
-        console.log('[VOICE] interrupted — go ahead');
+        console.log('[VOICE] interrupted — go ahead (answers in flight retired)');
     }
 
     function hideCard() { clearTimeout(cardTimer); card.classList.add('hidden'); }
@@ -1859,8 +1881,17 @@
         // The parameter is `text`, not `question`: the router needs the words
         // as spoken to decide, and stripAgentName() on the server removes any
         // "Scout," or "Jarvis," prefix afterwards.
+        var mySeq = ++askSeq;
         api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q, agent: addressed }) })
             .then(function (r) {
+                // STALE. She interrupted, or asked something else, while this
+                // was in the air. Everything below paints the screen and
+                // speaks, so returning here is the difference between "shut
+                // up" working and not.
+                if (mySeq !== askSeq) {
+                    console.log('[VOICE] answer discarded — she moved on before it arrived');
+                    return;
+                }
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 var answer = (r && r.answer) || 'No answer.';
                 // WHICH ASSISTANT ANSWERED, shown rather than hidden. There
@@ -1908,6 +1939,10 @@
                 }
             })
             .catch(function (e) {
+                // Same guard. A request that fails AFTER she said "shut up"
+                // must not put "Failed" on a screen she has moved on from —
+                // the error belongs to a question she retracted.
+                if (mySeq !== askSeq) return;
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
                 say('Failed');
                 showCard(undefined, 'Could not reach the assistant: ' + (e && e.message), false);

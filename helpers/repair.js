@@ -80,6 +80,16 @@ const SCOPES = new Set(['undo', 'cancel', 'restart', 'none']);
 // They are NOT the feature. Per the 13.9% figure above, they are expected to
 // miss most of what she actually says, and the model is what covers the rest.
 const RESTART = /\b(?:start (?:again|over|fresh)|start from (?:the )?(?:top|beginning|scratch)|from the top|do (?:it|this) again from|scrap (?:it|that|the whole thing) and start|begin again)\b/i;
+// AMAZON.CancelIntent's own documented sample utterances are "cancel", "never
+// mind" and "forget it". Apsara, 2026-09-07: "AMAZON.CancelIntent --> Include
+// that.. but not restricted only to this." So they are in, verbatim, and the
+// rest of the expression is everything Alexa's list does not cover.
+//
+// The three bare forms are anchored to the WHOLE utterance. "Cancel" on its
+// own is unmistakable; "cancel" inside "cancel the Houston booking" is an
+// instruction about a booking, and treating that as a retraction of her own
+// last sentence would drop the wrong thing entirely.
+const CANCEL_BARE = /^\s*(?:cancel|never ?mind|forget it|forget that)\s*[.!]?\s*$/i;
 const CANCEL = /\b(?:ignore (?:that|this|it|what i said|the last)|forget (?:that|it|this|what i said)|never ?mind|cancel (?:that|this|it)|scratch that|disregard (?:that|this)|drop (?:it|that)|abandon (?:that|this|it)|i made a mistake|that was (?:a )?mistake|wrong,? ignore)\b/i;
 const UNDO = /\b(?:undo(?: that| the last)?|take (?:that|it) back|not that one|no,? not that|remove the last|delete the last|back (?:that|it) out|strike that)\b/i;
 
@@ -89,7 +99,7 @@ function patternScope(t) {
     // less than she asked leaves her repeating herself while a half-dead task
     // argues with her.
     if (RESTART.test(t)) return 'restart';
-    if (CANCEL.test(t)) return 'cancel';
+    if (CANCEL_BARE.test(t) || CANCEL.test(t)) return 'cancel';
     if (UNDO.test(t)) return 'undo';
     return null;
 }
@@ -221,5 +231,5 @@ function nothingToUndo(scope, done) {
 
 module.exports = {
     classify, askModel, prompt, confirm, nothingToUndo,
-    patternScope, RESTART, CANCEL, UNDO, RULES, TIMEOUT_MS, SCOPES,
+    patternScope, RESTART, CANCEL, CANCEL_BARE, UNDO, RULES, TIMEOUT_MS, SCOPES,
 };
