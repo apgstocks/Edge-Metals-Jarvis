@@ -36,6 +36,20 @@ _sendToTeam    = sendToTeam;
 _pushAlert     = pushAlert || (() => {});
 }
 
+// ── HAS ANYONE ACTUALLY WIRED THE MESSAGING? ─────────────────────────────
+// init() is called from index.js and nowhere else, so anything that boots
+// createApi() on its own — a test harness, a future worker process — gets a
+// module whose _send is undefined. Every action then dies with
+// "_send is not a function", which reached Apsara as
+// "Something broke while handling that: _send is not a function".
+//
+// Found 2026-09-07 by tests/e2e-voice.js, which is the first thing ever to
+// run the API without index.js in front of it. Not a production bug — index
+// boots both — but a cryptic TypeError is a bad way to learn about a wiring
+// mistake, and the caller can now check instead of finding out in a stack
+// trace.
+function ready() { return typeof _send === 'function'; }
+
 // ── Pending action helpers (persist in brain.json — survive restarts) ─────────
 // A chat can only have ONE unresolved pending at a time (pending_actions is
 // keyed by chatId, not a list) — but several independent triggers can now
@@ -451,8 +465,19 @@ async function notifyContactRespectingChannel(record, { waChatId, text, subject,
     // primary source so this doesn't change WhatsApp behavior for anyone
     // at all — only adds the email branch above it).
     if (!waChatId) return { channel: 'none', ok: false };
-    await _send(waChatId, text);
-    return { channel: 'whatsapp', ok: true, target: waChatId };
+    // ── ok MEANT "WE TRIED", NOT "IT WENT" ───────────────────────────────
+    // Found 2026-09-07 by tests/e2e-voice.js. index.js's sendMessage returns
+    // FALSE when WhatsApp is not ready — it even logs "[SEND] WA not ready —
+    // dropped message" — and that answer was thrown away here, replaced by a
+    // hardcoded ok:true. The email branch above has always reported its
+    // failures honestly; the WhatsApp branch never could.
+    //
+    // `!== false` rather than truthiness on purpose: a sender that returns
+    // undefined has not told us it failed, and treating silence as failure
+    // would refuse forwards that actually went. Only an explicit false counts,
+    // which is exactly the contract index.js implements.
+    const wa = await _send(waChatId, text);
+    return { channel: 'whatsapp', ok: wa !== false, target: waChatId };
 }
 
 // Executes after manager confirms.
@@ -471,6 +496,31 @@ const forwardNotice = await notifyContactRespectingChannel(t, {
     text: [`New booking — ${label}`, '', formatBookingForForward(booking), '', 'Please confirm empty pickup and send the empty-drop photo when done.'].join('\n'),
     pdfDriveId: booking.pdf_drive_id || null,
 });
+
+// ── NOTHING IS RECORDED UNTIL THE DRIVER HAS ACTUALLY BEEN TOLD ─────────
+// Apsara asked for an end-to-end test; this is what it found, and it is the
+// worst thing in this file.
+//
+// Everything below used to run whether or not the message went: the container
+// was marked stage:'forwarded', the workflow advanced to 'forwarded', and she
+// was told "HOU111/1 forwarded to Sher Trucking." With WhatsApp down that is
+// a booking she believes is with a driver who has never heard of it — and the
+// board says forwarded, so nothing will ever chase it.
+//
+// Reproduced in the harness: the answer came back "HOU111/1 forwarded to Sher
+// Trucking" with zero messages sent.
+//
+// So the write is gated on the send, and the failure is reported in the words
+// she needs: which booking, which trucker, and that it did NOT go.
+if (!forwardNotice.ok) {
+    console.error(`[ACTIONS] forward FAILED for ${label} → ${truckerName} (${forwardNotice.channel})`);
+    await _send(chatId,
+        `Could not reach ${truckerName} — ${label} is NOT forwarded. `
+        + (forwardNotice.channel === 'none'
+            ? 'There is no WhatsApp number or email on file for them.'
+            : 'The message did not go out. Nothing has been recorded, so try again once they are reachable.'));
+    return { action_taken: 'forward_failed', channel: forwardNotice.channel };
+}
 
 // PDF side track — never blocks the forward. WhatsApp-only: the email
 // path above already linked the same Drive file inline instead (see
@@ -6297,6 +6347,7 @@ async function showWritingStyle(chatId) {
 }
 
 module.exports = {
+    ready,
     describeLink,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,

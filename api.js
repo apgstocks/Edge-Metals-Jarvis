@@ -2535,15 +2535,65 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // bridge — rather than a second, subtly different way of calling
             // the brain. The brain sends WhatsApp for real; there should be
             // exactly one way in, not two that can drift apart.
+            // Named, before it becomes "_send is not a function" three frames
+            // deep inside an action. workflow/actions.js takes its senders
+            // from init(), which index.js calls and nothing else does — so
+            // anything booting the API on its own gets a module that cannot
+            // message anybody, and every action dies with a TypeError that
+            // says nothing about the cause. It reached Apsara once as
+            // "Something broke while handling that: _send is not a function".
+            //
+            // Found 2026-09-07 by tests/e2e-voice.js, the first thing ever to
+            // run this API without index.js in front of it.
+            if (!require('./workflow/actions').ready()) {
+                console.error('[VOICE] workflow/actions has no messaging — init() was never called');
+                return answering({
+                    ok: false, agent: 'jarvis', agent_name: 'Jarvis',
+                    answer: 'My messaging is not wired up, so I can answer questions but not act on '
+                          + 'anything. That needs a restart.',
+                });
+            }
             const brain = require('./workflow/brain');
             const { sendCapture } = require('./helpers/wa-state');
             const settings = cfg.getSettings();
             const managerNum = settings.manager_number || cfg.MANAGER_NUMBER;
             if (!managerNum) return res.status(400).json({ error: 'MANAGER_NUMBER not configured' });
-            const realSendMessage = global.__jarvisSendMessage;
-            if (!realSendMessage) return res.status(500).json({ error: 'sendMessage bridge not initialised' });
             const chatId = `${managerNum}@c.us`;
             const capture = { replies: [] };
+
+            // ── WHATSAPP BEING DOWN MUST NOT COST HER EVERY ANSWER ───────
+            // Found 2026-09-07 by tests/e2e-voice.js on its first run: with
+            // no bridge, this returned 500 for ANY question that reached the
+            // brain — "what bookings are there", a cutoff, a container
+            // number. None of those send anything. The whole assistant went
+            // dark because a messaging transport was unavailable.
+            //
+            // The fallback is NOT a new degraded mode. It reproduces exactly
+            // what index.js's own sendMessage does when waReady is false:
+            // replies to HER chat are captured and returned, anything aimed
+            // at a trucker or supplier is dropped with a warning and a false
+            // return. Same semantics, so an action cannot behave differently
+            // here from how it behaves when WhatsApp drops in production.
+            //
+            // What this ADDS over index.js is that the refusal is not only a
+            // console line — it comes back in the answer, because "I could
+            // not reach Sher Trucking" is something she has to know and a log
+            // on a server she is not looking at is not telling her.
+            const realSendMessage = global.__jarvisSendMessage;
+            const refused = [];
+            const sender = realSendMessage || (async (to, text, media) => {
+                if (to === chatId) {
+                    capture.replies.push({ chatId: to, text: text || null, media: media || null });
+                    return true;
+                }
+                refused.push(to);
+                console.warn(`[VOICE] no WhatsApp bridge — dropped a message to ${to}`);
+                return false;
+            });
+            if (!realSendMessage) {
+                console.warn('[VOICE] sendMessage bridge not initialised — answering, but nothing will be sent');
+            }
+
             await sendCapture.run(capture, async () => {
                 await brain.process({
                     chatId, senderNumber: chatId, senderName: 'Voice',
@@ -2552,7 +2602,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     // The brain's policy layer is regex over this string and
                     // cannot resolve a reference itself.
                     text: asked, hasMedia: false, _source: 'voice',
-                }, realSendMessage);
+                }, sender);
             });
             // ── replies ARE OBJECTS ──────────────────────────────────────
             // Apsara, 2026-09-06: "[object Object] its saying object object".
@@ -2568,7 +2618,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const replies = (capture.replies || [])
                 .map((r) => (r && typeof r === 'object' ? r.text : r))
                 .filter((t) => typeof t === 'string' && t.trim());
-            const spoken = replies.join('\n\n') || 'Done.';
+            let spoken = replies.join('\n\n') || 'Done.';
+            // SAID, not just logged. If something tried to reach a trucker or
+            // a supplier and there was no transport, she has to hear it — a
+            // console line on a server she is not looking at is not telling
+            // her, and "Done." over a message that never left is the exact
+            // silent failure this whole build has been about.
+            if (refused.length) {
+                spoken += ` — but I could not send to ${[...new Set(refused)]
+                    .map((r) => String(r).replace(/@c\.us$/, '')).join(', ')}: WhatsApp is not connected.`;
+            }
             mem.remember('bot', spoken);
             return answering({
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,

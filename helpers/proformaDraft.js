@@ -1453,6 +1453,27 @@ function handle(text, opts) {
     // silently redraw a document that is already staged for sending.
     let amending = false;
     let before = null;
+
+    // ── A FINISHED DRAFT THAT WAS NEVER STAGED IS STILL A DOCUMENT ───────
+    // Found 2026-09-07 by tests/e2e-voice.js on its first run, and only
+    // there: every unit test staged the draft by hand, so this path had
+    // never been walked.
+    //
+    // A preview BLOCKED on a missing email address is complete — every field
+    // answered, the money computed, the whole thing on her screen — but
+    // markStaged() is only called when a confirm pending is created, and a
+    // blocked preview creates none. So `staged` was false, her correction
+    // took the ordinary answer path, and the field changed WITHOUT the
+    // "Changed the discharge port to BUSAN" line.
+    //
+    // That is precisely the silent rewrite of a financial document that the
+    // reporting exists to prevent, hiding on the one path nobody staged.
+    //
+    // nextQuestion() === null is the test for "finished": while questions
+    // remain, what she says is an answer, not a correction, and the two must
+    // not compete. Read BEFORE answer() absorbs anything.
+    const previewed = open && !isStart(text) && nextQuestion() === null;
+
     if (open && draft.staged && !isStart(text)) {
         if (!isAmendment(text, { intent: decided })) return null;
         // A real correction reopens it. The caller is responsible for tearing
@@ -1464,6 +1485,13 @@ function handle(text, opts) {
         // the guard that replaces the cue list: with a model deciding what
         // counts as a correction, a mis-parse must be audible rather than a
         // quietly rewritten field on a financial document.
+        before = Object.assign({}, draft.fields);
+    } else if (previewed && isAmendment(text, { intent: decided })) {
+        // Finished but unstaged. NOT gated behind a `return null` like the
+        // staged branch above: nothing is waiting on a yes here, so an
+        // ordinary sentence is still allowed through to answer() as before.
+        // The only thing this adds is that a real field change gets reported.
+        amending = true;
         before = Object.assign({}, draft.fields);
     }
 
