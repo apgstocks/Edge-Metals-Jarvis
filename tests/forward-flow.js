@@ -119,6 +119,7 @@ section('B — the guards actually short-circuit');
        /const transition = await require\('\.\/helpers\/draftIntent'\)/.test(seg),
        'an unawaited promise is truthy, so EVERY utterance would count as parking');
     const pd = require(path.join(ROOT, 'helpers/proformaDraft.js'));
+    const di = require(path.join(ROOT, 'helpers/draftIntent.js'));
     pd.clear(); pd._clearParked();
     ck('    but with no proforma anywhere it decides nothing',
        pd.handle('lets hold this and work on email') === null,
@@ -132,21 +133,59 @@ section('B — the guards actually short-circuit');
     // which is a hole in "an open question owns the conversation" — the rule
     // this whole file exists to guard.
     //
-    // It is safe only because it is triple-locked, and every lock is checked
-    // here. Losing any one of them means "yes, Sher Trucking" during a
-    // trucker confirmation could be read as a proforma correction, and the
-    // WhatsApp to the driver never goes.
-    // Asserted as ONE condition, not three separate greps. `pro.isStaged()`
-    // appears twice in the handler — the second is the teardown after the
-    // confirm ends — so a grep for it on its own passed happily with the lock
-    // deleted from the condition it was supposed to be guarding. Caught by
-    // mutation; the lesson is that a search over a whole function proves
-    // nothing about the one line that matters.
-    const lock = /answeringBrain && brainPending && brainPending\.type === 'confirm_proforma'\s*\n\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked\)/;
+    // ── AND WHICH LOCK IS ACTUALLY LOAD-BEARING ─────────────────────────
+    // 2026-09-07. This comment used to say the cue-word test was what kept
+    // "yes, Sher Trucking" out of the proforma path. That was WRONG, and it
+    // took Apsara pushing back — "it has to work dynamically... just like
+    // jarvis in iron man" — to go and check rather than repeat it.
+    //
+    // A trucker confirmation is `confirm_forward`. The FIRST lock already
+    // requires `confirm_proforma`, so a trucker confirm never reaches this
+    // branch at all. The cue list was not carrying that safety; it was
+    // carrying nothing, while silently dropping five of ten real corrections.
+    //
+    // The locks that ARE load-bearing, and what each one stops:
+    //   1. confirm_proforma  — keeps every other confirmation out entirely
+    //   2. isStaged()        — a draft still being asked about absorbs
+    //                          answers itself; this is the confirm window
+    //   3. a real field change — inside isAmendment(), and asserted by
+    //                          RUNNING it below, not by reading the call
+    const lock = /answeringBrain && brainPending && brainPending\.type === 'confirm_proforma'\s*\n\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked, \{ intent: transition \}\)/;
     ck('  the amendment exception is locked to all three conditions at once',
        lock.test(seg),
-       'proforma pending AND staged AND a real field change — drop any one and '
-       + '"yes, Sher Trucking" during a trucker confirm can be read as a proforma correction');
+       'proforma pending AND staged AND a real field change — the FIRST is what '
+       + 'keeps a trucker confirmation out, and it is the one that must not move');
+    ck('    and the correction test is the dynamic one',
+       /pro\.isAmendment\(asked, \{ intent: transition \}\)/.test(seg),
+       '"trade terms CIF Busan" carries no cue word and was being dropped');
+
+    // RUN, not grepped. The field-change lock is the only one of the three
+    // that lives inside a function, and it is the one that stops a bare
+    // "wait" tearing down a confirmation she had not finished thinking about.
+    pd.clear(); pd._clearParked();
+    pd.start('create a proforma for Daekwang, 2 containers, 21 MT of auto cast at 8450, CIF Long Beach');
+    pd.markStaged();
+    ck('    a hesitation is not an amendment, even when the model says amend',
+       pd.isAmendment('wait', { intent: 'amend' }) === false,
+       'nothing changed, so tearing down her confirmation would be for nothing');
+    ck('    nor is a question about something else',
+       pd.isAmendment('any bookings from Houston', { intent: 'amend' }) === false);
+    ck('    but a real field change is, with no cue word at all',
+       pd.isAmendment('trade terms CIF Busan', { intent: 'amend' }) === true,
+       'this is the phrasing that was being swallowed');
+    // A PHRASE THAT COLLIDES, chosen deliberately. My first version used
+    // "lets hold this and work on email", which carries no correction cue at
+    // all — so deleting the park guard left it returning false anyway and the
+    // mutation SURVIVED. This one fires the park pattern AND the cue list AND
+    // yields a real field, so the guard is the only thing separating them.
+    const collide = 'actually hold this, trade terms CIF Busan can wait';
+    ck('    the collision phrase really does look like both',
+       di.PARK.test(collide) && pd.CORRECTION_CUE.test(collide),
+       'if either stops matching, the assertion below proves nothing');
+    ck('    and a decided park is never an amendment',
+       pd.isAmendment(collide, { intent: 'park' }) === false,
+       'the two branches read the same classification and must not both fire — '
+       + 'parking and amending the same sentence loses the draft AND rewrites it');
     ck('    with the pending torn down before the draft reopens',
        seg.indexOf('clearPending(') !== -1
        && seg.indexOf('clearPending(') < seg.indexOf('const step ='),

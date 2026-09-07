@@ -26,15 +26,36 @@
 // judgement it is being asked for — did she mean to set this down — is
 // genuinely a language question that no word list answers.
 //
-// WHAT IS DELIBERATELY NOT MOVED TO THE MODEL, and it is not an oversight:
-// the amendment lock in api.js. That one is triple-locked (pending is a
-// proforma AND the draft is staged AND the sentence carries a real field
-// change) because it is the one exception to "an open question owns the
-// conversation". Loosen it and "yes, Sher Trucking" during a trucker
-// confirmation can be read as a proforma correction — and then the WhatsApp
-// to the driver never goes. A confirmation with a truck behind it is not a
-// place for a probabilistic classifier. Told her so rather than quietly
-// doing it.
+// AMENDMENTS TOO — AND I WAS WRONG TO REFUSE THEM FIRST TIME
+// ----------------------------------------------------------
+// Apsara, 2026-09-07: "if i say no no jarvis, trade terms should be like this
+// it should update. just like jarvis in iron man."
+//
+// I had left corrections on the fixed CORRECTION_CUE list and told her the
+// reason was that a probabilistic check there could read "yes, Sher Trucking"
+// during a TRUCKER confirmation as a proforma correction. That reason was
+// wrong, and it took her pushing back to go and look: the amendment branch in
+// api.js is already gated on `brainPending.type === 'confirm_proforma'`, so a
+// trucker confirmation never reaches it at all. The cue list was not carrying
+// that safety. It was carrying nothing.
+//
+// What it WAS costing, measured: of ten natural corrections, five were
+// silently swallowed mid-confirm — including "no no the rate is 8500" and
+// "consignee is Hyundai Steel not Daekwang". handle() returned null, the
+// sentence fell through to the general classifier, and the document she had
+// just corrected was still sitting there confirmable in its old form.
+//
+// A model is in fact SAFER here than the regex, because the real hazard is
+// "forward that to Sher Trucking" — which carries no cue word but does parse
+// as a consignee, so an eager absorb would rewrite the buyer on an invoice.
+// A word list cannot tell that from a correction. A model reading the whole
+// sentence can, and is told to in as many words.
+//
+// TWO LOCKS STAY, and they are the ones that were doing the work:
+//   1. the amendment must actually CHANGE A FIELD — absorb() has to yield
+//      something, or "wait" on its own tears down a confirmation for nothing
+//   2. what changed is SAID OUT LOUD before she is re-asked, so a mis-parse
+//      is audible instead of silent. That is the guard that replaces the cue.
 //
 // PATTERNS FIRST, MODEL SECOND — THE INVERSE OF followUp.js, ON PURPOSE
 // --------------------------------------------------------------------
@@ -51,6 +72,8 @@
 // in flight it returns 'none' without touching the network.
 
 const PARK_TIMEOUT_MS = 2500;
+
+const LABELS = new Set(['park', 'resume', 'amend', 'none']);
 
 // The offline net. Same two expressions that used to BE the feature; they are
 // now the thing that keeps it working when Gemini is unreachable, which for
@@ -72,6 +95,9 @@ const RULES = [
     '  "park"   — she wants to SET THE DRAFT DOWN and do something else for a',
     '              while. She intends to come back. The draft is kept.',
     '  "resume" — she wants to PICK BACK UP the draft she set down earlier.',
+    '  "amend"  — she is CORRECTING A FIELD on the document in front of her.',
+    '              Trade terms, payment terms, the rate, the tonnage, the',
+    '              consignee, the port, the material, the container count.',
     '  "none"   — anything else at all.',
     '',
     'THESE ARE NOT A PARK. Getting any of them wrong destroys her turn:',
@@ -79,12 +105,40 @@ const RULES = [
     '   says "hold on, 8450" she is answering, not parking. A number, a name,',
     '   a port, an incoterm or a quantity means "none" even when it opens',
     '   with a filler like "wait", "hold on" or "one sec".',
-    '2. A CORRECTION. "wait, make it FOB", "actually change it to CIF Busan",',
-    '   "no, 21 tons not 12" are amendments to the draft. Always "none".',
+    '2. A CORRECTION — that is "amend", never "park". She is staying on this',
+    '   document, not leaving it.',
     '3. A CANCELLATION. "forget it", "drop the whole thing", "cancel that",',
     '   "we are not doing this order" mean she is ABANDONING it, not holding',
     '   it. Always "none" — a different part of the system handles that, and',
     '   parking something she killed would resurrect it two hours later.',
+    '',
+    '── WHAT "amend" LOOKS LIKE, and it is how people actually talk ──',
+    'She does NOT always use a correction word. Naming a field and a value,',
+    'while a finished document is in front of her, IS a correction:',
+    '  "no no jarvis, trade terms should be CIF Busan"   → amend',
+    '  "no jarvis trade terms is CIF Busan"              → amend',
+    '  "trade terms CIF Busan"                           → amend',
+    '  "nope, CIF Busan"                                 → amend',
+    '  "payment terms 30 days from BL date"              → amend',
+    '  "no no the rate is 8500"                          → amend',
+    '  "consignee is Hyundai Steel not Daekwang"         → amend',
+    '  "make it two containers"                          → amend',
+    '',
+    'AND WHAT IS NOT AN AMENDMENT, however much it looks like one. These are',
+    'the ones that put the WRONG COMPANY on a financial document:',
+    '  "forward that to Sher Trucking"     → none. A trucker instruction. The',
+    '     words "to Sher Trucking" parse as a consignee, and reading this as',
+    '     an amendment silently rewrites the buyer on an invoice.',
+    '  "send it to Daekwang"               → none. That is her YES, not a',
+    '     change — she is confirming the document as it stands.',
+    '  "any bookings from Houston"         → none. A question, not a change.',
+    '  "email Yurim about the booking"     → none. A different task.',
+    '  "wait"  /  "hold on"  /  "hmm"      → none on its own. A hesitation is',
+    '     not a correction, and treating it as one tears down her',
+    '     confirmation for nothing.',
+    '',
+    'THE TEST: could you name the FIELD and the NEW VALUE she wants? If not,',
+    'it is not "amend".',
     '',
     'A PARK usually names, or clearly implies, SOMETHING ELSE she is turning',
     'to: an email, a call, a person, another booking. Examples, all "park":',
@@ -110,7 +164,21 @@ function prompt(text, state) {
             lines.push('THE QUESTION SHE WAS JUST ASKED: ' + state.question);
             lines.push('If her sentence is a plausible answer to that question, the label is "none".');
         }
-        lines.push('Nothing is parked, so "resume" is not available. Choose "park" or "none".');
+        if (state.staged) {
+            // The confirm window. This is where "no no jarvis, trade terms
+            // should be CIF Busan" lands, and where a missed correction means
+            // she says yes to terms she just rejected.
+            lines.push('THE DOCUMENT IS FINISHED AND SHE HAS BEEN ASKED TO CONFIRM IT.');
+            lines.push('So a sentence naming a field and a value is a CORRECTION to what she');
+            lines.push('is looking at — "amend" — not an answer to anything.');
+            lines.push('Nothing is parked, so "resume" is not available. Choose "park", "amend" or "none".');
+        } else {
+            // Mid-questioning the draft absorbs answers itself, so "amend" is
+            // not offered — it would compete with the answer path for the
+            // same sentence and only one of them can be right.
+            lines.push('She is still being asked for missing fields, so "amend" is not');
+            lines.push('available and neither is "resume". Choose "park" or "none".');
+        }
     } else if (state.parked) {
         lines.push('NOTHING IS OPEN. A proforma is PARKED: ' + (state.summary || '(a draft)'));
         lines.push('So "park" is not available. Choose "resume" or "none".');
@@ -141,11 +209,13 @@ async function askModel(text, state) {
             return null;
         }
         const label = String((res && res.label) || '').trim().toLowerCase();
-        if (label !== 'park' && label !== 'resume' && label !== 'none') return null;
-        // It cannot park what is not open, or resume what is not held, however
-        // confident it sounds. The state is a fact; the label is an opinion.
+        if (!LABELS.has(label)) return null;
+        // It cannot park what is not open, resume what is not held, or amend a
+        // document that is not finished and waiting on her. The state is a
+        // fact; the label is an opinion, and where they disagree the fact wins.
         if (label === 'park' && !state.open) return null;
         if (label === 'resume' && !state.parked) return null;
+        if (label === 'amend' && !state.staged) return null;
         if (label !== 'none') {
             console.log(`[DRAFT-INTENT] model says ${label}: "${text}" — ${(res && res.why) || ''}`);
         }
@@ -166,13 +236,22 @@ async function classify(text, state) {
     const st = state || {};
     if (!t) return 'none';
 
-    // THE GATE. No proforma in flight means there is nothing to park and
-    // nothing to resume, so there is no question to ask and no model call to
-    // pay for. This is also what stops the classifier from ever having an
-    // opinion about "yes, Sher Trucking" during a trucker confirmation.
+    // THE GATE. No proforma in flight means there is nothing to park, resume
+    // or amend, so there is no question to ask and no model call to pay for.
+    // This is also what stops the classifier from ever having an opinion
+    // about "yes, Sher Trucking" during a trucker confirmation.
     if (!st.open && !st.parked) return 'none';
 
     // Fast path. Identical output to the model, no network.
+    //
+    // There is deliberately NO fast path for 'amend'. The offline net for
+    // corrections is CORRECTION_CUE inside proformaDraft.isAmendment(), which
+    // needs absorb() to confirm a field actually changed — a decision this
+    // module cannot make and should not duplicate. So a 'none' from here is
+    // never the last word on an amendment: isAmendment() still applies its own
+    // cue test, which means this layer can only ever WIDEN what counts as a
+    // correction, never narrow it. An unreachable model degrades to exactly
+    // today's behaviour rather than to a document that ignores her.
     if (st.open && PARK.test(t)) return 'park';
     if (st.parked && RESUME.test(t)) return 'resume';
 

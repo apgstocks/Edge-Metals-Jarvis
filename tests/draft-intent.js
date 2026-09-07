@@ -61,8 +61,11 @@ require.cache[ppP] = { id: ppP, filename: ppP, loaded: true, exports: { lookup: 
 const di = require(path.join(ROOT, 'helpers/draftIntent.js'));
 const d = require(path.join(ROOT, 'helpers/proformaDraft.js'));
 
-const OPEN = { open: true, parked: false, summary: '21 MT of Auto cast for Daekwang', question: 'What rate per metric ton?' };
-const HELD = { open: false, parked: true, summary: '21 MT of Auto cast for Daekwang', question: null };
+const OPEN = { open: true, parked: false, staged: false, summary: '21 MT of Auto cast for Daekwang', question: 'What rate per metric ton?' };
+const HELD = { open: false, parked: true, staged: false, summary: '21 MT of Auto cast for Daekwang', question: null };
+// The confirm window: the document is finished and she has been asked to send
+// it. This is the ONLY state where "amend" is on the table.
+const STAGED = { open: true, parked: false, staged: true, summary: '21 MT of Auto cast for Daekwang, CIF Long Beach', question: null };
 const reset = (reply) => { gem.calls = []; gem.reply = reply; };
 
 (async () => {
@@ -157,6 +160,55 @@ section('D — and it does NOT eat her answers');
     }
 }
 
+section('D2 — "no no jarvis, trade terms should be CIF Busan"');
+{
+    // Apsara, 2026-09-07: "just like jarvis in iron man." MEASURED FIRST:
+    // five of these ten were silently swallowed mid-confirm — handle()
+    // returned null and the un-amended document stayed confirmable.
+    const corrections = [
+        'no no jarvis, trade terms should be CIF Busan',
+        'no jarvis trade terms is CIF Busan',
+        'nope, CIF Busan',
+        'trade terms CIF Busan',
+        'payment terms 30 days from BL date',
+        'no no the rate is 8500',
+        'consignee is Hyundai Steel not Daekwang',
+    ];
+    for (const c of corrections) {
+        reset({ label: 'amend', why: 'a field and a value' });
+        ck(`"${c.slice(0, 34)}" → amend`, await di.classify(c, STAGED) === 'amend');
+    }
+
+    // AND THE STATE STILL OVERRIDES. Amending a draft that is not staged is
+    // the answer path's job; two routes competing for one sentence means only
+    // one of them can be right and neither knows which.
+    reset({ label: 'amend', why: 'looks like a change' });
+    ck('an amend label mid-questioning is refused',
+       await di.classify('trade terms CIF Busan', OPEN) === 'none',
+       'the draft absorbs its own answers while it is still asking');
+    reset({ label: 'amend' });
+    ck('  and with nothing open at all', await di.classify('trade terms CIF Busan', HELD) === 'none');
+
+    // THE PROMPT HAS TO SAY WHICH WINDOW SHE IS IN, or the model cannot tell
+    // a correction from an answer — they are the same words.
+    reset({ label: 'none' });
+    await di.classify('mm', STAGED);
+    const ps = gem.calls[0] || '';
+    ck('the staged prompt says the document is finished',
+       /SHE HAS BEEN ASKED TO CONFIRM IT/.test(ps), ps.slice(-500));
+    ck('  and offers amend', /Choose "park", "amend" or "none"/.test(ps));
+    ck('  and lists what is NOT an amendment',
+       /forward that to Sher Trucking/.test(ps) && /send it to Daekwang/.test(ps),
+       'these parse as a consignee and would rewrite the buyer on an invoice');
+    ck('  with the test she can apply herself',
+       /could you name the FIELD and the NEW VALUE/.test(ps));
+
+    reset({ label: 'none' });
+    await di.classify('mm', OPEN);
+    ck('the mid-questioning prompt does NOT offer amend',
+       /"amend" is not/.test(gem.calls[0] || ''), (gem.calls[0] || '').slice(-300));
+}
+
 section('E — the offline net still holds');
 {
     // Gemini is genuinely unreachable for her sometimes. Degrading to today's
@@ -191,10 +243,11 @@ section('F — the prompt carries what the decision needs');
     ck('  and the question she was just asked',
        /THE QUESTION SHE WAS JUST ASKED: What rate per metric ton\?/.test(p), p.slice(-400));
     ck('  with resume ruled out while one is open',
-       /"resume" is not available/.test(p));
+       /neither is "resume"/.test(p), p.slice(-400));
     ck('  and the three anti-cases spelled out',
        /AN ANSWER to the outstanding question/.test(p)
-       && /A CORRECTION\./.test(p) && /A CANCELLATION\./.test(p));
+       && /A CORRECTION — that is "amend", never "park"/.test(p)
+       && /A CANCELLATION\./.test(p));
     ck('  and the tie-break written down',
        /WHEN IN DOUBT, ANSWER "none"/.test(p),
        'a classifier with no stated bias will pick whichever it likes today');
@@ -247,6 +300,59 @@ section('G — end to end through the draft itself');
        'a resume that lost the container count would make her say it all again');
 }
 
+section('G2 — an amendment lands, and SAYS WHAT IT CHANGED');
+{
+    // The guard that replaces the cue list. With a model deciding what counts
+    // as a correction, a mis-parse has to be audible — otherwise a field on a
+    // financial document is rewritten and she confirms it without knowing.
+    const base = 'create a proforma for Daekwang, 2 containers, 21 MT of auto cast at 8450, CIF Long Beach';
+    const amend = (say) => {
+        d.clear(); d._clearParked();
+        d.start(base); d.markStaged();
+        return d.handle(say, { transition: 'amend' });
+    };
+
+    const r = amend('no no jarvis, trade terms should be CIF Busan');
+    ck('the correction lands', !!r && r.stage === 'preview', JSON.stringify(r && r.stage));
+    ck('  and names what moved', /^Changed the discharge port to BUSAN — /.test(r.say), r && r.say);
+    ck('  in her words, not the field key',
+       !/shipment_terms|port_discharge/.test(r.say), r && r.say);
+
+    const rate = amend('no no the rate is 8500');
+    ck('a rate change is named with the money format',
+       /^Changed the rate to \$8,500\.00 — /.test(rate.say), rate && rate.say);
+
+    // ── TWO PRE-EXISTING BUGS THIS EXPOSED ON DAY ONE ────────────────────
+    // Both were invisible while the sentence was being swallowed, and both
+    // put wrong text on an invoice.
+    const who = amend('consignee is Hyundai Steel not Daekwang');
+    ck('"X not Y" does not put the correction in the company name',
+       who.fields.consignee === 'Hyundai Steel', String(who.fields.consignee)
+       + ' — "Hyundai Steel not Daekwang" would have been printed at the top of the invoice');
+
+    const buyer = amend('buyer is Hyundai Steel');
+    ck('"buyer" is a word for consignee', buyer.fields.consignee === 'Hyundai Steel',
+       String(buyer.fields.consignee));
+    ck('  and the goods are NOT silently renamed to Steel',
+       buyer.fields.material === 'Auto cast', String(buyer.fields.material)
+       + ' — with no consignee match the span was never blanked, so the material parser took "Steel"');
+
+    const instead = amend('consignee should be POSCO instead of Daekwang');
+    ck('"instead of Y" does not become the material',
+       instead.fields.consignee === 'POSCO' && instead.fields.material === 'Auto cast',
+       JSON.stringify({ c: instead.fields.consignee, m: instead.fields.material }));
+    const keep = amend('make it POSCO instead of Daekwang, and 3 containers');
+    ck('  and blanking the old value keeps the rest of her sentence',
+       keep.fields.containers === 3, String(keep.fields.containers));
+
+    // NOTHING MOVED IS SAID TOO. Implying a change that did not happen is how
+    // she confirms a document believing it was corrected.
+    const same = amend('trade terms CIF Long Beach');
+    ck('a correction that changes nothing says so',
+       !same || /reads the same as what I had/.test(same.say),
+       same && same.say);
+}
+
 section('H — nothing else changed');
 {
     // handle() with NO transition must behave exactly as before, because
@@ -265,9 +371,9 @@ section('H — nothing else changed');
     // find the reason next to the tests rather than only in a commit message.
     const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
     ck('the amendment exception is still deterministic',
-       /&& pro\.isStaged\(\) && pro\.isAmendment\(asked\)/.test(api),
-       'a probabilistic amendment check can read "yes, Sher Trucking" as a proforma '
-       + 'correction, and then the WhatsApp to the driver never goes');
+       /brainPending\.type === 'confirm_proforma'\s*\n?\s*&& pro\.isStaged\(\)/.test(api),
+       'a trucker confirm is confirm_forward and never reaches this branch — THAT is '
+       + 'the lock, and it is the one that must not move');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

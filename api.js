@@ -2051,6 +2051,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // api.js keeps the plumbing; the module keeps the thinking.
             const pro = require('./helpers/proformaDraft');
 
+            // ── ONE DYNAMIC READ OF WHAT SHE MEANT, USED BY BOTH BRANCHES ─
+            // Apsara, 2026-09-07: "no no jarvis, trade terms should be like
+            // this it should update. just like jarvis in iron man."
+            //
+            // park / resume / amend / none, decided by a model with the live
+            // draft and the outstanding question in front of it — see
+            // helpers/draftIntent.js. Called ONCE, up here, because the
+            // amendment branch below and the parking branch further down are
+            // two consequences of the same judgement and asking twice would
+            // double the wait she is standing through mid-sentence.
+            //
+            // Gated inside classify() on a proforma being open or parked, so
+            // it costs nothing on every other utterance.
+            const transition = await require('./helpers/draftIntent')
+                .classify(asked, pro.transitionState());
+
             // ── "WAIT. CHANGE THESE AND CREATE" ──────────────────────────
             // Apsara, 2026-09-07: "what if i want change in cif and payment
             // terms. if i say wait.change these andccreate, how jarvis would
@@ -2070,7 +2086,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // changed — a document sent with the terms she rejected.
             let amended = false;
             if (answeringBrain && brainPending && brainPending.type === 'confirm_proforma'
-                && pro.isStaged() && pro.isAmendment(asked)) {
+                && pro.isStaged() && pro.isAmendment(asked, { intent: transition })) {
                 try {
                     await require('./workflow/actions').clearPending(
                         `${(cfg.getSettings().manager_number || cfg.MANAGER_NUMBER)}@c.us`);
@@ -2115,8 +2131,6 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Gated on a proforma being open or parked, so this costs nothing
             // on every other utterance — and cannot form an opinion about
             // "yes, Sher Trucking" during a trucker confirmation.
-            const transition = await require('./helpers/draftIntent')
-                .classify(asked, pro.transitionState());
             const parking = transition === 'park' || transition === 'resume';
             const step = (answeringBrain && !amended && !parking)
                 ? null : pro.handle(asked, { transition });

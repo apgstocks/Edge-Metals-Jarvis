@@ -44,13 +44,26 @@ const ymd = (offsetDays) => {
     return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
 };
 
-// MEASURED, not assumed. daysUntil(today) returns 1, not 0 — so my first
-// fixture's "boundary" bookings sat nowhere near the boundary, and a mutation
-// loosening the comparison from `> -1` to `> 0` changed nothing and survived.
-// The rule keeps days <= -1, so the real edge is:
-//   ymd(-2) → daysUntil -1 → the NEWEST booking that IS archived
-//   ymd(-1) → daysUntil  0 → the OLDEST booking that is NOT
-// Written as offsets from those two facts so the file says why.
+// MEASURED, not assumed — and measured AT RUN TIME, which is the second
+// lesson. daysUntil() rounds from a moment, so the offset that lands on
+// daysUntil -1 is not the same in the morning as it is in the evening: this
+// suite passed all afternoon on ymd(-2)/ymd(-1) and went red at midnight when
+// the date rolled and every fixture shifted a day. A test that depends on the
+// hour is a test people learn to ignore.
+//
+// So the two boundary offsets are PROBED rather than hardcoded. The rule keeps
+// days <= -1, so:
+//   EDGE_IN  → the newest offset that IS archived (daysUntil -1)
+//   EDGE_OUT → one day younger, NOT archived (daysUntil 0)
+// If the probe cannot find them the suite says so instead of quietly testing
+// two bookings that both sit well inside the same side of the line.
+const { daysUntil } = require(path.join(ROOT, 'helpers/time.js'));
+let EDGE_IN = null, EDGE_OUT = null;
+for (let o = 0; o >= -4; o--) {
+    const d = daysUntil(ymd(o));
+    if (d === -1 && EDGE_IN === null) EDGE_IN = o;
+    if (d === 0 && EDGE_OUT === null) EDGE_OUT = o;
+}
 fs.writeFileSync(path.join(dir, 'bookings.json'), JSON.stringify({
     // Insertion order deliberately NOT expiry order, so the sort has
     // something to do. With the list already in the right order a mutation
@@ -59,10 +72,10 @@ fs.writeFileSync(path.join(dir, 'bookings.json'), JSON.stringify({
     LONGGONE: { booking_number: 'LONGGONE', cutoff_date: ymd(-12), carrier: 'Maersk', port_of_loading: 'HOUSTON', containers: [{ seq: 1 }] },
     HELDOPEN: { booking_number: 'HELDOPEN', cutoff_date: ymd(-5), carrier: 'CMA' },
     // daysUntil -1: the newest booking that still counts as expired.
-    JUSTOVER: { booking_number: 'JUSTOVER', cutoff_date: ymd(-2), carrier: 'ONE' },
+    JUSTOVER: { booking_number: 'JUSTOVER', cutoff_date: ymd(EDGE_IN), carrier: 'ONE' },
     // daysUntil 0: one day younger, and NOT expired. Archiving this strands a
     // booking whose container can still be gated.
-    STILLOK:  { booking_number: 'STILLOK',  cutoff_date: ymd(-1), carrier: 'ONE' },
+    STILLOK:  { booking_number: 'STILLOK',  cutoff_date: ymd(EDGE_OUT), carrier: 'ONE' },
     TOMORROW: { booking_number: 'TOMORROW', cutoff_date: ymd(+1), carrier: 'ONE' },
     NODATE:   { booking_number: 'NODATE',   carrier: 'Hapag' },
 }));
@@ -71,6 +84,13 @@ fs.writeFileSync(path.join(dir, 'workflow.json'), JSON.stringify({
 }));
 
 const scan = require(path.join(ROOT, 'helpers/cutoffScan.js'));
+
+// The probe has to have worked, or the two boundary assertions below are
+// comparing bookings that are not on the boundary at all — which is exactly
+// the failure this file already recorded once.
+ck('the archive boundary was located', EDGE_IN !== null && EDGE_OUT === EDGE_IN + 1,
+   `EDGE_IN=${EDGE_IN} EDGE_OUT=${EDGE_OUT} — daysUntil no longer yields -1 and 0 on `
+   + 'consecutive days, so the fixtures cannot straddle the line');
 
 console.log('\n─ scanning for bookings past cutoff ─────────────────────────');
 

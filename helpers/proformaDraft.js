@@ -283,7 +283,24 @@ const FIELDS = [
             // both used to capture the preposition as part of the name —
             // "to Hyundai Steel" went on the document, and into the address
             // book lookup, which then failed for a company that exists.
-            const m = /\b(?:consignee\s+(?:is\s+|to\s+|should\s+be\s+)?|for\s+|to\s+)([A-Za-z][\w&.\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bof\b|\bat\b|\brate\b|\bwith\b|\bmaterial\b|\d))/i.exec(t);
+            // ── "buyer is X", AND "X not Y" ──────────────────────────────
+            // Both found on 2026-09-07 by making corrections reach the draft
+            // at all. While the sentence was being swallowed these could not
+            // fire; the moment it landed, they did.
+            //
+            // "buyer is Hyundai Steel" matched NO branch, so `who` stayed
+            // null, so the consignee span was never blanked out of the text —
+            // and the material parser, reading the whole sentence, set the
+            // description line to "Steel". The buyer did not change and the
+            // GOODS did. She calls them buyer and consignee interchangeably.
+            //
+            // "consignee is Hyundai Steel not Daekwang" ran the non-greedy
+            // capture straight through the correction and produced the
+            // company name "Hyundai Steel not Daekwang", which is what would
+            // have been printed at the top of the invoice. `not` and
+            // `instead` are how a correction names the old value, so both
+            // terminate the name.
+            const m = /\b(?:(?:consignee|buyer)\s+(?:is\s+|to\s+|should\s+be\s+)?|for\s+|to\s+)([A-Za-z][\w&.\- ]{1,60}?)(?=\s*(?:$|[,.;]|\bof\b|\bat\b|\bnot\b|\binstead\b|\brate\b|\bwith\b|\bmaterial\b|\d))/i.exec(t);
             if (!m) return null;
             const name = m[1].trim().replace(/[.,]$/, '');
             // ── A TERM IS NOT A COMPANY ──────────────────────────────────
@@ -627,11 +644,25 @@ function absorb(text) {
         }
     }
 
-    let rest = t;
+    // ── THE OLD VALUE IN A CORRECTION IS NOT A NEW VALUE ─────────────────
+    // "consignee should be POSCO instead of Daekwang" terminated the name at
+    // POSCO correctly, and then the MATERIAL parser read the leftovers and
+    // set the description line to "Daekwang". Same shape as the consignee/
+    // material collision above: the fix is the same, blank the span before
+    // anything else reads it.
+    //
+    // This runs for every field, not just the consignee, because "the rate is
+    // 8500 not 8450" has exactly the same problem and the number parsers are
+    // just as happy to take the wrong one.
+    //
+    // Stopped at a clause boundary so it removes the old value and not the
+    // rest of her sentence: "make it POSCO instead of Daekwang, and 2
+    // containers" must keep the containers.
+    let rest = t.replace(/\b(?:not|instead\s+of|rather\s+than)\s+[A-Za-z0-9][\w&.\-]*(?:\s+[A-Za-z0-9][\w&.\-]*){0,3}/gi, ' ');
     if (who) {
         got.consignee = who;
         const esc = who.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        rest = t.replace(new RegExp(esc, 'i'), ' ');
+        rest = rest.replace(new RegExp(esc, 'i'), ' ');
     }
 
     for (const f of FIELDS) {
@@ -1249,10 +1280,52 @@ function isResume(text) { return RESUME.test(String(text || '')); }
 // what keeps those apart.
 const CORRECTION_CUE = /\b(wait|hold on|hang on|actually|instead|change|correct|make it|make that|should be|rather|scrap that|no[,.]|not\s+\w+,?\s+(?:make|change))\b/i;
 
-function isAmendment(text) {
+// ── SAYING WHAT MOVED ────────────────────────────────────────────────────
+// Her words, not the field keys. "shipment_terms" means nothing spoken aloud;
+// she calls them trade terms and so does the document.
+const FIELD_LABEL = {
+    consignee: 'the consignee', material: 'the material', rate: 'the rate',
+    mt: 'the quantity', containers: 'the containers',
+    payment_terms: 'payment terms', shipment_terms: 'trade terms',
+    port_discharge: 'the discharge port',
+};
+function fmtVal(key, v) {
+    if (v === undefined || v === null || v === '') return 'the default';
+    if (key === 'rate') {
+        const n = Number(v);
+        return Number.isFinite(n)
+            ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : String(v);
+    }
+    if (key === 'mt') return `${v} MT`;
+    return String(v);
+}
+
+// ── AND IT IS NO LONGER ONLY THE CUE LIST ────────────────────────────────
+// Apsara, 2026-09-07: "if i say no no jarvis, trade terms should be like this
+// it should update. just like jarvis in iron man."
+//
+// It did not, for five of ten natural phrasings — "trade terms CIF Busan",
+// "no no the rate is 8500", "consignee is Hyundai Steel not Daekwang" all
+// carry no cue word, so handle() returned null and the sentence vanished
+// while the un-amended document stayed confirmable.
+//
+// `opts.intent === 'amend'` is the dynamic decision from draftIntent.js. It is
+// OR'd with the cue list rather than replacing it, on purpose: this layer can
+// only ever widen what counts as a correction. If the model is unreachable
+// and classify() returns 'none', the cue list still fires exactly as it did
+// yesterday, so the worst case is the old behaviour and not a worse one.
+//
+// The field test below is NOT relaxed either way. "Wait" on its own is a
+// hesitation, and treating it as an amendment tears down a confirmation she
+// had not finished thinking about.
+function isAmendment(text, opts) {
     const t = String(text || '');
     if (!t.trim() || !draft) return false;
-    if (!CORRECTION_CUE.test(t)) return false;
+    const intent = opts && opts.intent;
+    // A decided park or resume is not a correction, whatever words it used.
+    if (intent === 'park' || intent === 'resume') return false;
+    if (intent !== 'amend' && !CORRECTION_CUE.test(t)) return false;
     // It must actually CHANGE something. "Wait" on its own is a hesitation,
     // and treating it as an amendment would cancel a confirmation she had
     // not finished thinking about.
@@ -1278,7 +1351,10 @@ function transitionState() {
     else if (held) line = held.line || '';
     let q = null;
     if (draft) { try { q = nextQuestion(); } catch (e) { q = null; } }
-    return { open: !!draft, parked: !!held, summary: line, question: q };
+    // `staged` is what makes "amend" available. Mid-questioning the draft
+    // absorbs answers itself, so offering the classifier a correction label
+    // there would put two paths in competition for one sentence.
+    return { open: !!draft, parked: !!held, staged: !!(draft && draft.staged), summary: line, question: q };
 }
 
 // `opts.transition` is the dynamic decision from helpers/draftIntent.js:
@@ -1345,18 +1421,47 @@ function handle(text, opts) {
     // A staged draft is waiting on her yes. It must not absorb whatever she
     // says next — "any bookings from Houston" would be read as an answer and
     // silently redraw a document that is already staged for sending.
+    let amending = false;
+    let before = null;
     if (open && draft.staged && !isStart(text)) {
-        if (!isAmendment(text)) return null;
+        if (!isAmendment(text, { intent: decided })) return null;
         // A real correction reopens it. The caller is responsible for tearing
         // down the pending it staged — see api.js — because a document that
         // has been amended must not still be confirmable in its old form.
         draft.staged = false;
+        amending = true;
+        // Snapshot BEFORE absorbing, so what changed can be named. This is
+        // the guard that replaces the cue list: with a model deciding what
+        // counts as a correction, a mis-parse must be audible rather than a
+        // quietly rewritten field on a financial document.
+        before = Object.assign({}, draft.fields);
     }
 
     if (!open) start(text); else answer(text);
 
+    // What actually moved. Compared as strings because a rate arrives as a
+    // number from one path and a numeric string from another, and reporting
+    // "rate 8500 → 8500" would train her to stop listening to this line.
+    let changedLine = '';
+    if (amending && before) {
+        const moved = [];
+        for (const f of FIELDS) {
+            const a = before[f.key], b = draft.fields[f.key];
+            if (String(a === undefined ? '' : a) !== String(b === undefined ? '' : b)) {
+                moved.push(`${FIELD_LABEL[f.key] || f.key} to ${fmtVal(f.key, b)}`);
+            }
+        }
+        // Nothing moved is possible: isAmendment saw a field in the sentence
+        // but absorb wrote the same value back. Say so rather than implying a
+        // change, or she confirms a document believing it was corrected.
+        changedLine = moved.length
+            ? `Changed ${moved.join(', ')} — `
+            : 'That reads the same as what I had — ';
+        console.log(`[PROFORMA] amended (${decided === 'amend' ? 'model' : 'cue'}): ${moved.join('; ') || 'no net change'}`);
+    }
+
     const q = nextQuestion();
-    if (q) return { stage: 'asking', say: q, have: Object.assign({}, draft.fields) };
+    if (q) return { stage: 'asking', say: changedLine + q, changed: changedLine || null, have: Object.assign({}, draft.fields) };
 
     const p = payload();
     const line = summary();
@@ -1373,7 +1478,7 @@ function handle(text, opts) {
     if (!who.ok && who.why === 'ambiguous') {
         return {
             stage: 'preview', ready: false, blocked: 'consignee_ambiguous',
-            say: `${line} Which ${draft.fields.consignee} — ${(who.matches || []).join(', ')}?`,
+            say: `${changedLine}${line} Which ${draft.fields.consignee} — ${(who.matches || []).join(', ')}?`,
             summary: line, recipient: null, consignee: who,
             fields: Object.assign({}, draft.fields),
             defaulted: p.defaulted, pdf: pdfPayload(), draft: brainDraft(),
@@ -1389,7 +1494,7 @@ function handle(text, opts) {
             : `I don't have an email address for ${to.who || 'them'}. Add the contact, or tell me the address.`;
         return {
             stage: 'preview', ready: false, blocked: to.why,
-            say: `${line} ${why}`,
+            say: `${changedLine}${line} ${why}`,
             summary: line, recipient: to,
             fields: Object.assign({}, draft.fields),
             defaulted: p.defaulted, pdf: pdfPayload(), draft: brainDraft(),
@@ -1398,7 +1503,7 @@ function handle(text, opts) {
 
     return {
         stage: 'preview', ready: true,
-        say: `${line} Send it to ${to.name}? Say yes and it goes.`,
+        say: `${changedLine}${line} Send it to ${to.name}? Say yes and it goes.`,
         summary: line, recipient: to,
         fields: Object.assign({}, draft.fields),
         defaulted: p.defaulted,

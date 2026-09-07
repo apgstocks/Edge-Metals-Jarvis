@@ -392,8 +392,9 @@ section('E — the handover is wired, and awaited');
        && seg.indexOf('clearPending(') < seg.indexOf('const step ='),
        'a later "yes" would otherwise confirm the version she just rejected');
     ck('  and only for a proforma pending, only when staged, only on a real change',
-       /brainPending\.type === 'confirm_proforma'\s*\n?\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked\)/.test(seg),
-       'a loose amendment test would hijack a trucker confirmation');
+       /brainPending\.type === 'confirm_proforma'\s*\n?\s*&& pro\.isStaged\(\) && pro\.isAmendment\(asked, \{ intent: transition \}\)/.test(seg),
+       'the confirm_proforma lock is what keeps a trucker confirmation out — NOT the '
+       + 'cue word test, which is what I wrongly claimed on 2026-09-07');
     ck('  the draft survives the handover so there is something to amend',
        /pro\.markStaged\(\)/.test(seg) && !/\bpro\.clear\(\);[\s\S]{0,80}markStaged/.test(seg));
     ck('  and is dropped once the confirm is over',
