@@ -64,6 +64,30 @@
             foreground: true,    // app is visible
             speaking: false,     // Jarvis or Scout is talking
             capturing: false,    // a one-shot command capture is open
+            // ── BARGE-IN, AND WHY IT IS A SEPARATE FLAG ──────────────────
+            // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
+            //
+            // Siri and Alexa both let you talk over them. Jarvis could not:
+            // invariant 1 below shuts the microphone while it speaks, and the
+            // comment in voice.js said plainly that changing it was "a real
+            // decision with a known failure mode behind it, not something to
+            // slip in." She has now made that decision.
+            //
+            // It is NOT made by loosening invariant 1. That rule is what every
+            // other part of this file trusts, and editing it would silently
+            // reinterpret every existing assertion about it. Instead the mic
+            // gets a SECOND, narrower mode that exists only while speaking —
+            // see micGuardOpen() — in which the recogniser is listening for
+            // the wake word and "stop" and nothing else. That is how Alexa
+            // does it too: full speech recognition does not run during
+            // playback, only the wake detector.
+            //
+            // `guard` is the kill switch. Two self-triggers in a row and it
+            // latches off for the session (fail closed, her call deferred to
+            // me): a feedback loop in her pocket drains the battery and she
+            // cannot stop it, whereas losing barge-in just means tapping the
+            // card, which still works.
+            guard: true,
         }, over || {});
     }
 
@@ -76,12 +100,29 @@
         return !!(s.capturing || s.enabled); // invariant 3 — only if asked for
     }
 
+    // ── THE SECOND MODE. DELIBERATELY NOT PART OF THE RULE ABOVE ─────────
+    // True only while speaking, and only ever means "listen for the wake word
+    // or a stop word". Full recognition still obeys micShouldBeOpen()
+    // unchanged, so invariant 1 holds for everything it held for yesterday
+    // and every test written against it still means what it meant.
+    //
+    // Invariants 2 and 3 are NOT relaxed: a backgrounded app does not listen,
+    // and neither does one she has switched off. Barge-in is a convenience
+    // during playback, not a reason to open a microphone she did not ask for.
+    function micGuardOpen(s) {
+        if (!s.speaking) return false;     // only ever during playback
+        if (!s.guard) return false;        // latched off after self-triggers
+        if (!s.foreground) return false;   // invariant 2, unchanged
+        return !!s.enabled;                // invariant 3, unchanged
+    }
+
     var EVENTS = [
         'USER_ENABLE', 'USER_DISABLE', 'USER_TOGGLE',
         'APP_FOREGROUND', 'APP_BACKGROUND',
         'SPEAK_START', 'SPEAK_END',
         'CAPTURE_START', 'CAPTURE_END',
         'WAKE_HEARD', 'RECOGNISER_STOPPED', 'PERMISSION_DENIED',
+        'BARGE_SELF_TRIGGERED',
     ];
 
     // (state, event) -> { state, effects }
@@ -98,12 +139,30 @@
                 s.enabled = true;
                 break;
 
+            // ── TURNING IT OFF MEANS OFF, INCLUDING THE SPEAKER ──────────
+            // Found 2026-09-06 by a test written for the new local
+            // synthesiser, but the bug is older than that and was never
+            // Kokoro's: switching voice off while Jarvis was mid-sentence
+            // left `speaking` true and produced NO effects, so the reply
+            // carried on talking over her. With the browser voice that was
+            // merely rude. With audio playing through an AudioContext it is
+            // worse, because `speaking` staying true also means the state
+            // never returns to idle.
+            //
+            // Clearing `speaking` here makes the derived comparison in
+            // run() emit STOP_SPEAKING, which is what actually silences
+            // both engines. `capturing` goes too: a capture window left
+            // open on a disabled assistant is a microphone nobody expects
+            // to be listening.
             case 'USER_DISABLE':
                 s.enabled = false;
+                s.speaking = false;
+                s.capturing = false;
                 break;
 
             case 'USER_TOGGLE':
                 s.enabled = !s.enabled;
+                if (!s.enabled) { s.speaking = false; s.capturing = false; }
                 break;
 
             case 'APP_BACKGROUND':
@@ -172,6 +231,14 @@
                 // the derived rule below simply restarts it if it should be on.
                 break;
 
+            // Latches barge-in off for the session. Emitted by voice.js after
+            // the second time the recogniser hands back something that turned
+            // out to be Jarvis's own voice. One-way on purpose: a flag that
+            // could switch itself back on is a loop with a longer period.
+            case 'BARGE_SELF_TRIGGERED':
+                s.guard = false;
+                break;
+
             case 'PERMISSION_DENIED':
                 // The one non-user event that turns the setting off, because
                 // continuing to "listen" without permission is a lie.
@@ -193,9 +260,23 @@
         var effects = [];
         // Silencing comes FIRST. The caller performs these in order, and
         // starting the mic before the speaker is muted is the whole bug.
+        var gWas = micGuardOpen(before);
+        var gNow = micGuardOpen(after);
+        // ── STOPS BEFORE STARTS, ALWAYS ──────────────────────────────────
+        // I first appended the guard effects after the others and it broke
+        // every "the microphone comes back" assertion: leaving speech emits
+        // START_MIC and STOP_GUARD_MIC, and with STOP last the caller started
+        // the recogniser and then immediately stopped it again. The mic never
+        // came back and nothing said so.
+        //
+        // Grouping by stop-then-start makes the order true by construction
+        // rather than by me getting a four-line sequence right, which I did
+        // not. Silencing still comes first of all.
         if (before.speaking && !after.speaking) effects.push('STOP_SPEAKING');
+        if (gWas && !gNow) effects.push('STOP_GUARD_MIC');
         if (was && !now) effects.push('STOP_MIC');
         if (!was && now) effects.push('START_MIC');
+        if (!gWas && gNow) effects.push('START_GUARD_MIC');
         if (!before.capturing && after.capturing) effects.push('OPEN_CAPTURE');
         return effects;
     }
@@ -213,5 +294,6 @@
         return { state: s, steps: all };
     }
 
-    return { initial: initial, reduce: reduce, run: run, micShouldBeOpen: micShouldBeOpen, EVENTS: EVENTS };
+    return { initial: initial, reduce: reduce, run: run, micShouldBeOpen: micShouldBeOpen,
+             micGuardOpen: micGuardOpen, EVENTS: EVENTS };
 }));

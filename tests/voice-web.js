@@ -34,7 +34,13 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 
 // A fake browser with a fake microphone and a fake voice, so every open and
 // close is observable.
-function browser({ chrome = true, voices = null, pref = null, reply = null } = {}) {
+// `holdSpeech` keeps the utterance open instead of ending it on the next
+// tick. Needed the moment barge-in existed: every assertion about talking
+// OVER Jarvis needs Jarvis to still be talking, and the default mock finishes
+// before the test can say a word. Without it the whole BARGE section was
+// measuring the follow-up window instead.
+function browser({ chrome = true, voices = null, pref = null, reply = null, holdSpeech = false } = {}) {
+    let held = null;
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
     // its own globals. Without it window.eval is Node's, and voice.js dies on
@@ -105,8 +111,13 @@ function browser({ chrome = true, voices = null, pref = null, reply = null } = {
             // instant audio began? Dispatching SPEAK_START by hand in a test
             // proves the reducer; only this proves that the code which
             // actually speaks remembers to tell it.
-            log.micOpenWhileSpeaking.push(!!live);
-            setTimeout(() => u.onend && u.onend(), 0);
+            // 2026-09-07: barge-in means `live` can be true during playback.
+            // What must never be true is a mic that could take a COMMAND, so
+            // the guard state is read AT THE INSTANT audio begins — reading it
+            // afterwards, as I first did, asks a question about a moment that
+            // has already passed.
+            log.micOpenWhileSpeaking.push(!!live && !(w.JarvisVoice && w.JarvisVoice.guard()));
+            if (holdSpeech) held = u; else setTimeout(() => u.onend && u.onend(), 0);
         },
         cancel() { log.cancels++; },
     };
@@ -201,7 +212,8 @@ function browser({ chrome = true, voices = null, pref = null, reply = null } = {
     w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
     if (!w.JarvisVoice) throw new Error('voice.js did not initialise — check window.VoiceMachine');
     if (!w.document.getElementById('jarvisVoiceBar')) throw new Error('voice.js did not mount its bar');
-    return { w, log, mic: () => live, doc: w.document };
+    return { w, log, mic: () => live, doc: w.document,
+             endSpeech: () => { const u = held; held = null; if (u && u.onend) u.onend(); } };
 }
 
 (async () => {
@@ -405,8 +417,12 @@ section('A00 — the desktop app answers in its own voice, and survives it faili
         // THE RULE. The mic must not be open while it is talking, and must
         // come back after — and this is a DIFFERENT code path from
         // speechSynthesis, so the old test does not cover it.
-        ck('  the microphone is shut while it speaks', !b.mic(),
+        ck('  an open mic while speaking is only ever a guard mic',
+           !b.mic() || b.w.JarvisVoice.guard(),
            'a second speaker that forgets this recreates the self-triggering loop');
+        ck('    and it knows what it is saying, so it can discard it',
+           b.w.JarvisVoice.isOwnVoice(b.w.JarvisVoice.nowSpeaking()) === true,
+           'the echo filter is the thing standing in for a closed mic');
         b.finishAudio();
         await new Promise((r) => setTimeout(r, 5));
         ck('  and reopens only when the audio actually ended', !!b.mic(),
@@ -709,7 +725,8 @@ section('A0c — interrupting whoever is talking');
     await new Promise((r) => setTimeout(r, 10));
 
     ck('it is speaking', b.w.JarvisVoice.state().speaking === true);
-    ck('  and the microphone is shut, as the rule requires', !b.mic(),
+    ck('  and any open mic is a guard mic, as the rule requires',
+       !b.mic() || b.w.JarvisVoice.guard(),
        'this is why she cannot simply say the other name');
     ck('  the card says how to interrupt',
        b.doc.getElementById('jvCard').className.indexOf('speaking') !== -1,
@@ -1101,6 +1118,16 @@ section('B — the wake word, and only the wake word');
     }
 }
 
+
+// ── 2026-09-07: THE RULE CHANGED SHAPE, NOT STRENGTH ─────────────────────
+// Apsara asked for Siri/Alexa barge-in, so the recogniser now stays alive
+// while Jarvis speaks. "The mic is shut" is therefore no longer the way to
+// state the guarantee — but the guarantee itself is unchanged: JARVIS MUST
+// NEVER ACT ON ITS OWN VOICE. Each assertion below is replaced by the two
+// that actually carry that, and they are stricter than what they replace:
+//   1. an open mic during speech is ALWAYS a guard mic (no commands)
+//   2. Jarvis's own sentence, fed back in, is recognised as its own
+
 section('C — THE SELF-TRIGGER, which is why any of this is careful');
 {
     // Jarvis answers out loud. Its own reply contains its own name. If the
@@ -1111,8 +1138,30 @@ section('C — THE SELF-TRIGGER, which is why any of this is careful');
     ck('mic is open before speaking', !!mic());
 
     w.JarvisVoice.dispatch('SPEAK_START');
-    ck('the microphone CLOSES before a word is spoken', !mic(),
+    ck('the command mic CLOSES before a word is spoken', !mic() || w.JarvisVoice.guard(),
        'this single assertion is the reason voice-machine.js exists');
+    // FAIL-SAFE. This section dispatches SPEAK_START by hand rather than
+    // calling speak(), so nothing recorded what Jarvis is saying — and
+    // without that the echo filter is inert. A guard mic in that state is
+    // the ORIGINAL self-trigger bug with extra steps, so there must not be
+    // one. Found by this assertion, not by design.
+    ck('  and no guard mic without a transcript to filter against',
+       !w.JarvisVoice.guard(),
+       'guard mode with nothing to compare against protects nothing');
+
+    // The filter itself, checked directly. A mangled partial of the sentence
+    // is what a recogniser actually returns off a loudspeaker.
+    const SAID = 'The earliest cutoff is next Wednesday, in seven days.';
+    ck('  the echo filter catches Jarvis quoting itself',
+       w.JarvisVoice.isOwnVoice('earliest cutoff is next wednesday', SAID) === true,
+       'without this the guard mic IS the self-trigger, just with extra steps');
+    ck('    even garbled, as a loudspeaker makes it',
+       w.JarvisVoice.isOwnVoice('the earliest cut off is next wensday in seven', SAID) === true);
+    ck('  but not something she actually said',
+       w.JarvisVoice.isOwnVoice('what about the Houston booking', SAID) === false,
+       'a filter that swallows everything is a broken barge-in, not a safe one');
+    ck('    nor a real interruption',
+       w.JarvisVoice.isOwnVoice('stop, make it FOB instead', SAID) === false);
     ck('  and the dot stops being live', !w.document.getElementById('jarvisVoiceBar').classList.contains('live'));
 
     // A partial result queued before the mic shut can still arrive late. It
@@ -1143,7 +1192,11 @@ section('D — speaking and listening are never both true');
         for (const e of seq) {
             b.w.JarvisVoice.dispatch(e);
             const s = b.w.JarvisVoice.state();
-            if (s.speaking && !!b.mic()) bad = e;
+            // 2026-09-07: barge-in means the recogniser EXISTS while
+            // speaking. What must never happen is a mic that can take a
+            // COMMAND — so the probe is "open and not guarded", which is the
+            // rule the old `!!b.mic()` was standing in for.
+            if (s.speaking && !!b.mic() && !b.w.JarvisVoice.guard()) bad = e;
         }
         ck(`[${seq.join(' → ')}] never has the mic open while speaking`, !bad,
            `broke at ${bad}`);
@@ -1238,7 +1291,7 @@ section('G2 — the code that SPEAKS closes the mic itself');
     await new Promise((r) => setTimeout(r, 20));
 
     ck('the answer was spoken', log.spoken.length > 0, 'the whole path did not run');
-    ck('  and the microphone was SHUT the instant audio began',
+    ck('  and no COMMAND mic was open while audio played',
        log.micOpenWhileSpeaking.every((open) => open === false),
        'this is the self-trigger: an open mic hears the reply, finds "Jarvis" in it, and fires again');
     ck('  the question reached the assistant', log.asked.length > 0 && /acme/i.test(log.asked[0]),
@@ -1551,9 +1604,29 @@ section('FOLLOW2 — and it does not hold the microphone open for ever');
     b2.mic() && b2.mic().hear('hey jarvis how much do we owe acme');
     b2.w.JarvisVoice.finish();
     await new Promise((r) => setTimeout(r, 30));
-    ck('  a plain answer does not reopen the microphone',
-       !/listening|go ahead/i.test(b2.doc.getElementById('jvText').textContent),
-       'pill says "' + b2.doc.getElementById('jvText').textContent + '" — an open mic after every answer is the self-trigger');
+    // ── 2026-09-07: THIS BEHAVIOUR WAS DELIBERATELY REVERSED ────────────
+    // Apsara: "mimic siri behaviour/alexa's." Alexa's Follow-Up Mode holds the
+    // microphone open for a few seconds after ANY answer, so "and what about
+    // Houston?" needs no wake word. Jarvis reopened only when the server said
+    // it was waiting — which covered a question it had asked, and nothing else.
+    //
+    // The old assertion's warning, "an open mic after every answer is the
+    // self-trigger", was about a mic open DURING playback. That is still
+    // forbidden and still asserted in section C. This window opens only once
+    // audio has stopped, is bounded, and still requires the assistant to be
+    // switched on and in front.
+    ck('  a plain answer opens a bounded follow-up window',
+       /passiveCapture = true;/.test(VOICE) && /var FOLLOWUP_MS = \d+/.test(VOICE),
+       'Alexa Follow-Up Mode — no wake word needed for the next sentence');
+    ck('    but only when she has it switched on and in front',
+       /followUpMode && state\.enabled && state\.foreground && !speechUnavailable/.test(VOICE),
+       'a window that ignores those is a microphone she did not ask for');
+    ck('    and it closes in silence, with no "didn\u2019t catch that"',
+       /if \(capturePassive\) captureWasFollowUp = false;/.test(VOICE),
+       'nobody asked her anything, so nagging her for not speaking is wrong');
+    ck('    and it does not steal the answer off the screen',
+       /if \(!capturePassive\) \{\s*\n\s*showCard\(/.test(VOICE),
+       'the window runs underneath — it is not a new prompt');
 }
 
 section('FOLLOW3 — a question is not a reason to break the invariants');
@@ -1646,6 +1719,109 @@ section('ACK — the chime answers the wake word, nothing else');
        `${beforeCall} → ${w.w.__playedRates.length} — the wake word is the one thing the chime exists to answer`);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+section('BARGE — talking over Jarvis, the way Siri and Alexa allow');
+{
+    // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
+    //
+    // The comment in voice.js said barge-in "needs the mic left open with echo
+    // cancellation carrying the load, and it means deliberately weakening that
+    // rule. That is a real decision with a known failure mode behind it, not
+    // something to slip in." She made the decision. This section is the
+    // "known failure mode" written down as assertions.
+    //
+    // The Web Speech API gives no speaker-reference signal, so there is no
+    // true AEC available. Two things stand in for it: guard mode (only wake
+    // and stop words count during playback) and the echo filter (anything
+    // matching what Jarvis is saying is discarded). Both are checked here by
+    // RUNNING them, not by reading the source.
+    const b = browser({ holdSpeech: true, reply: () => ({ answer: 'The earliest cutoff is next Wednesday, in seven days.' }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis when is the next cutoff');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+
+    ck('Jarvis is speaking', b.w.JarvisVoice.state().speaking === true,
+       JSON.stringify(b.w.JarvisVoice.state()));
+    ck('  and the mic is open, in guard mode', !!b.mic() && b.w.JarvisVoice.guard() === true,
+       'mic=' + !!b.mic() + ' guard=' + b.w.JarvisVoice.guard());
+    ck('  knowing what it is saying', /earliest cutoff/i.test(b.w.JarvisVoice.nowSpeaking()),
+       b.w.JarvisVoice.nowSpeaking());
+
+    // ── ITS OWN VOICE COMING BACK MUST DO NOTHING ────────────────────────
+    // This is the loop. If it fires here, it fires for ever on her phone.
+    const askedBefore = b.log.asked.length;
+    b.mic() && b.mic().hear('the earliest cutoff is next wednesday in seven days');
+    await new Promise((r) => setTimeout(r, 15));
+    ck('its own sentence coming back changes nothing',
+       b.w.JarvisVoice.state().speaking === true && b.log.asked.length === askedBefore,
+       'THE self-trigger: speaking=' + b.w.JarvisVoice.state().speaking
+       + ' asked=' + b.log.asked.length + ' (was ' + askedBefore + ')');
+
+    // Ordinary conversation over the top is not a command either. She might
+    // be talking to someone in the yard.
+    b.mic() && b.mic().hear('no not that one the other pile');
+    await new Promise((r) => setTimeout(r, 15));
+    ck('  and neither does her talking about something else',
+       b.w.JarvisVoice.state().speaking === true,
+       'only a stop word or the wake word interrupts');
+
+    // ── A REAL INTERRUPTION ──────────────────────────────────────────────
+    b.mic() && b.mic().hear('stop, make it FOB instead');
+    await new Promise((r) => setTimeout(r, 25));
+    ck('but "stop" cuts it off immediately',
+       b.w.JarvisVoice.state().speaking === false,
+       JSON.stringify(b.w.JarvisVoice.state()));
+    ck('  and reopens the microphone for what she says next',
+       b.w.JarvisVoice.state().capturing === true);
+    ck('  keeping what she said AFTER the stop word',
+       /jvCard|FOB/i.test(b.doc.getElementById('jvCard').textContent + ' ' + b.doc.getElementById('jvText').textContent)
+       || /FOB/i.test(b.doc.body.textContent),
+       'card: "' + b.doc.getElementById('jvCard').textContent
+       + '" — "stop, make it FOB instead" must not lose the instruction');
+}
+
+section('BARGE2 — and it fails CLOSED');
+{
+    // Apsara was asked how it should fail and said "I dont know", so the call
+    // is mine: latch it off. A feedback loop in her pocket drains the battery
+    // and she cannot stop it; losing barge-in costs one tap on the card,
+    // which never stopped working.
+    const b = browser({ holdSpeech: true, reply: () => ({ answer: 'Sher Trucking has the Oakland load and Jio has the Houston one.' }) });
+    b.w.eval(MACHINE); b.w.eval(VOICE);
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis who has the oakland load');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('guard mode is on to begin with', b.w.JarvisVoice.guard() === true);
+
+    // Twice is the limit. Once could be a coincidence; twice means the filter
+    // is losing and the honest response is to stop rather than keep trying.
+    b.mic() && b.mic().hear('sher trucking has the oakland load');
+    await new Promise((r) => setTimeout(r, 10));
+    ck('  still on after one self-trigger', b.w.JarvisVoice.guard() === true,
+       'one could be a coincidence');
+    b.mic() && b.mic().hear('and jio has the houston one');
+    await new Promise((r) => setTimeout(r, 15));
+    ck('  latched OFF after the second', b.w.JarvisVoice.guard() === false,
+       'a loop she cannot stop is worse than a feature she has to tap');
+    ck('  and it says so rather than going quiet',
+       /tap to interrupt/i.test(b.doc.getElementById('jvText').textContent),
+       'pill says "' + b.doc.getElementById('jvText').textContent + '"');
+
+    // ONE-WAY. A flag that can switch itself back on is a loop with a longer
+    // period, which is harder to diagnose, not safer.
+    b.w.JarvisVoice.dispatch('SPEAK_END');
+    b.w.JarvisVoice.dispatch('SPEAK_START');
+    await new Promise((r) => setTimeout(r, 10));
+    ck('  and stays off for the rest of the session', b.w.JarvisVoice.guard() === false);
+}
+
 section('CUT — it does not cut her off mid-sentence');
 {
     // Apsara, 2026-09-07: "at the end of wavelegth timeout, if i start saying
@@ -1663,8 +1839,17 @@ section('CUT — it does not cut her off mid-sentence');
     // assertion is what stops them being collapsed back into one.
     ck('the window measures SILENCE, not elapsed time',
        /var SILENCE_MS = \d+/.test(VOICE) && /var LISTEN_MS = \d+/.test(VOICE)
-       && /captureTimer = setTimeout\(finishCapture, heardAnything \? SILENCE_MS : LISTEN_MS\)/.test(VOICE),
+       && /captureTimer = setTimeout\(finishCapture,\s*\n?\s*heardAnything \? SILENCE_MS : \(capturePassive \? FOLLOWUP_MS : LISTEN_MS\)\)/.test(VOICE),
        'a fixed window cuts a long sentence in half at the same point every time');
+    // Alexa's follow-up window is SHORTER than a thinking pause, on purpose:
+    // she was not asked anything, so a full ten seconds after every answer is
+    // a microphone that is effectively always on.
+    ck('  and a passive follow-up window is shorter than a thinking pause',
+       (function () {
+           const F = Number((/var FOLLOWUP_MS = (\d+)/.exec(VOICE) || [])[1]);
+           const L = Number((/var LISTEN_MS = (\d+)/.exec(VOICE) || [])[1]);
+           return F > 0 && F < L;
+       })(), 'nobody asked her a question — this window is a convenience, not a prompt');
     ck('  and waiting-to-start is far longer than end-of-utterance',
        (function () {
            const L = Number((/var LISTEN_MS = (\d+)/.exec(VOICE) || [])[1]);

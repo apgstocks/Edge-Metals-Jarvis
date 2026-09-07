@@ -489,5 +489,76 @@ function violations(state) {
     ck('  and so does the end of speaking', /vmSend\('SPEAK_END'\)/.test(html));
 }
 
+// ── THREE COPIES, AND THEY HAD ALREADY DRIFTED ───────────────────────────
+// Found 2026-09-07 while adding barge-in, by a mutation that survived. This
+// file loads mobile-app/www/voice-machine.js; tests/voice-web.js evals
+// dashboard/voice-machine.js. They are the same module, shipped twice, and
+// nothing compared them — so these 75 assertions had been validating a copy
+// nine days behind the one the web app actually runs.
+//
+// WHAT THE DRIFT WAS, and it was not cosmetic: the mobile copy was missing
+// the 2026-09-06 fix to USER_DISABLE and USER_TOGGLE. On her PHONE, switching
+// voice off mid-sentence left `speaking` true and emitted no effects, so
+// Jarvis carried on talking over her and the microphone never reopened. The
+// dashboard was fixed; the phone was not; no test could see the difference.
+//
+// Same shape as the item-code lists in tests/numbering.js. Same fix: read
+// both and fail the day they diverge, because the copy nobody is looking at
+// is the one that gets it wrong.
+console.log('\n=== DRIFT — the shipped copies of this module must not diverge ===');
+{
+    const fs = require('fs');
+    const copies = [
+        'dashboard/voice-machine.js',
+        'mobile-app/www/voice-machine.js',
+        'mobile-app/android/app/src/main/assets/public/voice-machine.js',
+    ];
+    // Compared as CODE, not bytes: comments and blank lines may differ
+    // between a source file and a build artifact without anything behaving
+    // differently, and a guard that fails on whitespace gets switched off.
+    const code = (f) => {
+        let t;
+        try { t = fs.readFileSync(path.join(R, f), 'utf8'); } catch (e) { return null; }
+        return t.split('\n')
+            .map((l) => l.replace(/\/\/.*$/, '').trim())
+            .filter((l) => l && !l.startsWith('*') && !l.startsWith('/*'))
+            .join('\n');
+    };
+    const base = code(copies[0]);
+    ck('the dashboard copy was found', !!base && base.length > 500);
+    for (let i = 1; i < copies.length; i += 1) {
+        const other = code(copies[i]);
+        ck(`  ${copies[i]} matches it`, !!other && other === base,
+            other === null ? 'MISSING'
+              : 'diverged — the copy nobody looks at is the one that gets it wrong');
+    }
+
+    // And the specific fix that HAD drifted, asserted by behaviour rather
+    // than by a string, so it cannot be lost again in a reformat.
+    const off = VM.reduce(VM.initial({ enabled: true, speaking: true }), 'USER_DISABLE');
+    ck('switching voice off stops the speaker', off.state.speaking === false,
+       'this is what the phone was missing: Jarvis talked over her and the mic never came back');
+    ck('  and emits STOP_SPEAKING to do it', off.effects.indexOf('STOP_SPEAKING') !== -1,
+       JSON.stringify(off.effects));
+    const tog = VM.reduce(VM.initial({ enabled: true, speaking: true }), 'USER_TOGGLE');
+    ck('  and the toggle does the same', tog.state.speaking === false
+       && tog.effects.indexOf('STOP_SPEAKING') !== -1, JSON.stringify(tog.effects));
+
+    // Guard mode obeys invariant 2. A mutation deleting the foreground check
+    // from micGuardOpen() survived every assertion in the suite: barge-in is
+    // a convenience during playback, never a reason to open a microphone in a
+    // tab she cannot see.
+    ck('a backgrounded tab gets no guard mic either',
+       VM.micGuardOpen({ speaking: true, guard: true, enabled: true, foreground: false }) === false,
+       'invariant 2 is not relaxed by barge-in');
+    ck('  nor does one she switched off',
+       VM.micGuardOpen({ speaking: true, guard: true, enabled: false, foreground: true }) === false);
+    ck('  but a visible, enabled one does', 
+       VM.micGuardOpen({ speaking: true, guard: true, enabled: true, foreground: true }) === true);
+    ck('  and never while silent',
+       VM.micGuardOpen({ speaking: false, guard: true, enabled: true, foreground: true }) === false,
+       'the guard mic exists only to hear her over the top of an answer');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

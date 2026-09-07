@@ -184,12 +184,38 @@
     // finishCapture, which must not drop that turn in silence.
     var captureWasFollowUp = false;
     var captureRetried = false;
+    var capturePassive = false;
     // A one-shot line to show WHEN the capture reopens, not before. Writing it
     // straight into the pill was useless: openCapture() calls say('Listening')
     // and showCard('Go ahead…') a millisecond later and wiped it — the retry
     // happened and looked exactly like the silent drop it was fixing.
     var pendingHint = '';
     var pendingSeed = '';
+    // ── BARGE-IN (Siri/Alexa), AND THE GUARD THAT REPLACES INVARIANT 1 ───
+    // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
+    //
+    // While Jarvis is speaking the recogniser now stays alive, but in GUARD
+    // mode: nothing it returns is treated as a command except the wake word
+    // or a stop word. That is Alexa's design — full recognition does not run
+    // during playback, only the wake detector — and it shrinks the surface
+    // from "any sentence Jarvis says" to "the handful of words below".
+    //
+    // The second guard is the echo filter. We know exactly what Jarvis is
+    // saying, so anything the recogniser hands back that appears in that
+    // sentence is Jarvis's own voice and is discarded. This is the piece
+    // doing the work that acoustic echo cancellation would do if the Web
+    // Speech API gave us a speaker reference signal. It does not.
+    // Alexa's Follow-Up Mode. `passiveCapture` is consumed by openCapture and
+    // marks a window nobody asked her to fill, so finishCapture closes it in
+    // silence instead of retrying.
+    var followUpMode = true;
+    var passiveCapture = false;
+    var FOLLOWUP_MS = 5000;
+    var guardMode = false;
+    var nowSpeaking = '';       // what Jarvis is saying RIGHT NOW, for the filter
+    var selfTriggers = 0;       // consecutive times the filter caught its own voice
+    var SELF_TRIGGER_LIMIT = 2; // then barge-in latches off for the session
+    var BARGE_WORDS = /\b(stop|cancel|nevermind|never mind|quiet|shut up|wait|hold on|enough)\b/i;
     var capturePrefix = '';
     var CONTINUE_MS = 2500;
     var lastAsked = '';
@@ -754,7 +780,29 @@
         (r.effects || []).forEach(function (fx) {
             if (fx === 'STOP_SPEAKING') stopSpeaking();
             else if (fx === 'STOP_MIC') stopMic();
-            else if (fx === 'START_MIC') startMic();
+            else if (fx === 'START_MIC') { guardMode = false; startMic(); }
+            // GUARD MODE. The recogniser runs, but onresult below refuses to
+            // treat anything as a command unless it is a barge word that
+            // survives the echo filter. Order matters and the reducer
+            // guarantees it: STOP_MIC is emitted before START_GUARD_MIC.
+            else if (fx === 'START_GUARD_MIC') {
+                // ── THE FILTER IS THE PRICE OF ADMISSION ─────────────────
+                // Found by a test that dispatched SPEAK_START directly rather
+                // than calling speak(): guard mode came up with nowSpeaking
+                // empty, so isOwnVoice() could never return true and the mic
+                // was open during playback with NOTHING protecting it. That
+                // is not a weakened invariant, it is the original bug.
+                //
+                // So the guard mic requires knowing the sentence. Anything
+                // that starts speech without going through speak() gets the
+                // old behaviour — mic shut — which is the safe direction.
+                if (!nowSpeaking) {
+                    console.warn('[VOICE] speech started without a transcript — no guard mic, tap to interrupt');
+                    return;   // forEach callback: skip this effect, keep the rest
+                }
+                guardMode = true; startMic();
+            }
+            else if (fx === 'STOP_GUARD_MIC') { guardMode = false; stopMic(); }
             else if (fx === 'OPEN_CAPTURE') {
                 // ── THE EFFECT IS WHAT OPENS IT ──────────────────────────
                 // dispatch('WAKE_HEARD') emits OPEN_CAPTURE, and THIS line
@@ -956,7 +1004,48 @@
         try { window.speechSynthesis.speak(u); } catch (e) { onDone(); }
     }
 
+    // ── THE ECHO FILTER ──────────────────────────────────────────────────
+    // We know what Jarvis is saying, so we can recognise it coming back. A
+    // recogniser fed a loudspeaker returns a mangled, partial version of the
+    // sentence — so this compares WORDS, not strings, and calls it our own
+    // voice when most of what was heard also appears in what is being said.
+    //
+    // The threshold matters in one direction much more than the other. Too
+    // strict and a self-trigger gets through, which is the loop. Too loose
+    // and she loses a barge-in, which costs her one tap. So it is deliberately
+    // generous: three-in-five overlapping words is enough to discard.
+    //
+    // Short utterances are the hard case — "stop" is one word and could
+    // appear in the reply. Barge words are therefore checked BEFORE this in
+    // onresult only for the wake word; a bare stop word that also appears in
+    // the sentence being spoken is treated as echo, because a false stop is
+    // recoverable and a false command is not.
+    function normWords(t) {
+        return String(t || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ')
+            .split(/\s+/).filter(function (w) { return w.length > 1; });
+    }
+    // `against` is an argument so the filter can be tested on its own. It
+    // defaults to whatever is being spoken right now, which is every real
+    // call — but a rule this load-bearing should be checkable without having
+    // to drive a speech synthesiser to get at it.
+    function isOwnVoice(heard, against) {
+        var src = against === undefined ? nowSpeaking : against;
+        if (!src) return false;
+        var mine = normWords(src);
+        var got = normWords(heard);
+        if (!got.length || !mine.length) return false;
+        var set = {};
+        for (var i = 0; i < mine.length; i += 1) set[mine[i]] = true;
+        var hits = 0;
+        for (var j = 0; j < got.length; j += 1) if (set[got[j]]) hits += 1;
+        return (hits / got.length) >= 0.6;
+    }
+
     function speak(text) {
+        // Recorded BEFORE the dispatch, so the guard mic that opens a moment
+        // later already knows what it is about to hear itself say.
+        nowSpeaking = String(text || '');
+        selfTriggers = 0;
         dispatch('SPEAK_START');           // closes the mic BEFORE any audio
         // EXACTLY ONE dispatch of SPEAK_END, whichever engine runs and
         // however it ends. Two would reopen the microphone while Jarvis is
@@ -1004,6 +1093,32 @@
                     suppressAck = true;
                     dispatch('WAKE_HEARD');
                 }
+            } else if (followUpMode && state.enabled && state.foreground && !speechUnavailable) {
+                // ── ALEXA'S FOLLOW-UP MODE ───────────────────────────────
+                // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
+                //
+                // Alexa keeps the microphone open for about five seconds
+                // after ANY answer, not only after a question, so "and what
+                // about Houston?" does not need the wake word again. Jarvis
+                // only reopened when the SERVER said it was waiting for
+                // something, which covers a question it asked and nothing
+                // else — every ordinary answer ended the conversation.
+                //
+                // PASSIVE, and the distinction matters. Nothing was asked of
+                // her, so silence here is the normal outcome and must close
+                // quietly: no chime, no "didn't catch that", no retry. That
+                // retry exists for an outstanding question, and firing it
+                // after an ordinary answer would nag her for not speaking.
+                console.log('[VOICE] follow-up window open — no wake word needed');
+                // lastAsked is deliberately NOT cleared here, unlike the
+                // question branch above. It is what the continuation window
+                // joins a resumed half-sentence to, and wiping it turned
+                // "21 MT of copper at 8450" into a fragment with no subject.
+                // The question branch clears it because a fresh answer to a
+                // question is a new sentence; a follow-up is not.
+                suppressAck = true;
+                passiveCapture = true;
+                dispatch('WAKE_HEARD');
             }
         };
         if (speakLocal(text, finish)) return;
@@ -1027,6 +1142,65 @@
             // transient, and the count must not creep up over a long session
             // until one bad afternoon latches the feature off.
             networkErrors = 0;
+
+            // ── WHILE JARVIS IS TALKING ──────────────────────────────
+            // Everything here is thrown away unless it is a deliberate
+            // interruption. This is the branch that makes barge-in safe
+            // rather than a feedback loop.
+            // ── SHE CARRIED ON TALKING, INTO AN OPEN FOLLOW-UP WINDOW ───
+            // Alexa's follow-up window and the continuation window collided,
+            // and the test caught it: with a passive capture already open,
+            // her resumed half-sentence no longer reached the "she carried on
+            // talking" branch below — that branch only runs when NOTHING is
+            // capturing. So "21 MT of copper at 8450 per MT" arrived as a
+            // fragment with no subject, which is the exact bug the
+            // continuation window was built to fix, reintroduced by a feature
+            // added on top of it.
+            //
+            // Inside the grace period the passive window behaves like no
+            // window at all: the tail is joined to what she just asked. After
+            // it, a follow-up is a follow-up and stands alone — which is why
+            // this is bounded by CONTINUE_MS rather than lasting the whole
+            // five seconds.
+            if (state.capturing && capturePassive && !capturePrefix
+                && lastAsked && (Date.now() - lastAskedAt) < CONTINUE_MS
+                && !WAKE.test(txt) && !isOwnVoice(txt)) {
+                console.log('[VOICE] continuing into the follow-up window: "' + lastAsked + '" + "' + txt + '"');
+                capturePrefix = lastAsked;
+                lastAsked = '';
+            }
+
+            if (guardMode) {
+                if (isOwnVoice(txt)) {
+                    // Jarvis hearing Jarvis. Counted, because twice in a row
+                    // means the echo filter is losing and the honest response
+                    // is to stop rather than to keep trying.
+                    selfTriggers += 1;
+                    console.warn('[VOICE] guard heard our own voice ('
+                        + selfTriggers + '/' + SELF_TRIGGER_LIMIT + '): "' + txt.slice(0, 60) + '"');
+                    if (selfTriggers >= SELF_TRIGGER_LIMIT) {
+                        console.warn('[VOICE] barge-in latched OFF for this session — tap the card or press Esc');
+                        say('Tap to interrupt');
+                        dispatch('BARGE_SELF_TRIGGERED');
+                    }
+                    return;
+                }
+                if (WAKE.test(txt) || BARGE_WORDS.test(txt)) {
+                    // A real interruption. Anything she said AFTER the stop
+                    // word is carried into the capture as a seed, so "stop —
+                    // make it FOB instead" does not lose the instruction.
+                    selfTriggers = 0;
+                    var tail = txt.replace(WAKE, '').replace(BARGE_WORDS, '').trim();
+                    if (tail) pendingSeed = tail;
+                    suppressAck = true;
+                    console.log('[VOICE] barge-in: "' + txt.slice(0, 60) + '"');
+                    interrupt();
+                }
+                // Anything else while speaking is ignored outright. Not
+                // buffered, not queued: she was talking over an answer and
+                // did not ask for anything.
+                return;
+            }
 
             if (state.capturing) {
                 heardDuringCapture = capturePrefix ? (capturePrefix + ' ' + txt) : txt;
@@ -1380,6 +1554,45 @@
         return 420;
     }
 
+    // ── THE SECOND TONE: "I have stopped listening" ─────────────────────
+    // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
+    //
+    // Siri plays two different sounds — one when it starts listening, one
+    // when it stops. Jarvis had only the first, so the end of a capture was
+    // silent and the only signal was three grey characters in a pill she is
+    // not looking at while she talks.
+    //
+    // DELIBERATELY DIFFERENT IN SHAPE, not just pitch: the open tone rises,
+    // this one falls, in two notes and half the length. Someone who cannot
+    // hear the difference between 300Hz and 340Hz can still hear one going up
+    // and one going down.
+    function humDone(ctx) {
+        var t0 = ctx.currentTime;
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(360, t0);
+        osc.frequency.setValueAtTime(270, t0 + 0.09);
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(0.13, t0 + 0.02);
+        gain.gain.setValueAtTime(0.13, t0 + 0.14);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.20);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t0); osc.stop(t0 + 0.22);
+        return 220;
+    }
+
+    // Played when a capture that actually HEARD something closes. Not on an
+    // empty one: a tone for "I heard nothing" is a noise that tells her the
+    // opposite of what happened, and the passive follow-up window closes
+    // empty most of the time by design.
+    function playDone() {
+        try {
+            var ctx = audio();
+            if (ctx) humDone(ctx);
+        } catch (e) { /* an inaudible earcon is not worth an exception */ }
+    }
+
     function playAck() {
         var ms = 420;
         try {
@@ -1456,9 +1669,20 @@
         // turn in silence is worst, because the question stays open and she
         // has no way to tell it was lost.
         captureWasFollowUp = (o.ack === false);
+        // A passive window is NOT a follow-up to a question — see the retry
+        // in finishCapture, which must not fire for one.
+        capturePassive = passiveCapture; passiveCapture = false;
+        if (capturePassive) captureWasFollowUp = false;
         say(o.hint || 'Listening');
         paintAgent(addressed);
-        showCard(o.seed || '', o.seed ? '' : (o.hint ? o.hint + ' \u2014 go ahead' : 'Go ahead\u2026'), true);
+        // A PASSIVE WINDOW LEAVES THE ANSWER ON SCREEN. Caught by a test:
+        // opening the follow-up capture replaced the reply she had just been
+        // given with "Go ahead…" a few milliseconds after it appeared. The
+        // window is a convenience running quietly underneath; it is not a new
+        // prompt, and it must not take the screen away from her.
+        if (!capturePassive) {
+            showCard(o.seed || '', o.seed ? '' : (o.hint ? o.hint + ' \u2014 go ahead' : 'Go ahead\u2026'), true);
+        }
         if (o.ack !== false) playAck();
         armCaptureTimers();
     }
@@ -1499,15 +1723,22 @@
     //   LISTEN_MS  — how long to wait for her to BEGIN. Generous.
     //   SILENCE_MS — how long after she STOPS to decide she has finished.
     // The short one must not be armed until she has actually said something.
-    var LISTEN_MS = 8000;       // waiting for her to start — a thinking pause
-    var SILENCE_MS = 1800;      // quiet long enough to mean "finished"
+    // Tuned to Siri's own endpointing on 2026-09-07 at her request. Siri is
+    // SNAPPIER once you are talking and MORE PATIENT before you start, which
+    // is the opposite of the single 1800ms window that dropped her turns.
+    var LISTEN_MS = 10000;      // waiting for her to start — a thinking pause
+    var SILENCE_MS = 1200;      // quiet long enough to mean "finished"
     var HARD_CAP_MS = 45000;    // a recogniser that never stops emitting
     var hardCapTimer = null;
     var heardAnything = false;
 
     function armCaptureTimers() {
         clearTimeout(captureTimer);
-        captureTimer = setTimeout(finishCapture, heardAnything ? SILENCE_MS : LISTEN_MS);
+        // A passive follow-up window is five seconds, not ten. She was not
+        // asked anything, so holding the microphone open for a full
+        // thinking-pause after every answer is a mic that is always on.
+        captureTimer = setTimeout(finishCapture,
+            heardAnything ? SILENCE_MS : (capturePassive ? FOLLOWUP_MS : LISTEN_MS));
         if (!hardCapTimer) hardCapTimer = setTimeout(function () {
             console.log('[VOICE] hard cap reached — closing the capture');
             finishCapture();
@@ -1562,6 +1793,7 @@
         // in the recogniser.
         lastAsked = q;
         lastAskedAt = Date.now();
+        playDone();
         ask(q);
     }
 
@@ -1787,5 +2019,15 @@
         // supposed to be closed. That gap let a broken build pass once.
         finish: finishCapture,
         WAKE: WAKE,
+        // ── EXPOSED SO THE INVARIANT CAN STILL BE TESTED ─────────────────
+        // The old rule was "the recogniser does not exist while speaking",
+        // and a test could check that by looking for the object. Barge-in
+        // means it DOES exist, so the rule it enforced has to be checkable
+        // some other way or twenty assertions quietly become "the mic is
+        // open, fine". guard() is that way: while speaking, an open mic is
+        // only ever allowed to be a guard mic.
+        guard: function () { return guardMode; },
+        isOwnVoice: isOwnVoice,
+        nowSpeaking: function () { return nowSpeaking; },
     };
 }());
