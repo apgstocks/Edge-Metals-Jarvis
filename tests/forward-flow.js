@@ -236,9 +236,17 @@ section('D — the flow it hands off to is the REAL one');
     // would be a second set of rules to keep in step, and the one that
     // drifts is the one that sends a truck to the wrong yard.
     const actions = require('fs').readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+    // The GATE is unchanged — a container with nobody to collect from still
+    // cannot be forwarded. What changed on 2026-09-08 is the wording, because
+    // the old message dead-ended (Apsara: "when i ask it to foraward, it just
+    // says no supplier assigned"). It now names the blocker AND offers the
+    // supplier list. Asserting the refusal, not the sentence.
     ck('forwardBooking refuses without a supplier',
-       /no supplier assigned to container/.test(actions),
+       /no supplier on container/.test(actions) && /no_supplier_assigned/.test(actions),
        'a container with nobody to collect from cannot be forwarded');
+    ck('  and offers the way past it rather than dead-ending',
+       /buildSupplierSelectionMessage/.test(actions) && /then_forward/.test(actions),
+       'naming an obstacle and stopping is not an answer');
     ck('  asks WHICH trucker when none was named',
        /buildTruckerSelectionMessage/.test(actions) && /select_trucker/.test(actions),
        'this is her "if multiple truckers, ask me specifically"');

@@ -307,6 +307,89 @@ section('C2 — an order is never answered out of the table');
     }
 }
 
+section('C3 — a blocker is not an answer');
+{
+    // Apsara, 2026-09-08: "when i ask it to foraward,it just says no supplier
+    // assigned. when i ask it to asssign the supplier, it just treating that
+    // as a new request not a follow up"
+    //
+    // Three faults in one sentence, and one of them was mine twice over: the
+    // category-word guard went into forwardBooking yesterday and not into
+    // assignSupplier beside it, so the identical failure was waiting under a
+    // different verb.
+    const j = await boot({});
+    await j.say('show me the bookings from oakland');
+
+    const blocked = await j.say('forward it');
+    ck('a missing supplier is reported WITH the way past it',
+       /which one|add one from the dashboard/i.test(A(blocked)), A(blocked));
+    ck('  and it no longer just tells her to go and do it herself',
+       !/Assign a supplier first\.$/.test(A(blocked).trim()), A(blocked));
+
+    // Her answer to Jarvis's question must reach the question. "Oakland
+    // Metals" contains a port word, so the booking-query path claimed it and
+    // redrew the list while the pending sat there unanswered.
+    const picked = await j.say('Oakland Metals');
+    ck('  her answer reaches the question that asked it',
+       /assigned to Oakland Metals/i.test(A(picked)), A(picked));
+    ck('  and the forward she originally asked for carries on by itself',
+       /trucker/i.test(A(picked)), A(picked) + ' — she should not have to say "forward" twice');
+    await j.stop();
+
+    // ── AND IT ONLY CARRIES ON IF THE ASSIGN ACTUALLY LANDED ────────────
+    // Resuming a step whose prerequisite did not complete is how two
+    // half-finished actions end up arguing. Staged rather than talked into
+    // existence: a select_supplier pending carrying then_forward, on a
+    // booking whose container ALREADY has a supplier. assignSupplier answers
+    // "nothing to assign", and the forward must not run on top of that.
+    //
+    // Written after the mutation harness reported this guard as unkillable
+    // through conversation alone — every natural route to it either resolved
+    // the pending or refused before reaching assignSupplier.
+    {
+        const k = await boot({});
+        const fsx = require('fs');
+        const px = require('path');
+        const brainFile = px.join(k.dir, 'brain.json');
+        const chat = '918056944193@c.us';
+        const store = JSON.parse(fsx.readFileSync(brainFile, 'utf8'));
+        store.pending_actions = store.pending_actions || {};
+        store.pending_actions[chat] = {
+            // container_seq NULL, so assignSupplier auto-picks the next
+            // container WITHOUT a supplier — and HOU111 has none left, which
+            // is the "nothing to assign" outcome this needs. With an explicit
+            // seq it happily overwrites the supplier already there and
+            // succeeds, which staged the wrong scenario entirely.
+            type: 'select_supplier', bkg_no: 'HOU111', container_seq: null,
+            // created_at, not `at` — loadBrain() expires anything whose
+            // created_at is missing, treating it as epoch 0. My first version
+            // wrote `at` and the pending vanished before the request reached
+            // it, which looked exactly like the guard failing.
+            options: ['Eccomelt'], then_forward: true,
+            created_at: new Date().toISOString(),
+        };
+        fsx.writeFileSync(brainFile, JSON.stringify(store, null, 2));
+
+        const r = await k.say('Eccomelt');
+        ck('  a failed assign does not trigger the forward underneath it',
+           /already have suppliers|nothing to assign/i.test(A(r))
+           && !/forwarded|no trucker registered/i.test(A(r)), A(r));
+        await k.stop();
+    }
+}
+
+section('C4 — "assign the supplier" is about the booking in focus');
+{
+    const j = await boot({});
+    await j.say('show me the bookings from oakland');
+    const r = await j.say('assign the supplier');
+    ck('"assign the supplier" does not report SUPPLIER as an unknown booking',
+       !/No booking found for SUPPLIER/i.test(A(r)), A(r));
+    ck('  it uses the booking on screen and offers the list',
+       /which one|add one from the dashboard/i.test(A(r)), A(r));
+    await j.stop();
+}
+
 section('D — and the two this file found on its first run');
 {
     // Neither of these came from a bug report. Both came from saying an

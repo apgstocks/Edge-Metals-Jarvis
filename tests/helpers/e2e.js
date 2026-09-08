@@ -102,6 +102,12 @@ function fixtures(dir) {
     for (const [f, v] of [
         ['workflow.json', {}], ['brain.json', { pending_actions: {}, pending_queue: {} }],
         ['truckers.json', [{ name: 'Sher Trucking', number: '15551230001' }]],
+        // NOTE, for the third time in this file: suppliers.json is NOT where
+        // suppliers come from. They are a SUPABASE table, and the roster the
+        // app actually reads is in installSupabase() below. I edited this line
+        // first, saw no change, and had to be reminded by the code. Left here
+        // because something else does read it, and because the next person
+        // will make the same mistake unless the note is where the mistake is.
         ['suppliers.json', [{ name: 'Eccomelt', number: '15551230002' }]],
         // A contact whose name the recogniser reliably mangles. "Jeyshree"
         // is what Whisper returns; "Jayashree Menon" is who she means.
@@ -428,7 +434,13 @@ async function boot(opts) {
             { id: 1, name: 'Sher Trucking', number: '15551230001', group_id: '120363111@g.us' },
             { id: 2, name: 'Jio Transport' },
         ],
-        suppliers: [{ id: 1, name: 'Eccomelt', number: '15551230002' }],
+        // Eccomelt deliberately has NO locality — several suites rely on the
+        // port filter finding nothing at their port. Oakland Metals is
+        // additive: exactly one port gains a supplier the selection message
+        // will offer, so the assign-then-resume path can be walked end to end
+        // without changing what any existing suite sees.
+        suppliers: [{ id: 1, name: 'Eccomelt', number: '15551230002' },
+                    { id: 2, name: 'Oakland Metals', number: '15551230003', locality: 'OAKLAND' }],
         facts: [], memory_embeddings: [],
     });
 

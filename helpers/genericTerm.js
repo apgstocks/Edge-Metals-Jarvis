@@ -97,4 +97,23 @@ function nameOrNull(word, kind) {
     return isGeneric(word, kind) ? null : (word || null);
 }
 
-module.exports = { isGeneric, nameOrNull, GENERIC };
+// ── IS IT A CATEGORY WORD AT ALL? ────────────────────────────────────────
+// Apsara, 2026-09-08: "when i ask it to assign the supplier, it just treating
+// that as a new request not a follow up." She got "No booking found for
+// SUPPLIER."
+//
+// The grammar puts the first noun after the verb into the IDENTIFIER slot, so
+// "assign the supplier" lands the word "supplier" where a booking number
+// belongs. Asking isGeneric(word, 'booking') answers no — correctly, because
+// "supplier" is not a generic word for a booking. The question that actually
+// needed asking was the broader one: is this a category word of ANY kind, and
+// therefore not an identifier at all?
+//
+// A word that names a KIND of thing is never the name of a particular one.
+// That holds whichever slot it happens to have fallen into, which is why this
+// belongs here rather than as another special case at each call site.
+function isAnyCategory(word) {
+    return Object.keys(GENERIC).some((kind) => isGeneric(word, kind));
+}
+
+module.exports = { isGeneric, isAnyCategory, nameOrNull, GENERIC };

@@ -408,7 +408,9 @@ async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
 //
 // Deliberately NOT a guess between several: if she has ten on screen and
 // says "the booking", asking is right and picking one is not.
-if (require('../helpers/genericTerm').isGeneric(bkgNo, 'booking')) {
+// isAnyCategory for the same reason as assignSupplier below: "forward the
+// trucker" puts a trucker word in the booking slot.
+if (require('../helpers/genericTerm').isAnyCategory(bkgNo)) {
     let focus = null;
     try {
         const mem = require('../helpers/voiceMemory');
@@ -471,7 +473,46 @@ if (containerSeq != null) {
 // Supplier guard — per-container check when we have a target, else legacy any-supplier check.
 if (targetContainer) {
     if (!targetContainer.supplier) {
-        await _send(chatId, `Can't forward ${bkgNo}/${targetContainer.seq} — no supplier assigned to container #${targetContainer.seq}. Assign a supplier first.`);
+        // ── A BLOCKER IS NOT AN ANSWER ───────────────────────────────────
+        // Apsara, 2026-09-08: "when i ask it to forward, it just says no
+        // supplier assigned."
+        //
+        // The gate is right — nothing should go to a trucker before a
+        // supplier is on it. What was wrong is stopping there. "Assign a
+        // supplier first" is an instruction to go and do the assistant's job
+        // yourself; it names the obstacle and leaves her in front of it.
+        //
+        // So it offers. The suppliers are already loadable, the selection
+        // message already exists, and she was one word away from the thing
+        // she wanted. Deliberately an OFFER and not an automatic assignment:
+        // which supplier loads a container is a real decision with money
+        // behind it, and this is the same line the rest of the app holds —
+        // Jarvis proposes, she chooses.
+        let offer = 'Assign a supplier first.';
+        try {
+            const sel = await suppliers.buildSupplierSelectionMessage(bkgNo);
+            // The text is worth saying either way. With no supplier at this
+            // port it reads "No supplier registered at OAKLAND. Add one from
+            // the dashboard (Suppliers tab) with locality OAKLAND first." —
+            // which is the actual next step, and far better than the generic
+            // "Assign a supplier first" she was getting.
+            if (sel.text) offer = sel.text;
+            if (sel.list.length) {
+                await setPending(chatId, {
+                    type: 'select_supplier', bkg_no: bkgNo,
+                    container_seq: targetContainer.seq || null,
+                    options: sel.list.map((s) => s.name),
+                    // Remembered so that once she picks one, the forward she
+                    // originally asked for can carry on instead of being
+                    // something she has to ask for a second time.
+                    then_forward: true,
+                });
+            }
+        } catch (e) {
+            console.warn('[ACTIONS] could not offer suppliers:', e.message);
+        }
+        await _send(chatId,
+            `Can't forward ${bkgNo}/${targetContainer.seq} yet — no supplier on container #${targetContainer.seq}.\n${offer}`);
         return { action_taken: 'no_supplier_assigned' };
     }
 } else {
@@ -712,6 +753,51 @@ return { action_taken: 'forwarded' };
 
 // ── Assign supplier ───────────────────────────────────────────────────────────
 async function assignSupplier(chatId, bkgNo, supplierName, containerSeq) {
+// ── "ASSIGN THE SUPPLIER" — TO WHICH BOOKING? THE ONE WE ARE ON. ─────────
+// Apsara, 2026-09-08: "when i ask it to assign the supplier, it just
+// treating that as a new request not a follow up."
+//
+// She got "No booking found for SUPPLIER." — the identical failure I fixed
+// in forwardBooking yesterday, in the function immediately below it, and did
+// not carry across. The extraction read her category word as an identifier;
+// nothing had told it that "supplier" is a kind of thing rather than the name
+// of one.
+//
+// That it happened twice is the point worth recording. Fixing forward and not
+// assign is fixing the REPORT rather than the FAULT — she reported forward, so
+// I fixed forward. The two functions are the same shape, take the same kind of
+// argument, and fail the same way; a fix that only lands where the complaint
+// pointed guarantees the complaint comes back wearing a different verb.
+// (Same lesson as Scout getting real words on 2026-09-07 while Jarvis kept
+// humming: I keep fixing the instance she named.)
+// isAnyCategory, not isGeneric(bkgNo, 'booking'): "assign the supplier" puts
+// the word "supplier" in the booking slot, and asking whether that is a
+// generic BOOKING word answers no. See helpers/genericTerm.isAnyCategory.
+if (require('../helpers/genericTerm').isAnyCategory(bkgNo)) {
+    let focus = null;
+    try {
+        const mem = require('../helpers/voiceMemory');
+        focus = mem.currentCenter();
+        if (!focus) {
+            const set = mem.currentReferents();
+            if (set && Array.isArray(set.rows) && set.rows.length === 1) focus = set.rows[0];
+        }
+    } catch (e) { /* no voice memory in a WhatsApp-only flow */ }
+    if (focus && focus.booking_number) {
+        console.log(`[ACTIONS] "${bkgNo}" is a category word — using the booking in focus, ${focus.booking_number}`);
+        bkgNo = focus.booking_number;
+    } else {
+        await _send(chatId, 'Which booking? Say the number, or ask me to list them first.');
+        return { action_taken: 'booking_not_named' };
+    }
+}
+// And "supplier"/"seller"/"vendor" is the CATEGORY, so it means "you pick" —
+// which is exactly what a null name already does, twenty lines down.
+if (require('../helpers/genericTerm').isGeneric(supplierName, 'supplier')) {
+    console.log(`[ACTIONS] "${supplierName}" is the category, not a name — offering the list`);
+    supplierName = null;
+}
+
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
 
@@ -1560,9 +1646,26 @@ switch (pending.type) {
     case 'select_trucker':
         await clearPending(chatId);
         return forwardBooking(chatId, pending.bkg_no, selection, pending.container_seq); // → confirm step
-    case 'select_supplier':
+    case 'select_supplier': {
         await clearPending(chatId);
-        return assignSupplier(chatId, pending.bkg_no, selection, pending.container_seq);
+        const res = await assignSupplier(chatId, pending.bkg_no, selection, pending.container_seq);
+        // ── AND THEN THE THING SHE ORIGINALLY ASKED FOR ──────────────────
+        // She said "forward it", was told there was no supplier, and picked
+        // one. Making her say "forward it" a second time would be treating
+        // the interruption as though it had erased the request — and it is
+        // JARVIS that interrupted, not her.
+        //
+        // Only when a supplier actually landed. If the assignment stopped for
+        // its own reason (another confirmation, nothing to assign, a bad
+        // pick), the forward must not run on top of it — resuming a step
+        // whose prerequisite did not complete is how two half-finished
+        // actions end up arguing.
+        if (pending.then_forward && res && res.action_taken === 'assigned') {
+            console.log(`[ACTIONS] supplier set — carrying on with the forward she asked for`);
+            return forwardBooking(chatId, pending.bkg_no, null, pending.container_seq);
+        }
+        return res;
+    }
     case 'confirm_forward':
         await clearPending(chatId);
         await trust.recordApproval('forward', pending.trucker_name);

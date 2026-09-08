@@ -2648,7 +2648,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // system cannot recognise is worse than no question.
                 const outstanding = mem.lastQueryFrame && mem.lastQueryFrame();
                 const answeringPort = !!(outstanding && outstanding.asked_port);
-                if (followingUp && !answeringPort) {
+                // ── AND A PENDING QUESTION OUTRANKS ALL OF THIS ──────────
+                // Apsara, 2026-09-08, walking the supplier flow: Jarvis asked
+                // "which supplier?", she said "Oakland Metals", and the query
+                // path claimed it — because the name contains a port word.
+                // Her answer never reached the question that was waiting for
+                // it, and Jarvis cheerfully redrew the Oakland list instead.
+                //
+                // `quick` has carried the comment "her answer belongs to
+                // whoever asked" since the forward flow was built. This block
+                // was added later and did not honour it. A rule that only
+                // some of the code follows is not a rule.
+                //
+                // It is also the most dangerous shape here: the pending stays
+                // open, so her NEXT sentence gets measured against a question
+                // she believes she already answered.
+                if (answeringBrain) {
+                    cards = null;
+                } else if (followingUp && !answeringPort) {
                     cards = null;
                 } else {
                     const frame = await bq.parse(asked, {
