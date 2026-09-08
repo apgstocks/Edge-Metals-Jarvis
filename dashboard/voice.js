@@ -1420,6 +1420,10 @@
     // True while a fetch for that agent is outstanding, so the 2.5s retry
     // does not stack a second request on top of a slow first one.
     var ackPending = { jarvis: false, scout: false };
+    // Consecutive times the tone stood in for a missing recording. Reset the
+    // moment a real one plays, so an old cold start cannot trip the notice
+    // later on.
+    var toneFallbacks = 0;
     var ackPcm = null;          // kept for the tone fallback path
     var ackRate = 24000;
 
@@ -1583,23 +1587,42 @@
     // enough to start that the acknowledgement would arrive after she had
     // already begun speaking. Falling then rising is the shape of a spoken
     // "mm-hm"; a single flat beep reads as an error tone.
+    // ── ONE NOTE, NOT THREE ──────────────────────────────────────────────
+    // Apsara, 2026-09-07: "it keeps on saying da..da..da i dont know why."
+    //
+    // This is it, and it is mine. Three pitches in 420ms — 300, 255, 340 —
+    // reads as three syllables, and three syllables from something that
+    // usually talks reads as a word. "Da da da" is exactly what a
+    // three-note sine sounds like when you were expecting speech.
+    //
+    // It became audible this morning: playAck used to borrow the OTHER
+    // assistant's recording when its own was missing, I stopped it doing that
+    // (it was answering "Yes, boss" in Jarvis's place), and the tone is what
+    // is left. The tone was always the last resort; nothing had ever reached
+    // it before.
+    //
+    // So it is now ONE soft note. It cannot be mistaken for a word, and it
+    // sounds like what it is: a fallback. The three-note version is kept in
+    // the wake earcon, where it is meant to be heard and is not standing in
+    // for anything.
+    //
+    // AND THE REASON IS NO LONGER ONLY IN THE CONSOLE — see playAck. She
+    // heard a noise and had no idea why, which is the whole complaint.
     function humAck(ctx) {
         var t0 = ctx.currentTime;
         var osc = ctx.createOscillator();
         var gain = ctx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(300, t0);
-        osc.frequency.setValueAtTime(255, t0 + 0.13);
-        osc.frequency.setValueAtTime(340, t0 + 0.26);
         // Shaped rather than switched: an abrupt start and stop on a sine
         // is an audible click at both ends.
         gain.gain.setValueAtTime(0.0001, t0);
         gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.03);
-        gain.gain.setValueAtTime(0.18, t0 + 0.34);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.40);
+        gain.gain.setValueAtTime(0.18, t0 + 0.16);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
         osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(t0); osc.stop(t0 + 0.42);
-        return 420;
+        osc.start(t0); osc.stop(t0 + 0.24);
+        return 240;
     }
 
     // ── THE SECOND TONE: "I have stopped listening" ─────────────────────
@@ -1699,6 +1722,21 @@
                     + ' has no acknowledgement ready'
                     + (ackBuf[other] ? ' — using the tone, NOT '
                         + AGENT_LOOK[other].name + "'s words" : ' — using the tone'));
+                // ── SAY WHY, ON THE SECOND TIME ──────────────────────────
+                // She heard an unexplained noise and asked "i dont know
+                // why". A console warning on a server she is not looking at
+                // is not telling her. Second occurrence rather than the
+                // first, because one cold start while the voice is still
+                // downloading is normal and not worth a message.
+                toneFallbacks += 1;
+                if (toneFallbacks === 2) {
+                    say('Voice not loaded');
+                    showCard('', AGENT_LOOK[addressed].name
+                        + "'s voice hasn't loaded — that beep is standing in for it. "
+                        + 'Everything else still works.', true);
+                }
+            } else {
+                toneFallbacks = 0;
             }
             var pcmNow = decoded ? decoded.getChannelData(0) : ackPcm;
             var rateNow = decoded ? decoded.sampleRate : ackRate;

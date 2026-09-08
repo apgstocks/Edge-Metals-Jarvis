@@ -2764,7 +2764,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 cards,
             });
         } catch (e) {
-            console.error('[API] voice/ask failed:', e.message);
+            console.error('[API] voice/ask failed:', e.stack || e.message);
             res.status(500).json({ error: e.message });
         }
     });

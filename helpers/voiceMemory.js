@@ -117,8 +117,20 @@ function currentCenter() {
 }
 
 function setReferents(cards) {
-    center = null;
+    // ── CLEARED ONLY BY A NEW LIST, NOT BY EVERY CALL ────────────────────
+    // `center = null` used to run BEFORE this guard, so setReferents(null) —
+    // which api.js does on every INSTRUCTION, because cardsFor returns null
+    // for one — wiped the discourse centre as a side effect.
+    //
+    // Found 2026-09-07 while fixing "forward booking to trucker": the centre
+    // was correctly on HOU111 from the previous turn, and the very act of
+    // handling her forward destroyed it before forwardBooking could read it.
+    // She got "Which booking?" about the booking she had just been discussing.
+    //
+    // The rule was always "a new list is a new topic". A call with NO list is
+    // not a new topic; it is a sentence that has nothing to do with lists.
     if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;
+    center = null;
     referents = { kind: cards.kind, title: cards.title, ts: Date.now(), rows: cards.rows };
 }
 
@@ -187,6 +199,25 @@ function resolve(text) {
     const q = String(text || '');
     const set = currentReferents();
     if (!set) return { text: q, resolved: null };
+
+    // ── SHE ALREADY SAID WHICH ONE ───────────────────────────────────────
+    // Found by tests/phrasebook.js, 2026-09-08. "forward the booking HOU111 to
+    // Sher Trucking" came out as "forward booking HOU111 HOU111 to Sher
+    // Trucking" — the deictic was expanded even though the number it expands
+    // TO was already sitting in the sentence, and the brain understandably
+    // could not read the result.
+    //
+    // The rule is simply that a reference is a stand-in for something not
+    // said. If one of the rows on screen is named outright, nothing is
+    // standing in for anything and there is no work to do here. Scoped to the
+    // rows in view rather than a general booking-number pattern, so a token
+    // that merely LOOKS like a number ("40HC", a weight, a seal) cannot
+    // silence the resolver.
+    const namesOne = set.rows.some((r) => {
+        const id = String(r.booking_number || '').trim();
+        return id && new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(q);
+    });
+    if (namesOne) return { text: q, resolved: null };
 
     let row = null;
     let phrase = '';

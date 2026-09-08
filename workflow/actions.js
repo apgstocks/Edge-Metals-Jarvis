@@ -358,6 +358,40 @@ return { action_taken: 'contacts_shown' };
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
+// ── "FORWARD BOOKING TO TRUCKER" ─────────────────────────────────────────
+// Apsara, 2026-09-07. The other half of the same report: she said the word
+// "booking", the extraction took it as an identifier, and the reply was
+//
+//     No booking found for BOOKING.
+//
+// which is Jarvis telling her it has never heard of a booking called
+// "booking". She was pointing at the one on screen.
+//
+// Resolved from the discourse centre — the booking the last answer was
+// about, which is the same mechanism that makes "the erd of that booking"
+// work. If nothing is in focus it falls through to the original message,
+// which is at least honest about having nothing to go on.
+//
+// Deliberately NOT a guess between several: if she has ten on screen and
+// says "the booking", asking is right and picking one is not.
+if (require('../helpers/genericTerm').isGeneric(bkgNo, 'booking')) {
+    let focus = null;
+    try {
+        const mem = require('../helpers/voiceMemory');
+        focus = mem.currentCenter();
+        if (!focus) {
+            const set = mem.currentReferents();
+            if (set && Array.isArray(set.rows) && set.rows.length === 1) focus = set.rows[0];
+        }
+    } catch (e) { /* no voice memory in a WhatsApp-only flow */ }
+    if (focus && focus.booking_number) {
+        console.log(`[ACTIONS] "${bkgNo}" is the category — using the one in focus, ${focus.booking_number}`);
+        bkgNo = focus.booking_number;
+    } else {
+        await _send(chatId, 'Which booking? Say the number, or ask me to list them first.');
+        return { action_taken: 'booking_not_named' };
+    }
+}
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
 
@@ -422,7 +456,40 @@ if (!truckerName) {
 }
 
 const t = await truckers.getTrucker(truckerName);
-if (!t) { await _send(chatId, `Trucker "${truckerName}" not found. Type "forward ${bkgNo}" to pick from the list.`); return { action_taken: 'trucker_not_found' }; }
+if (!t) {
+    // ── "FORWARD IT TO THE TRUCKER" IS NOT A NAME ────────────────────────
+    // Apsara, 2026-09-07: "When i say forward booking to trucker, it says it
+    // cannot forward that booking to tracker."
+    //
+    // She said the CATEGORY, not a company. The right behaviour is the one
+    // twelve lines above — offer the list — and it was already there; all
+    // that was missing was recognising that "trucker" means the same as
+    // naming nobody. Instead she got her own word quoted back as an unknown
+    // haulier, which reads as though Jarvis has never heard of truckers.
+    //
+    // "tracker" reaches the same place: the recogniser mishears it, and
+    // helpers/genericTerm.js matches on the consonant skeleton rather than on
+    // a list of every spelling Whisper might produce.
+    //
+    // ORDER MATTERS. getTrucker has ALREADY failed by this point, so a real
+    // company called "Driver Logistics" was found long before this line and
+    // never reaches it. The category test only ever runs on a name that
+    // matched nothing.
+    if (require('../helpers/genericTerm').isGeneric(truckerName, 'trucker')) {
+        console.log(`[ACTIONS] "${truckerName}" is the category, not a name — offering the list`);
+        const sel = await truckers.buildTruckerSelectionMessage(bkgNo);
+        if (!sel.list.length) { await _send(chatId, sel.text); return { action_taken: 'no_truckers' }; }
+        await setPending(chatId, {
+            type: 'select_trucker', bkg_no: bkgNo,
+            container_seq: targetContainer?.seq || null,
+            options: sel.list.map((x) => x.name),
+        });
+        await _send(chatId, sel.text);
+        return { action_taken: 'awaiting_trucker_selection' };
+    }
+    await _send(chatId, `Trucker "${truckerName}" not found. Type "forward ${bkgNo}" to pick from the list.`);
+    return { action_taken: 'trucker_not_found' };
+}
 
 // Web Bot tab — skip yes/no confirm.
 if (isWebSource()) {

@@ -191,7 +191,12 @@ const MUTATIONS = [
       find: '            if (still) {', to: '            if (false) {' },
     { name: 'centering: a new list keeps the old centre',
       file: 'helpers/voiceMemory.js', suites: ['voice-memory'],
-      find: 'function setReferents(cards) {\n    center = null;', to: 'function setReferents(cards) {' },
+      find: '    if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;\n    center = null;',
+      to:   '    if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;' },
+    { name: 'centering: an empty call wipes the centre again',
+      file: 'helpers/voiceMemory.js', suites: ['voice-memory', 'e2e-voice'],
+      find: '    if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;\n    center = null;',
+      to:   '    center = null;\n    if (!cards || !Array.isArray(cards.rows) || !cards.rows.length) return;' },
     { name: 'centering: the centre is used without checking it is on screen',
       file: 'helpers/voiceMemory.js', suites: ['voice-memory'],
       find: '            const still = cb && set.rows.filter((r) => r.booking_number === cb.booking_number)[0];',
@@ -200,18 +205,52 @@ const MUTATIONS = [
       file: 'helpers/proformaDraft.js', suites: ['task-context'],
       find: '        parked = { draft, at: Date.now(), line };\n        draft = null;',
       to: '        parked = { draft, at: Date.now(), line };' },
+
+    // ── the category-word work (2026-09-07/08) ──────────────────────────
+    //
+    // DELIBERATELY NOT LISTED: breaking the exact-list line
+    // `if (list.some((g) => norm(g) === w)) return true;`.
+    // It is unkillable BY CONSTRUCTION, not because the tests are weak —
+    // KEYS is built by running phonetic() over the very same list, so every
+    // string the exact check accepts, the phonetic check accepts too. A
+    // mutation nobody can kill is a defect model that describes no real
+    // defect, and leaving it in the catalogue would train me to ignore
+    // survivors. If the exact line ever stops being redundant, this note is
+    // the reminder to add the mutation back.
+    { name: 'generic: the mis-heard spelling no longer reaches it',
+      file: 'helpers/genericTerm.js', suites: ['phrasebook'],
+      find: '    return KEYS[kind].has(phonetic(word));',
+      to:   '    return false;' },
+    { name: 'generic: a two-letter fragment can collide into a category',
+      file: 'helpers/genericTerm.js', suites: ['phrasebook', 'name-suggest'],
+      find: '    if (w.length < 4) return false;',
+      to:   '    if (w.length < 1) return false;' },
+
+    // ── the two the phrasebook found itself ─────────────────────────────
+    { name: 'forward: a noun before the number breaks the pattern again',
+      file: 'workflow/brain.js', suites: ['phrasebook', 'forward-flow'],
+      find: '(?:(?:booking|load|shipment|container)\\s+)?',
+      to:   '' },
+    // NOT LISTED, and the reason is written into brain.js beside the pattern:
+    // I originally guarded this prefix with a `(?!to\b)` lookahead and could
+    // not kill the mutation that removed it, because regex backtracking
+    // already does that job. The lookahead came out. An unkillable mutation
+    // is a message about the CODE, not about the tests.
+    { name: 'resolver: it expands a pronoun into a sentence that already names one',
+      file: 'helpers/voiceMemory.js', suites: ['phrasebook', 'voice-memory'],
+      find: '    if (namesOne) return { text: q, resolved: null };',
+      to:   '    if (false) return { text: q, resolved: null };' },
+    { name: 'resolver: any lookalike token silences it, not just a real row',
+      file: 'helpers/voiceMemory.js', suites: ['phrasebook', 'voice-memory'],
+      find: '    const namesOne = set.rows.some((r) => {',
+      to:   '    const namesOne = /\\b[A-Z]{2,4}\\d{2,}\\b/i.test(q) || set.rows.some((r) => {' },
+
+    // ── the harness telling the truth about the model ───────────────────
+    { name: 'harness: the offline stub throws again, which the real one cannot',
+      file: 'tests/helpers/e2e.js', suites: ['phrasebook'],
+      find: "            failure = 'unreachable';\n            return null;",
+      to:   "            throw new Error('ECONNREFUSED (stubbed offline)');" },
 ];
-
-// ── RUNNING ──────────────────────────────────────────────────────────────
-const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const listOnly = process.argv.includes('--list');
-const chosen = MUTATIONS.filter((m) => !only.length || only.some((o) => m.name.includes(o) || m.file.includes(o)));
-
-if (listOnly) {
-    chosen.forEach((m, i) => console.log(`${String(i + 1).padStart(2)}. [${m.file}] ${m.name}`));
-    console.log(`\n${chosen.length} mutation(s).`);
-    process.exit(0);
-}
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────
 // The first version restored on exit and on SIGINT/SIGTERM, and it STILL
@@ -238,7 +277,25 @@ function recoverFromCrash() {
     }
     try { fs.unlinkSync(SIDECAR); } catch (e) {}
 }
+// FIRST, BEFORE ANY PATH THAT CAN EXIT — 2026-09-08.
+// This call used to sit BELOW the argument handling, and `--list` exits in
+// that handling. So the one command you would naturally reach for to see what
+// is going on after an interrupted run was the one command that could not
+// clean up after it. I hit exactly that today: a run was killed mid-mutation,
+// I ran `--list`, it printed a tidy catalogue and left workflow/brain.js
+// mutated on disk. Recovery must not be reachable only on the happy path.
 recoverFromCrash();
+
+// ── RUNNING ──────────────────────────────────────────────────────────────
+const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const listOnly = process.argv.includes('--list');
+const chosen = MUTATIONS.filter((m) => !only.length || only.some((o) => m.name.includes(o) || m.file.includes(o)));
+
+if (listOnly) {
+    chosen.forEach((m, i) => console.log(`${String(i + 1).padStart(2)}. [${m.file}] ${m.name}`));
+    console.log(`\n${chosen.length} mutation(s).`);
+    process.exit(0);
+}
 
 // EVERY original, restored no matter how this process ends. An interrupted
 // mutation run that leaves broken code on disk is worse than no run at all —
@@ -277,6 +334,38 @@ const notApplied = [];
 let killed = 0;
 
 console.log(`\n─ mutation testing: ${chosen.length} mutation(s) ─────────────────────\n`);
+
+// ── THE BASELINE MUST BE GREEN FIRST — 2026-09-08 ────────────────────────
+// A mutation is "killed" when a suite that passed before now fails. If the
+// suite was ALREADY failing, every mutation looks killed and the report is
+// pure fiction.
+//
+// This is not hypothetical. Today I added an assertion to phrasebook.js that
+// was simply wrong — I asserted a phonetic key matched when it does not — and
+// three mutations across two unrelated files came back "killed", each one
+// credited to that same broken assertion. The report said 3 killed, 0
+// survived. The truth was 0 measured. It only surfaced because the
+// attribution looked odd: a voiceMemory mutation "killed" by a genericTerm
+// assertion is not a thing that can happen.
+//
+// So: run every suite the catalogue depends on, unmutated, before touching a
+// byte. A red baseline stops the run rather than flattering it.
+{
+    const needed = [...new Set(chosen.flatMap((m) => m.suites || []))];
+    const red = [];
+    for (const s of needed) {
+        const r = runSuite(s);
+        if (!r.ok) red.push(`${s} (${r.crashed ? 'crashed' : r.failed.join('; ')})`);
+    }
+    if (red.length) {
+        console.error('  BASELINE IS NOT GREEN — refusing to measure anything.\n');
+        red.forEach((r) => console.error('    · ' + r));
+        console.error('\n  Every mutation would look killed by these failures.');
+        console.error('  Fix the suite first, then re-run.\n');
+        process.exit(1);
+    }
+    console.log(`  baseline green: ${needed.join(', ')}\n`);
+}
 
 for (const m of chosen) {
     const file = R(m.file);

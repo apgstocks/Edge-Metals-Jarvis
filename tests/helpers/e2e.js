@@ -119,7 +119,26 @@ function fixtures(dir) {
 // ── THE MODEL STUB ───────────────────────────────────────────────────────
 // One function, routed on what the prompt is asking for, so a single stub
 // serves draftIntent, repair and followUp without any of them knowing.
-// `mode: 'down'` makes every call throw, which is the offline pass.
+// `mode: 'down'` is the offline pass.
+//
+// THE STUB MUST NOT THROW — 2026-09-08
+// ------------------------------------
+// It used to. `mode: 'down'` threw ECONNREFUSED, and that was WRONG, because
+// the real helpers/gemini.js catches every error internally, records the kind
+// in `lastFailure`, and RETURNS NULL. It has no throwing path at all.
+//
+// So every `gemini: 'down'` test in this repo was exercising a failure shape
+// that cannot occur in production, and the callers that DO handle null were
+// never reached. tests/phrasebook.js caught it on the first run: "forward the
+// booking to tracker" came back HTTP 500, and the stack pointed at
+// brain.js:1979 — `aiDecide` has no try/catch, because it does not need one.
+// Against the real module it gets null and returns NEED_DATA on the very next
+// line. Against my stub it exploded.
+//
+// The bug was in the harness, not the product. But a harness that invents
+// failures is worse than no harness: it costs a day chasing a phantom and, far
+// worse, it leaves the REAL offline behaviour of every one of those paths
+// unmeasured. Fidelity at the boundary is the whole value of an e2e.
 function installGemini(mode, log, o) {
     o = o || {};
     // Mirrors the real module's lastFailure: set on the way out of a failed
@@ -128,7 +147,11 @@ function installGemini(mode, log, o) {
     const callGeminiJSON = async (prompt) => {
         failure = null;
         log.push(prompt);
-        if (mode === 'down') throw new Error('ECONNREFUSED (stubbed offline)');
+        if (mode === 'down') {
+            // Exactly what the real one does on an unreachable endpoint.
+            failure = 'unreachable';
+            return null;
+        }
         // composer-* modes only fail the composer; everything else answers.
         const said = (/SHE SAID: (.*)/.exec(prompt) || [])[1] || '';
 

@@ -1012,7 +1012,29 @@ function policyDecide(ctx) {
         // whichever captured token actually matches the booking-number FORMAT wins,
         // regardless of position. Without this, "assign him to DALA52325500" silently
         // treated "him" as the booking and DALA52325500 as the supplier name.
-        if ((m = t.match(/^forward\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
+        // ── THE NOUN IN FRONT OF THE NUMBER ─────────────────────────────
+        // Found by tests/phrasebook.js, 2026-09-08. "forward booking HOU111 to
+        // trucker" did not match — the first captured token was "booking", and
+        // the pattern then demanded "to" where "HOU111" stood. It fell through
+        // to the AI and came back "I couldn't pin that down."
+        //
+        // That is bad on its own; what makes it serious is WHO SAYS IT. The
+        // reference resolver rewrites "forward the booking to trucker" into
+        // "forward booking HOU111 to trucker" before the brain ever sees it.
+        // Jarvis was rephrasing her sentence into a form its own parser could
+        // not read, so the centering work quietly disabled the forward path
+        // for every pronoun phrasing. Neither half is wrong alone.
+        //
+        // "forward booking to trucker" — where the noun IS the whole subject,
+        // because she means the one in focus — keeps working without any
+        // special handling. I first wrote a `(?!to\b)` lookahead to protect
+        // that case and then could not construct a mutation that killed it:
+        // the prefix is optional, so when the rest of the pattern cannot
+        // match, the engine simply backtracks and gives up the noun. The
+        // lookahead was restating what the regex already does. Removed rather
+        // than left in as decoration no test can hold to account.
+        const NOUN_PREFIX = String.raw`(?:(?:the|that|this)\s+)?(?:(?:booking|load|shipment|container)\s+)?`;
+        if ((m = t.match(new RegExp(String.raw`^forward\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
             const [first, seq, second] = [m[1], m[2], m[3]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);
@@ -1020,7 +1042,10 @@ function policyDecide(ctx) {
             const trucker_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
             return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
         }
-        if ((m = t.match(/^assign\s+([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$/))) {
+        // Same noun prefix, same reason — "assign booking HOU111 to Eccomelt"
+        // is the identical sentence shape and the resolver rewrites into it
+        // identically. Fixing only forward would leave the twin broken.
+        if ((m = t.match(new RegExp(String.raw`^assign\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
             const [first, seq, second] = [m[1], m[2], m[3]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);

@@ -571,6 +571,37 @@ section('CENTER — "the erd of that booking" with ten on screen');
     ck('  and a center missing from the current list resolves to nothing',
        gone.resolved === null && gone.ambiguous === 2, JSON.stringify(gone));
 
+    // ── AN EMPTY CALL IS NOT A NEW TOPIC ─────────────────────────────────
+    // api.js calls setReferents(cardsFor(...)) on EVERY turn, and cardsFor
+    // returns null for an instruction. `center = null` used to run before the
+    // guard, so simply saying "forward booking to trucker" destroyed the
+    // centre that the same sentence was about to need. She got "Which
+    // booking?" about the booking she had been discussing one breath earlier.
+    //
+    // Added 2026-09-08 because the mutation harness proved the fix was
+    // unguarded: moving that line back above the guard broke nothing that any
+    // suite noticed. A fix nobody is watching is a fix with a half-life.
+    mem.reset();
+    mem.setReferents({ kind: 'bookings', title: 'Bookings — HOUSTON', rows: [
+        { n: 1, booking_number: 'HOU111' }, { n: 2, booking_number: 'HOU222' },
+    ] });
+    mem.setCenter({ n: 1, booking_number: 'HOU111' });
+    mem.setReferents(null);
+    ck('a call with no list leaves the centre alone',
+       mem.currentCenter() && mem.currentCenter().booking_number === 'HOU111',
+       JSON.stringify(mem.currentCenter()));
+    mem.setReferents({ kind: 'bookings', title: 'x', rows: [] });
+    ck('  and so does a list with no rows in it',
+       mem.currentCenter() && mem.currentCenter().booking_number === 'HOU111',
+       JSON.stringify(mem.currentCenter()));
+    // The other half of the same rule, or the guard would just be a leak: a
+    // genuinely new list IS a new topic and must clear it.
+    mem.setReferents({ kind: 'bookings', title: 'Bookings — OAKLAND', rows: [
+        { n: 1, booking_number: 'OAK900' },
+    ] });
+    ck('  but a real new list still clears it', mem.currentCenter() === null,
+       JSON.stringify(mem.currentCenter()));
+
     // reset() clears it too, or a center leaks between sessions.
     mem.reset();
     ck('reset clears the center', mem.currentCenter() === null);
