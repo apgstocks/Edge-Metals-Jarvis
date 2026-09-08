@@ -2462,26 +2462,38 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // answer questions nobody anticipated, in her words — while the
             // one thing that must not be guessed, WHICH booking she means,
             // stays deterministic in helpers/voiceMemory.js.
-            const ac = require('./helpers/answerCards');
-            // ── JUDGED ON WHAT SHE SAID, NOT ON WHAT WE WROTE ────────────
-            // `asked` is the RESOLVED sentence: mem.resolveSmart has already
-            // turned "the container" into "booking HOU111". Feeding that to
-            // isFollowUp made it see a booking number and conclude she had
-            // named a new subject — so "what about the container size"
-            // redrew the whole list, from an identifier JARVIS had just
-            // inserted. It was reading its own handwriting back as evidence.
-            //
-            // `stripped` is her words with only the agent name removed. And a
-            // successful pronoun resolution is the strongest evidence there
-            // is that this is a follow-up, so it counts on its own.
-            const followingUp = !answeringBrain
-                && (!!ref.resolved || ac.isFollowUp(stripped, refSet));
-            if (followingUp) {
-                console.log(`[VOICE] following up on the ${refSet.rows.length} row(s) on screen — not redrawing`);
-            }
             const quick = answeringBrain
                 ? null            // her answer belongs to whoever asked
                 : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
+
+            // ── WHO DECIDES SHE IS STILL ON THE SAME SUBJECT ─────────────
+            // Apsara, 2026-09-07: "WHy cant it handle that .. we are using ai
+            // only right?"
+            //
+            // She was right to ask. This decision used to be a regex over nine
+            // nouns, taken BEFORE the model was consulted at all — the model
+            // was only ever asked to ANSWER, and when it could not, the code
+            // concluded she had changed subject and redrew her list. "I cannot
+            // answer this" is not evidence about what she meant.
+            //
+            // fu.answer now asks it directly, in the same call, so it costs
+            // nothing. Order of authority:
+            //   1. a PRONOUN THAT RESOLVED — she pointed at a row on screen.
+            //      Deterministic and not open to opinion.
+            //   2. what the model said about her sentence.
+            //   3. the patterns, when the model did not say — offline, or a
+            //      reply that left the field out.
+            const ac = require('./helpers/answerCards');
+            const modelSaysRows = fu.lastAboutTheseRows();
+            const followingUp = !answeringBrain && (
+                !!ref.resolved
+                || modelSaysRows === true
+                || (modelSaysRows === null && ac.isFollowUp(stripped, refSet))
+            );
+            if (followingUp) {
+                console.log(`[VOICE] still on the ${refSet.rows.length} row(s) on screen`
+                    + ` (${ref.resolved ? 'she pointed at one' : modelSaysRows === true ? 'the model says so' : 'pattern'})`);
+            }
             if (quick) {
                 console.log(`[VOICE] follow-up answered from the list: ${asked}`);
                 mem.remember('bot', quick);

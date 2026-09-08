@@ -159,11 +159,15 @@ function installGemini(mode, log) {
             // a hand-built row would never have crossed forModel at all.
             const row = rows.filter((r) => r.booking === about)[0] || rows[0];
             if (!row) return { answer: '', have_data: false };
+            // The model is now asked whether she is still on these rows —
+            // see helpers/followUp.js. A follow-up is anything that is not a
+            // fresh request for a different set.
+            const aboutRows = !/\b(?:show|list)\b.*\bbookings?\b/i.test(asked);
             if (/\berd\b/i.test(asked)) {
-                return { answer: `ERD on ${row.booking} is ${row.erd || 'not set'}.`, have_data: true };
+                return { answer: `ERD on ${row.booking} is ${row.erd || 'not set'}.`, have_data: true, about_these_rows: aboutRows };
             }
             if (/vessel/i.test(asked)) {
-                return { answer: `${row.booking} is on ${row.vessel || 'no vessel yet'}.`, have_data: true };
+                return { answer: `${row.booking} is on ${row.vessel || 'no vessel yet'}.`, have_data: true, about_these_rows: aboutRows };
             }
             return { answer: '', have_data: false };
         }

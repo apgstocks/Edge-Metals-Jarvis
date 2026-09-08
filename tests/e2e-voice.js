@@ -621,8 +621,33 @@ section('15 — and an unanswerable follow-up says so, never nothing');
     ck('the follow-up test reads what SHE said, not the resolved text',
        /ac\.isFollowUp\(stripped, refSet\)/.test(api),
        'passing `asked` makes it read its own handwriting back as evidence');
-    ck('  and a resolved pronoun counts as a follow-up on its own',
-       /!!ref\.resolved \|\| ac\.isFollowUp/.test(api));
+
+    // ── AND THE DECISION IS THE MODEL'S ─────────────────────────────────
+    // Apsara: "WHy cant it handle that .. we are using ai only right?" It
+    // could not, because it was never asked: the model was told to ANSWER,
+    // and a failure to answer was read as "she changed subject". Now it is
+    // asked outright, in the same call, and the order of authority is
+    // explicit.
+    ck('a resolved pronoun outranks everything — she pointed at a row',
+       /!!ref\.resolved\s*\n\s*\|\| modelSaysRows === true/.test(api),
+       'deterministic evidence is not open to a model\'s opinion');
+    ck('  then the model\'s own judgement',
+       /const modelSaysRows = fu\.lastAboutTheseRows\(\);/.test(api));
+    ck('  and the patterns only when it did not say',
+       /modelSaysRows === null && ac\.isFollowUp\(stripped, refSet\)/.test(api),
+       'offline, or a reply that left the field out — not as a second opinion');
+    const fu = require('fs').readFileSync(path.join(__dirname, '..', 'helpers/followUp.js'), 'utf8');
+    ck('  the question is actually put to the model',
+       /about_these_rows: is she still asking about the bookings in DATA\?/.test(fu),
+       'the whole complaint was that nobody asked it');
+    ck('  in the SAME call, so it costs her nothing',
+       fu.indexOf('about_these_rows') < fu.indexOf('callGeminiJSON(prompt'),
+       'a second round trip mid-sentence is time she can feel');
+    ck('  and "could not answer" is kept separate from "changed subject"',
+       /did not say is not a model that said no/.test(fu)
+       && /typeof res\.about_these_rows === 'boolean'/.test(fu),
+       'conflating them is the original bug — and an absent field must stay null, '
+       + 'not become false');
 
     await j.stop();
 }

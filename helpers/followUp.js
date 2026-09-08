@@ -295,7 +295,13 @@ const RULES = [
 // The dynamic path. Returns null when the model is unreachable or says
 // nothing usable, and the caller falls back — first to the patterns above,
 // then to the assistants.
+// What the model said about the LAST question: was she still talking about
+// the rows on screen? null when it did not say, or was never asked.
+let lastAboutRows = null;
+function lastAboutTheseRows() { return lastAboutRows; }
+
 async function askModel(question, referents, ref, now) {
+    lastAboutRows = null;
     const rows = forModel(referents, now);
     if (!rows.length) return null;
 
@@ -305,13 +311,40 @@ async function askModel(question, referents, ref, now) {
         JSON.stringify(rows),
         ref ? `\nSHE IS ASKING ABOUT booking ${ref.booking_number}.` : '',
         '', `SHE ASKED: ${question}`, '',
-        'Reply as JSON: {"answer": "...", "have_data": true|false}.',
+        // ── AND ASK IT THE QUESTION NOBODY WAS ASKING ────────────────────
+        // Apsara, 2026-09-07: "WHy cant it handle that .. we are using ai
+        // only right?"
+        //
+        // She is right and the answer was uncomfortable. The decision that
+        // broke her conversation — is this a NEW question about bookings, or
+        // a follow-up about the rows already on screen — was made by a regex
+        // over nine nouns, before any model was consulted. The model was only
+        // ever asked to ANSWER. When it could not, the code concluded she must
+        // have changed subject and redrew the list. That is a non-sequitur:
+        // "I cannot answer this" is not evidence about what she meant.
+        //
+        // So it is asked. In the SAME call, because the rows are already in
+        // the prompt and a second round trip mid-sentence costs her real time.
+        // Free, and it is the judgement a model is actually good at.
+        'about_these_rows: is she still asking about the bookings in DATA?',
+        'True for a follow-up like "and the vessel", "what about the container',
+        'size", "who is the carrier" — a question ABOUT these rows, even when',
+        'you cannot answer it. False only when she has moved to a different',
+        'subject or asked for a different set of bookings.',
+        '',
+        'Reply as JSON: {"answer": "...", "have_data": true|false, "about_these_rows": true|false}.',
         'have_data false means the answer is genuinely not in DATA.',
     ].join('\n');
 
     try {
         const { callGeminiJSON } = require('./gemini');
         const res = await callGeminiJSON(prompt, 1);
+        // Recorded whether or not there is an answer, because the whole point
+        // is that "could not answer" and "changed subject" are different
+        // things and the caller needs both. Undefined stays undefined — a
+        // model that did not say is not a model that said no.
+        lastAboutRows = res && typeof res.about_these_rows === 'boolean'
+            ? res.about_these_rows : null;
         const said = String((res && res.answer) || '').trim();
         if (!said) return null;
         // A refusal is still an answer — "that is not in what I have" is the
@@ -337,6 +370,6 @@ async function answer(question, referents, ref, now) {
 }
 
 module.exports = {
-    opening, answer, askModel, forModel, RULES,
+    opening, answer, askModel, forModel, RULES, lastAboutTheseRows,
     answerFollowUp, relative, urgency, parseYmd, sentence, ASKS,
 };
