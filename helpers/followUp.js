@@ -107,10 +107,23 @@ function opening(cards, now) {
     const cut = first.cutoff ? relative(first.cutoff, now) : '';
     const how = first.cutoff ? urgency(first.cutoff, now) : '';
 
+    // ── THE SCOPE IN HER WORDS, WHEN THERE IS ONE ────────────────────────
+    // The title used to be nothing but a port, so "from <place>" always read
+    // correctly. Now helpers/bookingQuery.js can narrow by assignment status
+    // and cutoff window too, and the description it produces already contains
+    // its own "from" — "Yes — 2 bookings from unassigned from Houston."
+    //
+    // So a scope, when present, replaces the "from <place>" phrasing rather
+    // than being poured into it. It matters beyond grammar: the scope is how
+    // she can hear WHICH question was answered, which is the whole complaint
+    // behind "instead of running that-its assuming something".
+    const scope = cards.scope ? String(cards.scope) : '';
+    const said = scope ? ' ' + scope : (place ? ' from ' + place : '');
+
     const parts = [];
     parts.push(n === 1
-        ? `Yes — one booking${place ? ' from ' + place : ''}.`
-        : `Yes — ${n} bookings${place ? ' from ' + place : ''}.`);
+        ? `Yes — one booking${said}.`
+        : `Yes — ${n} bookings${said}.`);
     if (cut) {
         // "next Wednesday, in 6 days" reads as one thought; "in 6 days, in 6
         // days" does not, so the second half is dropped when it repeats.

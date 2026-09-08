@@ -180,10 +180,14 @@ function namesSomewhere(text) {
 function bookingRows(port) {
     const all = loadBookings() || {};
     const wanted = String(port || '').toUpperCase();
-    return Object.values(all)
+    return shapeRows(Object.values(all)
         .filter((b) => !wanted
             || String(b.port_of_loading || '').toUpperCase().includes(wanted)
-            || String(b.port_of_discharge || '').toUpperCase().includes(wanted))
+            || String(b.port_of_discharge || '').toUpperCase().includes(wanted)));
+}
+
+function shapeRows(list) {
+    return list
         // Soonest cutoff first. That is the order she cares about — a
         // booking cutting off tomorrow is the one that needs a trucker —
         // and it is also the order that makes "the first one" mean
@@ -215,6 +219,20 @@ function bookingRows(port) {
                 not_forwarded: containers.filter((c) => !c.trucker).length,
             };
         });
+}
+
+// ── THE SAME ROW SHAPE, FROM ROWS SOMEBODY ELSE CHOSE ────────────────────
+// bookingRows() both SELECTS (by port substring) and SHAPES. helpers/
+// bookingQuery.js now does the selecting — by port, by assignment status, by
+// cutoff window, from a form the model filled — and still needs the shaping,
+// because the dashboard, the follow-up answerer and voiceMemory all expect
+// exactly these fields.
+//
+// Split rather than duplicated. Two functions that build "a row" drift, and
+// the drift shows up as a panel whose columns are subtly different depending
+// on which path drew it.
+function rowsFrom(bookings) {
+    return shapeRows(Array.isArray(bookings) ? bookings : []);
 }
 
 // Returns { kind, title, rows } or null. Null is the normal case — most
@@ -341,7 +359,7 @@ function isFollowUp(question, referents) {
 }
 
 module.exports = {
-    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts, isFollowUp, LIST_REQUEST, IS_INSTRUCTION,
+    cardsFor, bookingRows, rowsFrom, portIn, namesSomewhere, knownPorts, isFollowUp, LIST_REQUEST, IS_INSTRUCTION,
     PORT_ALIASES, PORT_STOPWORDS,
     // Tests need to defeat the 30s cache after writing a fixture store.
     _clearPortCache: () => { _portCache = null; _portCacheAt = 0; },

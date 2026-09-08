@@ -329,9 +329,33 @@ section('G — the voices');
         return { PHRASES: m ? m[1] : '' };
     })();
     ck('Scout has a spoken acknowledgement', /boss: 'Yes, boss\.'/.test(PHRASES), PHRASES.slice(0, 200));
-    ck('  and it is a NEW phrase key, not an edit to ack',
-       /ack: 'Mm hm\?'/.test(PHRASES),
-       'the WAV cache is keyed by name — editing ack keeps serving the old audio');
+    // ── THIS ASSERTION WAS PINNING THE NOISE IN PLACE — 2026-09-08 ───────
+    // It required `ack: 'Mm hm?'` to stay exactly as it was, justified by the
+    // belief that "the WAV cache is keyed by name". That belief is false:
+    // cacheKey(text, voice) hashes MODEL|voice|style|TEXT, so changing the
+    // words changes the key and the clip is re-synthesised on its own.
+    //
+    // The cost of the false belief was three reports of "da da" from Apsara.
+    // A green test sat in front of the actual cause every time I went looking.
+    // Second time today a test has held a bad decision in place; both were
+    // written by me, and both encoded an IMPLEMENTATION rather than a rule.
+    //
+    // So the rule, stated: an acknowledgement is words, and the key is derived
+    // from the text so the words can change freely.
+    ck('  and the cache is keyed by TEXT, so the words can change',
+       /update\(`\$\{MODEL\}\|\$\{voice\}\|\$\{STYLES\[voice\] \|\| ''\}\|\$\{text\}`\)/.test(hv),
+       'if this ever becomes keyed by phrase name, editing words serves stale audio');
+    // THE VALUE, NOT THE SOURCE TEXT. My first version grepped the PHRASES
+    // block for "Mm hm" and failed — on the COMMENT I had just written
+    // explaining that "Mm hm" was the bug. Fourth time this session a source
+    // grep has matched my own prose. Read the module.
+    {
+        const V = require(path.join(ROOT, 'helpers', 'voice.js'));
+        ck('  Jarvis answers in words too, not a hum',
+           V.PHRASES && V.PHRASES.ack === 'Yes, boss?',
+           'a speech model reading a non-word is the "da da" she reported 3 times: '
+           + JSON.stringify(V.PHRASES && V.PHRASES.ack));
+    }
     ck('  Scout asks for it and Jarvis does not',
        /scout:.*ack: 'boss'/.test(dv) && /jarvis:.*ack: 'ack'/.test(dv),
        (/scout:.*/.exec(dv) || [''])[0]);

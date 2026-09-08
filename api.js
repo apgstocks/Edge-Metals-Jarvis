@@ -2582,6 +2582,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             }
 
             let cards = null;
+            const bq = require('./helpers/bookingQuery');
+            // Set when the query is genuinely ambiguous about WHICH PORT and
+            // she has to be asked. Null the rest of the time — asking a
+            // question we already know the answer to is worse than not asking.
+            let listAsk = null;
             // ── A FOLLOW-UP KEEPS THE LIST IT IS ABOUT ───────────────────
             // Apsara, 2026-09-07: "On follow up - why it keeps on saying the
             // same thing about booking."
@@ -2591,11 +2596,63 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // summary out again — and the referent set was replaced under
             // her, so the next "that booking" meant a different one. See
             // helpers/answerCards.isFollowUp for the rule.
+            // ── THE MODEL FILLS THE FORM; THE CODE RUNS THE QUERY ────────
+            // Apsara, 2026-09-08: "Why would i need to hard code it? Stupid..
+            // Its an AI." and "first decide, then fix. dont just keep on
+            // doing patch work."
+            //
+            // cardsFor() is a set of regexes over her sentence. It understands
+            // "bookings from houston" and not "houston bookings"; it has never
+            // understood "available" or "cutting off next week" at all, so the
+            // panel it drew answered a WIDER question than she asked and
+            // looked complete while doing it.
+            //
+            // helpers/bookingQuery.js replaces the understanding half with a
+            // described schema the model fills — see the papers cited there.
+            // cardsFor stays as the fallback, because it is the offline net
+            // and a net is allowed to be dumb.
             try {
-                cards = followingUp ? null : ac.cardsFor(asked);
-                // A NEW list replaces the old one. cardsFor returns null for
-                // instructions, which is what stops "forward the first one"
-                // from replacing the very list it is pointing at.
+                // ── HER ANSWER TO "WHICH PORT?" COMES FIRST ──────────────
+                // A one-word "houston" right after Jarvis asked which port
+                // looks exactly like a follow-up to every heuristic in this
+                // file — short, no verb, no booking noun. It is not a
+                // follow-up; it is the missing slot, arriving. So an
+                // outstanding question is checked BEFORE the follow-up
+                // machinery gets a vote, which is also the only order that
+                // makes asking worth doing: a question whose answer the
+                // system cannot recognise is worse than no question.
+                const outstanding = mem.lastQueryFrame && mem.lastQueryFrame();
+                const answeringPort = !!(outstanding && outstanding.asked_port);
+                if (followingUp && !answeringPort) {
+                    cards = null;
+                } else {
+                    const frame = await bq.parse(asked, {
+                        prev: mem.lastQueryFrame ? mem.lastQueryFrame() : null,
+                    });
+                    if (frame) {
+                        const result = bq.run(frame);
+                        listAsk = bq.needsPort(frame, result);
+                        // The frame is remembered either way, and remembers
+                        // whether it left a question open — that flag is what
+                        // lets her one-word answer be recognised next turn.
+                        if (mem.setQueryFrame) {
+                            mem.setQueryFrame({ ...frame, asked_port: !!listAsk });
+                        }
+                        cards = listAsk ? null : {
+                            kind: 'bookings',
+                            title: 'Bookings — ' + bq.describe(frame, result),
+                            rows: ac.rowsFrom(result.rows),
+                            scope: bq.describe(frame, result),
+                            undated: result.undated,
+                        };
+                        if (cards && !cards.rows.length) cards = null;
+                    } else {
+                        cards = null;
+                    }
+                }
+                // A NEW list replaces the old one. setReferents ignores an
+                // empty call, which is what stops "forward the first one" from
+                // replacing the very list it is pointing at.
                 mem.setReferents(cards);
             } catch (e) { console.warn('[VOICE] cards failed:', e.message); }
 
@@ -2615,6 +2672,33 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // offer of the next step. The offer matters — it is what makes
             // it an assistant rather than a search box, and it is the shape
             // she wrote out herself.
+            // ── ASK, RATHER THAN ANSWER A QUESTION SHE DID NOT ASK ───────
+            // Apsara, 2026-09-08: "If i say show me available bookings ..it
+            // should ask from which port if not mentioned explicitly."
+            //
+            // In studies of mixed-initiative collaborative work, clarification
+            // is the single most common move — around 27% of interactions,
+            // more than any other kind. It is what a competent assistant does,
+            // not a failure to understand.
+            //
+            // The discipline is in WHEN. bq.needsPort returns null unless
+            // there are genuinely two or more ports in play, so a question
+            // whose answer is already known is never asked. And the frame is
+            // remembered, so her one-word "houston" carries the rest of what
+            // she originally asked for instead of starting a bare new query.
+            if (listAsk && listAsk.length) {
+                const said = `${listAsk.length} ports have those. Which one — ${listAsk.join(', ')}?`;
+                console.log(`[VOICE] asking which port: ${listAsk.join(', ')}`);
+                mem.remember('bot', said);
+                return answering({
+                    agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'asking which port',
+                    answer: said,
+                    cards: null,
+                    awaiting: true,
+                });
+            }
+
             if (cards && cards.rows && cards.rows.length) {
                 const said = fu.opening(cards);
                 if (said) {

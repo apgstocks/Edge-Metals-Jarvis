@@ -43,9 +43,17 @@ function formatBookingForForward(b) {
     ].join('\n');
 }
 
+// ERD ALONGSIDE CUTOFF. Apsara, 2026-09-08: "it should fetch unassigned
+// houston bookings with ERD and cut off dates."
+//
+// This line had the cutoff and not the ERD, so a list answered half her
+// question and she had to ask about each booking one at a time to get the
+// other half. They are the two dates that decide whether a booking can move,
+// and they belong together wherever bookings are listed.
 function formatBookingLine(b) {
     const wf = loadWorkflow()[b.booking_number] || {};
-    return `${b.booking_number} | ${stepLabel(wf.step)} | Trucker: ${wf.trucker_name || '—'} | Cutoff: ${b.cutoff_date || '—'}`;
+    return `${b.booking_number} | ${stepLabel(wf.step)} | Trucker: ${wf.trucker_name || '—'} `
+         + `| ERD: ${b.erd_date || '—'} | Cutoff: ${b.cutoff_date || '—'}`;
 }
 
 function formatBookingAvailable(b) {
@@ -54,6 +62,74 @@ function formatBookingAvailable(b) {
         `Route: ${b.port_of_loading || '—'} → ${b.port_of_discharge || '—'}`,
         `ERD: ${b.erd_date || '—'} | Cutoff: ${b.cutoff_date || '—'}`,
     ].join('\n');
+}
+
+// ── "WITH CUTOFF ANYWHERE NEXT WEEK" ─────────────────────────────────────
+// Apsara, 2026-09-08: "If i say,no..check houston bookings with cut off
+// anywhere next week. Instead of running that-its assuming something."
+//
+// She is describing the worst failure this app has: it ran a DIFFERENT query
+// and presented the result as though it were the one she asked for. The
+// "next week" was dropped silently, so she got every Houston booking back and
+// no indication that half her sentence had been ignored. A narrower answer
+// than requested is visibly wrong; a WIDER one looks like a complete answer.
+//
+// Real calendar weeks, not "within 7 days". When she says next week she means
+// Monday to Sunday of next week, and she is deciding whether a container can
+// physically make a date — so an answer that quietly means "the next seven
+// days" would include this Saturday and exclude next Sunday, both wrong in a
+// way she would only discover at the port.
+//
+// Returns null when she said no such thing, and null is the signal to apply
+// no window at all rather than to guess one.
+// IT PARSES TIME WORDS. IT DOES NOT DECIDE WHETHER SHE MEANT THE CUTOFF.
+//
+// My first version required the word "cutoff" to appear in the text, which
+// broke the moment the model did its job: asked for her timing words, Gemini
+// returns "this week" — the cutoff word stripped, because it had already
+// understood that part. The function then found no cutoff word and returned
+// no window, so the better the model got, the worse this behaved.
+//
+// The division that keeps this honest: the MODEL decides she was narrowing by
+// cutoff (it fills cutoff_phrase or leaves it null). This function converts
+// words to dates and nothing else. Deciding meaning here as well is how a
+// second, dumber opinion ends up overruling the first.
+function cutoffWindow(text, now) {
+    const t = String(text || '').toLowerCase();
+    const base = now ? new Date(now) : new Date();
+    base.setHours(0, 0, 0, 0);
+    // Monday as the start of the week; getDay() is 0=Sunday.
+    const dow = base.getDay();
+    const monday = new Date(base); monday.setDate(base.getDate() - ((dow + 6) % 7));
+
+    const mk = (start, days, label) => {
+        const from = new Date(start);
+        const to = new Date(start); to.setDate(start.getDate() + days - 1);
+        return { from, to, label };
+    };
+
+    if (/\bnext week\b/.test(t)) { const m = new Date(monday); m.setDate(monday.getDate() + 7); return mk(m, 7, 'next week'); }
+    if (/\bthis week\b/.test(t)) return mk(monday, 7, 'this week');
+    const inDays = /\b(?:in|within|next)\s+(\d{1,2})\s+days?\b/.exec(t);
+    if (inDays) return mk(base, parseInt(inDays[1], 10) + 1, `the next ${inDays[1]} days`);
+    if (/\btomorrow\b/.test(t)) { const d = new Date(base); d.setDate(base.getDate() + 1); return mk(d, 1, 'tomorrow'); }
+    if (/\btoday\b/.test(t)) return mk(base, 1, 'today');
+    return null;
+}
+
+// Applies the window from cutoffWindow(). A booking with NO cutoff date is
+// excluded: she asked which ones fall in a range, and "we do not know" is not
+// a yes. It is worth saying out loud rather than silently dropping, which is
+// why the caller reports the count it removed.
+function withinCutoffWindow(rows, win) {
+    if (!win) return { rows, undated: 0 };
+    let undated = 0;
+    const kept = (rows || []).filter((b) => {
+        const d = parseUSDate(b.cutoff_date);
+        if (!d) { undated += 1; return false; }
+        return d >= win.from && d <= win.to;
+    });
+    return { rows: kept, undated };
 }
 
 // ── Queries ───────────────────────────────────────────────────────────────────
@@ -173,5 +249,6 @@ module.exports = {
     formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
+    cutoffWindow, withinCutoffWindow,
     queryBookingsByLocation, hasSupplierAssigned, isBareUrl,
 };

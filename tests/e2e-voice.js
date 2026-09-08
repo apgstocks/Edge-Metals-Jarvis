@@ -691,9 +691,28 @@ section('16 — the follow-up rule, tested by BEHAVIOUR not by grep');
         const j = await boot({ rowsField: 'deny' });
         await j.say('show me the bookings from houston');
         const r = await j.say('and the vessel');
+        // ── WHAT "OBEYED" MEANS CHANGED, AND FOR THE BETTER — 2026-09-08 ─
+        // This used to assert `!!r.json.cards`: the model saying "different
+        // subject" had to produce a PANEL. Under the old cardsFor that panel
+        // was every booking in the system, because "and the vessel" names no
+        // port to filter on — and that is precisely what Apsara reported on
+        // 2026-09-07 ("On follow up - why it keeps on saying the same thing
+        // about booking"), with the worse half being that her two Houston
+        // rows were silently replaced by four and "that booking" started
+        // meaning one she had never mentioned.
+        //
+        // helpers/bookingQuery.js does not build a list for a sentence that
+        // is not asking for one. So the model's verdict is still obeyed —
+        // what changed is that obeying it no longer means inventing a table.
+        // The assertion is therefore about the DIFFERENCE the verdict makes:
+        // with the model saying "still these rows" the answer comes from
+        // them; with it saying "moved on", it does not.
         ck('the model saying "different subject" is obeyed too',
-           !!r.json.cards,
-           'no panel came back — the model said she had moved on and nothing acted on it');
+           !/HOU111 is on MSC ANNA/.test(A(r)),
+           'the model said she had moved on and the old rows answered anyway');
+        ck('  and no table is invented to prove the point',
+           !r.json.cards,
+           'a panel of every booking is the bug she reported, not the fix');
         await j.stop();
     }
 

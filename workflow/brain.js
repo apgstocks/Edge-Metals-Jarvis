@@ -978,6 +978,28 @@ function policyDecide(ctx) {
         //
         // Net effect: the fast path still handles every real location query
         // without an AI call, and stops guessing on everything else.
+        // ── NO SECOND WORD ORDER HERE. ON PURPOSE. ──────────────────────
+        // Apsara, 2026-09-08: "Why would i need to hard code it? Stupid..
+        // Its an AI.. Why would i need to do so much fixes? Why cant yu find
+        // that on your own???"
+        //
+        // I had just added a second regex to this line so that "houston
+        // bookings with cutoff next week" would match alongside "bookings
+        // from houston". She stopped me, and she was right to. That is the
+        // fix that guarantees a third report: the next sentence she says will
+        // have a third word order, and she will have to come and tell me.
+        //
+        // This pattern stays exactly as narrow as it was. It is the OFFLINE
+        // NET — the thing that keeps Jarvis usable when Gemini is
+        // unreachable — and a net does not have to catch everything. What
+        // catches everything is the model, which reads the sentence. So the
+        // extraction moved there: see the location/filter/cutoff fields in
+        // the AI's own schema below, and 'bookings_list_query' in the handler.
+        //
+        // The rule this file is supposed to follow, written down so I stop
+        // breaking it: deterministic code decides WHICH ENTITY and whether an
+        // irreversible action proceeds. The model decides what she MEANT.
+        // Word order is meaning. It was never mine to enumerate.
         const rawLocMatch = t.match(/\b(available|unassigned|assigned)?\s*bookings?\s+(?:from|at|in|for)\s+(.+?)\s*$/i);
         const locQueryMatch = (() => {
             if (!rawLocMatch) return null;
@@ -995,7 +1017,13 @@ function policyDecide(ctx) {
         if (locQueryMatch) {
             const filter = locQueryMatch[1] === 'assigned' ? 'assigned' : (locQueryMatch[1] ? 'unassigned' : undefined);
             const location = locQueryMatch[2].trim();
-            if (location) return { intent: 'bookings_list_query', resolvedBy: 'policy', data: { location, filter } };
+            // The offline net passes her WHOLE sentence through as the cutoff
+            // phrase and lets cutoffWindow() decide whether there is a window
+            // in it. Not a parse — a hand-off. When Gemini is up it fills
+            // this field properly from meaning; this is only so that losing
+            // the model does not also lose the narrowing she asked for.
+            const cutoff_phrase = t;
+            if (location) return { intent: 'bookings_list_query', resolvedBy: 'policy', data: { location, filter, cutoff_phrase } };
         }
 
         if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
@@ -1869,7 +1897,7 @@ AND NEVER ASK HER WHICH EMAILS SHE MEANS. Another real incident the same night: 
 "track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
-"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
+"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. IT DOES NOT MATTER WHAT ORDER SHE SAYS IT IN: "bookings from Houston", "Houston bookings", "what have we got in Houston", "anything loading out of Houston" are the same question — read the sentence, do not pattern-match it. If she narrows it by CUTOFF DATE ("with cutoff anywhere next week", "cutting off this week", "anything closing in 3 days"), copy her timing words verbatim into "cutoff_phrase"; the handler turns them into real dates and NAMES the range back to her. Leave cutoff_phrase null when she did not narrow it — never invent a window, and never drop one she gave you. Answering a wider question than the one she asked looks like a complete answer and is not one. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
 "get_quote" starts a freight quote request for a lane — "get/send/request a quote from X to Y", "quote LA to Houston", "ask NTG and TQL for a rate from Junk car to Eccomelt". Set origin and destination to the two places verbatim, and names_text to whoever she said to ask (or null). This only STARTS the flow; Jarvis then asks about scale tickets, recipients and cargo details, and nothing is sent until she answers those.
 "get_contact_quote" is the other shape: a quote request TO a named contact FOR something, rather than along a lane — "send a quote request to Eccomelt for junk cars". Set recipient_query and details.
 "send_pricelist_city" sends the price list for a city — set city. "learn_domain" scans a company's mail domain to learn its contacts — set term to the company word she used.
@@ -1971,6 +1999,7 @@ Return ONLY this JSON:
   "note": null,
   "location": null,
   "filter": null,
+  "cutoff_phrase": null,
   "origin": null,
   "destination": null,
   "names_text": null,
@@ -2342,8 +2371,25 @@ async function route(decision, ctx, sendMessage) {
             const { count, records } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'Unassigned (no supplier) ' : d.filter === 'assigned' ? 'Assigned ' : '';
             if (!count) return send(chatId, `No ${label.toLowerCase()}bookings from ${d.location}.`);
-            const body = records.map(b => formatBookingLine(b)).join('\n');
-            return send(chatId, `${label}bookings from ${d.location} (${count}):\n${body}`);
+
+            // ── THE WINDOW SHE ASKED FOR, OR NO WINDOW AND NO PRETENCE ───
+            // "check houston bookings with cut off anywhere next week" used
+            // to come back as every Houston booking, which reads as a
+            // complete answer and is not one. Now the range is applied, NAMED
+            // in the reply so she can see which question was answered, and
+            // any booking with no cutoff on file is reported rather than
+            // quietly dropped — "we don't know" is not "no".
+            const bk = require('../helpers/booking');
+            const win = d.cutoff_phrase ? bk.cutoffWindow(d.cutoff_phrase) : null;
+            const { rows, undated } = bk.withinCutoffWindow(records, win);
+            const tail = undated ? `\n(${undated} more from ${d.location} have no cutoff date on file.)` : '';
+
+            if (win && !rows.length) {
+                return send(chatId, `No ${label.toLowerCase()}bookings from ${d.location} with a cutoff ${win.label}.${tail}`);
+            }
+            const body = rows.map(b => formatBookingLine(b)).join('\n');
+            const scope = win ? `, cutoff ${win.label}` : '';
+            return send(chatId, `${label}bookings from ${d.location}${scope} (${rows.length}):\n${body}${tail}`);
         }
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);

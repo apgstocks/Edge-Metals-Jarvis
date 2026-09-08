@@ -134,6 +134,26 @@ function setReferents(cards) {
     referents = { kind: cards.kind, title: cards.title, ts: Date.now(), rows: cards.rows };
 }
 
+// ── THE LAST FORM SHE FILLED IN ──────────────────────────────────────────
+// Slot carryover, in the sense of Naik et al. (Interspeech 2018): when she
+// says only "houston" after asking for AVAILABLE bookings, the status has to
+// survive into the next turn or she gets every Houston booking and no sign
+// that half her question was dropped. Their finding is that carryover decided
+// over the whole context beats hand-coded rules by ~9%, so this stores the
+// previous frame and hands it to the model rather than deciding here which
+// fields to keep.
+//
+// Same lifetime as the referents. A frame older than the list it produced is
+// not context, it is a stale assumption.
+let queryFrame = null;
+function setQueryFrame(f) { queryFrame = f ? { ...f, ts: Date.now() } : null; }
+function lastQueryFrame() {
+    if (!queryFrame) return null;
+    if (Date.now() - queryFrame.ts > REFERENT_TTL_MS) { queryFrame = null; return null; }
+    const { ts, by, ...rest } = queryFrame;
+    return rest;
+}
+
 function currentReferents() {
     if (!referents) return null;
     if (Date.now() - referents.ts > REFERENT_TTL_MS) { referents = null; return null; }
@@ -418,6 +438,7 @@ function distinguishers() {
 
 module.exports = {
     remember, setReferents, currentReferents, setCenter, currentCenter,
+    setQueryFrame, lastQueryFrame,
     history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,

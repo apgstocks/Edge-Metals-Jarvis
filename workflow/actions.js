@@ -334,12 +334,46 @@ await _send(chatId, ['Urgent cutoffs:', '', ...lines].join('\n'));
 return { action_taken: 'list_urgent' };
 }
 
+// ── "SHOW ME AVAILABLE BOOKINGS" — FROM WHERE? ───────────────────────────
+// Apsara, 2026-09-08: "If i say show me available bookings ..it should ask
+// from which port if not mentioned explicitly. Then on saying houston, it
+// should fetch unassigned houston bookings with ERD and cut off dates."
+//
+// It used to dump every unassigned booking across every port in one wall. She
+// works one port at a time — a truck is booked at a place — so a list that
+// spans four ports is four answers she has to sort by eye.
+//
+// IT ASKS ONLY WHEN THERE IS SOMETHING TO ASK ABOUT. If everything unassigned
+// happens to be at one port, the question is theatre and the answer is just
+// given. Same rule the pronoun resolver already follows: ask when it is
+// genuinely ambiguous, answer when it is not. A machine that asks a question
+// it already knows the answer to is worse than one that guesses.
+//
+// The pending carries the FILTER, not just the question. Losing it was the
+// second half of her complaint — she asked for AVAILABLE bookings, said
+// "houston", and got all Houston bookings including the assigned ones,
+// because the port answer started a fresh query that had forgotten what she
+// originally asked for.
 async function showBookingsAvailable(chatId) {
 const avail = getAvailableBookings();
 if (!avail.length) { await _send(chatId, 'No unassigned bookings.'); return { action_taken: 'list_empty' }; }
+
+// ── AND THE ASKING LIVES IN ONE PLACE, WHICH IS NOT HERE ─────────────────
+// I first built the "which port?" question here, as a pending on the brain.
+// It worked and it was wrong: the voice path has its own turn-taking, so
+// there were then TWO mechanisms asking the same question, and the brain's
+// pending swallowed her next two follow-ups whole. She asked "when is the erd
+// of that booking" and got "I couldn't pin that down", because a pending was
+// sitting in front of it that she did not know existed.
+//
+// The question belongs where the conversation is: api.js's voice route, using
+// helpers/bookingQuery.js — one frame, one place that decides whether a slot
+// is missing, one place that asks. This function stays what it always was, so
+// WhatsApp behaves exactly as before.
 await _send(chatId, ['Available (no supplier):', '', ...avail.map(formatBookingAvailable)].join('\n\n'));
 return { action_taken: 'list_available' };
 }
+
 
 async function showBookingsWeek(chatId) {
 const week = getBookingsThisWeek();
