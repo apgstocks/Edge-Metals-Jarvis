@@ -2062,7 +2062,102 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // picks; it never writes an identifier.
             const stripped = stripAgentName(text);
             const ref = await mem.resolveSmart(stripped);
-            const asked = ref.text;
+            let asked = ref.text;
+
+            // ── "WANT ME TO FORWARD IT?" — AND THEN SHE SAYS YES ─────────
+            // Apsara, 2026-09-08: "it asks me do you want me to forward it.
+            // when i say Yes, it just shows that earliest cut off is and does
+            // nothing."
+            //
+            // The offer at the end of every list summary is MY sentence. She
+            // asked for that shape on 2026-09-06 ("they will say yes boss, we
+            // have 3 bookings available, earliest cutoff is next wednesday.
+            // You want me to forward that?") and I wrote the words and never
+            // wired the answer. So Jarvis has been asking a question with
+            // nowhere to put the reply for two days, and her "yes" fell
+            // through to the follow-up answerer, which quite reasonably tried
+            // to look up a field called "yes".
+            //
+            // An assistant that asks a question it cannot receive an answer to
+            // is worse than one that does not ask: it invites her to speak and
+            // then discards what she says.
+            //
+            // WHY A CLOSED-CLASS LIST IS THE RIGHT TOOL *HERE*, having spent
+            // today arguing against exactly that: this is a POLAR ANSWER to a
+            // POLAR QUESTION. "Yes", "no", "go ahead" are discourse particles
+            // — English grammar, not freight vocabulary — so the list cannot
+            // go stale as her business changes, which was the whole objection.
+            // And it fails safe: anything it does not recognise is not treated
+            // as an answer at all and carries on to normal handling.
+            // Set when her answer to an offer has been rewritten into the
+            // instruction she meant. The order check further down reads the
+            // ORIGINAL words ("yes"), which name no action — so without this
+            // the rewrite happens and is then answered from the table anyway.
+            let rewrittenAsOrder = false;
+            const offer = mem.lastOffer ? mem.lastOffer() : null;
+
+            // ── "WHICH ONE?" → "1" ──────────────────────────────────────
+            // The turn after Jarvis lists them. An ordinal here is a choice
+            // from THAT list, not a booking number and not a follow-up, and
+            // it has to be read before anything else gets an opinion — the
+            // same rule as her answer to "which port?".
+            if (offer && offer.kind === 'forward' && offer.asked_which) {
+                const n = /^\s*(\d{1,2})\s*[.!]?\s*$/.exec(stripped);
+                const pick = n ? (offer.rows || [])[parseInt(n[1], 10) - 1] : null;
+                const named = (offer.rows || []).find(
+                    (r) => r.booking_number && stripped.toUpperCase().indexOf(r.booking_number) !== -1);
+                const chosen = pick || named;
+                if (chosen && chosen.booking_number) {
+                    if (mem.clearOffer) mem.clearOffer();
+                    asked = `forward ${chosen.booking_number}`;
+                    rewrittenAsOrder = true;
+                    console.log(`[VOICE] picked #${n ? n[1] : '?'} from the offer — ${asked}`);
+                }
+            } else if (offer && offer.kind === 'forward') {
+                const YES = /^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|please(?: do)?|go ahead|do it|forward it|that one)\b/i;
+                const NO = /^\s*(?:no|nope|not now|later|leave it|don'?t)\b/i;
+                if (YES.test(stripped)) {
+                    if (mem.clearOffer) mem.clearOffer();
+                    // ONE row, one meaning. With several on screen "yes" says
+                    // she wants a forward, not WHICH — and picking for her is
+                    // the guess this whole file exists to avoid, with a real
+                    // truck at the end of it.
+                    if (offer.rows && offer.rows.length === 1 && offer.rows[0].booking_number) {
+                        asked = `forward ${offer.rows[0].booking_number}`;
+                        rewrittenAsOrder = true;
+                        console.log(`[VOICE] "yes" answers the offer — ${asked}`);
+                    } else if (offer.rows && offer.rows.length > 1) {
+                        const list = offer.rows.slice(0, 8)
+                            .map((r, i) => `${i + 1}. ${r.booking_number}`).join('  ');
+                        const said = `Which one? ${list}`;
+                        // The offer stays live, now waiting on WHICH — or her
+                        // "1" next turn has nowhere to land, which is the very
+                        // bug being fixed, one question deeper.
+                        if (mem.setOffer) mem.setOffer({ kind: 'forward', rows: offer.rows, asked_which: true });
+                        mem.remember('bot', said);
+                        return answering({
+                            agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                            routed_because: 'which booking to forward',
+                            answer: said, cards: null, awaiting: true,
+                        });
+                    }
+                } else if (NO.test(stripped)) {
+                    if (mem.clearOffer) mem.clearOffer();
+                    const said = 'Right, leaving it.';
+                    mem.remember('bot', said);
+                    return answering({
+                        agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                        routed_because: 'declining the offer',
+                        answer: said, cards: null, awaiting: false,
+                    });
+                } else if (mem.clearOffer) {
+                    // She said something else entirely. The offer lapses
+                    // quietly — an offer she ignored is not a question she
+                    // still owes an answer to, and nagging about it is how
+                    // "you already have a pending X" got written.
+                    mem.clearOffer();
+                }
+            }
             if (ref.resolved) {
                 console.log(`[VOICE] "${ref.resolved.from}" → booking ${ref.resolved.to} (#${ref.resolved.n})`);
             } else if (ref.ambiguous) {
@@ -2495,7 +2590,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // "forward") was available and the model's opinion got there
             // first. Facts veto; the model refines.
             const acEarly = require('./helpers/answerCards');
-            const looksLikeOrder = acEarly.IS_INSTRUCTION.test(stripped);
+            const looksLikeOrder = rewrittenAsOrder || acEarly.IS_INSTRUCTION.test(stripped);
             const quick = (answeringBrain || looksLikeOrder)
                 ? null            // her answer belongs to whoever asked
                 : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
@@ -2543,7 +2638,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             //     is a new subject, whatever the model thinks
             //   · a resolved pronoun forces a follow-up, whatever it thinks
             //   · otherwise the model may still say she has moved on
-            const isOrder = ac.IS_INSTRUCTION.test(stripped);
+            // rewrittenAsOrder FIRST: when she answers an offer, the words she
+            // said are "yes" or "1", which name no action — but what will
+            // actually be executed is "forward HOU111". Judging the original
+            // words here left the rewrite in place and then routed it as a
+            // follow-up anyway, so the instruction was built and thrown away.
+            const isOrder = rewrittenAsOrder || ac.IS_INSTRUCTION.test(stripped);
             const patternSaysFollowUp = ac.isFollowUp(stripped, refSet);
             const followingUp = !answeringBrain && !isOrder && (
                 !!ref.resolved
@@ -2761,6 +2861,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     // out, and centring on rows[0] anyway would make "that
                     // booking" a guess dressed as a resolution.
                     if (/cutoff/i.test(said)) mem.setCenter(cards.rows[0]);
+                    // ── AND IF IT OFFERED, IT REMEMBERS OFFERING ─────────
+                    // Read off the sentence that was ACTUALLY said rather
+                    // than assumed from the branch: fu.opening() decides the
+                    // wording, and an offer recorded when none was spoken
+                    // would arm a "yes" she never heard invited.
+                    if (mem.setOffer && /want me to forward/i.test(said)) {
+                        mem.setOffer({ kind: 'forward', rows: cards.rows });
+                    }
                     return answering({
                         agent: route.agent, agent_name: agent.name, voice: agent.voice,
                         routed_because: 'reading the bookings',

@@ -378,6 +378,83 @@ section('C3 — a blocker is not an answer');
     }
 }
 
+section('C5 — it asks "want me to forward it?", so "yes" must mean something');
+{
+    // Apsara, 2026-09-08: "it asks me do you want me to forward it. when i say
+    // Yes, it just shows that earliest cut off is and does nothing."
+    //
+    // The offer is MY sentence — she asked for that shape on 2026-09-06 and I
+    // wrote the words and never wired the answer. Jarvis spent two days asking
+    // a question with nowhere to put the reply, so "yes" fell through to the
+    // follow-up answerer, which looked for a field called "yes".
+    //
+    // An assistant that asks a question it cannot receive an answer to is
+    // worse than one that never asks: it invites her to speak, then discards
+    // what she says.
+    {
+        const j = await boot({});
+        const opened = await j.say('show me the bookings from oakland');
+        ck('the summary does offer', /want me to forward/i.test(A(opened)), A(opened));
+        const yes = await j.say('yes');
+        ck('  and "yes" starts the forward instead of re-reading the cutoff',
+           /supplier|trucker|which one|forwarded/i.test(A(yes))
+           && !/earliest cutoff|cuts? off/i.test(A(yes)), A(yes));
+        await j.stop();
+    }
+
+    // AND AGAINST A MODEL THAT WOULD ANSWER "yes" WITH A FIELD. This is
+    // literally what she saw — "it just shows that earliest cut off is" —
+    // and the polite default stub cannot produce it, so the mutation of the
+    // guard survived until the eager stub was used here.
+    {
+        const j = await boot({ followUpEager: true });
+        await j.say('show me the bookings from oakland');
+        const yes = await j.say('yes');
+        ck('  a model that would answer "yes" from the table is not asked',
+           !/cuts? off/i.test(A(yes)), A(yes));
+        await j.stop();
+    }
+
+    // WITH SEVERAL ON SCREEN, "yes" says she wants a forward — not WHICH.
+    // Picking for her is the guess this whole area exists to avoid, and there
+    // is a real truck at the end of it.
+    {
+        const j = await boot({});
+        await j.say('show me the bookings from houston');
+        const yes = await j.say('yes');
+        ck('  with two on screen it asks which, rather than choosing',
+           /which one/i.test(A(yes)) && /HOU111/.test(A(yes)) && /HOU222/.test(A(yes)), A(yes));
+        // And the answer to THAT question must land too — the same bug one
+        // question deeper is exactly how this kind of thing survives a fix.
+        const one = await j.say('1');
+        ck('    and "1" then picks the first one',
+           /trucker|supplier|forwarded/i.test(A(one)) && !/which one/i.test(A(one)), A(one));
+        await j.stop();
+    }
+
+    // "No" must be heard as well, or the offer is a trap rather than a choice.
+    {
+        const j = await boot({});
+        await j.say('show me the bookings from oakland');
+        const no = await j.say('no');
+        ck('  and "no" is taken as an answer, not as a retraction',
+           /leaving it|right/i.test(A(no)) && !/dropped|took back/i.test(A(no)), A(no));
+        await j.stop();
+    }
+
+    // AND AN OFFER SHE IGNORES LAPSES. An offer that outlives its turn is a
+    // trap: a "yes" to something else later would send a real message.
+    {
+        const j = await boot({});
+        await j.say('show me the bookings from oakland');
+        await j.say('when is the erd');
+        const late = await j.say('yes');
+        ck('  an offer she talked past does not fire later',
+           !/supplier|trucker|forwarded/i.test(A(late)), A(late));
+        await j.stop();
+    }
+}
+
 section('C4 — "assign the supplier" is about the booking in focus');
 {
     const j = await boot({});

@@ -268,6 +268,40 @@ const MUTATIONS = [
       file: 'workflow/brain.js', suites: ['phrasebook'],
       find: "try { isHerBooking = !!require('../helpers/booking').getBooking(first).booking; }",
       to:   'try { isHerBooking = false; }' },
+    // ── the offer, and the answer to it (2026-09-08) ────────────────────
+    { name: 'offer: "yes" goes back to being answered from the table',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '            const isOrder = rewrittenAsOrder || ac.IS_INSTRUCTION.test(stripped);',
+      to:   '            const isOrder = ac.IS_INSTRUCTION.test(stripped);' },
+    { name: 'offer: the rewrite happens but is never executed',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '            const looksLikeOrder = rewrittenAsOrder || acEarly.IS_INSTRUCTION.test(stripped);',
+      to:   '            const looksLikeOrder = acEarly.IS_INSTRUCTION.test(stripped);' },
+    // NOT LISTED: dropping the `/want me to forward/.test(said)` half of the
+    // offer-recording condition. fu.opening() appends the offer to EVERY
+    // summary it produces, so today the test can never be false and the
+    // mutation is unkillable by construction — like the genericTerm
+    // exact-list line. The check stays in the code because it reads what was
+    // actually SAID rather than assuming from the branch, which is what keeps
+    // it correct if that wording ever becomes conditional. If it does, this
+    // note is the reminder to add the mutation back.
+    { name: 'offer: with several on screen it picks one for her',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '                    if (offer.rows && offer.rows.length === 1 && offer.rows[0].booking_number) {',
+      to:   '                    if (offer.rows && offer.rows.length >= 1 && offer.rows[0].booking_number) {' },
+    { name: 'offer: it never lapses, so a later "yes" fires it',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '                } else if (mem.clearOffer) {\n                    // She said something else entirely.',
+      to:   '                } else if (false) {\n                    // She said something else entirely.' },
+    { name: 'offer: "no" is not heard as an answer',
+      file: 'api.js', suites: ['phrasebook'],
+      find: "                } else if (NO.test(stripped)) {",
+      to:   '                } else if (false) {' },
+    { name: 'offer: her pick from the list is ignored',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '                if (chosen && chosen.booking_number) {',
+      to:   '                if (false) {' },
+
     // ── the blocked forward, and the answer that must land (2026-09-08) ─
     { name: 'assign: the category guard is missing again, as it was yesterday',
       file: 'workflow/actions.js', suites: ['phrasebook'],

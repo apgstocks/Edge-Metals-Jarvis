@@ -635,10 +635,18 @@ section('15 — and an unanswerable follow-up says so, never nothing');
     // port). Those are facts about her words; a model opinion cannot overrule
     // them. Behaviour for all four cases is section 16 — these three only
     // pin the SHAPE, so a refactor cannot quietly re-invert it.
+    // isOrder gained a disjunct on 2026-09-08: when she answers an offer, the
+    // words she SAID are "yes" or "1", which name no action, while what will
+    // be executed is "forward HOU111". Judging the original words alone left
+    // the rewritten instruction to be answered from the table — the same
+    // failure this assertion exists to prevent, arriving by a different road.
     ck('an order is never treated as a follow-up question',
-       /const isOrder = ac\.IS_INSTRUCTION\.test\(stripped\);/.test(api)
+       /const isOrder = rewrittenAsOrder \|\| ac\.IS_INSTRUCTION\.test\(stripped\);/.test(api)
        && /!answeringBrain && !isOrder/.test(api),
        'a forward answered instead of acted on is a driver who never hears about a booking');
+    ck('  including one she gave by answering an offer',
+       /rewrittenAsOrder = true;/.test(api),
+       '"yes" to "want me to forward it?" is an order, whatever the words are');
     ck('  the deterministic checks are a NECESSARY condition',
        /\(patternSaysFollowUp && modelSaysRows !== false\)/.test(api),
        'the model refines inside them; it does not get to overrule a named port');

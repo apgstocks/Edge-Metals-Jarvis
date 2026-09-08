@@ -145,6 +145,23 @@ function setReferents(cards) {
 //
 // Same lifetime as the referents. A frame older than the list it produced is
 // not context, it is a stale assumption.
+// ── AN OFFER IS A QUESTION, SO IT NEEDS SOMEWHERE FOR THE ANSWER ─────────
+// "Want me to forward one?" was spoken for two days with nothing behind it.
+// Recorded here, alongside the referents, because that is exactly what it is
+// about — and cleared the moment it is answered, declined, or ignored. An
+// offer that outlives the turn it was made in becomes a trap: she says "yes"
+// to something else three sentences later and a truck gets a message.
+let offer = null;
+function setOffer(o) { offer = o ? { ...o, ts: Date.now() } : null; }
+function lastOffer() {
+    if (!offer) return null;
+    // ONE TURN. Deliberately much shorter than the referent TTL: the rows can
+    // still be on screen long after the offer has stopped being live.
+    if (Date.now() - offer.ts > 120000) { offer = null; return null; }
+    return offer;
+}
+function clearOffer() { offer = null; }
+
 let queryFrame = null;
 function setQueryFrame(f) { queryFrame = f ? { ...f, ts: Date.now() } : null; }
 function lastQueryFrame() {
@@ -438,7 +455,7 @@ function distinguishers() {
 
 module.exports = {
     remember, setReferents, currentReferents, setCenter, currentCenter,
-    setQueryFrame, lastQueryFrame,
+    setQueryFrame, lastQueryFrame, setOffer, lastOffer, clearOffer,
     history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,
