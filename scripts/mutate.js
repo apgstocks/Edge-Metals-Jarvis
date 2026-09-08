@@ -268,6 +268,37 @@ const MUTATIONS = [
       file: 'workflow/brain.js', suites: ['phrasebook'],
       find: "try { isHerBooking = !!require('../helpers/booking').getBooking(first).booking; }",
       to:   'try { isHerBooking = false; }' },
+    // ── nothing available, so ask a forwarder (2026-09-09) ──────────────
+    { name: 'forwarder: an empty available search just says nothing',
+      file: 'api.js', suites: ['phrasebook'],
+      find: "                        if (!listAsk && !result.rows.length\n                            && frame.status === 'unassigned' && frame.location) {",
+      to:   '                        if (false) {' },
+    { name: 'forwarder: it offers on ANY empty result, not just available',
+      file: 'api.js', suites: ['phrasebook'],
+      find: "                            && frame.status === 'unassigned' && frame.location) {",
+      to:   '                            && frame.location) {' },
+    // NOT LISTED: dropping `rewrittenAsOrder` from the cards gate. It became
+    // unkillable once the synthesised sentence was phrased properly — every
+    // instruction Jarvis writes for itself starts with a verb that
+    // answerCards.IS_INSTRUCTION already catches, so bookingQuery declines it
+    // one guard earlier. Kept in the code because it states the rule
+    // directly — a sentence Jarvis built from her answer is not a question to
+    // be parsed again — and because the phrasing it depends on is exactly the
+    // kind of thing a later edit changes without noticing. Fourth note of this
+    // shape; each is recorded rather than left looking like a weak test.
+    { name: 'forwarder: the port goes back on the end and is re-parsed',
+      file: 'api.js', suites: ['phrasebook'],
+      find: '                    asked = `send a mail to ${who}, asking for space out of ${offer.port}`;',
+      to:   '                    asked = `send a mail to ${who} asking for a booking from ${offer.port}`;' },
+    { name: 'forwarder: "no" is not heard, so it drafts anyway',
+      file: 'api.js', suites: ['phrasebook'],
+      find: "                const NO = /^\\s*(?:no|nope|not now|later|leave it|don'?t|nothing)\\b/i;\n                if (NO.test(stripped)) {",
+      to:   "                const NO = /^\\s*(?:no|nope|not now|later|leave it|don'?t|nothing)\\b/i;\n                if (false) {" },
+    { name: 'available: the workflow supplier is ignored again (the July bug)',
+      file: 'helpers/bookingQuery.js', suites: ['phrasebook'],
+      find: '        const wf = workflow[b.booking_number];',
+      to:   '        const wf = undefined;' },
+
     // ── talking over it (2026-09-09) ────────────────────────────────────
     { name: 'barge: back to nine approved interruption words',
       file: 'dashboard/voice.js', suites: ['voice-web'],

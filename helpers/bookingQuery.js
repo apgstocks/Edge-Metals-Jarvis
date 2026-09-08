@@ -252,6 +252,18 @@ function offline(said, o) {
 // what is true.
 function run(frame, now) {
     const f = frame || {};
+    // ── THE WORKFLOW RECORD IS WHERE THE SUPPLIER ACTUALLY IS ────────────
+    // hasSupplierAssigned(b, wf) needs BOTH. executeAssign writes wf.supplier
+    // and the container's own field, never b.supplier — so calling it with one
+    // argument, as this did, checks the legacy flat field alone and reports
+    // every properly assigned booking as unassigned.
+    //
+    // That is not a new mistake. helpers/booking.js carries a comment dated
+    // 2026-07-16 about the identical bug in getAvailableBookings, confirmed
+    // live on booking 272766480. I reintroduced it yesterday by dropping the
+    // second argument, in a file written to make this area better.
+    const workflow = require('./json').loadWorkflow();
+
     const rows = allBookings().filter((b) => {
         if (f.location) {
             const want = String(f.location).toUpperCase();
@@ -259,8 +271,9 @@ function run(frame, now) {
             const to = String(b.port_of_discharge || '').toUpperCase();
             if (from.indexOf(want) === -1 && to.indexOf(want) === -1) return false;
         }
-        if (f.status === 'unassigned' && bk.hasSupplierAssigned && bk.hasSupplierAssigned(b)) return false;
-        if (f.status === 'assigned' && bk.hasSupplierAssigned && !bk.hasSupplierAssigned(b)) return false;
+        const wf = workflow[b.booking_number];
+        if (f.status === 'unassigned' && bk.hasSupplierAssigned(b, wf)) return false;
+        if (f.status === 'assigned' && !bk.hasSupplierAssigned(b, wf)) return false;
         return true;
     });
 

@@ -2096,6 +2096,71 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             let rewrittenAsOrder = false;
             const offer = mem.lastOffer ? mem.lastOffer() : null;
 
+            // ── SHE NAMES THE FORWARDER ─────────────────────────────────
+            // The answer to "want me to ask a forwarder for space?". Whatever
+            // she says next is the name — "zimex", "ask zimex", "yes, zimex" —
+            // and it is turned into the sentence the existing booking-request
+            // flow already understands. From there it is helpers/
+            // bookingRequest.js and draftEmailForConfirm: how many containers,
+            // a draft in her own writing style, and nothing sent until she
+            // says yes.
+            //
+            // Rewritten rather than reimplemented. Everything after this point
+            // has been working since 2026-09-06 and carries its own scar
+            // tissue — a hallucinated recipient and an invented body, both
+            // caught live in August and both guarded there. Routing into it is
+            // the whole point.
+            if (offer && offer.kind === 'ask_forwarder') {
+                const NO = /^\s*(?:no|nope|not now|later|leave it|don'?t|nothing)\b/i;
+                if (NO.test(stripped)) {
+                    if (mem.clearOffer) mem.clearOffer();
+                    const said = 'Right, leaving it.';
+                    mem.remember('bot', said);
+                    return answering({
+                        agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                        routed_because: 'declining the offer',
+                        answer: said, cards: null, awaiting: false,
+                    });
+                }
+                // The name, with the wrapping she might put around it. Left
+                // deliberately loose: anything that is not a refusal is a
+                // forwarder's name, because that is the only thing the
+                // question invited. A wrong name fails visibly at the contact
+                // lookup, which then asks — it does not send anything.
+                const who = stripped
+                    .replace(/^\s*(?:yes|yeah|sure|ok(?:ay)?|please)\b[,.\s]*/i, '')
+                    .replace(/^\s*(?:ask|email|mail|send (?:a )?(?:mail|email) to|write to)\b\s*/i, '')
+                    .replace(/[.!?]+\s*$/, '')
+                    .trim();
+                if (who) {
+                    if (mem.clearOffer) mem.clearOffer();
+                    // ── THE PORT GOES IN FRONT, AND THAT IS NOT COSMETIC ──
+                    // "...asking for a booking from HOUSTON" was claimed by the
+                    // brain's own location rule — `bookings? (from|at|in) (.+)$`
+                    // anchored to the END of the sentence — so Jarvis answered
+                    // its own instruction with a list of Houston bookings.
+                    //
+                    // A sentence Jarvis writes for itself has to survive its own
+                    // parsers. Third time this week: the reference resolver
+                    // produced "booking HOU111 HOU111", the forward pattern
+                    // could not read "booking HOU111 to X", and now this.
+                    //
+                    // "space out of HOUSTON" still satisfies
+                    // bookingRequest.isRequest — ASKING matches "asking",
+                    // FOR_A_BOOKING matches "space" — without ending in the
+                    // shape the location rule is looking for.
+                    // AND A COMMA AFTER THE NAME, which is also not cosmetic.
+                    // "to zimex asking for space" made the recipient "zimex
+                    // asking", with an address invented to match — the name
+                    // extraction takes up to two words and "asking" was the
+                    // second. The draft went to a contact that does not exist.
+                    // A comma ends the name.
+                    asked = `send a mail to ${who}, asking for space out of ${offer.port}`;
+                    rewrittenAsOrder = true;
+                    console.log(`[VOICE] asking ${who} for space at ${offer.port} — "${asked}"`);
+                }
+            }
+
             // ── "WHICH ONE?" → "1" ──────────────────────────────────────
             // The turn after Jarvis lists them. An ordinal here is a choice
             // from THAT list, not a booking number and not a follow-up, and
@@ -2774,7 +2839,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // It is also the most dangerous shape here: the pending stays
                 // open, so her NEXT sentence gets measured against a question
                 // she believes she already answered.
-                if (answeringBrain) {
+                // rewrittenAsOrder: an instruction Jarvis built from her
+                // answer is not a question to be parsed again. "send a mail to
+                // zimex asking for a booking from HOUSTON" contains the words
+                // "booking" and "houston", so the query path claimed it and
+                // listed Houston bookings instead of writing the mail — the
+                // sentence Jarvis wrote itself defeating the sentence Jarvis
+                // wrote itself, which is the same shape as the resolver
+                // rewriting "the booking" into a form its own parser could not
+                // read on 2026-09-08.
+                if (answeringBrain || rewrittenAsOrder) {
                     cards = null;
                 } else if (followingUp && !answeringPort) {
                     cards = null;
@@ -2799,6 +2873,49 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                             undated: result.undated,
                         };
                         if (cards && !cards.rows.length) cards = null;
+
+                        // ── NOTHING AVAILABLE IS AN ANSWER, AND THEN A JOB ──
+                        // Apsara, 2026-09-09: "when i ask show me available
+                        // bookings from houston and all are assigned,it should
+                        // say no bookings available.and then ask whether it can
+                        // email [freightforwarder] for that booking?"
+                        //
+                        // She is describing what she actually does next. No
+                        // free booking at Houston means she needs one, and
+                        // getting one means asking a forwarder. Reporting the
+                        // absence and stopping leaves her to start the whole
+                        // thing again by voice.
+                        //
+                        // ONLY FOR "AVAILABLE", her choice when asked: an empty
+                        // result for a plain "bookings from Savannah" is just an
+                        // empty result, and offering there would make Jarvis
+                        // chatty about nothing.
+                        //
+                        // AND IT ROUTES INTO THE FLOW THAT ALREADY EXISTS.
+                        // helpers/bookingRequest.js has done this since
+                        // 2026-09-06 — it asks the one question that changes
+                        // (how many containers), drafts in her own writing
+                        // style grounded in real past mail to that contact,
+                        // shows the draft, and sends only on "yes". Naming a
+                        // forwarder here simply hands over to it. Writing a
+                        // second emailer would be the mistake I have made three
+                        // times this week in smaller ways.
+                        if (!listAsk && !result.rows.length
+                            && frame.status === 'unassigned' && frame.location) {
+                            const where = String(frame.location).toUpperCase();
+                            const said = `No bookings available from ${where}. `
+                                + 'Want me to ask a forwarder for space?';
+                            if (mem.setOffer) {
+                                mem.setOffer({ kind: 'ask_forwarder', port: where });
+                            }
+                            mem.remember('bot', said);
+                            console.log(`[VOICE] nothing available at ${where} — offering to ask a forwarder`);
+                            return answering({
+                                agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                                routed_because: 'nothing available',
+                                answer: said, cards: null, awaiting: true,
+                            });
+                        }
                     } else {
                         cards = null;
                     }

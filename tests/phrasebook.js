@@ -450,6 +450,95 @@ section('C2c — naming a booking by where it loads');
     }
 }
 
+section('C2d — nothing available, so ask a forwarder');
+{
+    // Apsara, 2026-09-09: "when i ask show me available bookings from houston
+    // and all are assigned,it should say no bookings available.and then ask
+    // whether it can email [freightforwarder] for that booking? when say user
+    // say zimex,it should email. on my confirmation,it should send" — plus
+    // "before sending mail,show me a draft".
+    //
+    // The offer routes into helpers/bookingRequest.js, which has done this
+    // since 2026-09-06: it asks the one question that changes (how many
+    // containers), drafts in her own writing style, shows the draft, and sends
+    // only on "yes". Nothing here re-implements any of that.
+    const fsx = require('fs');
+    const px = require('path');
+    const j = await boot({});
+    // Every Houston booking assigned, so "available" is genuinely empty.
+    fsx.writeFileSync(px.join(j.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+
+    const empty = await j.say('show me available bookings from houston');
+    ck('an empty "available" search says so plainly',
+       /no bookings available/i.test(A(empty)), A(empty));
+    ck('  and offers to ask a forwarder',
+       /forwarder/i.test(A(empty)), A(empty));
+
+    const named = await j.say('zimex');
+    ck('  naming one starts the booking request, not a new search',
+       /how many containers/i.test(A(named)), A(named));
+    ck('    addressed to zimex, not to a name that ran into the next word',
+       /for zimex\b/i.test(A(named)),
+       '"to zimex asking for space" made the recipient "zimex asking", with an address invented to match');
+
+    const draft = await j.say('2');
+    ck('  the draft is SHOWN before anything is sent',
+       /draft email to zimex/i.test(A(draft)) && /subject:/i.test(A(draft)), A(draft));
+    ck('    and it asks before sending', /yes\/no|send this/i.test(A(draft)), A(draft));
+    ck('    and NOTHING has been sent yet',
+       (j.mails || []).length === 0,
+       'a draft that has already gone is not a draft');
+
+    const sent = await j.say('yes');
+    ck('  and only then does it send', /sent to zimex/i.test(A(sent)), A(sent));
+    ck('    to the address it showed her',
+       (j.mails || []).length === 1 && /zimex/.test(String((j.mails || [])[0].to || '')),
+       JSON.stringify(j.mails));
+    await j.stop();
+}
+
+section('C2e2 — but an ordinary empty result does NOT offer');
+{
+    // Her choice when asked: only when nothing is AVAILABLE. An empty result
+    // for a plain search is just an empty result, and offering to email a
+    // forwarder there would make Jarvis chatty about nothing.
+    //
+    // "Assigned bookings from Oakland" is genuinely empty — OAK333 has no
+    // supplier — with a location set and a status that is NOT "unassigned".
+    //
+    // My first version of this used "cutting off tomorrow", which the offline
+    // net does not read as a cutoff window at all, so the search came back
+    // with two rows and the assertion could not fail. Caught by the mutation
+    // harness: removing the status check survived it. An assertion that cannot
+    // fail is the thing this whole file was built to stop me writing.
+    const j = await boot({});
+    const r = await j.say('show me assigned bookings from oakland');
+    ck('an empty plain search does not offer to email anyone',
+       !/forwarder/i.test(A(r)), A(r));
+    // And "zimex" after it must not be read as an answer to a question nobody
+    // asked — the offer is what makes a bare name meaningful.
+    const after = await j.say('zimex');
+    ck('  so a name afterwards drafts nothing',
+       !/how many containers/i.test(A(after)) && (j.mails || []).length === 0, A(after));
+    await j.stop();
+}
+
+section('C2e — and "no" sends nothing');
+{
+    const fsx = require('fs');
+    const px = require('path');
+    const j = await boot({});
+    fsx.writeFileSync(px.join(j.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+    await j.say('show me available bookings from houston');
+    const no = await j.say('no');
+    ck('declining the forwarder offer is taken as an answer',
+       /leaving it|right/i.test(A(no)), A(no));
+    ck('  and nothing is drafted or sent', (j.mails || []).length === 0);
+    await j.stop();
+}
+
 section('C3 — a blocker is not an answer');
 {
     // Apsara, 2026-09-08: "when i ask it to foraward,it just says no supplier
