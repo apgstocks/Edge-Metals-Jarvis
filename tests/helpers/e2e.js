@@ -430,9 +430,29 @@ async function boot(opts) {
         // actually go and be asserted as gone. Jio has neither group nor
         // number, which is how the "could not reach them" branch gets walked
         // — the branch that used to mark a booking forwarded anyway.
+        // Sher Trucking and Jio have NO locality, which several suites depend
+        // on — buildTruckerSelectionMessage filters by the booking's port, so
+        // with only those two every "forward" ends at "No trucker registered
+        // at HOUSTON".
+        //
+        // That turned out to be a hole rather than a choice: it meant the
+        // SELECTION path — Jarvis listing the truckers and her picking one —
+        // had never been walked by voice at all, because every voice test
+        // stopped one gate earlier. Found on 2026-09-09 while demonstrating
+        // the flow to her, which is a bad time to find it.
+        //
+        // Bayou Haulage is additive: one port gains a trucker the selection
+        // message will offer. Nothing any existing suite sees changes.
         truckers: [
             { id: 1, name: 'Sher Trucking', number: '15551230001', group_id: '120363111@g.us' },
             { id: 2, name: 'Jio Transport' },
+            // group_id too, or the last step refuses with "no WhatsApp number
+            // or email on file" — which is correct behaviour and exactly the
+            // guard added on 2026-09-07, but it means the SUCCESS path still
+            // never completes. A fixture that stops one gate short of the end
+            // is how a flow gets called "tested" without ever having worked.
+            { id: 3, name: 'Bayou Haulage', number: '15551230004', locality: 'HOUSTON',
+              group_id: '120363222@g.us' },
         ],
         // Eccomelt deliberately has NO locality — several suites rely on the
         // port filter finding nothing at their port. Oakland Metals is

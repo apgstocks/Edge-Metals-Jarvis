@@ -134,10 +134,17 @@ const BOOK = [
 // ── THE FEW THAT MUST WORK, MODEL OR NO MODEL ────────────────────────────
 // Everything else is reported. These are failed, because they are
 // deterministic paths she uses constantly and a stub cannot excuse them.
+// NOTE on the shapes below, after the fixture gained a Houston trucker on
+// 2026-09-09: several of these used to read `no trucker registered`, which was
+// never the point — it was the fixture running out of road. What is being
+// asserted is that the sentence REACHES the trucker step, whether that step
+// then offers a list, forwards, or reports that there is nobody at that port.
+// An assertion that encodes the absence of test data breaks the day the data
+// gets better, which is the wrong way round.
 const MUST_WORK = [
-    ['forward booking to trucker', /which booking|no trucker registered|pick|which one/i],
+    ['forward booking to trucker', /which trucker|which booking|no trucker registered|pick|which one/i],
     ['forward HOU111 to trucker', /no trucker registered|which|pick from the list|forwarded/i],
-    ['forward the booking to tracker', /which booking|no trucker registered|pick|which one/i],
+    ['forward the booking to tracker', /which trucker|which booking|no trucker registered|pick|which one/i],
     ['show me the bookings from houston', /2 bookings/i],
     ['anything from houston', /2 bookings|booking/i],
     // Added after this file found them, 2026-09-08 — see section D.
@@ -146,12 +153,12 @@ const MUST_WORK = [
     ['assign booking HOU111 to Eccomelt', /assign|supplier/i],
     // Her verbs, 2026-09-08. Offline, because when the model is up it would
     // classify any of these and the net would never be exercised.
-    ['share booking to tracker', /no trucker registered|which|pick/i],
-    ['share the booking to trucker', /no trucker registered|which|pick/i],
+    ['share booking to tracker', /which trucker|no trucker registered|which|pick/i],
+    ['share the booking to trucker', /which trucker|no trucker registered|which|pick/i],
     ['share HOU111 to Sher Trucking', /forwarded/i],
-    ['share booking with trucker', /no trucker registered|which|pick/i],
-    ['send booking to trucker', /no trucker registered|which|pick/i],
-    ['give booking to trucker', /no trucker registered|which|pick/i],
+    ['share booking with trucker', /which trucker|no trucker registered|which|pick/i],
+    ['send booking to trucker', /which trucker|no trucker registered|which|pick/i],
+    ['give booking to trucker', /which trucker|no trucker registered|which|pick/i],
     ['pass HOU111 to Sher Trucking', /forwarded/i],
     ['shoot HOU111 to Sher Trucking', /forwarded/i],
 ];
@@ -298,13 +305,61 @@ section('C2 — an order is never answered out of the table');
         const e = await eager.say('forward the booking');
         ck('  even a model that would answer anything is not asked',
            !/cuts? off/i.test(A(e)), A(e));
-        // The same stub must still answer a real question, or this proves
-        // only that the eager mode is broken.
+        await eager.stop();
+    }
+
+    // The same stub must still answer a real question, or the assertion above
+    // proves only that the eager mode is broken.
+    //
+    // A FRESH SESSION, and the reason is worth writing down. "forward the
+    // booking" now reaches the trucker list and leaves a select_trucker
+    // pending open, so asking a question in that same breath gets read as an
+    // answer to it and comes back "I couldn't pin that down". That is the
+    // pending-swallows-a-question family Apsara has already reported twice
+    // (the await_fact_batch screenshot, and the name-confirm one). It is not
+    // what this assertion is about, so it is not tested here — but it is real,
+    // it is reachable from the flow above, and it is written down rather than
+    // worked around silently.
+    {
+        const eager = await boot({ followUpEager: true });
+        await eager.say('show me the bookings from houston');
         const eq = await eager.say('when is the cutoff');
         ck('    while it still answers a genuine question',
            /cuts? off/i.test(A(eq)), A(eq));
         await eager.stop();
     }
+}
+
+section('C2b — the whole forward, spoken, all the way to a sent message');
+{
+    // Apsara, 2026-09-09: "now coming back to voice, how does forward works
+    // now?" — and demonstrating it is what found this gap.
+    //
+    // Every voice test until now stopped one gate short. The fixture had no
+    // trucker at HOUSTON, so "forward booking to trucker" always ended at "No
+    // trucker registered at HOUSTON" and the SELECTION path — Jarvis listing
+    // the truckers, her picking one, a message actually going out — had never
+    // been walked by voice at all. A fixture that stops before the end is how
+    // a flow gets called tested without ever having worked.
+    const j = await boot({});
+    await j.say('show me the bookings from houston');
+
+    const asked = await j.say('forward booking to trucker');
+    ck('saying the category gets the list of truckers at that port',
+       /which trucker/i.test(A(asked)) && /Bayou Haulage/.test(A(asked)), A(asked));
+    ck('  for the booking she was already discussing, not a fresh one',
+       /HOU111/.test(A(asked)), A(asked));
+
+    const done = await j.say('1');
+    ck('  and picking a number forwards it', /forwarded to Bayou Haulage/i.test(A(done)), A(done));
+
+    // THE ASSERTION THAT MATTERS. "Forwarded" is a claim about the outside
+    // world. The worst bug found this week was notifyContactRespectingChannel
+    // returning ok:true with nothing sent — a booking marked forwarded and a
+    // driver who never heard. So the test is not that Jarvis SAID it.
+    const sent = (j.sent || []).map((m) => String(m.text || m.body || ''));
+    ck('  and a real message went out, not just a sentence on screen',
+       sent.some((t) => /HOU111/.test(t)), JSON.stringify(sent).slice(0, 160));
 }
 
 section('C3 — a blocker is not an answer');
