@@ -454,6 +454,83 @@ section('11 — and when the writer fails, it says whose fault it is');
     await j.stop();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('12 — "send mail to jeyshree" when the contact is Jayashree');
+// Apsara, 2026-09-07: "If i say send mail to jeyshree.. It got transcripted as
+// jayashree. I want it to check email for any matching thing auto adjusting
+// spelling. then ask."
+{
+    const fs = require('fs');
+    const j = await boot({ gmailKnowsAddress: false });
+
+    const one = await j.say('send a mail to jeyshree about the Houston cutoff');
+    ck('it does not just give up on an unknown name',
+       !/give me the exact email address/i.test(A(one)), A(one));
+    ck('  it offers the one that SOUNDS right',
+       /Jayashree Menon/.test(A(one)), A(one));
+    ck('  quoting back what it heard, so she can tell a mis-hearing from an invention',
+       /"jeyshree"/i.test(A(one)), A(one));
+    ck('  and ASKS rather than using it', /\(yes\/no\)/i.test(A(one)), A(one));
+    ck('  with nothing sent yet', j.mails.length === 0, JSON.stringify(j.mails));
+
+    const two = await j.say('yes');
+    ck('her yes turns the suggestion into a recipient',
+       /Jayashree Menon/.test(A(two)), A(two));
+    ck('  and it says it will remember', /remember/i.test(A(two)), A(two));
+    ck('  still asking before the email actually goes',
+       /reply "no" if that.s the wrong one|Send this\?/i.test(A(two)), A(two));
+    ck('    so nothing has been sent on a GUESS', j.mails.length === 0, JSON.stringify(j.mails));
+
+    const three = await j.say('yes');
+    ck('and then it sends', /^Sent to/i.test(A(three)), A(three));
+    ck('  to the right address', j.mails.length === 1 && /jayashree@/.test(j.mails[0].to),
+       JSON.stringify(j.mails.map((m) => m.to)));
+
+    // ── THE PART THAT MAKES IT A FIX ────────────────────────────────────
+    // The recogniser mishears that name every single time. Confirming once
+    // does not change the acoustics — so if it does not learn, she answers
+    // the same question for ever, which is worse than the original bug
+    // because it looks like progress.
+    const saved = JSON.parse(fs.readFileSync(j.dir + '/email_contacts.json', 'utf8'));
+    const learned = saved.find((c) => c.name === 'jeyshree');
+    ck('the mis-hearing is remembered', !!learned && learned.email === 'jayashree@example.com',
+       JSON.stringify(saved));
+    ck('  keeping the real name for display',
+       learned && learned.displayName === 'Jayashree Menon', JSON.stringify(learned));
+
+    // And now the exact lookup finds it, so it never asks again.
+    const four = await j.say('send a mail to jeyshree about the cutoff');
+    ck('the second time it does NOT ask again',
+       !/Did you mean/i.test(A(four)), A(four));
+    ck('  it goes straight to the draft', /Subject:|Send this\?/i.test(A(four)), A(four));
+
+    await j.stop();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('13 — and "no" does not throw the request away');
+{
+    const j = await boot({ gmailKnowsAddress: false });
+    const one = await j.say('send a mail to jeyshree about the Houston cutoff');
+    ck('the suggestion is offered', /Did you mean/i.test(A(one)), A(one));
+
+    const two = await j.say('no');
+    // "No" here means "that is not who I meant" — she still wants the email
+    // sent, to someone else. Falling into the generic cancel would throw the
+    // whole request away because Jarvis guessed wrong.
+    ck('a no keeps the request alive',
+       /email address/i.test(A(two)), A(two) + ' — she still wants the mail sent');
+    ck('  and does NOT read as a cancellation',
+       !/^cancelled/i.test(A(two).trim()), A(two));
+
+    // AND IT LEARNS NOTHING FROM A REFUSAL.
+    const saved = JSON.parse(require('fs').readFileSync(j.dir + '/email_contacts.json', 'utf8'));
+    ck('nothing was remembered from a wrong guess',
+       !saved.some((c) => c.name === 'jeyshree'), JSON.stringify(saved));
+
+    await j.stop();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -1261,6 +1261,66 @@ async function resolvePending(chatId, pending, answer, selection, cancelText = n
 // type, "no" here does NOT mean "cancel and stop." It means "don't save the
 // cc pattern, but still draft the email I originally asked for" — the cc
 // suggestion is a side offer, not the actual request.
+// ── "DID YOU MEAN JAYASHREE?" ────────────────────────────────────────────
+// Apsara, 2026-09-07: "send mail to jeyshree" came back "jayashree". The
+// suggestion was raised in draftEmailForConfirm when the exact lookup failed
+// and a name SOUNDED like one she has. Her answer is what turns it into a
+// recipient — the suggestion never did.
+//
+// HANDLED HERE, before the generic 'no' branch, for the same reason
+// await_cc_pattern_confirm is: "no" does not mean "cancel and stop". It means
+// "that is not who I meant" — she still wants the email sent, to somebody
+// else. Falling into the generic cancel would throw the whole request away
+// because Jarvis guessed wrong, which is a strange thing to punish her for.
+//
+// Found by tests/e2e-voice.js: the first version read only `selection` and a
+// plain "yes" arrives as `answer`, so every confirmation was recorded as a
+// refusal. Two parameters, and the one carrying the answer was the one not
+// being read.
+if (pending.type === 'await_name_confirm') {
+    await clearPending(chatId);
+    const matches = pending.matches || [];
+    const said = String(selection || '').trim();
+    const chosen = matches.find((c) => c.name === said)
+        || (matches.length === 1 && answer === 'yes' ? matches[0] : null);
+
+    if (!chosen) {
+        await _send(chatId,
+            `Right — I won't use that. Give me ${pending.heard}'s email address and I'll draft it (or "cancel").`);
+        await setPending(chatId, {
+            type: 'await_manual_email_address',
+            target_name: pending.heard, details: pending.details || '',
+            bkg_no: pending.bkg_no || null, scheduled_for: pending.scheduled_for || null,
+        });
+        return { action_taken: 'name_suggestion_declined' };
+    }
+
+    // ── AND IT LEARNS THE MIS-HEARING ────────────────────────────────────
+    // This is the difference between a fix and a papercut. The recogniser
+    // will hear "Jeyshree" for "Jayashree" EVERY time she says it — the
+    // acoustics do not change because she confirmed once. Without this she is
+    // asked the same question every time, for ever, which is worse than the
+    // original bug because it looks like progress.
+    //
+    // Saved as a contact under the HEARD spelling, so the exact lookup in
+    // nameMatch.js finds it next time and this path is never reached again.
+    // The fuzzy layer stays a fallback for names not yet corrected.
+    //
+    // Failure is logged, never fatal: not learning costs her one question
+    // next time, throwing would lose the email she is in the middle of.
+    try {
+        const emailContacts = require('../helpers/emailContacts');
+        await emailContacts.addContact(pending.heard, chosen.email, { displayName: chosen.name });
+        console.log(`[ACTIONS] learned "${pending.heard}" -> ${chosen.name} <${chosen.email}>`);
+    } catch (err) {
+        console.warn(`[ACTIONS] could not remember "${pending.heard}":`, err.message);
+    }
+
+    await _send(chatId, `Got it — ${chosen.name}. I'll remember "${pending.heard}" means them.`);
+    return draftEmailWithAddress(chatId, chosen.name, pending.details, pending.bkg_no, chosen.email, 'contact',
+        pending.scheduled_for ? new Date(pending.scheduled_for) : null);
+}
+
 if (pending.type === 'await_cc_pattern_confirm') {
     await clearPending(chatId);
     const emailContacts = require('../helpers/emailContacts');
@@ -2603,6 +2663,60 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
     if (resolvedContact) {
         to = resolvedContact.contact.email;
         toSource = 'contact';
+    }
+
+    // ── SHE SAID "JEYSHREE"; THE RECOGNISER HEARD "JAYASHREE" ────────────
+    // Apsara, 2026-09-07: "If i say send mail to jeyshree.. It got
+    // transcripted as jayashree. I want it to check email for any matching
+    // thing auto adjusting spelling. then ask."
+    //
+    // Exact lookup has already failed by this point, and the transcription is
+    // the reason — the name is right, the spelling is a guess the recogniser
+    // made. Proper nouns are where speech recognisers are weakest; the
+    // contextual-biasing literature says so plainly, and it is why Siri and
+    // Alexa bias their decoders with the user's own contact list.
+    //
+    // AND IT SUGGESTS, IT DOES NOT RESOLVE. helpers/nameMatch.js refuses
+    // fuzzy matching because "a near-miss resolves to the wrong company and a
+    // real quote request or email goes to them", and that rule is untouched:
+    // nothing below assigns `to`. It asks her, and her yes is what decides.
+    // She drew that line herself — "then ask".
+    if (!to) {
+        try {
+            const { suggest } = require('../helpers/nameSuggest');
+            const roster = (emailContacts.loadContacts() || []).filter((c) => c && c.email);
+            const near = suggest(targetName, roster);
+            if (near.length) {
+                const opts = near.map((n) => n.record);
+                const list = opts.map((c, i) => `${i + 1}. ${c.name} <${c.email}>`).join('\n');
+                const staged = await setPending(chatId, {
+                    type: 'await_name_confirm',
+                    heard: targetName, matches: opts,
+                    options: opts.map((c) => c.name),
+                    target_name: targetName, details: details || '', bkg_no: bkgNo || null,
+                    scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+                });
+                const one = opts.length === 1;
+                // THE HEARD SPELLING IS QUOTED BACK. Without it she cannot
+                // tell a mis-transcription from Jarvis inventing a contact,
+                // and those need completely different responses from her.
+                const ask = one
+                    ? `I don't have anyone called "${targetName}". Did you mean ${opts[0].name} <${opts[0].email}>? (yes/no)`
+                    : `I don't have anyone called "${targetName}" — did you mean one of these?\n${list}\n\nReply with the number (or "no").`;
+                if (staged.queued) {
+                    await _send(chatId, `${ask.split('\n')[0]} — but you have ${describePending(staged.blockedBy)} to answer first. I'll ask once that's resolved.`);
+                    return { action_taken: 'email_name_suggest_queued' };
+                }
+                console.log(`[ACTIONS] "${targetName}" not found — suggesting ${opts.map((c) => c.name).join(', ')} (${near[0].why})`);
+                await _send(chatId, ask);
+                return { action_taken: 'email_name_suggested' };
+            }
+        } catch (e) {
+            // A failed suggestion must never break the send. Falling through
+            // to the mail search below is exactly what happened before this
+            // existed, so the worst case is yesterday's behaviour.
+            console.warn('[ACTIONS] name suggestion failed, carrying on:', e.message);
+        }
     }
 
     if (!to) {

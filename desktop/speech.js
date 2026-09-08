@@ -205,13 +205,48 @@ const PROMPT = 'Jarvis. Edge Metals yard. Loads, trucker bills, suppliers, '
     + 'inventory, petty cash, invoices. Payments by Zelle, wire, cash, card. '
     + 'Copper, brass, aluminium, steel, radiators.';
 
+// ── AND THE NAMES SHE ACTUALLY SAYS ──────────────────────────────────────
+// Apsara, 2026-09-07: "send mail to jeyshree" came back "jayashree", and
+// "Check siri/alexa's paper."
+//
+// The papers agree on where this belongs. Zhao et al. (Interspeech 2019) and
+// Amazon's slot-triggered biasing work both note that end-to-end recognisers
+// "do poorly on proper nouns, which is the main source of biasing phrases",
+// which is why production assistants bias the decoder with the user's OWN
+// contact list rather than repairing the output afterwards.
+//
+// The constant above contains not one name from her business. Every buyer,
+// trucker and port she says twenty times a day was left for the decoder to
+// guess at, and "Jeyshree" is what guessing looks like.
+//
+// The list is built server-side in helpers/voiceVocab.js — it needs her
+// bookings, contacts and Supabase rosters, none of which this process has —
+// and pushed in here. Unset, transcription behaves exactly as it did
+// yesterday, which is the right failure: a biasing prompt is an accuracy
+// improvement, and an accuracy improvement that can break transcription
+// outright is a bad trade.
+let vocabPrompt = null;
+function setVocab(prompt) {
+    const p = String(prompt || '').trim();
+    // Whisper truncates past 224 tokens and hallucinates from long narrative
+    // prompts, so a malformed push is ignored rather than half-applied.
+    if (!p || p.length > 1200) {
+        console.warn('[SPEECH] ignoring a vocabulary prompt of ' + p.length + ' chars');
+        return false;
+    }
+    vocabPrompt = p;
+    console.log('[SPEECH] vocabulary prompt set — ' + p.length + ' chars');
+    return true;
+}
+function currentPrompt() { return vocabPrompt || PROMPT; }
+
 async function transcribe(pcm) {
     const model = await load();
     const audio = padded(pcm);
     const task = await model.transcribe(audio, {
         language: 'en',
         suppress_non_speech_tokens: true,
-        initial_prompt: PROMPT,
+        initial_prompt: currentPrompt(),
         // Each utterance is decoded ALONE. Without this, whisper carries
         // context between calls and will continue an earlier sentence into
         // a new one — which, on short independent commands, produces
@@ -261,5 +296,5 @@ function status() {
     };
 }
 
-module.exports = { load, transcribe, status, modelDir, pickModel, MODEL_PREFERENCE,
+module.exports = { load, transcribe, status, setVocab, currentPrompt, modelDir, pickModel, MODEL_PREFERENCE,
     get MODEL() { return chosen; } };

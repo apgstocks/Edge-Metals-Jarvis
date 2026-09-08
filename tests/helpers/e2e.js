@@ -103,8 +103,17 @@ function fixtures(dir) {
         ['workflow.json', {}], ['brain.json', { pending_actions: {}, pending_queue: {} }],
         ['truckers.json', [{ name: 'Sher Trucking', number: '15551230001' }]],
         ['suppliers.json', [{ name: 'Eccomelt', number: '15551230002' }]],
-        ['contacts.json', []],
+        // A contact whose name the recogniser reliably mangles. "Jeyshree"
+        // is what Whisper returns; "Jayashree Menon" is who she means.
+        ['contacts.json', [{ name: 'Jayashree Menon', email: 'jayashree@example.com' }]],
     ]) fs.writeFileSync(path.join(dir, f), JSON.stringify(v));
+    // emailContacts reads its OWN file. Writing only contacts.json left the
+    // roster empty and the suggestion path with nothing to suggest — the
+    // truckers-live-in-Supabase lesson, a second time.
+    fs.writeFileSync(path.join(dir, 'email_contacts.json'), JSON.stringify([
+        { name: 'Jayashree Menon', email: 'jayashree@example.com' },
+        { name: 'Yurim', email: 'yurim@example.com' },
+    ], null, 2));
 }
 
 // ── THE MODEL STUB ───────────────────────────────────────────────────────
@@ -196,7 +205,12 @@ function installGemini(mode, log) {
             // version matched nothing and every classification came back
             // NEED_DATA, which looked exactly like the bug being chased.
             const t = (/═══ NEW MESSAGE ═══\s*\n"([\s\S]*?)"\s*\n/.exec(prompt) || [])[1] || '';
-            const who = (/\b(?:to|for)\s+([A-Z][\w&.\-]*(?:\s+[A-Z][\w&.\-]*)?)/.exec(t) || [])[1] || null;
+            // CASE-INSENSITIVE. My first version required a capital letter,
+            // so "send a mail to jeyshree" extracted no name at all and the
+            // whole suggestion path was unreachable — a transcript is very
+            // often lowercase, which is precisely the case being tested.
+            // Stops at "about", which is her saying what the mail is for.
+            const who = (/\b(?:to|for)\s+((?!the\b)[\w&.'\-]+(?:\s+(?!about\b|regarding\b|re\b)[\w&.'\-]+)?)/i.exec(t) || [])[1] || null;
             if (/\b(?:e?mail|mail)\b/i.test(t) && /\b(?:send|write|draft|shoot)\b/i.test(t)) {
                 return { action: 'draft_email', target_name: who, email_details: null,
                          bkg_no: null, confidence: 0.95, reasoning: 'stub' };

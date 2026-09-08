@@ -1847,6 +1847,32 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // Not admin-gated: the staff prefix list already blocks staff from
     // /api/voice, and speaking a sentence the caller can already read on
     // their own screen grants nothing new.
+    // ── THE NAMES THE RECOGNISER SHOULD EXPECT TO HEAR ───────────────────
+    // Apsara, 2026-09-07: "send mail to jeyshree" transcribed as "jayashree".
+    //
+    // Contextual biasing, which is what Siri and Alexa do about exactly this
+    // — see helpers/voiceVocab.js for the papers. The desktop app cannot
+    // build the list itself: it has no bookings, no contacts and no Supabase.
+    // So it asks for it here and pushes it into Whisper's initial_prompt.
+    //
+    // READ-ONLY and cheap, but it is a list of her customers' names, so it
+    // sits behind the same auth as everything else rather than being open
+    // because it "is only vocabulary".
+    app.get('/api/voice/vocab', async (req, res) => {
+        try {
+            const vv = require('./helpers/voiceVocab');
+            const prompt = vv.buildPrompt(await vv.fromDataAsync());
+            res.set('Cache-Control', 'no-store');
+            res.json({ ok: true, prompt, chars: prompt.length });
+        } catch (e) {
+            // A failure here must not stop her talking: the desktop app keeps
+            // the static prompt it shipped with, which is yesterday's
+            // behaviour rather than a broken microphone.
+            console.warn('[VOICE] vocab build failed:', e.message);
+            res.status(200).json({ ok: false, error: e.message, prompt: null });
+        }
+    });
+
     app.get('/api/voice/phrase/:name', async (req, res) => {
         try {
             const { phrase } = require('./helpers/voice');

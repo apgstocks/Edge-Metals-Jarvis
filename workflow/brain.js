@@ -2384,6 +2384,21 @@ function pendingFullReminder(p) {
         // search itself already always ran before this pending exists.
         return `(Still waiting on ${p.target_name}'s email — checked saved contacts and mail, found nothing. I'll draft the email to them about "${p.details || '(what you asked)'}" once you give me the address — or reply "cancel".)`;
     }
+    // ── "DID YOU MEAN JAYASHREE?" ────────────────────────────────────────
+    // Apsara, 2026-09-07: "send mail to jeyshree" transcribed as "jayashree".
+    // draftEmailForConfirm offers the name that SOUNDS right and waits.
+    //
+    // The reminder quotes BOTH spellings — what she said and what is on file
+    // — because coming back to this cold, "did you mean Jayashree?" is only
+    // answerable if she can see it was "jeyshree" that Jarvis heard.
+    if (p.type === 'await_name_confirm') {
+        const opts = p.matches || [];
+        if (opts.length === 1) {
+            return `(Still waiting — I don't have anyone called "${p.heard}". Did you mean ${opts[0].name} <${opts[0].email}>? Reply yes or no.)`;
+        }
+        const listText = opts.map((c, i) => `${i + 1}. ${c.name} <${c.email}>`).join('\n');
+        return `(Still waiting — I don't have anyone called "${p.heard}". Did you mean one of these?\n${listText}\n\nReply with the number, or "no".)`;
+    }
     if (p.type === 'await_cc_pattern_confirm') {
         return `(Still waiting: save ${p.detected_cc.join(', ')} as ${p.target_name}'s standing cc? Reply yes or no — either way I'll draft the email to them next.)`;
     }

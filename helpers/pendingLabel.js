@@ -55,6 +55,7 @@ const LABELS = {
 
     // Disambiguation — she is being asked WHICH
     await_contact_disambiguation: 'which contact you meant',
+    await_name_confirm: 'a name I wasn\'t sure I heard right',
     select_trucker: 'which trucker you meant',
     select_supplier: 'which supplier you meant',
 
