@@ -291,6 +291,18 @@ const LIST_REQUEST = /\b(?:show|list|give|what|which|any|how many)\b[^.?]{0,30}\
 function isFollowUp(question, referents) {
     const q = String(question || '');
     if (!q.trim()) return false;
+    // ── AN INSTRUCTION IS NOT A FOLLOW-UP QUESTION ───────────────────────
+    // Found 2026-09-07 by section 7 of the e2e, and it would have shipped:
+    // "forward HOU111 to Sher Trucking" IS about the rows on screen, so the
+    // model answered "yes, still these rows" — quite correctly — and the
+    // follow-up branch swallowed it and replied "I don't have that on
+    // HOU111" instead of forwarding the booking to a driver.
+    //
+    // The model was asked the right question and given the wrong job. "Is
+    // she still talking about these rows" and "is this a question rather
+    // than an order" are different, and only the second one decides whether
+    // this branch may answer instead of acting.
+    if (IS_INSTRUCTION.test(q)) return false;
     // Nothing on screen means there is nothing to follow up ON.
     if (!referents || !Array.isArray(referents.rows) || !referents.rows.length) return false;
     // A port is a new filter, always.
@@ -311,7 +323,7 @@ function isFollowUp(question, referents) {
 }
 
 module.exports = {
-    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts, isFollowUp, LIST_REQUEST,
+    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts, isFollowUp, LIST_REQUEST, IS_INSTRUCTION,
     PORT_ALIASES, PORT_STOPWORDS,
     // Tests need to defeat the 30s cache after writing a fixture store.
     _clearPortCache: () => { _portCache = null; _portCacheAt = 0; },

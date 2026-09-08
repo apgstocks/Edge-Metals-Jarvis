@@ -2485,10 +2485,32 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             //      reply that left the field out.
             const ac = require('./helpers/answerCards');
             const modelSaysRows = fu.lastAboutTheseRows();
-            const followingUp = !answeringBrain && (
+            // AND NEVER AN INSTRUCTION. "forward HOU111 to Sher Trucking" is
+            // about the rows on screen — the model says so, correctly — but
+            // it is an ORDER, not a question, and answering it here instead
+            // of acting on it means a driver never hears about a booking.
+            // Checked on BOTH paths, because the model's yes is what made
+            // this reachable at all.
+            // ── FACTS VETO, THE MODEL REFINES ────────────────────────────
+            // The first version let `modelSaysRows === true` short-circuit
+            // everything, and it swallowed "what bookings are there from
+            // oakland" — she named a DIFFERENT PORT, which is a fact about
+            // her words, and no model opinion should be able to overrule it.
+            // The same short-circuit swallowed "forward HOU111 to Sher
+            // Trucking", which is an order, not a question.
+            //
+            // So the deterministic checks are a NECESSARY condition and the
+            // model refines within them:
+            //   · an order is never a follow-up question
+            //   · naming a new port, a booking number, or asking for the list
+            //     is a new subject, whatever the model thinks
+            //   · a resolved pronoun forces a follow-up, whatever it thinks
+            //   · otherwise the model may still say she has moved on
+            const isOrder = ac.IS_INSTRUCTION.test(stripped);
+            const patternSaysFollowUp = ac.isFollowUp(stripped, refSet);
+            const followingUp = !answeringBrain && !isOrder && (
                 !!ref.resolved
-                || modelSaysRows === true
-                || (modelSaysRows === null && ac.isFollowUp(stripped, refSet))
+                || (patternSaysFollowUp && modelSaysRows !== false)
             );
             if (followingUp) {
                 console.log(`[VOICE] still on the ${refSet.rows.length} row(s) on screen`

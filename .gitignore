@@ -142,3 +142,4 @@ mobile-app/www/index.html
 tests/form-parity.js
 tests/mobile-layout.js
 tests/spend-report.js
+.mutate-restore.json

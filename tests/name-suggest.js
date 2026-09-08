@@ -81,6 +81,15 @@ section('B — and it refuses far more than it offers');
         // stopped ONLY by the query being three characters.
         { name: 'Cherry Exports', email: 'ch@x.com' },
         { name: 'Raja Metals', email: 'ra@x.com' },
+        // AND ONE FOR THE PHONETIC REQUIREMENT ITSELF. "Sherpa" is 0.67
+        // similar to "sherry" — over MIN_SIMILARITY — shares its initial, and
+        // sounds nothing like it (Sr vs Srp). It is refused ONLY because
+        // phonetic agreement is required alongside that similarity.
+        //
+        // Found by scripts/mutate.js: dropping the sameSound requirement
+        // survived every assertion in this file, because nothing here was
+        // 0.62-similar to anything without also rhyming with it.
+        { name: 'Sherpa Lines', email: 'sp@x.com' },
     ];
     // FIRST LETTER AGREEMENT. The initial is the sound a listener almost
     // never mishears, and without this guard "Jeyshree" reaches "Ashree" and
@@ -97,6 +106,19 @@ section('B — and it refuses far more than it offers');
        !ns.suggest('sherry', roster).some((x) => /Cherry/.test(x.name)),
        JSON.stringify(ns.suggest('sherry', roster).map((x) => x.name))
        + ' — the initial is the sound a listener does not mishear');
+
+    // SIMILARITY ALONE IS NOT ENOUGH. Over MIN_SIMILARITY, same initial, and
+    // it still must not be offered — a name that merely looks close is what
+    // nameMatch.js refuses to act on, and a mis-HEARING is the only thing
+    // this file exists to repair.
+    ck('"sherry" does NOT reach Sherpa, though it is 0.67 similar',
+       !ns.suggest('sherry', roster).some((x) => /Sherpa/.test(x.name)),
+       JSON.stringify(ns.suggest('sherry', roster).map((x) => x.name))
+       + ' — over the similarity floor, but it does not sound the same');
+    ck('  and the two really are far apart phonetically',
+       ns.phonetic('sherry') !== ns.phonetic('Sherpa'),
+       ns.phonetic('sherry') + ' vs ' + ns.phonetic('Sherpa')
+       + ' — if these ever converge the assertion above proves nothing');
 
     // Nothing at all is a normal answer, and the caller falls back to asking
     // outright. A matcher that always produces a best guess is the thing

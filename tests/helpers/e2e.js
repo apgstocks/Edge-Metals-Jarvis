@@ -120,7 +120,8 @@ function fixtures(dir) {
 // One function, routed on what the prompt is asking for, so a single stub
 // serves draftIntent, repair and followUp without any of them knowing.
 // `mode: 'down'` makes every call throw, which is the offline pass.
-function installGemini(mode, log) {
+function installGemini(mode, log, o) {
+    o = o || {};
     // Mirrors the real module's lastFailure: set on the way out of a failed
     // call, read by the caller to explain itself.
     let failure = null;
@@ -162,14 +163,35 @@ function installGemini(mode, log) {
             // The model is now asked whether she is still on these rows —
             // see helpers/followUp.js. A follow-up is anything that is not a
             // fresh request for a different set.
-            const aboutRows = !/\b(?:show|list)\b.*\bbookings?\b/i.test(asked);
+            // ── THREE WAYS THE MODEL CAN ANSWER THIS ─────────────────────
+            // 'deny' — it says she has moved on, AND declines to answer. Both
+            //          halves matter: an answer FROM these rows is itself
+            //          proof she is still on them, so a stub that denies
+            //          while still answering tests nothing.
+            // 'omit' — the field is missing entirely (an older model, a
+            //          truncated reply). Must fall back to the patterns, not
+            //          be read as a denial.
+            // default — it answers, and says she is still on these rows.
+            // A REALISTIC verdict: naming a different port, or asking for a
+            // list, is her moving on. My first version said "still these
+            // rows" for "what bookings are there from oakland", which is what
+            // a careless model would do — and it revealed that the model's
+            // yes was overruling the port check. Kept realistic so the test
+            // exercises the arrangement rather than papering over it.
+            const aboutRows = o.rowsField === 'deny'
+                ? false
+                : !/\b(?:show|list|what|which|any)\b[^?.]{0,30}\bbookings?\b/i.test(asked)
+                  && !/\b(houston|oakland|long beach|busan)\b/i.test(asked);
+            const withVerdict = (obj) => (o.rowsField === 'omit'
+                ? obj : Object.assign({}, obj, { about_these_rows: aboutRows }));
+            if (o.rowsField === 'deny') return withVerdict({ answer: '', have_data: false });
             if (/\berd\b/i.test(asked)) {
-                return { answer: `ERD on ${row.booking} is ${row.erd || 'not set'}.`, have_data: true, about_these_rows: aboutRows };
+                return withVerdict({ answer: `ERD on ${row.booking} is ${row.erd || 'not set'}.`, have_data: true });
             }
             if (/vessel/i.test(asked)) {
-                return { answer: `${row.booking} is on ${row.vessel || 'no vessel yet'}.`, have_data: true, about_these_rows: aboutRows };
+                return withVerdict({ answer: `${row.booking} is on ${row.vessel || 'no vessel yet'}.`, have_data: true });
             }
-            return { answer: '', have_data: false };
+            return withVerdict({ answer: '', have_data: false });
         }
         // The email composer. Without this the draft comes back null and the
         // flow stops at "couldn't draft" — so the confirmation gate, the
@@ -347,7 +369,7 @@ async function boot(opts) {
     }
 
     const prompts = [];
-    installGemini(o.gemini || 'up', prompts);
+    installGemini(o.gemini || 'up', prompts, o);
     const mails = [];
     installGmail(mails, { knows: o.gmailKnowsAddress });
     installSupabase({

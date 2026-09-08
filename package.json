@@ -1,7 +1,7 @@
 {
   "name": "jarvis",
   "version": "3.0.0",
-  "description": "Jarvis — Edge Metals freight operations AI. Single-process, single-VM, zero paid cloud services.",
+  "description": "Jarvis \u2014 Edge Metals freight operations AI. Single-process, single-VM, zero paid cloud services.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -9,9 +9,10 @@
     "pm2": "pm2 start ecosystem.config.js --update-env",
     "check": "node scripts/check-action-wiring.js",
     "test": "node scripts/check-action-wiring.js && node scripts/run-tests.js",
-    "test:full": "node scripts/check-action-wiring.js && node scripts/run-tests.js --all",
+    "test:full": "node scripts/check-action-wiring.js && node scripts/run-tests.js && node scripts/mutate.js",
     "pm2:save": "pm2 save",
-    "logs": "tail -n 100 -f data/logs/jarvis.log"
+    "logs": "tail -n 100 -f data/logs/jarvis.log",
+    "mutate": "node scripts/mutate.js"
   },
   "dependencies": {
     "@google/genai": "^0.3.0",

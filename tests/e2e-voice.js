@@ -628,14 +628,25 @@ section('15 — and an unanswerable follow-up says so, never nothing');
     // and a failure to answer was read as "she changed subject". Now it is
     // asked outright, in the same call, and the order of authority is
     // explicit.
-    ck('a resolved pronoun outranks everything — she pointed at a row',
-       /!!ref\.resolved\s*\n\s*\|\| modelSaysRows === true/.test(api),
-       'deterministic evidence is not open to a model\'s opinion');
-    ck('  then the model\'s own judgement',
+    // ── FACTS VETO, THE MODEL REFINES ───────────────────────────────────
+    // The arrangement changed once the e2e ran it: letting the model's "yes"
+    // short-circuit everything swallowed BOTH "forward HOU111 to Sher
+    // Trucking" (an order) and "what bookings are there from oakland" (a new
+    // port). Those are facts about her words; a model opinion cannot overrule
+    // them. Behaviour for all four cases is section 16 — these three only
+    // pin the SHAPE, so a refactor cannot quietly re-invert it.
+    ck('an order is never treated as a follow-up question',
+       /const isOrder = ac\.IS_INSTRUCTION\.test\(stripped\);/.test(api)
+       && /!answeringBrain && !isOrder/.test(api),
+       'a forward answered instead of acted on is a driver who never hears about a booking');
+    ck('  the deterministic checks are a NECESSARY condition',
+       /\(patternSaysFollowUp && modelSaysRows !== false\)/.test(api),
+       'the model refines inside them; it does not get to overrule a named port');
+    ck('  a resolved pronoun still forces it',
+       /!!ref\.resolved\s*\n\s*\|\| \(patternSaysFollowUp/.test(api),
+       'she pointed at a row on screen — that is not an opinion');
+    ck('  and the model is consulted at all',
        /const modelSaysRows = fu\.lastAboutTheseRows\(\);/.test(api));
-    ck('  and the patterns only when it did not say',
-       /modelSaysRows === null && ac\.isFollowUp\(stripped, refSet\)/.test(api),
-       'offline, or a reply that left the field out — not as a second opinion');
     const fu = require('fs').readFileSync(path.join(__dirname, '..', 'helpers/followUp.js'), 'utf8');
     ck('  the question is actually put to the model',
        /about_these_rows: is she still asking about the bookings in DATA\?/.test(fu),
@@ -650,6 +661,93 @@ section('15 — and an unanswerable follow-up says so, never nothing');
        + 'not become false');
 
     await j.stop();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('16 — the follow-up rule, tested by BEHAVIOUR not by grep');
+{
+    // Three mutations against this rule died only on source-pattern
+    // assertions — proving the line exists, not that the conversation holds.
+    // The same weakness let "disable the auth branch" survive its own suite.
+    // These drive real turns and read the answers.
+
+    // (a) THE MODEL SAYS "still these rows" AND IS OBEYED.
+    {
+        const j = await boot({});
+        await j.say('show me the bookings from houston');
+        const r = await j.say('and the vessel');
+        ck('the model saying "same rows" keeps the list',
+           !r.json.cards && /HOU111/.test(A(r)), A(r));
+        const after = await j.say('and the erd of that one');
+        ck('  and the next pronoun still means that booking',
+           /HOU111/.test(A(after)), A(after));
+        await j.stop();
+    }
+
+    // (b) THE MODEL SAYS "different subject" AND IS OBEYED. Without this the
+    // model's answer could be quietly ignored and everything above would
+    // still pass, because the patterns would reach the same conclusion.
+    {
+        const j = await boot({ rowsField: 'deny' });
+        await j.say('show me the bookings from houston');
+        const r = await j.say('and the vessel');
+        ck('the model saying "different subject" is obeyed too',
+           !!r.json.cards,
+           'no panel came back — the model said she had moved on and nothing acted on it');
+        await j.stop();
+    }
+
+    // (c) THE FIELD IS MISSING. An older model, a truncated reply. It must
+    // fall back to the PATTERNS, not be read as a denial — which is what
+    // coercing undefined to false would do.
+    {
+        const j = await boot({ rowsField: 'omit' });
+        await j.say('show me the bookings from houston');
+        const r = await j.say('and the vessel');
+        ck('a reply with no verdict falls back to the patterns',
+           !r.json.cards,
+           A(r) + ' — silence from the model is not a denial');
+        await j.stop();
+    }
+
+    // (c2) OFFLINE, THE PATTERNS ARE ALL THERE IS. With the model answering,
+    // it ALSO says "different subject" for a new port — so removing the port
+    // check from isFollowUp changed nothing and the mutation survived. The
+    // overlap is good defence and bad evidence: the pattern has to be tested
+    // where it is the only thing standing.
+    {
+        const j = await boot({ gemini: 'down' });
+        await j.say('show me the bookings from houston');
+        const stay = await j.say('and the vessel');
+        ck('offline, a follow-up still keeps the list', !stay.json.cards, A(stay));
+
+        const port = await j.say('anything from long beach');
+        ck('offline, a NEW PORT still redraws', !!port.json.cards
+           && (port.json.cards.rows || []).some((r) => r.booking_number === 'LGB444'),
+           A(port) + ' — with no model, only the port check can catch this');
+
+        const all = await j.say('show me all the bookings');
+        ck('offline, an explicit list request still redraws', !!all.json.cards
+           && (all.json.cards.rows || []).length === 4,
+           A(all) + ' — with no model, only the list-request check can catch this');
+
+        const order = await j.say('forward HOU111 to Sher Trucking');
+        ck('offline, an order is still acted on, not answered',
+           !/I don.t have that on/i.test(A(order)), A(order));
+        await j.stop();
+    }
+
+    // (d) A RESOLVED PRONOUN OUTRANKS THE MODEL. She pointed at a row; that
+    // is a fact, and no model opinion overrides it.
+    {
+        const j = await boot({ rowsField: 'deny' });
+        await j.say('show me the bookings from houston');
+        const r = await j.say('when is the erd of that booking');
+        ck('a resolved pronoun keeps the list even when the model denies it',
+           !r.json.cards && /HOU111|ERD/i.test(A(r)),
+           A(r) + ' — she pointed at a row on screen; that is not an opinion');
+        await j.stop();
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

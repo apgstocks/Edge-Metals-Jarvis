@@ -32,18 +32,24 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const DIR = path.join(ROOT, 'tests');
 
-// Suites that hold a socket open or wait on a live service. Named here with a
-// reason rather than silently absent, so the exclusion is a decision someone
-// made and not a file that got forgotten. `npm run test:full` runs them.
-const SLOW = new Set(['arbiter-live.js', 'trap-audit.js']);
+// ── AUDITS, NOT ASSERTION SUITES ─────────────────────────────────────────
+// These two print a REPORT and exit 0; they have no "N passed, M failed"
+// line. The runner treated a missing totals line as a crash, so they were
+// excluded and labelled "slow" — which was not the real reason, since they
+// take under a second each. The effect was that I told her "run test:full for
+// those" all day and never ran them myself.
+//
+// They are in the normal run now, judged on their EXIT CODE, which is what
+// they actually communicate with. Worth it immediately: trap-audit reports a
+// real hole — await_relay_reply swallowing new questions as answers — that
+// nothing else in the suite knows about.
+const REPORT_ONLY = new Set(['arbiter-live.js', 'trap-audit.js']);
 
 const PER_SUITE_MS = Number(process.env.TEST_TIMEOUT_MS || 180000);
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
-const withSlow = process.argv.includes('--all');
 
 const files = fs.readdirSync(DIR)
     .filter((f) => f.endsWith('.js'))
-    .filter((f) => (withSlow || !SLOW.has(f)))
     .filter((f) => !only.length || only.some((o) => f.includes(o)))
     .sort();
 
@@ -72,9 +78,16 @@ for (const f of files) {
     // printing looks identical to one that was never written, and several of
     // my own mutations this week died by crashing — which would have read as
     // green under a runner that only looked for the word "FAIL".
-    const crashed = !m;
+    // An audit has no totals by design; only its exit code means anything.
+    const crashed = !m && !REPORT_ONLY.has(f);
     const timedOut = r.error && r.error.code === 'ETIMEDOUT';
     const bad = crashed || failed > 0 || (r.status !== 0 && !failed);
+    if (REPORT_ONLY.has(f) && !bad && !m) {
+        // Its findings are the point, and a clean exit does not mean it found
+        // nothing worth reading.
+        const note = out.split('\n').filter((l) => /swallows:|DANGEROUS|opportunity/.test(l))[0];
+        if (note) console.log(`${' '.repeat(34)}${note.trim().slice(0, 88)}`);
+    }
 
     totalPass += pass; totalFail += failed;
     results.push({ f, pass, failed, secs, crashed, timedOut, bad, out });
@@ -82,6 +95,7 @@ for (const f of files) {
     const state = timedOut ? `TIMED OUT after ${PER_SUITE_MS / 1000}s`
         : crashed ? 'CRASHED — no totals printed'
         : failed ? `${pass} passed, ${failed} FAILED`
+        : (REPORT_ONLY.has(f) && !m) ? 'audit clean (report only)'
         : `${pass} passed`;
     console.log(`${bad ? '✗' : '·'} ${f.padEnd(30)} ${state.padEnd(32)} ${secs}s`);
 }
@@ -115,7 +129,4 @@ if (broken.length) {
 console.log('\n' + '─'.repeat(72));
 console.log(`${files.length} suites · ${totalPass} assertions passed · ${totalFail} failed`
     + (broken.length ? ` · ${broken.length} suite(s) red` : ' · all green'));
-if (!withSlow && SLOW.size) {
-    console.log(`(skipped: ${[...SLOW].join(', ')} — run \`npm run test:full\` for those)`);
-}
 process.exit(broken.length ? 1 : 0);
