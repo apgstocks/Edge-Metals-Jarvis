@@ -50,6 +50,41 @@ _pushAlert     = pushAlert || (() => {});
 // trace.
 function ready() { return typeof _send === 'function'; }
 
+// ── SAY WHY THE DRAFT DID NOT HAPPEN ─────────────────────────────────────
+// Apsara, 2026-09-07: "When i say send mail, its not doin that."
+//
+// All three draft paths answered "try rephrasing what it should say" for
+// EVERY failure, including a missing API key and an unreachable model. That
+// sentence tells her the fault is her wording and hands her an action that
+// cannot possibly work — she rephrases, it fails again, and there is nothing
+// on screen to suggest looking anywhere else.
+//
+// helpers/gemini.js now records WHY the last call came back null, so this
+// can be honest. Only 'unusable' is plausibly about what she said; the
+// others are all on this side and say so, with the thing that would
+// actually fix them.
+function draftFailureMessage(kind) {
+    let why = null;
+    try { why = require('../helpers/gemini').lastGeminiFailure(); } catch (e) { /* fall through */ }
+    const what = kind === 'reply' ? 'that reply' : 'that email';
+    if (why === 'auth') {
+        return `Couldn't draft ${what} — my AI key is missing or rejected, so I can't write anything right now. `
+             + 'That needs fixing on the server; nothing you say will get round it.';
+    }
+    if (why === 'quota') {
+        return `Couldn't draft ${what} — the AI quota is used up for now. `
+             + 'Try again later, or send it yourself if it is urgent.';
+    }
+    if (why === 'unreachable') {
+        return `Couldn't draft ${what} — I couldn't reach the AI to write it. `
+             + "That's my end, not your wording. Try again in a moment.";
+    }
+    // 'unusable', or no reason recorded: the model DID answer, with something
+    // that was not a usable draft. This is the only case where rephrasing is
+    // sensible advice, so it is the only case that offers it.
+    return `Couldn't draft ${what} — tell me what it should say and I'll try again.`;
+}
+
 // ── Pending action helpers (persist in brain.json — survive restarts) ─────────
 // A chat can only have ONE unresolved pending at a time (pending_actions is
 // keyed by chatId, not a list) — but several independent triggers can now
@@ -2917,7 +2952,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
 
     const draft = await callGeminiJSON(prompt);
     if (!draft || !draft.subject || !draft.body) {
-        await _send(chatId, "Couldn't draft that email — try rephrasing what it should say.");
+        await _send(chatId, draftFailureMessage("email"));
         return { action_taken: 'email_draft_failed' };
     }
 
@@ -4234,7 +4269,7 @@ ${require('../helpers/writingStyle').getStyleGuidance()}
 Return ONLY this JSON: { "subject": "short subject line", "body": "email body, plain text, no markdown, sign off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
         const draft = await callGeminiJSON(prompt);
         if (!draft || !draft.subject || !draft.body) {
-            await _send(chatId, "Couldn't draft that email — try rephrasing what it should say.");
+            await _send(chatId, draftFailureMessage("email"));
             return { action_taken: 'reply_draft_failed' };
         }
 
@@ -4330,7 +4365,7 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
 
     const draft = await callGeminiJSON(prompt);
     if (!draft || !draft.body) {
-        await _send(chatId, "Couldn't draft that reply — try rephrasing what it should say.");
+        await _send(chatId, draftFailureMessage("reply"));
         return { action_taken: 'reply_draft_failed' };
     }
 

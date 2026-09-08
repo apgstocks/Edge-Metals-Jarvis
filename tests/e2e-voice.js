@@ -397,6 +397,63 @@ section('9 — silence from a sender is not failure');
     await j.stop();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('10 — "send mail" — and why it was not doing that');
+// Apsara, 2026-09-07: "When i say send mail, its not doin that."
+{
+    const j = await boot({});
+
+    const one = await j.say('send a mail to Yurim about the Houston cutoff');
+    ck('it drafts rather than shrugging',
+       /Send this\?/i.test(A(one)), A(one));
+    ck('  showing her the actual body first',
+       /confirm the cutoff/i.test(A(one)), A(one));
+    ck('  and NOTHING has been sent yet', j.mails.length === 0,
+       JSON.stringify(j.mails) + ' — the yes/no gate is the only thing between her and a sent email');
+
+    const two = await j.say('yes');
+    ck('her yes sends it', /^Sent to/i.test(A(two)), A(two));
+    ck('  to the address it found', j.mails.length === 1 && /yurim@/.test(j.mails[0].to),
+       JSON.stringify(j.mails.map((m) => m.to)));
+    ck('  with the subject it drafted', /Houston cutoff/i.test(j.mails[0].subject || ''),
+       JSON.stringify(j.mails[0].subject));
+
+    await j.stop();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('11 — and when the writer fails, it says whose fault it is');
+{
+    // THE ACTUAL BUG. callGeminiJSON returns null for every failure — no key,
+    // quota gone, network down, unparseable answer — and all four came out as
+    // "try rephrasing what it should say". That blames her wording for an
+    // outage on this side and hands her the one action that cannot possibly
+    // work. She would rephrase, and rephrase, and it would never once send.
+    const cases = [
+        ['composer-auth', /key is missing or rejected/i, 'a missing key is not her wording'],
+        ['composer-quota', /quota is used up/i, 'a spent quota is not her wording'],
+        ['composer-down', /couldn.t reach the AI/i, 'an unreachable model is not her wording'],
+    ];
+    for (const [mode, want, why] of cases) {
+        const j = await boot({ gemini: mode });
+        const r = await j.say('send a mail to Yurim about the Houston cutoff');
+        ck(`${mode}: says what actually went wrong`, want.test(A(r)), A(r) + ' — ' + why);
+        ck(`  ${mode}: and does NOT tell her to rephrase`,
+           !/rephrasing/i.test(A(r)), A(r));
+        ck(`  ${mode}: nothing was sent`, j.mails.length === 0, JSON.stringify(j.mails));
+        await j.stop();
+    }
+
+    // The ONE case where rephrasing is sensible advice: the model answered,
+    // with something that was not a usable draft.
+    const j = await boot({ gemini: 'composer-junk' });
+    const r = await j.say('send a mail to Yurim about the Houston cutoff');
+    ck('an unusable answer DOES ask her what it should say',
+       /tell me what it should say/i.test(A(r)), A(r));
+    ck('  which is the only case that should', !/key is missing|quota|reach the AI/i.test(A(r)), A(r));
+    await j.stop();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

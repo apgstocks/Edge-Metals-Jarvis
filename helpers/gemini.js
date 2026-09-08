@@ -78,7 +78,29 @@ function resolveCutoffDate(fields) {
 // Deliberately OPTIONAL so this can spread gradually. Every existing caller
 // passes no schema and behaves precisely as before — this cannot regress
 // any current flow, only harden the calls that opt in.
+// ── WHY THE LAST FAILURE IS RECORDED ─────────────────────────────────────
+// Apsara, 2026-09-07: "When i say send mail, its not doin that."
+//
+// Traced with tests/e2e-voice.js to workflow/actions.js:
+//     const draft = await callGeminiJSON(prompt);
+//     if (!draft) await _send(chatId, "Couldn't draft that email — try
+//                                      rephrasing what it should say.");
+//
+// callGeminiJSON returns null for EVERY failure — no API key, quota
+// exhausted, network down, three retries of unparseable JSON — and all of
+// them came out as "try rephrasing what it should say". That blames her
+// wording for an outage on this side, and the advice is useless: she would
+// rephrase, and rephrase, and it would never once work.
+//
+// A caller cannot tell those apart from a bare null, so the reason is kept
+// here for the caller to READ. Deliberately a module-level last-value rather
+// than a changed return type: every existing caller keeps working unchanged,
+// and the ones that want to explain themselves can.
+let lastFailure = null;
+function lastGeminiFailure() { return lastFailure; }
+
 async function callGeminiJSON(prompt, retries = 2, schema = null) {
+    lastFailure = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const model  = getClient().getGenerativeModel({
@@ -101,10 +123,15 @@ async function callGeminiJSON(prompt, retries = 2, schema = null) {
             console.warn(`[GEMINI] Unparseable response (attempt ${attempt + 1})`);
         } catch (err) {
             console.error(`[GEMINI] Call failed (attempt ${attempt + 1}):`, err.message);
+            lastFailure = /\b(429|quota|rate)\b/i.test(err.message) ? 'quota'
+                : /\b(401|403|API key|credential)\b/i.test(err.message) ? 'auth'
+                : 'unreachable';
             // Back off on rate limits
             if (attempt < retries) await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
         }
     }
+    // Never threw, never parsed: the model answered with something unusable.
+    if (!lastFailure) lastFailure = 'unusable';
     return null;
 }
 async function extractBookingFieldsFromText(emailBodyText, retries = 2) {
@@ -4034,4 +4061,4 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };
+module.exports = { callGeminiJSON, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };

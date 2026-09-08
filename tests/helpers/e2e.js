@@ -36,6 +36,20 @@ const http = require('http');
 
 const ROOT = path.join(__dirname, '..', '..');
 
+// ── OVERLAY, DO NOT REPLACE ──────────────────────────────────────────────
+// The real module is required FIRST so the overlay keeps every export it
+// does not deliberately override. Skipping that is how "getGmailRead is not
+// a function" happened: require.cache had no entry yet, the spread copied an
+// empty object, and the stub silently amputated ninety per cent of the
+// module's surface. A stub that removes functions is not a stub, it is a
+// different module wearing the same name.
+function overlay(relPath, patch) {
+    const p = require.resolve(path.join(ROOT, relPath));
+    let base = {};
+    try { base = require(p) || {}; } catch (e) { /* a module that cannot load is still stubbable */ }
+    require.cache[p] = { id: p, filename: p, loaded: true, exports: Object.assign({}, base, patch) };
+}
+
 // ── FIXTURE ──────────────────────────────────────────────────────────────
 // Four bookings, two of them Houston, with the shape her real data has —
 // verified against data/bookings.json on 2026-09-07, which carries erd_date
@@ -98,11 +112,14 @@ function fixtures(dir) {
 // serves draftIntent, repair and followUp without any of them knowing.
 // `mode: 'down'` makes every call throw, which is the offline pass.
 function installGemini(mode, log) {
-    const p = require.resolve(path.join(ROOT, 'helpers/gemini.js'));
-    const real = require.cache[p];
+    // Mirrors the real module's lastFailure: set on the way out of a failed
+    // call, read by the caller to explain itself.
+    let failure = null;
     const callGeminiJSON = async (prompt) => {
+        failure = null;
         log.push(prompt);
         if (mode === 'down') throw new Error('ECONNREFUSED (stubbed offline)');
+        // composer-* modes only fail the composer; everything else answers.
         const said = (/SHE SAID: (.*)/.exec(prompt) || [])[1] || '';
 
         // draftIntent — park / resume / amend / none
@@ -141,15 +158,60 @@ function installGemini(mode, log) {
             }
             return { answer: '', have_data: false };
         }
+        // The email composer. Without this the draft comes back null and the
+        // flow stops at "couldn't draft" — so the confirmation gate, the
+        // yes/no, and the send itself were all unreachable.
+        if (/Return ONLY this JSON: \{ "subject"/.test(prompt)) {
+            // Reproduces the exact production failure she reported: the
+            // classifier works, the address is found, and the WRITER is the
+            // thing that does not come back.
+            //
+            // RETURNS NULL, does not throw — because the real callGeminiJSON
+            // catches everything internally and returns null. My first
+            // version threw, which propagated to the brain as "Something
+            // broke while handling that: 401 API key not valid" — a contract
+            // the real function does not have, so the test was measuring a
+            // failure mode that cannot happen.
+            const composerFail = { 'composer-auth': 'auth', 'composer-quota': 'quota',
+                                   'composer-down': 'unreachable', 'composer-junk': 'unusable' }[mode];
+            if (composerFail) { failure = composerFail; return null; }
+            return { subject: 'Houston cutoff', body: 'Hi,\n\nCould you confirm the cutoff?\n\nApsara' };
+        }
+
+        // ── THE BRAIN'S OWN ACTION CLASSIFIER ────────────────────────────
+        // workflow/brain.js:aiDecide() goes through callGeminiJSON too, so
+        // without this every sentence that reaches the brain came back
+        // NEED_DATA — "I couldn't pin that down" — and the whole action
+        // surface was untestable end to end. That is not a small gap: it is
+        // most of what Jarvis actually DOES.
+        //
+        // Deliberately crude. The point is not to reproduce the real
+        // classifier's judgement — it is to hold the classification FIXED so
+        // everything downstream of it can be exercised. When she reports
+        // "send mail is not doing that", this is what tells us whether the
+        // fault is the classification or the twelve steps after it.
+        if (/AVAILABLE ACTIONS/i.test(prompt) || /bookings_list_query, bookings_count_query/.test(prompt)) {
+            // The sentence sits under a "NEW MESSAGE" banner, in quotes.
+            // Read off the real prompt rather than guessed at: my first
+            // version matched nothing and every classification came back
+            // NEED_DATA, which looked exactly like the bug being chased.
+            const t = (/═══ NEW MESSAGE ═══\s*\n"([\s\S]*?)"\s*\n/.exec(prompt) || [])[1] || '';
+            const who = (/\b(?:to|for)\s+([A-Z][\w&.\-]*(?:\s+[A-Z][\w&.\-]*)?)/.exec(t) || [])[1] || null;
+            if (/\b(?:e?mail|mail)\b/i.test(t) && /\b(?:send|write|draft|shoot)\b/i.test(t)) {
+                return { action: 'draft_email', target_name: who, email_details: null,
+                         bkg_no: null, confidence: 0.95, reasoning: 'stub' };
+            }
+            return { action: 'NEED_DATA', confidence: 0, reasoning: 'stub: not classified' };
+        }
         return null;
     };
-    require.cache[p] = {
-        id: p, filename: p, loaded: true,
-        // Everything else the real module exports is preserved, so a caller
-        // reaching for extractPdfFields does not get undefined and throw a
-        // TypeError that reads like a bug in the code under test.
-        exports: Object.assign({}, real ? real.exports : {}, { callGeminiJSON }),
-    };
+    // Everything else the real module exports is preserved, so a caller
+    // reaching for extractPdfFields does not get undefined and throw a
+    // TypeError that reads like a bug in the code under test.
+    overlay('helpers/gemini.js', {
+        callGeminiJSON,
+        lastGeminiFailure: () => failure,
+    });
 }
 
 // ── SUPABASE ─────────────────────────────────────────────────────────────
@@ -164,8 +226,6 @@ function installGemini(mode, log) {
 // calls, and every one of them is here. It is thenable, because the real
 // client is awaited directly without calling .then().
 function installSupabase(tables) {
-    const p = require.resolve(path.join(ROOT, 'helpers/supabase.js'));
-    const real = require.cache[p];
     const q = (name) => {
         let rows = (tables[name] || []).slice();
         const api = {
@@ -181,15 +241,65 @@ function installSupabase(tables) {
         };
         return api;
     };
-    require.cache[p] = {
-        id: p, filename: p, loaded: true,
-        exports: Object.assign({}, real ? real.exports : {}, {
-            getSupabase: () => ({
-                from: q,
-                rpc: async () => ({ data: [], error: null }),
-            }),
-        }),
+    overlay('helpers/supabase.js', {
+        getSupabase: () => ({ from: q, rpc: async () => ({ data: [], error: null }) }),
+    });
+}
+
+// ── GMAIL ────────────────────────────────────────────────────────────────
+// The third external the harness has to stand in for, alongside Gemini and
+// Supabase. Without it "send a mail to Yurim" stops at "Gmail isn't
+// configured" and everything downstream — finding the address, drafting,
+// staging the confirmation, and the yes/no gate that is the only thing
+// between her and an email going out — is never reached.
+//
+// `sent` records what WOULD have gone, so a test can assert both that
+// nothing left before she confirmed AND that it did after.
+// A googleapis-shaped client with nothing in the mailbox. Enough for the
+// draft path to look, find nothing, and move on to the stubbed helpers.
+function fakeClient() {
+    return {
+        users: {
+            messages: {
+                list: async () => ({ data: { messages: [] } }),
+                get: async () => ({ data: { payload: { headers: [] }, snippet: '' } }),
+                send: async () => ({ data: { id: 'sent-1', threadId: 'thread-1' } }),
+            },
+            getProfile: async () => ({ data: { emailAddress: 'apsara@edgemetals.com' } }),
+            threads: { get: async () => ({ data: { messages: [] } }) },
+        },
     };
+}
+
+function installGmail(store, opts) {
+    const o = opts || {};
+    overlay('helpers/gmail.js', {
+            // The credential-backed entry points. Left real, they throw "Gmail
+        // OAuth client secret missing" before any of the stubs below are
+        // reached — the draft path checks the client, not just the helpers.
+        getOAuthClient: async () => ({}),
+        getGmailRead: async () => fakeClient(),
+        getGmailWrite: async () => fakeClient(),
+        getGmailSenderRead: async () => fakeClient(),
+        getMyEmailAddress: async () => 'apsara@edgemetals.com',
+            // A prior message from the recipient is how an address is found
+            // when there is no saved contact — the same route production
+            // takes before it resorts to asking her.
+            findLatestFrom: async (client, name) =>
+            // Returns a STRING. My first version returned a message object
+            // and actions.js correctly refused it — "findLatestFrom resolved
+            // a non-address ... discarding" — which is the guard that stops a
+            // malformed lookup becoming an email addressed to "[object
+            // Object]". Worth keeping in the record.
+            (o.knows === false ? null
+                : `${String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '')}@example.com`),
+        listMessages: async () => [],
+            getMessage: async () => null,
+            getEmailContent: async () => '',
+            detectCcPattern: async () => [],
+            sendEmail: async (m) => { store.push(m); return { id: 'sent-1', threadId: 'thread-1' }; },
+        looksLikeAuthFailure: () => false,
+    });
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────
@@ -220,6 +330,8 @@ async function boot(opts) {
 
     const prompts = [];
     installGemini(o.gemini || 'up', prompts);
+    const mails = [];
+    installGmail(mails, { knows: o.gmailKnowsAddress });
     installSupabase({
         // TWO truckers on purpose. Sher has a group, so a forward to it can
         // actually go and be asserted as gone. Jio has neither group nor
@@ -307,7 +419,7 @@ async function boot(opts) {
     });
 
     return {
-        port, dir, prompts, say, sent,
+        port, dir, prompts, say, sent, mails,
         stop: () => { delete global.__jarvisSendMessage; return new Promise((r) => srv.close(r)); },
     };
 }
