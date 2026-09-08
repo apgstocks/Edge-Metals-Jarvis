@@ -356,9 +356,20 @@ function createApi() {
             problems.push('heartbeat_unreadable');
         }
 
+        // WHICH COMMIT IS ANSWERING — see helpers/version.js for why this is
+        // on the PUBLIC route. It is the one field that settles "is the fix
+        // deployed?" without either of us guessing, and it has to be reachable
+        // without a session cookie or it will not be used. A short SHA of a
+        // private repo discloses nothing an attacker can act on; the login
+        // page on this port already says more.
+        const ver = require('./helpers/version').running();
+
         res.status(problems.length ? 503 : 200).json({
             ok: !problems.length,
             problems,
+            version: ver.short,
+            version_dirty: ver.dirty,
+            booted_at: ver.booted_at,
             whatsapp: waReady,
             last_scan_at: lastScanAt,
             last_scan_age_min: staleMin,
@@ -625,7 +636,8 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // calls to Drive/Gemini — a health endpoint that costs money and latency
     // every time it's polled is one nobody leaves running.
     app.get('/api/health', (req, res) => {
-        const out = { ok: true, checks: {}, at: new Date().toISOString() };
+        const out = { ok: true, checks: {}, at: new Date().toISOString(),
+                      version: require('./helpers/version').running() };
         const mark = (name, ok, detail) => { out.checks[name] = { ok, detail: detail || null }; if (!ok) out.ok = false; };
         try {
             mark('drive_keyfile', !!cfg.GDRIVE_KEYFILE && fs.existsSync(cfg.GDRIVE_KEYFILE),

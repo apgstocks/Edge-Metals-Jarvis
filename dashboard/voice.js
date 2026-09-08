@@ -150,6 +150,11 @@
         jarvis: { name: 'Jarvis', voice: 'Orus', ack: 'ack',  accent: '#B4703A', tint: 'rgba(180,112,58,' },
         scout:  { name: 'Scout',  voice: 'Leda', ack: 'boss', accent: '#3E8E7E', tint: 'rgba(62,142,126,' },
     };
+    // What each one SAYS when it hears its name. Mirrors PHRASES.ack and
+    // PHRASES.boss in helpers/voice.js; used only by the local-synthesis
+    // fallback, which cannot ask the server for the text. Kept beside the
+    // agents so the next person to change the words finds both.
+    var ACK_WORDS = { jarvis: 'Yes, boss?', scout: 'Yes, boss.' };
     // How long a command may run before it is cut off. Long enough for
     // "record a twelve thousand dollar zelle payment against edge zero seven",
     // short enough that an open mic in a noisy office closes on its own.
@@ -1498,7 +1503,12 @@
 
     function warmAckLocal() {
         if (!ttsBridge || !ttsBridge.speak) return;
-        ttsBridge.speak('Mm hm?', null).then(function (r) {
+        // THE SAME WORDS THE SERVER WOULD HAVE SAID. This line held its own
+        // copy of "Mm hm?", so even after helpers/voice.js started saying a
+        // real word, the offline path would have gone back to the noise she
+        // has complained about three times. A phrase written down in two
+        // places is a phrase that only gets fixed in one.
+        ttsBridge.speak(ACK_WORDS.jarvis, null).then(function (r) {
             if (r && r.ok && r.pcm && r.pcm.length) {
                 ackPcm = r.pcm instanceof Float32Array ? r.pcm : new Float32Array(r.pcm);
                 ackRate = r.sampleRate || 24000;
@@ -1729,12 +1739,17 @@
                 // first, because one cold start while the voice is still
                 // downloading is normal and not worth a message.
                 toneFallbacks += 1;
-                if (toneFallbacks === 2) {
-                    say('Voice not loaded');
+                if (toneFallbacks === 1) {
                     showCard('', AGENT_LOOK[addressed].name
-                        + "'s voice hasn't loaded — that beep is standing in for it. "
-                        + 'Everything else still works.', true);
+                        + "'s voice hasn't loaded yet — listening anyway. "
+                        + 'It will answer out loud once it has.', true);
                 }
+                // AND IT WARMS THE VOICE INSTEAD OF BEEPING ABOUT IT.
+                // The tone never fixed anything; it announced a problem and
+                // left it in place, so the next wake did the same. Fetching
+                // the clip now is the only response that makes the second
+                // wake better than the first.
+                try { if (typeof warmAck === 'function') warmAck(addressed); } catch (e) {}
             } else {
                 toneFallbacks = 0;
             }
@@ -1749,7 +1764,30 @@
                 src.start();
                 ms = Math.round((pcmNow.length / rateNow) * 1000);
             } else {
-                ms = humAck(ctx);
+                // ── IT MAKES NO NOISE IT CANNOT EXPLAIN ──────────────────
+                // Apsara, 2026-09-08: "Also it keeps on saying da da..Will a
+                // human assistant say like this? what the hell?"
+                //
+                // She is right, and my last fix was the wrong shape. I heard
+                // "three notes sound like babble" and made it ONE note. But
+                // the number of notes was never the problem. The problem is
+                // that a person who is listening to you does not go "da" —
+                // they look up. Any synthesised tone standing in for a spoken
+                // acknowledgement is a machine noise where a word should be,
+                // and she will read it as babble however many notes it has.
+                //
+                // So: silence. The listening state is already on screen and
+                // is the honest acknowledgement — it says "I heard you" the
+                // way a person does, by visibly attending. The card above
+                // explains the missing voice ONCE, in words, and the clip is
+                // fetched in the background so the next wake speaks properly.
+                //
+                // ms stays 0: with nothing playing there is no speaker output
+                // to deafen the recogniser against, and deafening it for a
+                // sound that never happened would eat the front of her
+                // sentence — the exact bug from yesterday morning, arriving
+                // by a different road.
+                ms = 0;
             }
         } catch (e) { /* an inaudible ack is not worth an exception */ }
 

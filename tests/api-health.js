@@ -124,6 +124,31 @@ function get(port, headers) {
     h = await hz(port);
     ck('reconnected goes back to 200', h.status, 200);
 
+    // 4. WHICH COMMIT IS ANSWERING — 2026-09-08.
+    // Apsara: "if its in guthub,then its in VM". We spent a round of the
+    // conversation each asserting what the VM was running, neither of us able
+    // to look. This field is the end of that: whatever is true, it says so.
+    //
+    // Asserted on the PUBLIC route deliberately. Behind auth it would be
+    // unreachable from her phone in the yard, and a check she cannot run is a
+    // check that does not exist.
+    ckTrue('healthz names the commit it is running',
+           h.json && typeof h.json.version === 'string' && /^[0-9a-f]{7}$/.test(h.json.version),
+           JSON.stringify(h.json && h.json.version));
+    ckTrue('  and says whether the box has uncommitted edits on top of it',
+           h.json && (h.json.version_dirty === true || h.json.version_dirty === false),
+           JSON.stringify(h.json && h.json.version_dirty));
+    ckTrue('  and when this process started, so a restart is visible',
+           h.json && !isNaN(Date.parse(h.json.booted_at || '')),
+           JSON.stringify(h.json && h.json.booted_at));
+    // It must never be the reason the endpoint fails. A health check that can
+    // itself go down is the thing it was built to prevent.
+    {
+        const v = require('../helpers/version.js');
+        ckTrue('the version lookup never throws, whatever git does',
+               (() => { try { v.running(); v.bootLine(); return true; } catch (e) { return false; } })());
+    }
+
     // 4. A fresh boot must not alert — otherwise every deploy pages her and
     //    the alert gets muted, which is how monitoring dies.
     writeStore({ seen: {} });                     // no scan yet, as after a restart
@@ -135,12 +160,28 @@ function get(port, headers) {
     ck('but a long-running process with no scan at all IS a problem', h.status, 503);
     ckTrue('named honestly', h.json && (h.json.problems || []).includes('no_scan_recorded'), JSON.stringify(h.json));
 
-    // 5. It must not leak. Three booleans and a timestamp, nothing else.
+    // 5. It must not leak. An EXACT key list, not a "does not contain" check,
+    //    so anything added to a public endpoint has to be argued for here
+    //    first. It worked: adding the version stamp on 2026-09-08 turned this
+    //    red, which is the only reason the decision below got made on purpose
+    //    rather than by accident.
+    //
+    //    The three new keys and what they give away:
+    //      version       a 7-char SHA of a PRIVATE repo. Meaningless without
+    //                    the repo; reveals no route, no dependency, no data.
+    //      version_dirty a boolean saying the box has uncommitted edits.
+    //      booted_at     when this process started. uptime_s already said the
+    //                    same thing to the second.
+    //    Nothing here names a customer, a booking, a price or a person, which
+    //    is the line this endpoint has always held.
     writeStore({ seen: {}, lastScanAt: new Date().toISOString() });
     h = await hz(port);
     ckTrue('the body exposes no business data',
-        h.json && Object.keys(h.json).sort().join(',') === 'at,last_scan_age_min,last_scan_at,ok,problems,uptime_s,whatsapp',
+        h.json && Object.keys(h.json).sort().join(',') === 'at,booted_at,last_scan_age_min,last_scan_at,ok,problems,uptime_s,version,version_dirty,whatsapp',
         Object.keys(h.json || {}).join(','));
+    ckTrue('  and the version stamp is a short SHA, never the full repo state',
+        h.json && (h.json.version === null || /^[0-9a-f]{7}$/.test(h.json.version)),
+        JSON.stringify(h.json && h.json.version));
 
     process.uptime = savedUptime;
     delete global.__jarvisWaReady;

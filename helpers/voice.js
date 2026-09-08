@@ -126,9 +126,33 @@ const PHRASES = {
     // serving the old audio from disk and look like the change had not
     // landed. That is a debugging afternoon nobody needs.
     //
-    // Spelled "Mm hm" with a space because the synthesiser reads "Mmhm" as a
-    // word and "Mm-hm" as two, hyphen and all.
-    ack: 'Mm hm?',
+    // ── AND THEN IT SAID A WORD, LIKE A PERSON ───────────────────────────
+    // Apsara, 2026-09-08: "Also it keeps on saying da da..Will a human
+    // assistant say like this? what the hell?"
+    //
+    // THE "DA DA" WAS THIS LINE. Not a synthesised tone — I spent yesterday
+    // fixing tones, twice, and both times I was fixing the wrong thing. It
+    // was Kokoro reading the text "Mm hm?" out loud. A speech model given a
+    // non-word produces exactly what she describes: two vocalised syllables
+    // that are not language. She has now reported it three times, and each
+    // time I looked at the oscillator instead of the string.
+    //
+    // On 2026-09-07 she said "I dont want scout to say chime. it should say
+    // yes boss." I changed SCOUT and left Jarvis humming, as though the
+    // instruction had been about which assistant rather than about being
+    // spoken to in words.
+    //
+    // Both say words now. They stay distinguishable by VOICE — Orus for
+    // Jarvis, Leda for Scout — which was always the signal that says which
+    // one is listening; the noise was never carrying that.
+    //
+    // (The comment that used to live here said the WAV cache is keyed by
+    // phrase NAME, so editing text would serve stale audio. That is wrong:
+    // warmUp and phrase() both call cacheKey(PHRASES[name], voice) — it is
+    // keyed by TEXT and voice, so changing the words changes the key and the
+    // clip is re-synthesised on its own. Corrected rather than worked around,
+    // because that belief is what produced two keys for one idea.)
+    ack: 'Yes, boss?',
     // ── SCOUT ANSWERS, IT DOES NOT CHIME ─────────────────────────────────
     // Apsara, 2026-09-07: "I dont want scout to say chime. it should say yes
     // boss.. when i say hey scout."

@@ -40,6 +40,41 @@ console.log('\n─ voice: routing and speech ───────────�
     ck('  and Scout answers in words, not a chime',
        voice.PHRASES ? voice.PHRASES.boss === 'Yes, boss.' : true);
     ck('they do not share a voice', AGENTS.jarvis.voice !== AGENTS.scout.voice);
+
+    // ── NEITHER OF THEM MAKES A NOISE AT HER ─────────────────────────────
+    // Apsara, 2026-09-08: "Also it keeps on saying da da..Will a human
+    // assistant say like this? what the hell?" — the third report of the
+    // same thing.
+    //
+    // The cause was PHRASES.ack = 'Mm hm?' being read aloud by Kokoro. Twice
+    // I went looking at oscillators. The assertion above only covered Scout,
+    // which is precisely why the fix for her 2026-09-07 message landed on one
+    // assistant and not the other: a test written for the agent she named
+    // rather than for the rule she stated.
+    //
+    // So the rule, for BOTH, and it is a rule about language rather than a
+    // list of approved strings: an acknowledgement must be pronounceable
+    // words. "Mm", "hm", "mmhm", "uh", "er" are not — they are a speech model
+    // being handed something that is not speech.
+    {
+        const NOT_A_WORD = /^[\s.,!?-]*(?:m+|h+m+|m+h+m*|u+h+|e+r+|a+h+|hu+h)[\s.,!?-]*$/i;
+        const acks = { jarvis: (voice.PHRASES || {}).ack, scout: (voice.PHRASES || {}).boss };
+        for (const who of Object.keys(acks)) {
+            const said = String(acks[who] || '');
+            ck(`${who} answers its name with words`,
+               said.length > 0 && !NOT_A_WORD.test(said) && /[a-z]{2,}/i.test(said), JSON.stringify(said));
+        }
+        // And the browser's offline fallback must say the SAME thing. It used
+        // to carry its own hardcoded 'Mm hm?', so fixing the server alone
+        // would have left the noise in place on exactly the path that runs
+        // when the server cannot be reached.
+        const js = require('fs').readFileSync(path.join(R, 'dashboard/voice.js'), 'utf8');
+        ck('  and the local fallback does not keep its own copy of the old noise',
+           !/speak\('Mm hm\?'/.test(js) && !/'Mm hm\?'/.test(js));
+        ck('  it uses the same words as the server',
+           new RegExp("jarvis:\\s*'" + String(acks.jarvis).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'").test(js),
+           'dashboard ACK_WORDS.jarvis must match PHRASES.ack');
+    }
 }
 
 // ── routing: yard questions reach Scout ───────────────────────────────────

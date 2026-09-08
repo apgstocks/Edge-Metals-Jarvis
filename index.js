@@ -158,6 +158,10 @@ try { require('./helpers/voice').warmUp().catch(() => {}); } catch (e) {}
 
 app.listen(cfg.API_PORT, () => {
     console.log(`[BOOT] API + dashboard on :${cfg.API_PORT}`);
+    // WHICH COMMIT THIS PROCESS IS. First line to look at in `pm2 logs jarvis`
+    // after a deploy: if it did not change, the pull did not take, and no
+    // amount of arguing about GitHub will change what is answering requests.
+    try { console.log(require('./helpers/version').bootLine()); } catch (e) {}
     console.log(`[BOOT] APP_PASSWORD:   ${cfg.APP_PASSWORD ? 'set (' + cfg.APP_PASSWORD.length + ' chars)' : 'NOT SET — logins will fail with 500'}`);
     console.log(`[BOOT] ADMIN_PASSWORD: ${cfg.ADMIN_PASSWORD ? 'set (' + cfg.ADMIN_PASSWORD.length + ' chars)' : 'not set — no admin tier available'}`);
 });

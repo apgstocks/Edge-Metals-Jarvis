@@ -1929,8 +1929,25 @@ section('ACK — one acknowledgement, and never the other one\'s words');
     ck('  and it still says out loud that it substituted',
        /has no acknowledgement ready/.test(src),
        'a silent fallback is how this went unnoticed for a day');
-    ck('  falling through to the tone, which claims nothing',
-       /ms = humAck\(ctx\);/.test(src));
+    // ── AND FALLING THROUGH TO SILENCE, NOT A TONE — 2026-09-08 ──────────
+    // This assertion used to demand `ms = humAck(ctx)`, i.e. it REQUIRED the
+    // beep. Apsara, third report: "it keeps on saying da da..Will a human
+    // assistant say like this?"
+    //
+    // A test can hold a bad decision in place as firmly as a good one. This
+    // one did: I wrote it to prove the tone was reached, so every later look
+    // at the fallback found a green test and moved on. The rule it should
+    // always have encoded is that a missing voice produces NO SOUND — an
+    // assistant that cannot speak yet says nothing and shows that it is
+    // listening, which is what a person does.
+    ck('  falling through to silence, not a noise she has to interpret',
+       /ms = 0;/.test(src) && !/ms = humAck\(ctx\);/.test(src),
+       'a synthesised tone standing in for speech is the "da da"');
+    ck('  and it explains the missing voice in words, once',
+       /voice hasn't loaded yet/.test(src));
+    ck('  and warms the voice so the next wake speaks properly',
+       /warmAck\(/.test(src.slice(src.indexOf('has no acknowledgement ready'))),
+       'announcing the problem without fixing it repeats it forever');
 
     // ONE PER WAKE. Several paths dispatch WAKE_HEARD — interim results, the
     // continuation window, the guard mic — so rather than guess which one
