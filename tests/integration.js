@@ -288,9 +288,52 @@ section('Brain routing — traps, escapes, and core grammar');
     ck('cancel escapes any pending',      D('cancel', CARGO), 'resolve_pending');
     ck('fresh quote command jumps queue', D('Send quote request from Junk car to Eccomelt', CARGO), 'get_quote');
 
+    // ── "bookings from oakland" LEFT THIS LIST ON PURPOSE ────────────────
+    // Apsara, repeatedly: "i dont want any fixed intent." The deterministic
+    // grammar no longer claims this one — it returns (needsAI) and the model
+    // decides, which is the direction she asked for.
+    //
+    // So asserting the OLD fixed intent was asserting the thing she had it
+    // changed away from. But deleting the case outright would leave the
+    // question untested, so the property that actually matters is asserted
+    // instead: it must still be ANSWERABLE, and the port must still be read
+    // out of her real data.
+    {
+        const ac = require(R('helpers/answerCards'));
+        const vr = require(R('helpers/voiceRouter'));
+        ckTrue('"bookings from oakland" still routes to Jarvis',
+            vr.routeVoice('bookings from oakland').agent === 'jarvis');
+
+        // A PORT IS ONLY A PORT IF SHE SHIPS THROUGH IT. answerCards derives
+        // its vocabulary from her live bookings, so with an empty store
+        // "oakland" is just a word and there is no panel to build. The first
+        // version of this assertion failed for exactly that reason — the
+        // behaviour was right and the fixture was missing, which is the same
+        // shape of mistake as the digest extractor above.
+        const fsx = require('fs');
+        const cfgx = require(R('config'));
+        const before = fsx.existsSync(cfgx.BOOKINGS_FILE)
+            ? fsx.readFileSync(cfgx.BOOKINGS_FILE, 'utf8') : null;
+        fsx.writeFileSync(cfgx.BOOKINGS_FILE, JSON.stringify({
+            OAK1: { booking_number: 'OAK1', port_of_loading: 'OAKLAND',
+                    port_of_discharge: 'BUSAN', cutoff_date: '12/01/2026', containers: [] },
+        }));
+        ac._clearPortCache();
+        const cards = ac.cardsFor('bookings from oakland');
+        ckTrue('  and still produces a booking panel for OAKLAND',
+            !!cards && /OAKLAND/i.test(cards.title || ''),
+            cards && cards.title);
+        ckTrue('    naming the booking she actually has there',
+            !!cards && (cards.rows || []).some((r) => r.booking_number === 'OAK1'),
+            JSON.stringify(cards && cards.rows));
+        if (before === null) { try { fsx.unlinkSync(cfgx.BOOKINGS_FILE); } catch (e) {} }
+        else fsx.writeFileSync(cfgx.BOOKINGS_FILE, before);
+        ac._clearPortCache();
+    }
+
     // Core grammar regression — widening anything must not hijack these.
     for (const [t, w] of [['menu', 'show_menu'], ['available', 'show_bookings_available'],
-        ['bookings from oakland', 'bookings_list_query'], ['get quote from LA to Houston', 'get_quote'],
+        ['get quote from LA to Houston', 'get_quote'],
         ['did zimex reply', 'search_mail'], ['check mail from zimex', 'search_mail'],
         ['email zimex about DALA123', 'draft_email'], ['reply to zimex about cutoff', 'reply_email'],
         ['price list', 'ask_pricelist_city'], ['urgent', 'show_bookings_urgent']])
@@ -390,7 +433,12 @@ On Fri, Aug 21, 2026 at 3:14 PM Apsara <apg0596@gmail.com> wrote:
         { fromName: 'Raj', summary: 'Asking for a rate', asked_for: null, deadline: null, urgency: 'normal', subject: 's' },
     ]);
     ckTrue('digest counts', d.includes('2 emails waiting on you'));
-    ckTrue('digest numbers entries', d.includes('1. !! Zimex') && d.includes('2. '));
+    // The sender moved to the continuation line when the digest was reworked
+    // to lead with the summary. Asserted as NUMBER + URGENCY MARK + the
+    // sender appearing beneath it, rather than as one hardcoded string, so
+    // the next cosmetic change does not fail a test about numbering.
+    ckTrue('digest numbers entries',
+        /1\. !! /.test(d) && /\n\s+Zimex/.test(d) && /2\. /.test(d));
     ckTrue('digest shows deadline', d.includes('by Friday'));
     ckTrue('digest offers reply-by-number', d.includes('reply to 1'));
     ckTrue('digest promises a confirm gate', d.toLowerCase().includes('yes before anything goes out'));
@@ -437,13 +485,42 @@ section('Inbox triage — store shape, and the digest-numbering bug');
     const sorted = [...raw].sort((x, y) => RANK[x.urgency] - RANK[y.urgency]);
     await rw.saveStore({ seen: {}, lastDigest: sorted, undelivered: [], tracked: [], lastDigestAt: new Date().toISOString() });
     const digest = rw.buildDigest(sorted);
+    // ── THE FORMAT MOVED; THE PROPERTY DID NOT ───────────────────────────
+    // The digest now leads with the SUMMARY and puts the sender on the line
+    // underneath — a deliberate change, and a better one for reading aloud:
+    //
+    //     1. !! *cutoff confirm* — by Friday
+    //        Zimex
+    //
+    // This extractor still stripped the number and took everything before
+    // " —", so `shown` became the SUMMARIES while `resolved` stayed the
+    // NAMES. The two assertions below were comparing different fields and
+    // failing on the mismatch — which meant the integrity property they exist
+    // to guard, that "reply to 1" reaches the email displayed as 1, was not
+    // being checked AT ALL. A stale test that fails is still a test that
+    // stopped working, and this one guards a confirmed reply going to the
+    // wrong customer.
+    //
+    // Reads the SENDER from the continuation line now, so both sides compare
+    // the same thing again.
+    const lines = digest.split('\n');
     const shown = [1, 2, 3].map((n) => {
-        const line = digest.split('\n').find((l) => l.trim().startsWith(n + '.'));
-        return line ? line.replace(/^\s*\d+\.\s*(?:!!|·)\s*/, '').split(' —')[0].trim() : null;
+        const i = lines.findIndex((l) => l.trim().startsWith(n + '.'));
+        if (i === -1) return null;
+        const senderLine = (lines[i + 1] || '').trim();
+        return senderLine ? senderLine.split(/\s+—\s+/)[0].trim() : null;
     });
     const resolved = [1, 2, 3].map((n) => (rw.resolveDigestIndex(n) || {}).fromName);
     ck('digest orders urgent first', shown, ['Zimex', 'Raj', 'Lee']);
     ck('"reply to N" resolves to the SAME email shown as N', resolved, shown);
+    // AND THE SUMMARIES ARE IN THE SAME ORDER, so a format change that broke
+    // the pairing between a number and its summary cannot pass either.
+    const summaries = [1, 2, 3].map((n) => {
+        const line = lines.find((l) => l.trim().startsWith(n + '.'));
+        return line ? (/\*(.+?)\*/.exec(line) || [])[1] : null;
+    });
+    ck('  and the summary shown against each number matches',
+       summaries, ['cutoff confirm', 'rate request', 'fyi']);
     ck('out-of-range index refuses rather than guessing', rw.resolveDigestIndex('9'), null);
     ck('zero index refuses', rw.resolveDigestIndex('0'), null);
     ck('garbage index refuses', rw.resolveDigestIndex('abc'), null);
@@ -499,7 +576,12 @@ section('Inbox triage — chase-ups for mail left unanswered');
     ck('API blip keeps it tracked', flaky.length, 1);
 
     const msg = rw.buildChaseMessage([{ fromName: 'Zimex', summary: 'Wants cutoff confirmation', ageDays: 6, subject: 's' }]);
-    ckTrue('chase message says unanswered', msg.includes('still unanswered'));
+    // The wording moved from "still unanswered" to "still open ... no reply
+    // yet" — same meaning, better phrasing. Asserted as MEANING now, so a
+    // rewrite does not fail it but a message that stops telling her the mail
+    // is unanswered still does.
+    ckTrue('chase message says it is unanswered',
+        /still (?:unanswered|open)/i.test(msg) && /no reply yet|unanswered/i.test(msg));
     ckTrue('chase message states the age', msg.includes('6 days ago'));
 }
 

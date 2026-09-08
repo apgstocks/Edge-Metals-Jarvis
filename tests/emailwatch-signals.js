@@ -297,7 +297,33 @@ section('C4 — REGRESSION: an ordinary request behaves exactly as before');
     ck('needs_reply is untouched', a.needs_reply === true);
     ck('asked_for survives request-grounding', a.asked_for === 'the ERD');
     const digest = rw.buildDigest([{ ...a, fromName: 'Andy Park', subject: 's' }]);
-    ck('the digest still says waiting on you', /1 email waiting on you/.test(digest), digest);
+
+    // ── IT IS FILED UNDER "NOT SURE", AND THAT IS CORRECT ────────────────
+    // This asserted "1 email waiting on you" and had failed since the
+    // confidence caps landed. The behaviour changed on purpose and the change
+    // is the safer one:
+    //
+    // This fixture has NO To line, so addressing() cannot verify from the
+    // headers that Apsara was the person asked — only the prose says so. That
+    // trips the `addressingUnknown` cap at 0.75, and anything at or below
+    // SURE_CONFIDENCE goes in the "I'm not sure about" bucket instead of
+    // being stated plainly as hers.
+    //
+    // The incident behind that cap is named in replyWatch.js: "Andy Park —
+    // wants: EDO #", where the direction was read backwards off a single
+    // message and she was told an email was waiting on her when it was not.
+    // Asserting the old header here would be asserting that incident back.
+    //
+    // So what is checked is what actually matters: the item still SHOWS, with
+    // what was asked and how to reply — it is flagged as uncertain, not
+    // dropped.
+    ck('an unverifiable request is flagged, not stated as hers',
+       /not sure about/i.test(digest), digest);
+    ck('  and it is capped rather than silently trusted',
+       typeof a.confidence === 'number' && a.confidence <= 0.75,
+       'confidence=' + a.confidence + ' — addressing was not header-derived');
+    ck('  but it is still SHOWN, not dropped',
+       /Andy Park/.test(digest) && /1 /.test(digest), digest);
     ck('and still says "wants:"', /— wants: the ERD/.test(digest), digest);
     ck('and still offers the reply command', /Nothing sent yet/.test(digest), digest);
 }
