@@ -1695,9 +1695,12 @@ switch (pending.type) {
         await clearPending(chatId);
         const said = String(selection || answer || '').trim();
         const opts = Array.isArray(pending.options) ? pending.options : [];
-        const n = /^\s*(\d{1,2})\s*[.!]?\s*$/.exec(said);
-        const chosen = n ? opts[parseInt(n[1], 10) - 1]
-                         : opts.find((o) => said.toUpperCase().indexOf(String(o).toUpperCase()) !== -1);
+        // The same picker the trucker and supplier lists use, so "one", "the
+        // first one" and a mis-heard booking number behave identically
+        // wherever she is asked to choose. My first version here read digits
+        // only — the exact gap she reported on 2026-09-09 for truckers, which
+        // I had just written a second copy of.
+        const chosen = require('../helpers/pickFromList').pick(said, opts);
         if (!chosen) {
             await _send(chatId, `Didn't catch which one. Reply with a number: ${opts.map((o, i) => `${i + 1}. ${o}`).join('  ')}`);
             return { action_taken: 'booking_not_named' };

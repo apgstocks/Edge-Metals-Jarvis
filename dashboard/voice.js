@@ -2043,6 +2043,25 @@
                 // because the finish handler consumes it the moment the audio
                 // ends — and on a short reply that is almost immediately.
                 awaitingReply = !!(r && r.awaiting);
+                // ── AN ANSWER TO A QUESTION STANDS ALONE ─────────────────
+                // Apsara, 2026-09-09: "when i say one -its not detected. when
+                // i again say 1, getting detected as 11."
+                //
+                // THAT SECOND HALF IS THIS LINE. The continuation window
+                // joins a fragment spoken just after her last utterance onto
+                // that utterance — which is right for "show me houston
+                // bookings" followed by "the unassigned ones", and wrong for
+                // every answer to a question Jarvis asked.
+                //
+                // She said "1" to pick a booking, then "1" again to pick a
+                // trucker, well inside the window. The two were glued into
+                // "1 1", and what came back was an eleven she never said.
+                //
+                // So when Jarvis has just ASKED something, her previous
+                // utterance stops being a sentence-in-progress. Each answer is
+                // complete in itself and the next one is a new answer, not a
+                // continuation of the last.
+                if (r && r.awaiting) lastAsked = '';
                 // The colour follows the ANSWERING agent, which can differ
                 // from the one addressed — she says "Hey Jarvis" and asks
                 // about loads, and the router hands it to Scout. Showing the

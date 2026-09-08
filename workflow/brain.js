@@ -399,13 +399,25 @@ async function normalize(raw) {
 const YES = ['yes', 'y', 'confirm', 'proceed', 'go ahead', 'do it', 'ok', 'okay', 'sure'];
 const NO  = ['no', 'n', 'cancel', 'stop', 'nope', "don't"];
 
+// ── CHOOSING ONE OF A FEW, OUT LOUD ──────────────────────────────────────
+// Apsara, 2026-09-09: "when i say one -its not detected... When i say trucker
+// name as Jey, it is transcribing as J or Jai or JJ. as a ai,is it that
+// difficult to map like chatgpt or claude does?"
+//
+// What used to be here was three lines: digits, then a substring test. It
+// could not read "one", "first" or "number 2", and it could not get from
+// "Jai" to "Jey Transport" — not because that is hard, but because nothing
+// ever compared her words to the two-to-eight options on her screen.
+//
+// It was also unsafe in a way she had not hit yet: `find(o => o.includes(t))`
+// returns the FIRST option containing her text, so with two J-named hauliers
+// on screen, "J" silently picked one. There is a truck at the end of this.
+//
+// Moved to helpers/pickFromList.js, which matches by position, by name, by
+// sound and by edit distance — and returns nothing at all when more than one
+// option survives, so ambiguity becomes a question instead of a guess.
 function resolveListSelection(text, options) {
-    const t = String(text).toLowerCase().trim();
-    if (/^\d+$/.test(t)) {
-        const i = parseInt(t) - 1;
-        if (i >= 0 && i < options.length) return options[i];
-    }
-    return options.find(o => o.toLowerCase() === t || o.toLowerCase().includes(t)) || null;
+    return require('../helpers/pickFromList').pick(text, options);
 }
 
 // ── Typo tolerance — deterministic, not LLM-dependent ────────────────────────

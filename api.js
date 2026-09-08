@@ -2102,16 +2102,27 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // it has to be read before anything else gets an opinion — the
             // same rule as her answer to "which port?".
             if (offer && offer.kind === 'forward' && offer.asked_which) {
-                const n = /^\s*(\d{1,2})\s*[.!]?\s*$/.exec(stripped);
-                const pick = n ? (offer.rows || [])[parseInt(n[1], 10) - 1] : null;
-                const named = (offer.rows || []).find(
-                    (r) => r.booking_number && stripped.toUpperCase().indexOf(r.booking_number) !== -1);
-                const chosen = pick || named;
+                // helpers/pickFromList, so "one" and "the first one" work here
+                // too. Numbers ONLY had been the rule, and she reported
+                // exactly that gap for the trucker list on the same day — a
+                // third hand-rolled picker would have been a third place for
+                // it to be wrong.
+                const numbers = (offer.rows || []).map((r) => r.booking_number).filter(Boolean);
+                const chosen = numbers.length
+                    ? (offer.rows || []).find((r) => r.booking_number
+                        === require('./helpers/pickFromList').pick(stripped, numbers))
+                    : null;
                 if (chosen && chosen.booking_number) {
                     if (mem.clearOffer) mem.clearOffer();
                     asked = `forward ${chosen.booking_number}`;
                     rewrittenAsOrder = true;
-                    console.log(`[VOICE] picked #${n ? n[1] : '?'} from the offer — ${asked}`);
+                    // Logs what she SAID rather than a parsed index. `n` was
+                    // the old digit match and no longer exists — a leftover
+                    // reference in a log line, which threw only on the exact
+                    // path it was describing. Printing her words is more
+                    // useful anyway: "one" and "1" and "the first one" all
+                    // land here and the log should say which.
+                    console.log(`[VOICE] "${stripped}" picked ${chosen.booking_number} from the offer`);
                 }
             } else if (offer && offer.kind === 'forward') {
                 const YES = /^\s*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|please(?: do)?|go ahead|do it|forward it|that one)\b/i;

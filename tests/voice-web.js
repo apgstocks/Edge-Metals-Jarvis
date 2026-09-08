@@ -1960,6 +1960,27 @@ section('ACK — one acknowledgement, and never the other one\'s words');
     // fetch" means the request reached nothing; the one fact that identifies
     // WHY is the address it tried, and the message left it out. That omission
     // is what cost her a conversation.
+    // ── AN ANSWER TO A QUESTION IS NOT A CONTINUATION ───────────────────
+    // Apsara, 2026-09-09: "when i say one -its not detected. when i again say
+    // 1, getting detected as 11."
+    //
+    // The second half is the continuation window. It joins a fragment spoken
+    // just after her last utterance onto that utterance — right for "show me
+    // houston bookings" then "the unassigned ones", wrong for every answer to
+    // a question Jarvis asked. She picked a booking with "1", then a trucker
+    // with "1", well inside the window, and the two were glued into "1 1".
+    //
+    // She never said eleven. Nothing on screen said where it came from.
+    ck('an answer to a question does not continue the previous utterance',
+       /if \(r && r\.awaiting\) lastAsked = '';/.test(src),
+       'two separate answers get glued together and she gets a number she never said');
+    ck('  and it is keyed off the SERVER saying it asked something',
+       /awaitingReply = !!\(r && r\.awaiting\);/.test(src),
+       'the client cannot know a question was asked unless the server says so');
+    ck('  while an ordinary follow-up still continues',
+       /continuing into the follow-up window/.test(src),
+       'killing the window outright would undo the fix it was built for');
+
     ck('a network failure names the address it tried',
        /Could not reach the assistant' \+ \(where \? ' at ' \+ where/.test(src)
        || /Could not reach the assistant.*where/.test(src),
