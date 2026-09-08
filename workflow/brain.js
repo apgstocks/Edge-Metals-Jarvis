@@ -1033,20 +1033,74 @@ function policyDecide(ctx) {
         // match, the engine simply backtracks and gives up the noun. The
         // lookahead was restating what the regex already does. Removed rather
         // than left in as decoration no test can hold to account.
-        const NOUN_PREFIX = String.raw`(?:(?:the|that|this)\s+)?(?:(?:booking|load|shipment|container)\s+)?`;
-        if ((m = t.match(new RegExp(String.raw`^forward\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
-            const [first, seq, second] = [m[1], m[2], m[3]];
-            const firstIsBkg = resolveBookingNumber(first);
-            const secondIsBkg = second && resolveBookingNumber(second);
-            const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
-            const trucker_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
-            return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
+        const NOUN_PREFIX = String.raw`(?:(?:the|that|this)\s+)?((?:booking|load|shipment|container)\s+)?`;
+
+        // ── "SHARE", NOT ONLY "FORWARD" ─────────────────────────────────
+        // Apsara, 2026-09-08: "still it shows i cannot share booking to
+        // tracker."
+        //
+        // Yesterday I fixed the sentence SHAPE and tested it with the one verb
+        // I happened to have in my head. She does not say "forward". She says
+        // share, pass, send, give. Fixing the shape for a single verb is the
+        // same narrowness one level up, and she has now had to report it twice.
+        //
+        // WHY THIS IS NOT JUST A LONGER VERB LIST, OR RATHER: WHY IT IS A
+        // SAFE ONE. "send" is genuinely ambiguous in this app — "send a mail
+        // to jeyshree" must never be read as forwarding a booking called
+        // "mail". So the extra verbs are admitted ONLY when the sentence also
+        // carries something that says a booking is the object: either the noun
+        // ("share the BOOKING to..."), or an identifier that resolves to a
+        // real booking in the store. "forward" and "assign" keep their old
+        // unconditional grammar, because those verbs mean nothing else here.
+        //
+        // The model remains the general answer — with Gemini reachable it
+        // classifies any phrasing. This is the offline net, and the net has to
+        // cover the words she actually uses.
+        const SEND_ONWARD = String.raw`forward|share|pass|hand|shoot|send|give`;
+        if ((m = t.match(new RegExp(String.raw`^(${SEND_ONWARD})\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+(?:to|with)\s+(.+))?$`)))) {
+            const [verb, noun, first, seq, second] = [m[1], m[2], m[3], m[4], m[5]];
+            const namedBooking = resolveBookingNumber(first) || (second && resolveBookingNumber(second));
+            // "share booking to tracker" — the noun capture is null here, and
+            // that is the regex working correctly: with nothing after it, the
+            // optional group gives "booking" up to the identifier slot on
+            // backtracking. So the word arrives as `first`, and the question
+            // is the same one helpers/genericTerm.js already answers — is that
+            // a name, or is it the category? If it is the category, she is
+            // pointing at the booking in focus, and forwardBooking resolves it
+            // from the discourse centre exactly as it does for "forward
+            // booking to trucker".
+            const saidTheWord = require('../helpers/genericTerm').isGeneric(first, 'booking');
+            // AND THE PLAINEST PROOF OF ALL: it is one of her bookings.
+            // resolveBookingNumber is a SHAPE test — [A-Z]{2,6} then six or
+            // more digits — so a real booking whose number does not happen to
+            // fit that shape would be turned away at this gate while "share
+            // DALA52325500 to X" sailed through for a booking that does not
+            // exist. Asking the store is both stricter and kinder: it says yes
+            // to her actual bookings and no to everything else.
+            let isHerBooking = false;
+            try { isHerBooking = !!require('../helpers/booking').getBooking(first).booking; }
+            catch (e) { /* store unreadable — the other three tests still stand */ }
+            // The gate. Anything but "forward" has to prove it means a booking.
+            if (verb === 'forward' || noun || namedBooking || saidTheWord || isHerBooking) {
+                const firstIsBkg = resolveBookingNumber(first);
+                const secondIsBkg = second && resolveBookingNumber(second);
+                const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());
+                const trucker_name = firstIsBkg ? (second || null) : (secondIsBkg ? first : (second || null));
+                return { intent: 'forward_booking', resolvedBy: 'policy', data: { bkg_no, container_seq: seq ? parseInt(seq, 10) : null, trucker_name } };
+            }
+            // Fell through on purpose: "send a mail to jeyshree" reaches the
+            // email path below exactly as it always did.
         }
         // Same noun prefix, same reason — "assign booking HOU111 to Eccomelt"
         // is the identical sentence shape and the resolver rewrites into it
         // identically. Fixing only forward would leave the twin broken.
+        //
+        // No synonym list here: "assign" has no everyday twin the way forward
+        // does, and the verbs she uses for supplying — "put Eccomelt on it" —
+        // are a different grammar, not a different word. Left for the model
+        // rather than guessed at.
         if ((m = t.match(new RegExp(String.raw`^assign\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
-            const [first, seq, second] = [m[1], m[2], m[3]];
+            const [first, seq, second] = [m[2], m[3], m[4]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);
             const bkg_no = firstIsBkg ? firstIsBkg : (secondIsBkg || first.toUpperCase());

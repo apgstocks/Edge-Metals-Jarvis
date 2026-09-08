@@ -250,6 +250,28 @@ const MUTATIONS = [
       file: 'tests/helpers/e2e.js', suites: ['phrasebook'],
       find: "            failure = 'unreachable';\n            return null;",
       to:   "            throw new Error('ECONNREFUSED (stubbed offline)');" },
+
+    // ── her verbs, not mine (2026-09-08) ────────────────────────────────
+    { name: 'verbs: only "forward" again, so "share" stops working',
+      file: 'workflow/brain.js', suites: ['phrasebook'],
+      find: 'const SEND_ONWARD = String.raw`forward|share|pass|hand|shoot|send|give`;',
+      to:   'const SEND_ONWARD = String.raw`forward`;' },
+    { name: 'verbs: the gate is dropped, so "send a mail" forwards a booking',
+      file: 'workflow/brain.js', suites: ['phrasebook'],
+      find: "if (verb === 'forward' || noun || namedBooking || saidTheWord || isHerBooking) {",
+      to:   'if (true) {' },
+    { name: 'verbs: the category word no longer opens the gate',
+      file: 'workflow/brain.js', suites: ['phrasebook'],
+      find: "const saidTheWord = require('../helpers/genericTerm').isGeneric(first, 'booking');",
+      to:   'const saidTheWord = false;' },
+    { name: 'verbs: a real booking is judged by shape rather than by the store',
+      file: 'workflow/brain.js', suites: ['phrasebook'],
+      find: "try { isHerBooking = !!require('../helpers/booking').getBooking(first).booking; }",
+      to:   'try { isHerBooking = false; }' },
+    { name: 'instruction: "share" reads as a question about the rows on screen',
+      file: 'helpers/answerCards.js', suites: ['phrasebook', 'answer-cards'],
+      find: 'forward|assign|send|share|pass|hand|shoot|give|message|email|mail|tell|notify|inform|dispatch|book|relay',
+      to:   'forward|assign|send|message|email|tell|notify|dispatch|book' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

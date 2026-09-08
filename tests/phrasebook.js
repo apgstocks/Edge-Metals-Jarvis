@@ -93,6 +93,19 @@ const BOOK = [
         'forward the booking HOU111 to Sher Trucking',
         'assign booking HOU111 to Eccomelt',
         'forward that to Sher Trucking',
+        // SHE DOES NOT SAY "FORWARD". Apsara, 2026-09-08: "still it shows i
+        // cannot share booking to tracker." I fixed the sentence shape
+        // yesterday and tested it with the single verb that happened to be in
+        // my head, so she had to report the same job failing twice.
+        'share booking to tracker',
+        'share the booking to trucker',
+        'share HOU111 to Sher Trucking',
+        'share booking with trucker',
+        'send booking to trucker',
+        'give booking to trucker',
+        'pass HOU111 to Sher Trucking',
+        'shoot HOU111 to Sher Trucking',
+        'share the load to trucker',
     ] },
     { job: 'raise a proforma', setup: [], say: [
         'create a proforma for Daekwang, 21 MT of auto cast at 8450',
@@ -131,6 +144,27 @@ const MUST_WORK = [
     ['forward booking HOU111 to Sher Trucking', /forwarded/i],
     ['forward the booking HOU111 to Sher Trucking', /forwarded/i],
     ['assign booking HOU111 to Eccomelt', /assign|supplier/i],
+    // Her verbs, 2026-09-08. Offline, because when the model is up it would
+    // classify any of these and the net would never be exercised.
+    ['share booking to tracker', /no trucker registered|which|pick/i],
+    ['share the booking to trucker', /no trucker registered|which|pick/i],
+    ['share HOU111 to Sher Trucking', /forwarded/i],
+    ['share booking with trucker', /no trucker registered|which|pick/i],
+    ['send booking to trucker', /no trucker registered|which|pick/i],
+    ['give booking to trucker', /no trucker registered|which|pick/i],
+    ['pass HOU111 to Sher Trucking', /forwarded/i],
+    ['shoot HOU111 to Sher Trucking', /forwarded/i],
+];
+
+// ── AND WHAT THE SEND-ONWARD VERBS MUST NOT SWALLOW ──────────────────────
+// "send" is the dangerous one: "send a mail to jeyshree" must never be read
+// as forwarding a booking called "mail". The gate in brain.js is what keeps
+// these apart, so both sides are asserted — a guard tested only in the
+// direction it was written for is half a guard.
+const MUST_NOT_FORWARD = [
+    ['send a mail to jeyshree about the Houston cutoff', /jeyshree|jayashree|draft/i],
+    ['send mail to jeyshree', /jeyshree|jayashree|draft/i],
+    ['email Yurim about the cutoff', /yurim|draft/i],
 ];
 
 (async () => {
@@ -181,6 +215,18 @@ section('B — and the ones that must work without a model at all');
         const r = await j.say(phrase);
         await j.stop();
         ck(`offline: "${phrase}"`, want.test(A(r)), A(r).slice(0, 130));
+    }
+}
+
+section('B2 — and what those verbs must NOT swallow');
+{
+    for (const [phrase, want] of MUST_NOT_FORWARD) {
+        const j = await boot({});
+        const r = await j.say(phrase);
+        await j.stop();
+        const a = A(r);
+        ck(`"${phrase}" is still an email`,
+           want.test(a) && !/No booking found|forwarded/i.test(a), a.slice(0, 120));
     }
 }
 

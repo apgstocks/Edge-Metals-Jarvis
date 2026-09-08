@@ -55,7 +55,25 @@ const PORT_ALIASES = {
 // "forward booking 27476 to Sher" should not redraw the table underneath the
 // thing she is about to act on.
 const ABOUT_BOOKINGS = /\b(booking|bookings|container|containers|vessel|vessels|cutoff|cutoffs|erd|sailing)\b/i;
-const IS_INSTRUCTION = /\b(forward|assign|send|message|email|tell|notify|dispatch|book)\b/i;
+// ── AN ORDER, NOT A QUESTION ─────────────────────────────────────────────
+// Used to decide that a sentence is her telling Jarvis to DO something, so it
+// must not be answered out of the rows already on screen.
+//
+// "share" was missing, and the consequence was not "share didn't work" — it
+// was worse. "share booking to tracker" failed this test, so it was treated
+// as a QUESTION about the booking in focus, and she got "I don't have that on
+// HOU111", as if she had asked for a field. An instruction misread as a
+// question is answered confidently with the wrong kind of thing entirely.
+//
+// Still a verb list, and I want to be straight about that rather than dress
+// it up. I looked at deriving it — question-words versus everything else —
+// and it does not work here: "show me the bookings from houston" is an
+// imperative too, and it MUST still draw the panel. The real distinction is
+// between acting on an entity and asking about one, and that is a judgement,
+// which is the model's job. This list is only the offline net, so the honest
+// fix is to make the net cover the words she actually uses and to say plainly
+// that it is a net.
+const IS_INSTRUCTION = /\b(forward|assign|send|share|pass|hand|shoot|give|message|email|mail|tell|notify|inform|dispatch|book|relay)\b/i;
 
 const ymd = (s) => {
     const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s || '').trim());
