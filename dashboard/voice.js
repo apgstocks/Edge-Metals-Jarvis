@@ -2074,8 +2074,36 @@
                 // the error belongs to a question she retracted.
                 if (mySeq !== askSeq) return;
                 if (window.JarvisOrb) window.JarvisOrb.setThinking(false);
+                // ── SAY WHERE IT TRIED ───────────────────────────────────
+                // Apsara, 2026-09-09: "could not reach the assistant.failed to
+                // fetch" — and that message is why she had to come and ask me.
+                //
+                // "Failed to fetch" is the browser saying the request never
+                // reached anything. The one fact that identifies the cause is
+                // WHICH ADDRESS it tried, and the message left it out. The
+                // server was up the whole time; the app was pointing at an old
+                // URL held in localStorage, which survives every upgrade
+                // precisely because it is meant to.
+                //
+                // So the error now names the address and the way to change it.
+                // An error that cannot be acted on is a message that costs her
+                // a conversation.
+                var where = '';
+                try {
+                    where = (typeof API_BASE === 'string' && API_BASE)
+                        ? API_BASE
+                        : (window.location && window.location.origin) || '';
+                } catch (e2) { where = ''; }
+                var why = (e && e.message) || 'no response';
+                var network = /failed to fetch|networkerror|load failed/i.test(why);
                 say('Failed');
-                showCard(undefined, 'Could not reach the assistant: ' + (e && e.message), false);
+                showCard(undefined,
+                    'Could not reach the assistant' + (where ? ' at ' + where : '') + ' — ' + why
+                    + (network
+                        ? '\n\nThe server did not answer at all. Check it is running, '
+                          + 'or change the address in Settings → Server.'
+                        : ''),
+                    false);
             });
     }
 

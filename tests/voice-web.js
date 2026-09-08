@@ -1953,6 +1953,26 @@ section('ACK — one acknowledgement, and never the other one\'s words');
     // continuation window, the guard mic — so rather than guess which one
     // doubled, playAck refuses twice in a breath AND LOGS IT, so her console
     // names the path next time.
+    // ── AN ERROR SHE CAN ACT ON ─────────────────────────────────────────
+    // Apsara, 2026-09-09: "could not reach the assistant.failed to fetch".
+    // The server was up the entire time — /healthz answered, running that
+    // afternoon's commit — so the message was true and useless. "Failed to
+    // fetch" means the request reached nothing; the one fact that identifies
+    // WHY is the address it tried, and the message left it out. That omission
+    // is what cost her a conversation.
+    ck('a network failure names the address it tried',
+       /Could not reach the assistant' \+ \(where \? ' at ' \+ where/.test(src)
+       || /Could not reach the assistant.*where/.test(src),
+       'without the address, "failed to fetch" is unactionable');
+    ck('  and says the server did not answer at all',
+       /did not answer at all/.test(src));
+    ck('  and points at the one control that changes it',
+       /Settings → Server/.test(src),
+       'the address lives in localStorage and survives every upgrade, which is exactly why it can go stale');
+    ck('  but only for a NETWORK failure, not for a server that replied',
+       /var network = \/failed to fetch\|networkerror\|load failed\/i\.test\(why\);/.test(src),
+       'a 500 is not fixed by changing the address, and saying so would send her the wrong way');
+
     ck('a second acknowledgement in the same breath is suppressed',
        /if \(Date\.now\(\) - lastAckAt < ACK_GAP_MS\)/.test(src));
     ck('  and it is reported, not swallowed',
