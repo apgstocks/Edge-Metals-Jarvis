@@ -373,6 +373,75 @@ section('G — the voices');
        'a bolder voice here is a measurably worse one and she should know');
 }
 
+section('changing the subject is not taking something back');
+{
+    // Apsara, 2026-09-08: "when i ask show available bookings from houston,it
+    // showed that i took back the name wasnt sure i heard right.."
+    //
+    // A name-confirmation was open. She asked for a list. The model called it
+    // a retraction, so Jarvis announced it had dropped the name question —
+    // a claim about her intent that she never made. Being told you retracted
+    // something you did not is worse than being ignored.
+    //
+    // The rule is the structural definition of repair (Schegloff, Jefferson &
+    // Sacks 1977; Heeman & Allen 1994): a repair has a REPARANDUM. Nothing
+    // pointed at, nothing repaired.
+    const openName = { task: "a name I wasn't sure I heard right" };
+
+    // (1) The model claims a retraction but names nothing it retracts.
+    reset({ label: 'cancel', refers_to_previous: false, reparandum: null, why: 'stub' });
+    ck('her exact sentence is not a retraction',
+       await r.classify('show available bookings from houston', openName) === 'none');
+    ck('  nor is any other self-contained request',
+       await r.classify('email Yurim about the cutoff', openName) === 'none');
+
+    // (1b) AND EACH GUARD ALONE. The sentence below CONTAINS a pointing
+    //      word ("no"), so the backstop lets it through — only the missing
+    //      reparandum can catch it. Without this case the two guards cover
+    //      for each other and a mutation of either survives, which is exactly
+    //      what the harness reported when I first wrote this section.
+    ck('  a "no" in front does not make a new request a retraction',
+       await r.classify('no, show available bookings from houston', openName) === 'none');
+
+    // (2) The model insists it DOES point back, but the sentence contains
+    //     nothing that could point. The backstop only ever downgrades, so the
+    //     worst it can do is make her say a retraction twice.
+    reset({ label: 'cancel', refers_to_previous: true, reparandum: 'the name question', why: 'stub' });
+    ck('  and a claimed reference that is not in the sentence is refused',
+       await r.classify('show available bookings from houston', openName) === 'none');
+
+    // (3) REAL RETRACTIONS STILL WORK. This is the half that matters — a
+    //     guard that suppresses the feature is not a fix.
+    ck('"no, drop the name thing" still cancels',
+       await r.classify('no, drop the name thing', openName) === 'cancel');
+    reset({ label: 'undo', refers_to_previous: true, reparandum: 'the last line', why: 'stub' });
+    ck('  and an undo that points at something still undoes',
+       await r.classify('take back the last line', openName) === 'undo');
+
+    // (3b) A LABEL THAT IS NOT ONE OF THE FOUR IS NOT A LABEL. Models
+    //      invent enum values; "abort", "delete_all", a sentence. Anything
+    //      outside the four scopes has to become 'none' rather than being
+    //      handed on to a caller that will compare it against 'undo' and
+    //      'cancel', match neither, and take whatever branch is left.
+    for (const bogus of ['abort', 'delete everything', 'CANCEL_ALL', '']) {
+        reset({ label: bogus, refers_to_previous: true, reparandum: 'x', why: 'stub' });
+        const got = await r.classify('that whole thing was wrong', openName);
+        ck(`  a model label of "${bogus}" does not escape as a scope`,
+           got === 'none', String(got));
+        ck(`    and it is never handed on verbatim`, got !== bogus, String(got));
+    }
+
+    // (4) The offline patterns are unaffected — they already require an
+    //     explicit editing term, so they cannot fire on a new subject.
+    reset(null);
+    ck('offline: a new subject is still none',
+       await r.classify('show available bookings from houston', openName) === 'none');
+    ck('offline: "ignore that, i made a mistake" is still a cancel',
+       await r.classify('ignore that, i made a mistake', openName) === 'cancel');
+    ck('offline: AMAZON.CancelIntent bare "never mind" still cancels',
+       await r.classify('never mind', openName) === 'cancel');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

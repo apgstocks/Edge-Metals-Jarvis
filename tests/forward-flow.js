@@ -87,9 +87,18 @@ section('B — the guards actually short-circuit');
     ck('the router is overridden when a question is open',
        /const route = answeringBrain\s*\n\s*\?\s*\{ agent: 'jarvis'/.test(seg),
        'a bare "yes" scores as nothing and would land on Scout');
+    // The condition gained a second disjunct on 2026-09-08 — an ORDER is
+    // also never answered from the list (Apsara: "when i ask it to forward
+    // the booking... it just shows cut off for the booking is in 7 days").
+    // What this assertion is for is unchanged: answeringBrain must still
+    // stand the shortcut down, or a "yes" confirming a trucker gets answered
+    // out of the booking table and the confirmation is dropped.
     ck('  the follow-up shortcut stands down',
-       /const quick = answeringBrain\s*\n\s*\?\s*null/.test(seg),
+       /const quick = \(answeringBrain[^)]*\)\s*\n\s*\?\s*null/.test(seg),
        'answering from the booking list would drop the confirmation on the floor');
+    ck('    and an order stands it down too',
+       /const quick = \(answeringBrain \|\| looksLikeOrder\)/.test(seg),
+       'a model asked to answer "forward the booking" from a table reads out a field');
     ck('  and the proforma draft stands down',
        /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
        'a proforma in progress must not swallow a trucker confirmation');

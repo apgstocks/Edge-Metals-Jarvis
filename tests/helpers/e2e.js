@@ -208,6 +208,30 @@ function installGemini(mode, log, o) {
             const withVerdict = (obj) => (o.rowsField === 'omit'
                 ? obj : Object.assign({}, obj, { about_these_rows: aboutRows }));
             if (o.rowsField === 'deny') return withVerdict({ answer: '', have_data: false });
+
+            // ── A MODEL ASKED THE WRONG QUESTION ANSWERS IT ANYWAY ───────
+            // Apsara, 2026-09-08: "when i ask it to forward the booking,
+            // instead of getting into forwarding process, it just shows cut
+            // off for the booking is in 7 days."
+            //
+            // The rest of this stub is well-behaved: handed "forward the
+            // booking" it matches none of the field patterns below and
+            // returns no answer, so the bug she reported could not be
+            // reproduced here at all — the first mutation of the fix survived
+            // the whole suite for exactly that reason.
+            //
+            // A real model does not decline. Given a table and a sentence and
+            // told to answer from the table, it produces the most useful field
+            // it can find, which is precisely how an ORDER came back as a
+            // cutoff date. `followUpEager` makes the stub behave like the real
+            // thing, so the assertion is about the code refusing to ask, not
+            // about the stub declining to answer.
+            if (o.followUpEager) {
+                return withVerdict({
+                    answer: `The earliest one cuts off ${row.cutoff || 'not set'}.`,
+                    have_data: true,
+                });
+            }
             if (/\berd\b/i.test(asked)) {
                 return withVerdict({ answer: `ERD on ${row.booking} is ${row.erd || 'not set'}.`, have_data: true });
             }

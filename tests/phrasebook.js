@@ -253,6 +253,60 @@ section('C — the three she found by talking, pinned');
     await j.stop();
 }
 
+section('C2 — an order is never answered out of the table');
+{
+    // Apsara, 2026-09-08: "when i ask it to forward the booking, instead of
+    // getting into forwarding process, it just shows cut off for the booking
+    // is in 7 days."
+    //
+    // fu.answer() was consulted BEFORE anyone checked whether she had given an
+    // order. Asked to answer "forward the booking" from a table of bookings, a
+    // model reads out a field — the most helpful thing available to it. It was
+    // asked the wrong question.
+    const j = await boot({});
+    await j.say('show me the bookings from houston');
+    await j.say('when is the cutoff');
+
+    const r = await j.say('forward the booking');
+    ck('"forward the booking" starts forwarding, it does not read the cutoff',
+       /trucker|forward|which/i.test(A(r)) && !/cuts? off|cutoff is/i.test(A(r)), A(r));
+
+    const done = await j.say('forward that booking to Sher Trucking');
+    ck('  and a named trucker forwards it', /forwarded/i.test(A(done)), A(done));
+
+    // THE OTHER HALF. A guard that swallows real questions is not a fix.
+    const q = await j.say('and the vessel');
+    ck('  while a real question is still answered from the rows',
+       /MSC ANNA/.test(A(q)), A(q));
+    await j.stop();
+
+    // MOVED BELOW j.stop() ON PURPOSE. helpers/voiceMemory.js is module
+    // state, shared by every boot in this process, so two sessions open at
+    // once step on each other's referents — the second boot's list became
+    // the first boot's, and "and the vessel" answered from the wrong rows.
+    // Caught by the mutation harness's baseline check, which refuses to
+    // measure anything against a red suite; without it I would have recorded
+    // a mutation as killed by a test that was broken.
+    // ── AND AGAINST A MODEL THAT ANSWERS ANYTHING ───────────────────────
+    // The default stub declines when it has no matching field, so it cannot
+    // reproduce what she saw — the mutation of this fix survived the whole
+    // suite until the harness learned to behave like a real model, which
+    // answers with the most useful field it can find rather than refusing.
+    {
+        const eager = await boot({ followUpEager: true });
+        await eager.say('show me the bookings from houston');
+        const e = await eager.say('forward the booking');
+        ck('  even a model that would answer anything is not asked',
+           !/cuts? off/i.test(A(e)), A(e));
+        // The same stub must still answer a real question, or this proves
+        // only that the eager mode is broken.
+        const eq = await eager.say('when is the cutoff');
+        ck('    while it still answers a genuine question',
+           /cuts? off/i.test(A(eq)), A(eq));
+        await eager.stop();
+    }
+}
+
 section('D — and the two this file found on its first run');
 {
     // Neither of these came from a bug report. Both came from saying an

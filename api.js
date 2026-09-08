@@ -2474,9 +2474,34 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // answer questions nobody anticipated, in her words — while the
             // one thing that must not be guessed, WHICH booking she means,
             // stays deterministic in helpers/voiceMemory.js.
-            const quick = answeringBrain
+            // ── AN ORDER IS NEVER ANSWERED FROM THE TABLE ────────────────
+            // Apsara, 2026-09-08: "when i ask it to forward the booking,
+            // instead of getting into forwarding process, it just shows cut
+            // off for the booking is in 7 days."
+            //
+            // fu.answer() hands her sentence and the rows on screen to the
+            // model and asks it to answer from them. Asked to answer "forward
+            // the booking" out of a table, a model does the most helpful thing
+            // available to it and reads out a field. It is not wrong — it was
+            // asked the wrong question.
+            //
+            // The instruction check existed already, thirty lines below, and
+            // it was too late: `quick` returns before anything looks at it.
+            // Deciding whether she gave an ORDER has to come before deciding
+            // how to ANSWER her, because an order is not a question and there
+            // is nothing in the table that could satisfy it.
+            //
+            // Same shape as every other bug this week: a fact (she said
+            // "forward") was available and the model's opinion got there
+            // first. Facts veto; the model refines.
+            const acEarly = require('./helpers/answerCards');
+            const looksLikeOrder = acEarly.IS_INSTRUCTION.test(stripped);
+            const quick = (answeringBrain || looksLikeOrder)
                 ? null            // her answer belongs to whoever asked
                 : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
+            if (looksLikeOrder && refSet) {
+                console.log(`[VOICE] "${stripped}" is an order — not answering it from the list`);
+            }
 
             // ── WHO DECIDES SHE IS STILL ON THE SAME SUBJECT ─────────────
             // Apsara, 2026-09-07: "WHy cant it handle that .. we are using ai

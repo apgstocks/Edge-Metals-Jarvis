@@ -153,7 +153,40 @@ function prompt(text, ctx) {
         lines.push('retraction should be anything other than "none" here.');
     }
     lines.push('', 'SHE SAID: ' + text, '');
-    lines.push('Reply as JSON: {"label": "undo"|"cancel"|"restart"|"none", "why": "a few words"}.');
+    // ── A REPAIR HAS TO POINT AT SOMETHING ───────────────────────────────
+    // Apsara, 2026-09-08: "when i ask show available bookings from houston,
+    // it showed that i took back the name wasnt sure i heard right.."
+    //
+    // A name-confirmation was open, she asked for a list of bookings, and the
+    // model called it a retraction — so Jarvis announced it had dropped the
+    // name question. She never said that. Changing the subject is not taking
+    // something back, and being told you retracted something you did not is
+    // worse than being ignored: it is a claim about your intent.
+    //
+    // The structural definition is the fix, and it is not mine — it is the
+    // one repair has had since Schegloff, Jefferson & Sacks (1977) and the
+    // one Heeman & Allen (ACL 1994) build on: a repair consists of a
+    // REPARANDUM (the material being replaced), an optional interregnum, and
+    // the alteration. The reparandum is not optional. If nothing earlier is
+    // being pointed at, the utterance is not a repair — it is a new topic,
+    // which in Grosz & Sidner's terms PUSHES a focus space rather than
+    // popping one.
+    //
+    // So the model must name what is being repaired. It cannot label
+    // something a retraction and decline to say what was retracted, and
+    // classify() enforces that rather than taking the label on trust.
+    lines.push('A RETRACTION MUST POINT AT SOMETHING SHE ALREADY SAID.');
+    lines.push('If this sentence is a complete new request that stands on its own');
+    lines.push('("show available bookings from houston", "email Yurim", "what is');
+    lines.push('the cutoff on HOU111"), she has CHANGED SUBJECT, not taken');
+    lines.push('anything back. That is "none", even though something is open.');
+    lines.push('Set refers_to_previous true only when she is pointing back at the');
+    lines.push('earlier thing — "ignore that", "no, not that one", "start again",');
+    lines.push('"forget the last bit" — and say WHAT in reparandum.');
+    lines.push('');
+    lines.push('Reply as JSON: {"label": "undo"|"cancel"|"restart"|"none",');
+    lines.push(' "refers_to_previous": true|false, "reparandum": "what she is');
+    lines.push(' taking back, or null", "why": "a few words"}.');
     return lines.join('\n');
 }
 
@@ -171,8 +204,27 @@ async function askModel(text, ctx) {
         }
         const label = String((res && res.label) || '').trim().toLowerCase();
         if (!SCOPES.has(label)) return null;
+
+        // ── THE LABEL HAS TO COME WITH ITS REPARANDUM ────────────────────
+        // Enforced here rather than trusted, because this is the difference
+        // between "she took it back" and "she moved on", and Jarvis says the
+        // first one out loud. A model that cannot point at what is being
+        // retracted has not identified a retraction; it has noticed that she
+        // said something else.
+        //
+        // ABSENT IS NOT FALSE. An older model, a truncated reply, a field
+        // dropped — none of those are evidence she stayed on topic, so a
+        // missing field leaves the label alone. Only an explicit false
+        // downgrades it. Same rule as followUp's about_these_rows, and for
+        // the same reason: silence is not a vote.
+        if (label !== 'none' && res && res.refers_to_previous === false) {
+            console.log(`[REPAIR] model said ${label} but pointed at nothing — `
+                + `treating "${text}" as a new subject, not a retraction`);
+            return 'none';
+        }
         if (label !== 'none') {
-            console.log(`[REPAIR] model says ${label}: "${text}" — ${(res && res.why) || ''}`);
+            console.log(`[REPAIR] model says ${label}: "${text}" — ${(res && res.why) || ''}`
+                + (res && res.reparandum ? ` (taking back: ${res.reparandum})` : ''));
         }
         return label;
     } catch (e) {
@@ -199,7 +251,36 @@ async function classify(text, ctx) {
     if (quick) return quick;
 
     const said = await askModel(t, ctx || {});
-    return said || 'none';
+    if (!said || said === 'none') return 'none';
+
+    // ── THE BACKSTOP: NOTHING TO POINT WITH ──────────────────────────────
+    // The model is asked to justify a retraction by naming its reparandum,
+    // and that is the main guard. This is the second one, for the case where
+    // it claims a reference that is not in the sentence.
+    //
+    // A retraction is expressed with CLOSED-CLASS words — anaphora ("that",
+    // "it", "the last one"), negation ("no", "not"), or an editing term
+    // ("ignore", "forget", "instead"). That is a property of English, not a
+    // list of things Apsara might say, which is why it is safe to write down:
+    // it cannot go stale as her vocabulary grows, and it does not need
+    // extending when she phrases a request a new way.
+    //
+    // FAIL-SAFE DIRECTION MATTERS. This only ever turns a retraction INTO
+    // "none" — the harm it prevents is Jarvis announcing it dropped something
+    // she never retracted. The opposite error, missing a real retraction,
+    // leaves her saying it again, which is a smaller cost and one she can see.
+    //
+    // Heeman & Allen (ACL 1994) found only 13.9% of revision repairs carry an
+    // explicit editing term — but that is about repairs WITHIN one utterance,
+    // where the reparandum is right there in the same breath. Across turns,
+    // pointing back at a previous turn requires something that points.
+    const POINTS_BACK = /\b(?:that|this|it|those|these|last|previous|again|instead|no|not|never|forget|ignore|cancel|undo|scratch|wrong|mistake|nvm)\b/i;
+    if (!POINTS_BACK.test(t)) {
+        console.log(`[REPAIR] "${t}" retracts nothing — no reference to anything `
+            + 'earlier, so it is a new subject');
+        return 'none';
+    }
+    return said;
 }
 
 // ── SAYING WHAT WAS UNDONE ───────────────────────────────────────────────
