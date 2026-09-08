@@ -198,6 +198,46 @@ function queryBookingsByLocation(location, filter) {
     return { count: filtered.length, bookings: filtered.map(b => b.booking_number), records: filtered };
 }
 
+// ── "THE HOUSTON BOOKING" ────────────────────────────────────────────────
+// Apsara, 2026-09-09: "if i say foward the houston booking...it should forward
+// that booking to trucker na?"
+//
+// Yes. It is a REFERRING EXPRESSION — she is naming the booking by where it
+// loads instead of by its number, which is how anybody talks about a booking
+// they have not got the paperwork for in front of them. Jarvis knew every port
+// in her data and still answered "I couldn't pin that down."
+//
+// WHY THIS RESOLVES HERE AND NOT IN THE MODEL
+// -------------------------------------------
+// The split this whole app is built on: the model decides what she MEANT — a
+// forward, referred to by place — and deterministic code decides WHICH ENTITY.
+// Asked to pick between two Houston bookings, a model will pick one, and there
+// is a truck at the end of this. So the place comes from her sentence and the
+// booking comes from the store:
+//
+//   exactly one at that port  -> that is the one she means
+//   more than one             -> ASK. Picking would be a guess wearing a
+//                                resolution's clothes.
+//   none                      -> null, and the caller says so honestly
+//
+// The vocabulary is the PORTS IN HER DATA, so it grows on its own — the same
+// rule helpers/answerCards.js already follows for "anything from Savannah".
+// Nothing here is a list of place names I typed out.
+function resolveByPlace(word, opts) {
+    const q = String(word || '').trim();
+    if (!q) return null;
+    // A real booking number always wins. If she has a booking whose id happens
+    // to read like a port, the lookup found it long before this.
+    if (getBooking(q).booking) return null;
+
+    let hit;
+    try { hit = queryBookingsByLocation(q, (opts && opts.filter) || undefined); }
+    catch (e) { return null; }
+    if (!hit || !hit.count) return null;
+    if (hit.count === 1) return { kind: 'one', booking: hit.records[0] };
+    return { kind: 'many', rows: hit.records };
+}
+
 function getBookingsByRoute(pol, pod) {
     return Object.values(loadBookings()).filter(b =>
         (b.port_of_loading  || '').toLowerCase().includes(pol.toLowerCase()) &&
@@ -249,6 +289,6 @@ module.exports = {
     formatBookingFull, formatBookingLine, formatBookingAvailable, formatBookingForForward,
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
-    cutoffWindow, withinCutoffWindow,
+    cutoffWindow, withinCutoffWindow, resolveByPlace,
     queryBookingsByLocation, hasSupplierAssigned, isBareUrl,
 };

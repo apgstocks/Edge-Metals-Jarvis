@@ -391,6 +391,75 @@ return { action_taken: 'contacts_shown' };
 
 // ── Forward booking to trucker ────────────────────────────────────────────────
 // No trucker given → numbered selection (pending). Trucker given → confirm (pending).
+// ── "THE HOUSTON BOOKING" ────────────────────────────────────────────────
+// Apsara, 2026-09-09: "if i say foward the houston booking...it should forward
+// that booking to trucker na?"
+//
+// Shared by forwardBooking and assignSupplier, and shared on purpose. Yesterday
+// I fixed the category-word bug in forward and not in assign, and she found the
+// same failure a day later under a different verb. Two call sites with one
+// behaviour get one implementation.
+//
+// Returns the booking number to use, or null if the caller should stop —
+// having already said why.
+async function resolveSpokenBooking(chatId, bkgNo, verb, partyName, containerSeq) {
+    const gt = require('../helpers/genericTerm');
+    const bk = require('../helpers/booking');
+
+    // 1. A category word — "the booking", "the supplier" — means the one we
+    //    are already talking about.
+    if (gt.isAnyCategory(bkgNo)) {
+        let focus = null;
+        try {
+            const mem = require('../helpers/voiceMemory');
+            focus = mem.currentCenter();
+            if (!focus) {
+                const set = mem.currentReferents();
+                if (set && Array.isArray(set.rows) && set.rows.length === 1) focus = set.rows[0];
+            }
+        } catch (e) { /* no voice memory in a WhatsApp-only flow */ }
+        if (focus && focus.booking_number) {
+            console.log(`[ACTIONS] "${bkgNo}" is a category word — using the booking in focus, ${focus.booking_number}`);
+            return focus.booking_number;
+        }
+        await _send(chatId, 'Which booking? Say the number, or ask me to list them first.');
+        return null;
+    }
+
+    // 2. A PLACE — "the houston booking". Resolved against the store, never
+    //    guessed: one match is the answer, several is a question. There is a
+    //    truck at the end of this.
+    const byPlace = bk.resolveByPlace(bkgNo);
+    if (byPlace && byPlace.kind === 'one') {
+        console.log(`[ACTIONS] "${bkgNo}" is a place — the only booking there is ${byPlace.booking.booking_number}`);
+        return byPlace.booking.booking_number;
+    }
+    if (byPlace && byPlace.kind === 'many') {
+        const list = byPlace.rows.slice(0, 8)
+            .map((b, i) => `${i + 1}. ${b.booking_number} — cutoff ${b.cutoff_date || 'not set'}`).join('\n');
+        await setPending(chatId, {
+            type: 'select_booking_for_action',
+            action: verb === 'assign' ? 'assign' : 'forward',
+            options: byPlace.rows.map((b) => b.booking_number),
+            // ── WHAT SHE ALREADY TOLD ME ─────────────────────────────────
+            // "forward the houston booking to Bayou Haulage" names the
+            // trucker. Asking which BOOKING must not cost her the half of the
+            // sentence she already said — she would pick 1 and be asked which
+            // trucker, about the trucker she just named.
+            //
+            // The same fault as the blocked-forward on 2026-09-08, where
+            // choosing a supplier lost the forward she had asked for. An
+            // interruption is not permission to forget the request.
+            party_name: partyName || null,
+            container_seq: containerSeq != null ? containerSeq : null,
+        });
+        await _send(chatId, `${byPlace.rows.length} bookings at ${String(bkgNo).toUpperCase()} — which one?\n\n${list}\n\nReply with a number or the booking number.`);
+        return null;
+    }
+
+    return bkgNo;
+}
+
 async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
 // ── "FORWARD BOOKING TO TRUCKER" ─────────────────────────────────────────
 // Apsara, 2026-09-07. The other half of the same report: she said the word
@@ -408,25 +477,11 @@ async function forwardBooking(chatId, bkgNo, truckerName, containerSeq) {
 //
 // Deliberately NOT a guess between several: if she has ten on screen and
 // says "the booking", asking is right and picking one is not.
-// isAnyCategory for the same reason as assignSupplier below: "forward the
-// trucker" puts a trucker word in the booking slot.
-if (require('../helpers/genericTerm').isAnyCategory(bkgNo)) {
-    let focus = null;
-    try {
-        const mem = require('../helpers/voiceMemory');
-        focus = mem.currentCenter();
-        if (!focus) {
-            const set = mem.currentReferents();
-            if (set && Array.isArray(set.rows) && set.rows.length === 1) focus = set.rows[0];
-        }
-    } catch (e) { /* no voice memory in a WhatsApp-only flow */ }
-    if (focus && focus.booking_number) {
-        console.log(`[ACTIONS] "${bkgNo}" is the category — using the one in focus, ${focus.booking_number}`);
-        bkgNo = focus.booking_number;
-    } else {
-        await _send(chatId, 'Which booking? Say the number, or ask me to list them first.');
-        return { action_taken: 'booking_not_named' };
-    }
+// Category word, or a place — see resolveSpokenBooking above.
+{
+    const resolved = await resolveSpokenBooking(chatId, bkgNo, 'forward', truckerName, containerSeq);
+    if (!resolved) return { action_taken: 'booking_not_named' };
+    bkgNo = resolved;
 }
 const { booking } = getBooking(bkgNo);
 if (!booking) { await _send(chatId, `No booking found for ${bkgNo}.`); return { action_taken: 'not_found' }; }
@@ -770,26 +825,13 @@ async function assignSupplier(chatId, bkgNo, supplierName, containerSeq) {
 // pointed guarantees the complaint comes back wearing a different verb.
 // (Same lesson as Scout getting real words on 2026-09-07 while Jarvis kept
 // humming: I keep fixing the instance she named.)
-// isAnyCategory, not isGeneric(bkgNo, 'booking'): "assign the supplier" puts
-// the word "supplier" in the booking slot, and asking whether that is a
-// generic BOOKING word answers no. See helpers/genericTerm.isAnyCategory.
-if (require('../helpers/genericTerm').isAnyCategory(bkgNo)) {
-    let focus = null;
-    try {
-        const mem = require('../helpers/voiceMemory');
-        focus = mem.currentCenter();
-        if (!focus) {
-            const set = mem.currentReferents();
-            if (set && Array.isArray(set.rows) && set.rows.length === 1) focus = set.rows[0];
-        }
-    } catch (e) { /* no voice memory in a WhatsApp-only flow */ }
-    if (focus && focus.booking_number) {
-        console.log(`[ACTIONS] "${bkgNo}" is a category word — using the booking in focus, ${focus.booking_number}`);
-        bkgNo = focus.booking_number;
-    } else {
-        await _send(chatId, 'Which booking? Say the number, or ask me to list them first.');
-        return { action_taken: 'booking_not_named' };
-    }
+// Same resolver as forwardBooking. One behaviour, one implementation — the
+// lesson from 2026-09-08, when the category fix went into forward alone and
+// she hit the identical failure the next day under "assign".
+{
+    const resolved = await resolveSpokenBooking(chatId, bkgNo, 'assign', supplierName, containerSeq);
+    if (!resolved) return { action_taken: 'booking_not_named' };
+    bkgNo = resolved;
 }
 // And "supplier"/"seller"/"vendor" is the CATEGORY, so it means "you pick" —
 // which is exactly what a null name already does, twenty lines down.
@@ -1646,6 +1688,28 @@ switch (pending.type) {
     case 'select_trucker':
         await clearPending(chatId);
         return forwardBooking(chatId, pending.bkg_no, selection, pending.container_seq); // → confirm step
+    // "2 bookings at HOUSTON — which one?" — her answer to
+    // resolveSpokenBooking. A number picks from the list she was shown; a
+    // booking number is taken as itself, because she may well just say it.
+    case 'select_booking_for_action': {
+        await clearPending(chatId);
+        const said = String(selection || answer || '').trim();
+        const opts = Array.isArray(pending.options) ? pending.options : [];
+        const n = /^\s*(\d{1,2})\s*[.!]?\s*$/.exec(said);
+        const chosen = n ? opts[parseInt(n[1], 10) - 1]
+                         : opts.find((o) => said.toUpperCase().indexOf(String(o).toUpperCase()) !== -1);
+        if (!chosen) {
+            await _send(chatId, `Didn't catch which one. Reply with a number: ${opts.map((o, i) => `${i + 1}. ${o}`).join('  ')}`);
+            return { action_taken: 'booking_not_named' };
+        }
+        // Straight back into the action she asked for, with no name yet — so
+        // forwardBooking offers the truckers and assignSupplier the suppliers,
+        // exactly as if she had named the booking in the first place.
+        return pending.action === 'assign'
+            ? assignSupplier(chatId, chosen, pending.party_name || null, pending.container_seq ?? null)
+            : forwardBooking(chatId, chosen, pending.party_name || null, pending.container_seq ?? null);
+    }
+
     case 'select_supplier': {
         await clearPending(chatId);
         const res = await assignSupplier(chatId, pending.bkg_no, selection, pending.container_seq);

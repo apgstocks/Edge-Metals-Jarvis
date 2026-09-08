@@ -1062,6 +1062,23 @@ function policyDecide(ctx) {
         // lookahead was restating what the regex already does. Removed rather
         // than left in as decoration no test can hold to account.
         const NOUN_PREFIX = String.raw`(?:(?:the|that|this)\s+)?((?:booking|load|shipment|container)\s+)?`;
+        // ── AND THE SAME NOUN ON THE OTHER SIDE ─────────────────────────
+        // Apsara, 2026-09-09: "if i say foward the houston booking...it should
+        // forward that booking to trucker na?"
+        //
+        // Yes. English puts that noun either side of the identifier — "booking
+        // HOU111" and "the houston booking" are one grammar, not two word
+        // orders — and this pattern only knew the first, so her sentence
+        // matched nothing at all and never reached any code that could resolve
+        // it.
+        //
+        // THE SAME NOUN LIST, reused. This is not the thing she stopped me
+        // doing yesterday: I am not enumerating ways to phrase a request, I am
+        // letting one noun sit where the language allows it. The WORK is done
+        // by resolveSpokenBooking in workflow/actions.js, which turns a place
+        // into a booking against the store — and that serves the model's route
+        // too, where no regex is involved at all.
+        const NOUN_SUFFIX = String.raw`(?:\s+(?:booking|bookings|load|loads|shipment|container))?`;
 
         // ── "SHARE", NOT ONLY "FORWARD" ─────────────────────────────────
         // Apsara, 2026-09-08: "still it shows i cannot share booking to
@@ -1085,7 +1102,7 @@ function policyDecide(ctx) {
         // classifies any phrasing. This is the offline net, and the net has to
         // cover the words she actually uses.
         const SEND_ONWARD = String.raw`forward|share|pass|hand|shoot|send|give`;
-        if ((m = t.match(new RegExp(String.raw`^(${SEND_ONWARD})\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+(?:to|with)\s+(.+))?$`)))) {
+        if ((m = t.match(new RegExp(String.raw`^(${SEND_ONWARD})\s+${NOUN_PREFIX}([A-Za-z0-9-]+)${NOUN_SUFFIX}(?:\/(\d+))?(?:\s+(?:to|with)\s+(.+))?$`)))) {
             const [verb, noun, first, seq, second] = [m[1], m[2], m[3], m[4], m[5]];
             const namedBooking = resolveBookingNumber(first) || (second && resolveBookingNumber(second));
             // "share booking to tracker" — the noun capture is null here, and
@@ -1127,7 +1144,7 @@ function policyDecide(ctx) {
         // does, and the verbs she uses for supplying — "put Eccomelt on it" —
         // are a different grammar, not a different word. Left for the model
         // rather than guessed at.
-        if ((m = t.match(new RegExp(String.raw`^assign\s+${NOUN_PREFIX}([A-Za-z0-9-]+)(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
+        if ((m = t.match(new RegExp(String.raw`^assign\s+${NOUN_PREFIX}([A-Za-z0-9-]+)${NOUN_SUFFIX}(?:\/(\d+))?(?:\s+to\s+(.+))?$`)))) {
             const [first, seq, second] = [m[2], m[3], m[4]];
             const firstIsBkg = resolveBookingNumber(first);
             const secondIsBkg = second && resolveBookingNumber(second);
@@ -1910,6 +1927,7 @@ You still cannot make phone calls, or do anything else deferred beyond schedule_
 - CRITICAL, never violate this: empty_drop_confirmed, load_ready_received, picked_up_confirmed, scale_ticket_received, and ingate_received each represent a TRUCKER OR SUPPLIER confirming that something physically happened. They must NEVER fire from a message the MANAGER sent — not even if the manager's wording sounds like a statement ("empty is dropped"), and especially not from a QUESTION ("check whether empty dropped", "has he picked up yet", "is it ready"). A manager asking or wondering about status is asking a question, not reporting a physical event they witnessed — treat any manager message about container/pickup/load status as either show_booking_status (if they want to know current recorded status) or ask_contact (if they want it verified with the trucker/supplier directly). These five confirm actions are only ever correct when resolvedBy is 'policy' from the trucker/supplier's own organic message, or via ask_contact's relay-reply mechanism — never as a direct AI classification of anything the manager typed.
 - For "schedule_followup": target_name is REQUIRED (the trucker/supplier name — from context if not restated). minutes is optional (defaults to 30 if omitted — say so in reasoning). bkg_no should be activeBooking if the conversation is clearly about one booking.
 - When activeBooking is set AND the message clearly refers to an action verb ("forward", "assign", "recall", "archive", "status") WITHOUT naming a booking number, use activeBooking as bkg_no. Do NOT return NEED_DATA in this case.
+- SHE OFTEN NAMES A BOOKING BY WHERE IT LOADS rather than by its number: "forward the Houston booking", "assign the Oakland one", "the Savannah load". That is a real reference, not a vague one — put the PLACE in bkg_no exactly as she said it ("Houston") and let the handler resolve it against the bookings. Do NOT pick a booking number yourself when several load at that port, and do NOT return NEED_DATA: the handler knows how many there are, and it asks her which one when there is more than one. Same for a booking named by its category alone ("the booking", "that load") — pass the word through; the handler resolves it from what is on her screen.
 - For action "reply": NEVER restate, paraphrase, or echo the user's message back to them. A reply must add information, ask a specific clarifying question, or state what you can/cannot do. If you have nothing useful to add, use "NEED_DATA" instead of a hollow reply.
 - "silent" is ONLY for a trucker/supplier message that is clearly not operational (small talk, wrong-number chatter, an emoji with no context). If the sender (role is "trucker" or "supplier") sent something that could plausibly be about their job — a question, a problem, a status update you can't quite place — use "NEED_DATA", not "silent". NEED_DATA for a trucker/supplier gets escalated to the manager; "silent" gets no response at all, so default to NEED_DATA when unsure.
 - If the sender's role is "manager" or "team" and the message is a genuine question rather than a command (e.g. "why is DALA23991600 stuck", "how many bookings are unassigned from LA", "what does FCL mean", "which truckers do we have in Houston", "what's the busiest lane this week", "should I worry about anything today", "what's Jey's status"), ANSWER IT — using the ALL ACTIVE BOOKINGS / PORT SUMMARY / TRUCKERS ON FILE / SUPPLIERS ON FILE / SESSION / FACTS / URGENT context for anything Edge-Metals-specific, and your own general freight knowledge for anything else. Give a direct, specific answer via action "reply". Do not fall back to NEED_DATA just because the question isn't one of the defined command actions. NEED_DATA is ONLY for when a question needs Edge Metals' own specific data that genuinely isn't in the context above (including plausibly-archived bookings) — say specifically what's missing. It is never a valid response to a general knowledge question; if you know the answer generally, answer it.

@@ -362,6 +362,94 @@ section('C2b — the whole forward, spoken, all the way to a sent message');
        sent.some((t) => /HOU111/.test(t)), JSON.stringify(sent).slice(0, 160));
 }
 
+section('C2c — naming a booking by where it loads');
+{
+    // Apsara, 2026-09-09: "if i say foward the houston booking...it should
+    // forward that booking to trucker na?"
+    //
+    // Yes. It is a referring expression — naming the booking by where it loads
+    // instead of by its number, which is how anybody talks about a booking
+    // whose paperwork is not in front of them. Every variant answered "I
+    // couldn't pin that down", including with the Houston list already on
+    // screen.
+    //
+    // THE DIVISION THAT KEEPS IT SAFE: the sentence supplies the PLACE, the
+    // store supplies the BOOKING. One at that port is an answer; several is a
+    // question. There is a truck at the end of this, so picking would be a
+    // guess wearing a resolution's clothes.
+
+    // ONE booking at that port — resolved, no question asked.
+    {
+        const j = await boot({});
+        const r = await j.say('forward the oakland booking');
+        // Checks it did not ask which BOOKING. It may well go on to ask which
+        // SUPPLIER — OAK333 has none — and my first version of this assertion
+        // failed on that, because "which one?" appears in both questions.
+        // An assertion that cannot tell two questions apart is not testing
+        // the thing it names.
+        ck('one booking at that port is simply the one she means',
+           /OAK333/.test(A(r)) && !/bookings at .* which one/is.test(A(r)), A(r));
+        await j.stop();
+    }
+
+    // SEVERAL — asked, not guessed, and her answer lands.
+    {
+        const j = await boot({});
+        const asked = await j.say('forward the houston booking');
+        ck('two at that port is a question, not a guess',
+           /which one/i.test(A(asked)) && /HOU111/.test(A(asked)) && /HOU222/.test(A(asked)), A(asked));
+        const picked = await j.say('1');
+        ck('  and a number picks from that list', /HOU111/.test(A(picked)), A(picked));
+        const done = await j.say('1');
+        ck('  and it forwards for real', /forwarded to Bayou Haulage/i.test(A(done)), A(done));
+        ck('    with a message actually sent',
+           (j.sent || []).some((m) => /HOU111/.test(String(m.text || m.body || ''))));
+        await j.stop();
+    }
+
+    // She may just say the booking number instead of a position.
+    {
+        const j = await boot({});
+        await j.say('forward the houston booking');
+        const r = await j.say('HOU222');
+        ck('  or she says the booking number and that works too',
+           /HOU222/.test(A(r)) && /which trucker/i.test(A(r)), A(r));
+        await j.stop();
+    }
+
+    // THE HALF OF HER SENTENCE SHE ALREADY SAID.
+    // "forward the houston booking to Bayou Haulage" names the trucker.
+    // Asking which BOOKING must not cost her that — the same fault as the
+    // blocked forward on 2026-09-08, where picking a supplier lost the
+    // forward. An interruption is not permission to forget the request.
+    {
+        const j = await boot({});
+        await j.say('forward the houston booking to Bayou Haulage');
+        const done = await j.say('1');
+        ck('  a trucker she already named survives the "which booking?" question',
+           /forwarded to Bayou Haulage/i.test(A(done)) && !/which trucker/i.test(A(done)), A(done));
+        await j.stop();
+    }
+
+    // AND THE SAME SHAPE UNDER "ASSIGN" — fixing the fault, not the report.
+    {
+        const j = await boot({});
+        const r = await j.say('assign the oakland booking');
+        ck('  "assign the oakland booking" resolves the same way',
+           /OAK333/.test(A(r)) && /which one/i.test(A(r)), A(r));
+        await j.stop();
+    }
+
+    // A REAL BOOKING NUMBER ALWAYS WINS over any place reading.
+    {
+        const j = await boot({});
+        const r = await j.say('forward HOU111 to Bayou Haulage');
+        ck('  and naming the booking outright still goes straight through',
+           /forwarded to Bayou Haulage/i.test(A(r)), A(r));
+        await j.stop();
+    }
+}
+
 section('C3 — a blocker is not an answer');
 {
     // Apsara, 2026-09-08: "when i ask it to foraward,it just says no supplier

@@ -68,6 +68,7 @@ const LABELS = {
 
     // The booking wizard
     wizard_await_booking: 'the booking wizard, part way through',
+    select_booking_for_action: 'which booking you meant',
     wizard_await_port: 'the booking wizard, part way through',
     wizard_await_supplier: 'the booking wizard, part way through',
     wizard_await_trucker: 'the booking wizard, part way through',

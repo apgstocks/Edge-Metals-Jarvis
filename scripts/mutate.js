@@ -268,6 +268,33 @@ const MUTATIONS = [
       file: 'workflow/brain.js', suites: ['phrasebook'],
       find: "try { isHerBooking = !!require('../helpers/booking').getBooking(first).booking; }",
       to:   'try { isHerBooking = false; }' },
+    // ── "the houston booking" (2026-09-09) ──────────────────────────────
+    { name: 'place: a booking named by its port is not resolved at all',
+      file: 'workflow/actions.js', suites: ['phrasebook'],
+      find: "    const byPlace = bk.resolveByPlace(bkgNo);",
+      to:   '    const byPlace = null;' },
+    { name: 'place: it picks one when several load at that port',
+      file: 'helpers/booking.js', suites: ['phrasebook'],
+      find: "    if (hit.count === 1) return { kind: 'one', booking: hit.records[0] };\n    return { kind: 'many', rows: hit.records };",
+      to:   "    return { kind: 'one', booking: hit.records[0] };" },
+    // NOT LISTED: removing `if (getBooking(q).booking) return null;` from
+    // resolveByPlace. Unkillable with realistic data — a port query never
+    // matches a booking NUMBER, so the guard has nothing to do until she owns
+    // a booking whose id reads like one of her ports. Kept because it states
+    // the ordering rule this whole area depends on (identity beats
+    // description, the same rule written in helpers/genericTerm.js), and
+    // because the day it stops being redundant is the day it matters. Third
+    // one of these today; each is recorded rather than quietly left to look
+    // like a weak test.
+    { name: 'place: the trucker she already named is dropped',
+      file: 'workflow/actions.js', suites: ['phrasebook'],
+      find: '            party_name: partyName || null,',
+      to:   '            party_name: null,' },
+    { name: 'place: the grammar loses the trailing noun again',
+      file: 'workflow/brain.js', suites: ['phrasebook'],
+      find: 'const NOUN_SUFFIX = String.raw`(?:\\s+(?:booking|bookings|load|loads|shipment|container))?`;',
+      to:   'const NOUN_SUFFIX = String.raw``;' },
+
     // ── which account the money left (2026-09-09) ───────────────────────
     { name: 'bank: a Zelle with no bank is accepted from the form',
       file: 'helpers/banks.js', suites: ['banks', 'trucker-bills'],
