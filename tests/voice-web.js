@@ -1960,6 +1960,41 @@ section('ACK — one acknowledgement, and never the other one\'s words');
     // fetch" means the request reached nothing; the one fact that identifies
     // WHY is the address it tried, and the message left it out. That omission
     // is what cost her a conversation.
+    // ── "IT SHOWS LISTENING AND DOES NOTHING" ───────────────────────────
+    // Apsara, 2026-09-09: "now when i say hey jarvis eventhough it shows
+    // listening-it is not transcribing/responding back."
+    //
+    // startMic ended with `try { rec.start(); } catch (e) { rec = null; }`.
+    // Silent. start() throws InvalidStateError when the previous recogniser
+    // has not finished releasing — and Chrome ends and restarts this thing
+    // constantly, so after a busy exchange the odds of landing in that window
+    // are not small. Nothing logged it, nothing retried, and the pill kept the
+    // label from the last successful start.
+    //
+    // "Listening" while nothing is listening is the exact lie the rest of this
+    // file exists to prevent, sitting in a one-line catch.
+    ck('a microphone that fails to start says so',
+       /microphone did not start/.test(src),
+       'a silent catch is how the pill came to claim a state that was not true');
+    ck('  and stops claiming to listen',
+       /say\('Restarting…'\)/.test(src));
+    ck('  and asks the reducer to try again',
+       /setTimeout\(function \(\) \{ dispatch\('RECOGNISER_STOPPED'\); \}, 400\);/.test(src),
+       'rejoining the ordinary reopen path rather than inventing a second one');
+    ck('  and releases the half-started recogniser first',
+       /try \{ rec\.abort\(\); \} catch/.test(src),
+       'leaving it live is what makes the NEXT start throw too');
+
+    // The catch was only how SHE got there. The general fault is that the
+    // reducer's view and reality can disagree with nothing checking.
+    ck('a watchdog checks the mic is actually open when it should be',
+       /watchdog: the mic should be open and is not/.test(src));
+    ck('  and it only ever REOPENS, never overrides a stop',
+       /if \(!VM\.micShouldBeOpen\(state\)\) return;/.test(src),
+       'a watchdog that can hold the mic open against the reducer is a worse bug than the one it fixes');
+    ck('  and it cannot throw its way out of existence',
+       /catch \(e\) \{ \/\* a watchdog that throws is worse than none \*\/ \}/.test(src));
+
     // ── AN ANSWER TO A QUESTION IS NOT A CONTINUATION ───────────────────
     // Apsara, 2026-09-09: "when i say one -its not detected. when i again say
     // 1, getting detected as 11."

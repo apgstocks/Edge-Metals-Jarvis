@@ -1385,8 +1385,41 @@
         // should still be open.
         rec.onend = function () { rec = null; dispatch('RECOGNISER_STOPPED'); };
 
-        try { rec.start(); say(canWake ? 'Say “Hey Jarvis”' : 'Listening…'); }
-        catch (e) { rec = null; }
+        // ── A FAILED START USED TO BE A DEAD END ─────────────────────────
+        // Apsara, 2026-09-09: "now when i say hey jarvis eventhough it shows
+        // listening-it is not transcribing/responding back."
+        //
+        // This was `catch (e) { rec = null; }`. Silent. No log, no retry, no
+        // dispatch — so the reducer never learned the microphone had failed to
+        // open, nothing restarted it, and the pill kept whatever label it had
+        // from the last successful start. "Listening" while nothing is
+        // listening is the exact lie the rest of this file was written to
+        // stop, and it was sitting in a one-line catch the whole time.
+        //
+        // start() throws for a real reason: InvalidStateError, when the
+        // previous recogniser has not finished releasing. Chrome ends and
+        // restarts this thing constantly, so after a busy exchange — a
+        // forward, a confirmation, several answers — the odds of landing in
+        // that window are not small. That matches when she hit it.
+        //
+        // So: say so, put the reference back, and let the reducer try again.
+        try {
+            rec.start();
+            micStartedAt = Date.now();
+            say(canWake ? 'Say “Hey Jarvis”' : 'Listening…');
+        } catch (e) {
+            var msg = (e && e.message) || String(e);
+            console.warn('[VOICE] microphone did not start: ' + msg);
+            try { rec.abort(); } catch (e2) {}
+            rec = null;
+            // The label must not keep claiming a state that is not true.
+            say('Restarting…');
+            // One retry, on a tick, because the usual cause is the previous
+            // recogniser still letting go. RECOGNISER_STOPPED is what the
+            // reducer already uses to reopen when it should be open, so this
+            // rejoins the ordinary path rather than inventing a second one.
+            setTimeout(function () { dispatch('RECOGNISER_STOPPED'); }, 400);
+        }
     }
 
     function stopMic() {
@@ -1394,6 +1427,33 @@
         var r = rec; rec = null;
         try { r.onend = null; r.stop(); } catch (e) {}
     }
+
+    // ── AND A WATCHDOG, BECAUSE THAT WAS ONE PATH OF SEVERAL ─────────────
+    // The silent catch above is fixed, but it was only the way SHE got there.
+    // The general fault is that two things can disagree — the reducer's view
+    // of whether the microphone should be open, and whether a recogniser
+    // actually exists — and nothing was checking. Every way of ending up in
+    // that state looks identical to her: the pill says Listening and nothing
+    // happens.
+    //
+    // So this asks the one question that matters, every few seconds: should
+    // it be open, and is it? Cheap, and it covers the paths I have not
+    // thought of as well as the one I have.
+    //
+    // Deliberately NOT a reason to keep the microphone open when the reducer
+    // says it should be shut — it only ever reopens, never overrides a stop.
+    var micStartedAt = 0;
+    var MIC_WATCHDOG_MS = 4000;
+    setInterval(function () {
+        try {
+            if (!SR || speechUnavailable) return;
+            if (!VM.micShouldBeOpen(state)) return;
+            if (rec) return;
+            // It should be listening and there is no recogniser at all.
+            console.warn('[VOICE] watchdog: the mic should be open and is not — restarting');
+            dispatch('RECOGNISER_STOPPED');
+        } catch (e) { /* a watchdog that throws is worse than none */ }
+    }, MIC_WATCHDOG_MS);
 
     // ── "Mm-hm" — the sound that says it is listening ────────────────────
     // Apsara, 2026-09-06: "When i say Hey Jarvis, it should speak back HMM..
