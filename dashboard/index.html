@@ -4322,12 +4322,16 @@ let spendTo = '';
 // '' means every method. Held here so it survives a repaint, like the date
 // range — a filter that resets itself when you tap Apply is worse than none.
 let spendMethod = '';
+// '' means every bank. Same reasoning as spendMethod: a filter that resets on
+// repaint is worse than no filter.
+let spendBank = '';
 
 async function renderSpendReportTab() {
   const qs = [];
   if (spendFrom) qs.push('from=' + encodeURIComponent(spendFrom));
   if (spendTo) qs.push('to=' + encodeURIComponent(spendTo));
   if (spendMethod) qs.push('method=' + encodeURIComponent(spendMethod));
+  if (spendBank) qs.push('bank=' + encodeURIComponent(spendBank));
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -4403,7 +4407,43 @@ async function renderSpendReportTab() {
           ${['', ...(rep.columns || [])].map(m => `
             <button class="btn btn-spend-method" data-method="${esc(m)}" style="font-size:11.5px; padding:7px 12px; ${spendMethod === m ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(m || 'All')}</button>`).join('')}
         </div>
+        <!-- ── AND OUT OF WHICH ACCOUNT ──────────────────────────────────
+             Apsara, 2026-09-09. Narrows the whole report the same way the
+             method does. Only rendered when there is more than one bank to
+             choose between: a single-bank row of chips is a control that
+             cannot change anything.
+
+             "Not recorded" is offered as a filter on purpose — it is how she
+             finds the Zelles from before the bank field existed, which is the
+             only way that gap ever gets closed. -->
+        ${(rep.bankColumns || []).length > 1 ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Out of</span>
+          ${['', ...(rep.bankColumns || [])].map(b => `
+            <button class="btn btn-spend-bank" data-bank="${esc(b)}" style="font-size:11.5px; padding:7px 12px; ${spendBank === b ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(b || 'All')}</button>`).join('')}
+        </div>` : ''}
       </div>
+
+      <!-- ── WHAT LEFT EACH ACCOUNT ──────────────────────────────────────
+           Apsara, 2026-09-09. Sits beside the totals rather than replacing
+           the method table: the method answers "how", the bank answers "from
+           where", and she reconciles against a statement using the second.
+
+           These add up to Total out exactly, INCLUDING "Not recorded" — a
+           breakdown that quietly omits the rows it has no bank for would
+           disagree with the total and invite her to pick which number to
+           believe. -->
+      ${Object.keys(rep.byBank || {}).length ? `
+      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Out of each account</div>
+        <div style="display:flex; gap:26px; flex-wrap:wrap;">
+          ${Object.keys(rep.byBank).sort((a, b) => (rep.byBank[b] || 0) - (rep.byBank[a] || 0)).map(b => `
+            <div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b)}</div>
+              <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byBank[b]))}</div>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
 
       <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap;">
         <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Total out</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</div></div>
@@ -4508,6 +4548,10 @@ async function renderSpendReportTab() {
     spendMethod = b.dataset.method || '';
     renderSpendReportTab();
   }));
+  document.querySelectorAll('.btn-spend-bank').forEach(b => b.addEventListener('click', () => {
+    spendBank = b.dataset.bank || '';
+    renderSpendReportTab();
+  }));
 }
 
 // ── Petty cash ─────────────────────────────────────────────────────────────
@@ -4583,6 +4627,13 @@ async function renderTruckerTab() {
   const data = await api('/api/trucker-bills');
   truckerBills = Array.isArray(data.bills) ? data.bills : [];
   truckerModes = Array.isArray(data.modes) && data.modes.length ? data.modes : truckerModes;
+  // The bank list rides along on this payload and on /api/payments. Whichever
+  // tab she opens first fills it; both write the same three variables, so the
+  // Pay form on a load and the Pay form on a trucker bill can never offer
+  // different banks.
+  if (Array.isArray(data.banks) && data.banks.length) bankOptions = data.banks;
+  if (Array.isArray(data.bank_modes) && data.bank_modes.length) bankModes = data.bank_modes;
+  if (typeof data.other === 'string' && data.other) bankOther = data.other;
   const rep = data.report || { billed: 0, paid: 0, outstanding: 0, overpaid: 0, count: 0 };
 
   $('viewRoot').innerHTML = `
@@ -4712,6 +4763,9 @@ function openTruckerPayModal(b) {
   // server would reject — and the server refuses Cash on this ledger whatever
   // the dropdown says.
   $('trk_pay_mode').innerHTML = truckerModes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  paintBankOptions($('trk_pay_bank'));
+  if ($('trk_pay_bank_other')) $('trk_pay_bank_other').value = '';
+  syncBankFields('trk_pay');
   // Pre-filled with what is still outstanding, rounded here rather than left
   // as a float — 1000 - 333.33 - 333.33 is 333.34000000000003, and a Pay box
   // that opens showing that is a Pay box nobody trusts.
@@ -4752,6 +4806,8 @@ function wireTruckerModals() {
   }
   truckerModalsWired = true;
   $('trkClose').addEventListener('click', closeTruckerBillModal);
+  $('trk_pay_mode').addEventListener('change', () => syncBankFields('trk_pay'));
+  $('trk_pay_bank').addEventListener('change', () => syncBankFields('trk_pay'));
   $('trkSave').addEventListener('click', async () => {
     const payload = {
       date: toIsoDate($('trk_date').value),
@@ -4791,6 +4847,7 @@ function wireTruckerModals() {
           // yard paid for metal — see helpers/payments.js.
           load_kind: 'trucker',
           mode: $('trk_pay_mode').value,
+          bank: bankValue('trk_pay'),
           amount: $('trk_pay_amount').value,
           paid_on: toIsoDate($('trk_pay_date').value),
         }),
@@ -4919,6 +4976,83 @@ let payingLoad = null;   // { id, kind, amount, seller, payment }
 // Same rule as fmtAmount — every amount on screen carries its $.
 const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ── THE BANK ON A ZELLE OR A WIRE ────────────────────────────────────────
+// Apsara, 2026-09-09: "options like BofA, Chase Bank, Others. when they select
+// others a text box should appear in mobile app and website."
+//
+// The list comes from the SERVER (GET /api/payments returns it) rather than
+// being written out here and again in the app. Two hardcoded copies drift,
+// and the one that drifts is the one that offers a bank the server rejects —
+// which reads to her as a broken Save button, not as a mismatched list.
+//
+// Seeded with the same two the server starts with, so the form still works if
+// that fetch has not landed yet.
+let bankOptions = ['BofA', 'Chase Bank'];
+let bankModes = ['Zelle', 'Wire'];
+let bankOther = 'Others';
+
+// ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────
+// The Trucker tab happens to carry the list on its own payload, but the Pay
+// form on a LOAD never fetched anything — so a bank she typed under Others
+// would have appeared on one form and not the other, which is worse than not
+// remembering it at all. Fetched when the Pay modal opens: one small request,
+// at the moment the list is about to be used, so a bank added on her phone is
+// on the website's dropdown the next time she pays somebody.
+//
+// Failure is silent ON PURPOSE. If it cannot be reached the form keeps the
+// two seeded banks and Others still works — she can type the name and the
+// server records it. A blocking error here would stop her recording a payment
+// over a dropdown that had a working escape hatch all along.
+let bankListLoaded = false;
+async function loadBankOptions(force) {
+  if (bankListLoaded && !force) return;
+  try {
+    const d = await api('/api/payments');
+    if (Array.isArray(d.banks) && d.banks.length) bankOptions = d.banks;
+    if (Array.isArray(d.bank_modes) && d.bank_modes.length) bankModes = d.bank_modes;
+    if (typeof d.other === 'string' && d.other) bankOther = d.other;
+    bankListLoaded = true;
+  } catch (e) {
+    console.warn('[BANKS] could not load the bank list, using the built-in one:', e.message);
+  }
+}
+
+function paintBankOptions(sel) {
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = bankOptions.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('')
+    + `<option value="${esc(bankOther)}">${esc(bankOther)}</option>`;
+  // Her previous choice survives a repaint — losing it mid-form is how a
+  // dropdown silently reverts to the first bank while she is looking at the
+  // amount field.
+  if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+
+// Shows or hides the bank row for the chosen mode, and the text box for
+// Others. `prefix` is 'pay' or 'trk' — the two forms are identical in
+// behaviour, so they share this rather than each growing their own copy.
+function syncBankFields(prefix) {
+  const mode = ($(prefix + '_mode') || {}).value || '';
+  const row = $(prefix + '_bank_row');
+  const sel = $(prefix + '_bank');
+  const otherField = $(prefix + '_bank_other_field');
+  const needs = bankModes.some(m => m.toLowerCase() === String(mode).toLowerCase());
+  if (row) row.style.display = needs ? '' : 'none';
+  if (otherField) otherField.style.display = (needs && sel && sel.value === bankOther) ? '' : 'none';
+}
+
+// What to send. Null when the mode has no bank, so the server sees an absent
+// field rather than an empty string — it refuses a bank on Cash, and "" is
+// still a value.
+function bankValue(prefix) {
+  const mode = ($(prefix + '_mode') || {}).value || '';
+  if (!bankModes.some(m => m.toLowerCase() === String(mode).toLowerCase())) return null;
+  const sel = $(prefix + '_bank');
+  if (!sel) return null;
+  if (sel.value === bankOther) return (($(prefix + '_bank_other') || {}).value || '').trim() || null;
+  return sel.value || null;
+}
+
 function openPayModal(loadId, kind) {
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
@@ -4932,6 +5066,12 @@ function openPayModal(loadId, kind) {
     ? `Load ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This load has no price yet, so there is no balance to work against.</span>`
     : `Load ${esc(l.id)}${esc(who)}<br>Load total ${payMoney(l.amount)} · already paid ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
   $('pay_mode').value = 'Zelle';
+  paintBankOptions($('pay_bank'));
+  $('pay_bank_other').value = '';
+  syncBankFields('pay');
+  // Repainted when it lands. Not awaited: the modal opens immediately with
+  // the banks we already have, and a late arrival only ever ADDS options.
+  loadBankOptions().then(() => { paintBankOptions($('pay_bank')); syncBankFields('pay'); });
   $('pay_date').value = toUsDate(todayLocalDateStr()); wireUsDateField('pay_date');
   // Pre-filled with what is actually outstanding, since settling the balance
   // is the common case — still fully editable for a part payment.
@@ -4976,7 +5116,7 @@ function renderPayHistory() {
     ${rows.map(r => `
       <div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:12px;">
         <span style="color:var(--text-muted);">${esc(fmtDate(r.paid_on))}</span>
-        <span>${esc(r.mode)}</span>
+        <span>${esc(r.mode)}${r.bank ? ' · ' + esc(r.bank) : ''}</span>
         ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
         <span style="flex:1;"></span>
         <span style="font-weight:700;">${payMoney(r.amount)}</span>
@@ -5366,6 +5506,16 @@ function renderLoads(loads) {
             </div>
             <div class="field"><label>Date</label><input id="pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
           </div>
+          <!-- Bank: shown only for Zelle and Wire, and the text box only for
+               Others. Hidden rather than disabled, because a greyed-out field
+               on a cash payment still reads as something she forgot to fill. -->
+          <div class="ld-grid-2" id="pay_bank_row" style="margin-top:14px; display:none;">
+            <div class="field"><label>Bank</label><select id="pay_bank"></select></div>
+            <div class="field" id="pay_bank_other_field" style="display:none;">
+              <label>Which bank</label>
+              <input id="pay_bank_other" placeholder="e.g. Wells Fargo" autocomplete="off" maxlength="40">
+            </div>
+          </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"></div>
             <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
@@ -5513,6 +5663,8 @@ function wireLoadsEvents() {
   $('btnClosePay').addEventListener('click', closePayModal);
   $('btnCancelPay').addEventListener('click', closePayModal);
   $('pay_amount').addEventListener('input', updatePayPreview);
+  $('pay_mode').addEventListener('change', () => syncBankFields('pay'));
+  $('pay_bank').addEventListener('change', () => syncBankFields('pay'));
   // Delegated: the history list is re-rendered after every change, so
   // per-button handlers would be lost.
   $('payHistory').addEventListener('click', async (ev) => {
@@ -5536,6 +5688,7 @@ function wireLoadsEvents() {
       const body = {
         load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
+        bank: bankValue('pay'),
       };
       try {
         await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
@@ -6431,6 +6584,14 @@ boot();
     <div class="modal-body">
       <div class="ld-grid-2">
         <div class="field"><label>Mode</label><select id="trk_pay_mode"></select></div>
+        <!-- Always shown here: a trucker bill is Zelle or Wire, so there is
+             no mode on this form that has no bank behind it. syncBankFields
+             still runs, so the two forms cannot drift apart in behaviour. -->
+        <div class="field" id="trk_pay_bank_row"><label>Bank</label><select id="trk_pay_bank"></select></div>
+        <div class="field" id="trk_pay_bank_other_field" style="display:none;">
+          <label>Which bank</label>
+          <input id="trk_pay_bank_other" placeholder="e.g. Wells Fargo" autocomplete="off" maxlength="40">
+        </div>
         <div class="field"><label>Amount ($)</label><input id="trk_pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
       </div>
       <div class="field" style="margin-top:14px;"><label>Paid on</label><input id="trk_pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>

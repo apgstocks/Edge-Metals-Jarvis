@@ -132,6 +132,20 @@ const FILES = {
     // Keeping payments outside that write path means editing a weight cannot
     // touch what was paid.
     PAYMENTS_FILE: path.join(DATA_DIR, 'payments.json'),
+    // ── BANKS SHE HAS TYPED UNDER "OTHERS" ────────────────────────────────
+    // Apsara, 2026-09-09, choosing this over a Banks screen: "Fixed three, but
+    // Others text is remembered." So the first Wells Fargo wire is typed once
+    // and offered ever after.
+    //
+    // ITS OWN FILE, not a key on settings: it is written from the payment
+    // write path, which runs while she is paying somebody, and settings.json
+    // is rewritten wholesale by the Settings tab. One save from that tab
+    // during a payment would drop whichever the other had just added.
+    //
+    // NOT SENSITIVE — a list of bank NAMES, no account numbers, nothing that
+    // identifies an account. So unlike bank-item.json it is not excluded from
+    // the nightly Drive backup; losing it would mean retyping her own banks.
+    BANKS_FILE: path.join(DATA_DIR, 'banks.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

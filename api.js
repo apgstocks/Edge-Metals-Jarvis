@@ -3117,7 +3117,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const { listPayments, PAYMENT_MODES } = require('./helpers/payments');
             const loadId = req.query && req.query.load_id;
             const all = listPayments();
-            res.json({ modes: PAYMENT_MODES, payments: loadId ? all.filter((p) => p.load_id === loadId) : all });
+            // The banks travel with the modes for the same reason the modes
+            // travel at all: the dropdown is built from the SERVER's list, so
+            // it cannot offer something the server would reject. `other` is
+            // the exact label that reveals the text box — sent rather than
+            // hardcoded in two clients, because "Other" against a server
+            // expecting "Others" is a 400 she would read as a broken button.
+            const banks = require('./helpers/banks');
+            res.json({
+                modes: PAYMENT_MODES,
+                banks: banks.options(),
+                bank_modes: banks.MODES_WITH_BANK,
+                other: banks.OTHER,
+                payments: loadId ? all.filter((p) => p.load_id === loadId) : all,
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -3149,7 +3162,28 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 }
             }
 
-            const payment = await addPayment({ ...b, created_by: (req.role || null) });
+            // ── REQUIRED ONLY OF A CLIENT THAT KNOWS ABOUT BANKS ─────────
+            // The obvious version — require_bank: true, always — is wrong, and
+            // the reason is the mobile app: it is an installed APK, so the
+            // server can be a week ahead of whatever build is on her phone.
+            // A blanket requirement would mean every Zelle and Wire recorded
+            // from an old app started failing the moment this deployed, in the
+            // yard, with no way to fix it from there.
+            //
+            // So the test is whether the client SENT THE FIELD AT ALL. Present
+            // means it has the dropdown: an empty value is then a real
+            // omission — she picked Others and typed nothing — and refusing is
+            // right, because she is looking at the box she needs to fill.
+            // Absent means an older build, and the payment is recorded with
+            // the bank unknown, which the spend report shows under "Not
+            // recorded" rather than hiding.
+            //
+            // Degrading to a visible gap beats refusing a payment somebody is
+            // standing there trying to make.
+            const clientKnowsBanks = Object.prototype.hasOwnProperty.call(b || {}, 'bank');
+            const payment = await addPayment({
+                ...b, require_bank: clientKnowsBanks, created_by: (req.role || null),
+            });
             // A cash payment short of the asked-for amount has to say so
             // loudly enough that the client can tell the operator, per Apsara
             // 2026-09-02 ("make it as partial payment and notify user"). The
@@ -3210,6 +3244,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // expense methods do: the dropdown is built from the server's
                 // list, so it cannot offer something the server would reject.
                 modes: t.TRUCKER_PAYMENT_MODES,
+                // Same list, same reason. A trucker bill is Zelle or Wire, so
+                // on this form the bank is always required.
+                banks: require('./helpers/banks').options(),
+                bank_modes: require('./helpers/banks').MODES_WITH_BANK,
+                other: require('./helpers/banks').OTHER,
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -3316,6 +3355,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // "just Zelle" / "just Wire" / "just Cash" — narrows every
                 // figure, not only the rows. See helpers/spendReport.js.
                 method: req.query.method,
+                // "how much went out of Chase last month". Narrows the same
+                // way the method does — every figure, not only the rows.
+                bank: req.query.bank,
             }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

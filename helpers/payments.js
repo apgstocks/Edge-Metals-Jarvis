@@ -90,6 +90,25 @@ async function addPayment(input = {}) {
     const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
     if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
 
+    // ── WHICH ACCOUNT IT LEFT ────────────────────────────────────────────
+    // Apsara, 2026-09-09: "I want to create an option for zelle,wire -->
+    // options like BofA, Chase Bank, Others."
+    //
+    // BEFORE the petty-cash reservation below, deliberately. A bad bank must
+    // fail while nothing has moved: reserving cash and then throwing would
+    // leave the box short with no payment beside it, which is the exact
+    // failure the reservation ordering further down was written to avoid.
+    // Cash never has a bank anyway, so this costs that path nothing.
+    //
+    // A DISALLOWED value always throws — a bank on a cash payment is a false
+    // statement, wherever it came from. A MISSING one depends on the caller:
+    // require_bank is set by the API route — i.e. by the two pay FORMS, where
+    // she has a dropdown in front of her. Callers that record a payment from a
+    // spoken sentence leave it off; see helpers/banks.js for why the two are
+    // deliberately not the same.
+    const banks = require('./banks');
+    const bank = await banks.resolveForMode(mode, input.bank, { required: input.require_bank === true });
+
     // ── CASH COMES OUT OF THE PETTY CASH BOX ──────────────────────────────
     // Per Apsara 2026-09-02: "If i click pay in load and select cash, the
     // invoice amount should be adjusted against this."
@@ -152,6 +171,12 @@ async function addPayment(input = {}) {
         // written before this field existed keep their meaning.
         load_kind: ['sale', 'trucker'].includes(input.load_kind) ? input.load_kind : 'purchase',
         mode,
+        // Null on Cash and Cheque, and null on every payment written before
+        // 2026-09-09. Nothing migrates them: an old Zelle whose account nobody
+        // recorded is UNKNOWN, and stamping a guess on it would be inventing
+        // a fact about where money went. The report groups those as
+        // "not recorded" rather than hiding them.
+        bank,
         // What was ACTUALLY paid. On a capped cash payment this is less than
         // was asked for, and the rest stays outstanding — which is exactly
         // what "make it a partial payment" means. Stored as the real figure so

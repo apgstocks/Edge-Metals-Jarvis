@@ -39,6 +39,13 @@ const num0 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 const METHODS = ['Cash', 'Zelle', 'Wire', 'Cheque', 'Card', 'Other'];
 const UNCLASSIFIED = 'Unclassified';
 
+// A payment whose account nobody wrote down — every Zelle and Wire from before
+// 2026-09-09, and every Cash and Cheque forever. Its own name rather than
+// "Unclassified", which already means something different on this report (a
+// payment METHOD that is not on the list). Two different unknowns sharing one
+// label is how a report comes to be quietly misread.
+const NOT_RECORDED = 'Not recorded';
+
 const monthOf = (d) => String(d || '').slice(0, 7);      // YYYY-MM
 const inRange = (d, from, to) => {
     const s = String(d || '');
@@ -96,6 +103,19 @@ function collectRows({ payments, expenses, from, to }) {
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
             method: METHODS.includes(p.mode) ? p.mode : UNCLASSIFIED,
+            // ── WHICH ACCOUNT IT LEFT ─────────────────────────────────────
+            // Apsara, 2026-09-09, asked for the report to break down by bank
+            // as well as by method.
+            //
+            // NOT_RECORDED rather than null, and rather than being dropped: a
+            // Zelle written before 2026-09-09 has no bank on it, and pretending
+            // those rows do not exist would make the per-bank column total
+            // disagree with the method total for no visible reason. They are a
+            // named bucket, so the gap is something she can see and close.
+            //
+            // Cash and Cheque carry it too — they are always NOT_RECORDED,
+            // which is correct: there is no account behind them.
+            bank: (p.bank && String(p.bank).trim()) || NOT_RECORDED,
             amount: round2(amount),
             label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
@@ -115,6 +135,11 @@ function collectRows({ payments, expenses, from, to }) {
             // Anything not on the list is Unclassified, INCLUDING the legacy
             // free-text values. Deliberately not coerced — see the header.
             method: METHODS.includes(e.payment_method) ? e.payment_method : UNCLASSIFIED,
+            // Expenses never had a bank field and Zelle/Wire are retired from
+            // that form anyway (see helpers/expenses.js). Present and constant
+            // so every row has the key — a row missing it would land in
+            // `undefined` and quietly grow a column with no name.
+            bank: NOT_RECORDED,
             amount: round2(amount),
             label: e.description || e.category || 'Expense',
             ref: e.category || null,
@@ -140,14 +165,21 @@ function collectRows({ payments, expenses, from, to }) {
 //
 // The COLUMNS still list every method, so the table keeps its shape and it is
 // obvious the others are empty by filter rather than by accident.
-function buildSpendReport({ payments, expenses, pettyEntries, from, to, method } = {}) {
+function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, bank } = {}) {
     const columns = METHODS.concat([UNCLASSIFIED]);
     // Only a method the report actually reports in. Anything else is ignored
     // rather than returning nothing — a typo in a query string should not look
     // like "you spent nothing".
     const wanted = columns.includes(String(method || '').trim()) ? String(method).trim() : '';
+    // The bank filter is NOT validated against a fixed list, unlike the method
+    // — the list of banks grows whenever she types one under Others, so a
+    // whitelist here would go stale the day after she adds one. An unknown
+    // bank simply matches nothing, which is the honest answer to "how much
+    // went out of a bank we have never used".
+    const wantedBank = String(bank || '').trim();
     const all = collectRows({ payments, expenses, from, to })
-        .filter(r => !wanted || r.method === wanted);
+        .filter(r => !wanted || r.method === wanted)
+        .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase());
 
     // The report answers "where did the money GO". Money received from buyers
     // is a different question and must not be added to that answer — but it is
@@ -158,6 +190,11 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
 
     const months = new Map();
     const byMethod = Object.fromEntries(columns.map((m) => [m, 0]));
+    // Built from the rows rather than from a fixed list, for the same reason
+    // the filter is not validated: the banks are whatever she has actually
+    // used. A bank with no spend in this window does not appear, which is
+    // right — an empty column invites the question "why is that zero".
+    const byBank = {};
     let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0;
 
     for (const r of rows) {
@@ -166,6 +203,8 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
         const bucket = months.get(m);
         bucket[r.method] = round2(bucket[r.method] + r.amount);
         byMethod[r.method] = round2(byMethod[r.method] + r.amount);
+        const b = r.bank || NOT_RECORDED;
+        byBank[b] = round2((byBank[b] || 0) + r.amount);
         total = round2(total + r.amount);
         // An explicit three-way split, not an if/else pair. The previous shape
         // was `if load ... else expense`, which would have swept the new
@@ -223,9 +262,23 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
         // Echoed back so the client shows the active button from the SERVER's
         // answer rather than from what it thinks it asked for.
         method: wanted || null,
+        // Echoed for the same reason, and NOT normalised to a canonical
+        // spelling: if she filtered on something that matched nothing, showing
+        // her what she actually asked for is what makes the empty report make
+        // sense.
+        bank: wantedBank || null,
         columns,
+        // Every bank that appears in the payments at all, so the filter can
+        // be built even when the current window has no spend from one of them.
+        // Sorted, with "Not recorded" pushed last — it is a gap, not a bank,
+        // and it should not sit at the top of her list.
+        bankColumns: [...new Set(collectRows({ payments, expenses, from: null, to: null })
+            .map((r) => r.bank || NOT_RECORDED))]
+            .sort((a, b) => (a === NOT_RECORDED) - (b === NOT_RECORDED) || a.localeCompare(b)),
         months: monthRows,
         byMethod,
+        // What left each account in this window. Only banks with spend appear.
+        byBank,
         total,
         loadTotal,
         expenseTotal,
@@ -251,4 +304,4 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method }
     };
 }
 
-module.exports = { buildSpendReport, collectRows, METHODS, UNCLASSIFIED };
+module.exports = { buildSpendReport, collectRows, METHODS, UNCLASSIFIED, NOT_RECORDED };

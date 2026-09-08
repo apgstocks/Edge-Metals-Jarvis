@@ -243,6 +243,12 @@ const TOOLS = {
             load_id: { type: 'string', required: true },
             amount: { type: 'number', required: true },
             mode: { type: 'string', required: true, describe: 'Zelle, Wire, Cash or Cheque' },
+            // Optional, and optional ON PURPOSE — she may simply not say which
+            // account a Zelle left, and refusing the whole payment over it
+            // would make a working feature stop working. Unsaid becomes
+            // "Not recorded" on the spend report, where she can see and close
+            // the gap. See helpers/banks.js.
+            bank: { type: 'string', describe: 'which bank a Zelle or Wire went out of, if she said' },
             paid_on: { type: 'date', describe: 'defaults to today' },
             note: { type: 'string' },
         },
@@ -265,7 +271,20 @@ const TOOLS = {
             const after = Math.round((before.pending - amount) * 100) / 100;
             const paidOn = isYmd(p.paid_on) ? p.paid_on : require('./time').todayLocal();
 
+            // Validated at PROPOSE time, not only at run time. The confirm card
+            // is the last thing she reads before this writes, so a bank that
+            // will be refused has to fail here — refusing after she has
+            // confirmed teaches her that confirming does not mean anything.
+            const banks = require('./banks');
+            const bank = await banks.resolveForMode(mode, p.bank);
+
             const warnings = [];
+            // Said out loud rather than left blank. She is confirming a payment
+            // she cannot see a form for, so the one field that will be missing
+            // from the report has to be on the card in front of her.
+            if (banks.needsBank(mode) && !bank) {
+                warnings.push(`No bank recorded for this ${mode} — it will show as "Not recorded" on the spend report.`);
+            }
             if (after < 0) warnings.push(`This is ${money(-after)} MORE than the ${money(before.pending)} still outstanding on this load.`);
             if (before.pending === 0) warnings.push('This load is already fully paid.');
 
@@ -274,12 +293,12 @@ const TOOLS = {
                 details: [
                     ['Load', `${loadId} — ${load.seller || 'no seller'}, ${money(load.amount || 0)}`],
                     ['Already paid', money(before.paid)],
-                    ['This payment', `${money(amount)} by ${mode}`],
+                    ['This payment', `${money(amount)} by ${mode}${bank ? ' from ' + bank : ''}`],
                     ['Left pending after', money(Math.max(after, 0))],
                 ],
                 warnings,
                 run: async (ctx) => require('./payments').addPayment({
-                    load_id: loadId, amount, mode, paid_on: paidOn, note: p.note,
+                    load_id: loadId, amount, mode, bank, paid_on: paidOn, note: p.note,
                     created_by: ctx.role || 'yard-assistant',
                 }),
             };

@@ -388,6 +388,47 @@ section('H — an edit that makes a bill overpaid');
     ck('  payments were not touched', payments.paymentsForLoad(b.id).length === 1);
 }
 
+// ── E. THE BANK, AND THE OLD APK ─────────────────────────────────────────
+// Apsara, 2026-09-09, asked for a bank picker on Zelle and Wire.
+//
+// The interesting half is not that a bank is stored — it is HOW the server
+// decides whether to insist on one. The mobile app is an installed APK, so
+// the server can be a week ahead of the build on her phone, and a blanket
+// requirement would mean every Zelle recorded from an old app started failing
+// the moment this deployed. In the yard. With nothing to fix it from there.
+section('E — the bank, and what happens to a client that predates it');
+{
+    reset();
+
+    // A NEW client: it sends the field, so an empty one is a real omission —
+    // she chose Others and typed nothing, and the box is right in front of her.
+    const b1 = await bills.addBill(bill({ company: 'Ace', amount: 500 }));
+    const missing = await req('POST', '/api/payments', { sid: adminSid,
+        body: { load_id: b1.id, load_kind: 'trucker', mode: 'Wire', amount: 500, paid_on: '2026-09-05', bank: null } });
+    ck('a bank-aware client that sends nothing is refused', missing.status === 400,
+       'she picked Others and typed nothing — the box is on screen, so ask');
+    ck('  and nothing was written', payments.paymentsForLoad(b1.id).length === 0,
+       'a refused payment that still lands is worse than either outcome');
+
+    // An OLD client: the field is absent entirely. Recorded, with the gap
+    // visible on the report rather than the payment refused.
+    const b2 = await bills.addBill(bill({ company: 'Ace', amount: 500 }));
+    const old = await req('POST', '/api/payments', { sid: adminSid,
+        body: { load_id: b2.id, load_kind: 'trucker', mode: 'Wire', amount: 500, paid_on: '2026-09-05' } });
+    ck('a client that predates the field still records payments', old.status === 200,
+       'an old APK in the yard must not stop her paying a trucker');
+    ck('  with the bank stored as unknown, not invented',
+       payments.paymentsForLoad(b2.id)[0].bank == null);
+
+    // And a real one goes in canonically.
+    const b3 = await bills.addBill(bill({ company: 'Ace', amount: 500 }));
+    await req('POST', '/api/payments', { sid: adminSid,
+        body: { load_id: b3.id, load_kind: 'trucker', mode: 'Wire', amount: 500, paid_on: '2026-09-05', bank: 'chase bank' } });
+    ck('  a bank she picked is stored in its canonical spelling',
+       payments.paymentsForLoad(b3.id)[0].bank === 'Chase Bank',
+       JSON.stringify(payments.paymentsForLoad(b3.id)[0].bank));
+}
+
 server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
