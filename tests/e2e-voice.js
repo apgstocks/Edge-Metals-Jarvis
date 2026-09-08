@@ -531,6 +531,102 @@ section('13 — and "no" does not throw the request away');
     await j.stop();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('14 — a follow-up does not re-read the list at her');
+// Apsara, 2026-09-07: "On follow up - why it keeps on saying the same thing
+// about booking."
+{
+    const j = await boot({});
+
+    const one = await j.say('show me the bookings from houston');
+    const first = A(one);
+    ck('the opening summary is said once', /2 bookings from Houston/i.test(first), first);
+    const houston = (one.json.cards.rows || []).map((r) => r.booking_number);
+    ck('  with her two Houston rows on screen',
+       houston.join(',') === 'HOU111,HOU222', JSON.stringify(houston));
+
+    // "and the vessel" contains a booking noun, which is what made cardsFor
+    // treat it as a new query, rebuild the table from ALL bookings and read
+    // the same summary out again.
+    const two = await j.say('and the vessel');
+    ck('a follow-up does NOT repeat the opening line',
+       !/bookings\.|bookings from/i.test(A(two)), A(two) + ' — this is the repetition she reported');
+    ck('  and does not redraw the panel underneath her',
+       !two.json.cards,
+       'a replaced list silently changes what "the first one" points at');
+    ck('  it answers about the booking in focus', /HOU111/.test(A(two)), A(two));
+
+    // ── THE WORSE HALF ──────────────────────────────────────────────────
+    // The rebuilt list was all four bookings, so the discourse center moved
+    // to one she had never mentioned and the NEXT "that one" meant a Long
+    // Beach booking. Annoying became dangerous.
+    const three = await j.say('and the erd of that one');
+    ck('the reference still means the booking she was discussing',
+       /HOU111/.test(A(three)) || !/LGB444|OAK333/.test(A(three)), A(three));
+
+    // AND A REAL NEW QUESTION STILL STARTS A NEW LIST. A rule that never
+    // redraws is the same bug pointing the other way.
+    const four = await j.say('what bookings are there from oakland');
+    ck('naming a new port DOES redraw', /Oakland/i.test(A(four)), A(four));
+    ck('  with the new rows', !!four.json.cards
+       && (four.json.cards.rows || []).map((r) => r.booking_number).join(',') === 'OAK333',
+       JSON.stringify(four.json.cards && four.json.cards.rows));
+    const five = await j.say('and the erd of that one');
+    ck('  and the follow-up now tracks the NEW list', /OAK333/.test(A(five)) || /ERD/i.test(A(five)), A(five));
+
+    // ── ONE GUARD EACH ──────────────────────────────────────────────────
+    // "what bookings are there from oakland" trips BOTH the port check and
+    // the list-request check, so deleting either left it working and two
+    // mutations survived while looking covered. These two phrases trip
+    // exactly one apiece.
+    const port = await j.say('anything from long beach');   // a port, no list words
+    ck('a bare port name still redraws', !!port.json.cards
+       && (port.json.cards.rows || []).some((r) => r.booking_number === 'LGB444'),
+       A(port) + ' — only the PORT check can catch this one');
+
+    const listAll = await j.say('show me all the bookings');  // list words, no port
+    ck('and asking for the whole list redraws too', !!listAll.json.cards
+       && (listAll.json.cards.rows || []).length === 4,
+       A(listAll) + ' — only the LIST-REQUEST check can catch this one');
+
+    await j.stop();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('15 — and an unanswerable follow-up says so, never nothing');
+{
+    // Once the list stopped being redrawn, "and the vessel" fell through to
+    // the router instead — and with the model down it came back EMPTY. A
+    // blank card reads as a dead microphone. Trading a repetition for silence
+    // is not a fix.
+    const j = await boot({ gemini: 'down' });
+    await j.say('show me the bookings from houston');
+    const r = await j.say('what about the container size');
+    ck('an unanswerable follow-up still answers', !!A(r).trim(), '(EMPTY)');
+    ck('  naming the booking it looked at', /HOU111/.test(A(r)), A(r));
+    ck('  and offering her a way forward', /booking number|something else/i.test(A(r)), A(r));
+    ck('  without re-reading the list', !/bookings from|Earliest cutoff/i.test(A(r)), A(r));
+
+    // THE BACKSTOP. Every branch is supposed to say something; this is the
+    // one place that can guarantee it.
+    const api = require('fs').readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+    ck('an empty answer can never leave the endpoint',
+       /a branch produced an EMPTY answer/.test(api)
+       && /if \(typeof payload\.answer !== 'string' \|\| !payload\.answer\.trim\(\)\)/.test(api),
+       'silence reads as a dead microphone, and it came from a branch that thought it had replied');
+
+    // AND IT IS JUDGED ON HER WORDS. `asked` is the RESOLVED sentence, so
+    // feeding it to isFollowUp made it read a booking number Jarvis had
+    // itself just inserted as proof she had named a new subject.
+    ck('the follow-up test reads what SHE said, not the resolved text',
+       /ac\.isFollowUp\(stripped, refSet\)/.test(api),
+       'passing `asked` makes it read its own handwriting back as evidence');
+    ck('  and a resolved pronoun counts as a follow-up on its own',
+       /!!ref\.resolved \|\| ac\.isFollowUp/.test(api));
+
+    await j.stop();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

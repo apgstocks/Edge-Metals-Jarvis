@@ -254,8 +254,64 @@ function cardsFor(question) {
     };
 }
 
+// ── A FOLLOW-UP MUST NOT REDRAW THE LIST ─────────────────────────────────
+// Apsara, 2026-09-07: "On follow up - why it keeps on saying the same thing
+// about booking."
+//
+// Reproduced in tests/e2e-voice.js, and it is two bugs wearing one coat:
+//
+//   YOU: show me the bookings from houston
+//    ->  Yes — 2 bookings from Houston. Earliest cutoff is next Tuesday...
+//   YOU: and the vessel
+//    ->  Yes — 4 bookings. Earliest cutoff is this Monday...      <-- again
+//
+// 1. THE REPETITION. "and the vessel" contains the word "vessel", which is on
+//    the ABOUT_BOOKINGS list, so cardsFor treated it as a NEW question about
+//    bookings, built a fresh table, and fu.opening() read the same summary
+//    sentence out again. Every follow-up the answer layer could not handle
+//    came back as the opening line, which is exactly what she is hearing.
+//
+// 2. THE WORSE ONE. The new table was ALL FOUR bookings, because "and the
+//    vessel" names no port to filter on. So the referent set was silently
+//    replaced — her two Houston rows became four — and the discourse center
+//    moved with it. Her next "the container" resolved to a Long Beach
+//    booking she had never mentioned. A repetition is annoying; quietly
+//    changing what "that booking" means is dangerous.
+//
+// THE RULE. A question only replaces the list when it names something that
+// would CHANGE which bookings belong on screen: a port, or a booking number,
+// or an explicit ask to list them. "And the vessel" names none of those — it
+// is a question ABOUT the rows already there, and the rows must stay put.
+//
+// Deliberately not a length or a wake-word heuristic: "what about Oakland" is
+// short and IS a new subject, while "can you tell me what the vessel on that
+// one is" is long and is not. What matters is whether she named a new filter.
+const LIST_REQUEST = /\b(?:show|list|give|what|which|any|how many)\b[^.?]{0,30}\bbookings?\b/i;
+
+function isFollowUp(question, referents) {
+    const q = String(question || '');
+    if (!q.trim()) return false;
+    // Nothing on screen means there is nothing to follow up ON.
+    if (!referents || !Array.isArray(referents.rows) || !referents.rows.length) return false;
+    // A port is a new filter, always.
+    if (portIn(q)) return false;
+    // An explicit "show me the bookings" is a fresh query even with no port —
+    // she is asking for the whole list back.
+    if (LIST_REQUEST.test(q)) return false;
+    // A booking number is the narrowest new subject there is. Checked against
+    // the numbers that actually exist rather than a made-up pattern, so a
+    // format nobody anticipated cannot slip through as "not a booking".
+    try {
+        const all = bookingRows();
+        const norm = q.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (all.some((b) => b.booking_number
+            && norm.includes(String(b.booking_number).toUpperCase().replace(/[^A-Z0-9]/g, '')))) return false;
+    } catch (e) { /* no bookings is not a reason to redraw */ }
+    return true;
+}
+
 module.exports = {
-    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts,
+    cardsFor, bookingRows, portIn, namesSomewhere, knownPorts, isFollowUp, LIST_REQUEST,
     PORT_ALIASES, PORT_STOPWORDS,
     // Tests need to defeat the 30s cache after writing a fixture store.
     _clearPortCache: () => { _portCache = null; _portCacheAt = 0; },

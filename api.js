@@ -1994,7 +1994,8 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             //     of a spoken sentence means the same thing everywhere
             //   · a proforma is mid-flow, where even the preview ("Send it to
             //     Daekwang?") is waiting on her
-            const answering = (payload) => {
+            const answering = (payloadIn) => {
+                let payload = payloadIn;
                 let awaiting = false;
                 try {
                     const acts = require('./workflow/actions');
@@ -2004,6 +2005,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 if (!awaiting && typeof payload.answer === 'string'
                     && /\?["'”)]*\s*$/.test(payload.answer.trim())) awaiting = true;
                 if (!awaiting && payload.proforma && payload.proforma.stage) awaiting = true;
+                // ── NEVER ANSWER WITH NOTHING ────────────────────────────
+                // Found 2026-09-07: a follow-up that reached the router with
+                // the model down came back with answer:'' — a blank card and
+                // silence, which reads as a dead microphone. Every branch in
+                // this handler is supposed to say something; this is the one
+                // place that can guarantee it, so it does, and it says so in
+                // the log rather than papering over quietly.
+                if (typeof payload.answer !== 'string' || !payload.answer.trim()) {
+                    console.error('[VOICE] a branch produced an EMPTY answer — '
+                        + JSON.stringify({ agent: payload.agent, ok: payload.ok }));
+                    payload = Object.assign({}, payload, {
+                        answer: "Something went wrong working that out — say it again?",
+                        ok: false,
+                    });
+                }
                 // Merged UNDER the payload so an explicit awaiting on a
                 // branch always wins over the inferred one.
                 return res.json(Object.assign({ awaiting }, payload));
@@ -2446,6 +2462,23 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // answer questions nobody anticipated, in her words — while the
             // one thing that must not be guessed, WHICH booking she means,
             // stays deterministic in helpers/voiceMemory.js.
+            const ac = require('./helpers/answerCards');
+            // ── JUDGED ON WHAT SHE SAID, NOT ON WHAT WE WROTE ────────────
+            // `asked` is the RESOLVED sentence: mem.resolveSmart has already
+            // turned "the container" into "booking HOU111". Feeding that to
+            // isFollowUp made it see a booking number and conclude she had
+            // named a new subject — so "what about the container size"
+            // redrew the whole list, from an identifier JARVIS had just
+            // inserted. It was reading its own handwriting back as evidence.
+            //
+            // `stripped` is her words with only the agent name removed. And a
+            // successful pronoun resolution is the strongest evidence there
+            // is that this is a follow-up, so it counts on its own.
+            const followingUp = !answeringBrain
+                && (!!ref.resolved || ac.isFollowUp(stripped, refSet));
+            if (followingUp) {
+                console.log(`[VOICE] following up on the ${refSet.rows.length} row(s) on screen — not redrawing`);
+            }
             const quick = answeringBrain
                 ? null            // her answer belongs to whoever asked
                 : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
@@ -2476,9 +2509,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 });
             }
 
+            // ── AND A FOLLOW-UP NOBODY COULD ANSWER SAYS SO ──────────────
+            // Once the list stopped being redrawn, "and the vessel" fell
+            // through to the router instead — and with the model down it came
+            // back EMPTY. Trading a repetition for silence is not a fix.
+            //
+            // A question about rows on her screen has no business reaching
+            // the brain: the brain has no referent memory, cannot know what
+            // "the vessel" refers to, and its best case is answering about
+            // something else entirely. So this stops here, and names what it
+            // could not find rather than saying nothing.
+            if (followingUp && !quick) {
+                const focus = (ref.resolved && ref.resolved.row) || mem.currentCenter();
+                const who = focus && focus.booking_number ? ` on ${focus.booking_number}` : '';
+                console.log(`[VOICE] follow-up unanswered: "${asked}"${who}`);
+                mem.remember('bot', 'not in what I have');
+                return answering({
+                    agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'following on from what you just asked',
+                    answer: `I don't have that${who}. Ask me something else about it, or say the booking number.`,
+                    ok: true,
+                    // The panel stays exactly as it is. Clearing it here would
+                    // take away the rows the question was about.
+                    cards: null,
+                });
+            }
+
             let cards = null;
+            // ── A FOLLOW-UP KEEPS THE LIST IT IS ABOUT ───────────────────
+            // Apsara, 2026-09-07: "On follow up - why it keeps on saying the
+            // same thing about booking."
+            //
+            // "and the vessel" contains a booking noun, so cardsFor built a
+            // fresh table of ALL bookings and fu.opening() read the same
+            // summary out again — and the referent set was replaced under
+            // her, so the next "that booking" meant a different one. See
+            // helpers/answerCards.isFollowUp for the rule.
             try {
-                cards = require('./helpers/answerCards').cardsFor(asked);
+                cards = followingUp ? null : ac.cardsFor(asked);
                 // A NEW list replaces the old one. cardsFor returns null for
                 // instructions, which is what stops "forward the first one"
                 // from replacing the very list it is pointing at.
