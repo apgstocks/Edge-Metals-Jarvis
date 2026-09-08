@@ -1960,6 +1960,64 @@ section('ACK — one acknowledgement, and never the other one\'s words');
     // fetch" means the request reached nothing; the one fact that identifies
     // WHY is the address it tried, and the message left it out. That omission
     // is what cost her a conversation.
+    // ── TALKING OVER IT IS THE INTERRUPTION ─────────────────────────────
+    // Apsara, 2026-09-09: "say now, jarvis telling something and i say cut the
+    // crap and just forward this to trucker".
+    //
+    // That sentence used to do NOTHING. The gate was `WAKE.test(txt) ||
+    // BARGE_WORDS.test(txt)` — nine approved interruption words — so anything
+    // phrased differently fell through to "ignored outright" and she had to
+    // wait for Jarvis to finish and say it again.
+    //
+    // When somebody talks over you, you stop. You do not check whether they
+    // used a sanctioned word. The only real question is whose voice it is, and
+    // isOwnVoice() — which stops Jarvis interrupting itself — has already run
+    // by that point.
+    ck('an instruction interrupts, not just nine approved stop words',
+       /var meantIt = .*ADDRESSED\.test\(txt\)/.test(src),
+       'a list of nine words decided whether she was allowed to interrupt');
+    // AND IT IS STILL NOT ANY SPEECH. My first attempt made every sentence an
+    // interruption, and the yard-conversation assertion further down caught
+    // it: "no not that one the other pile" is her talking to somebody else,
+    // and Jarvis acting on that is worse than Jarvis ignoring it.
+    ck('  but ordinary talk over the top is still not a command',
+       /ADDRESSED = \/\\b\(forward\|assign/.test(src),
+       'the test is whether she is telling Jarvis to DO something');
+    // The browser has no model to ask, so this list has to exist — and it has
+    // to stay in step with the one the server uses, or the two disagree about
+    // what an instruction is and only one of them is ever right.
+    {
+        const server = require(path.join(ROOT, 'helpers/answerCards.js')).IS_INSTRUCTION.source
+            .replace(/^\\b\(|\)\\b$/g, '').split('|');
+        const m = /ADDRESSED = \/\\b\(([^)]+)\)\\b\/i;/.exec(src);
+        const client = m ? m[1].split('|') : [];
+        const missing = server.filter((w) => client.indexOf(w) === -1);
+        ck('  and the client knows every verb the server calls an instruction',
+           missing.length === 0, 'missing from the client: ' + missing.join(', '));
+    }
+    ck('  and it is the LAST condition, so wake and stop words still work',
+       /if \(WAKE\.test\(txt\) \|\| BARGE_WORDS\.test\(txt\) \|\| meantIt\)/.test(src));
+    ck('  a cough or a syllable does not stop it mid-sentence',
+       /length >= 3/.test(src),
+       'without a floor Jarvis stops at every noise in the yard');
+    ck('  and the echo guard still runs FIRST',
+       src.indexOf('isOwnVoice(txt)') < src.indexOf('var meantIt'),
+       'widening the gate without the echo check would let Jarvis interrupt itself');
+
+    // The instruction inside the interruption has to survive it — that is the
+    // difference between silencing it and redirecting it.
+    ck('what she said after the stop word is carried into the capture',
+       /if \(tail\) pendingSeed = tail;/.test(src));
+    ck('  with the noise words stripped off the front',
+       /cut the crap\|shut it\|be quiet/.test(src),
+       'a small list, and it only ever trims words off something already being acted on');
+    ck('  and the leftover punctuation too',
+       /replace\(\/\^\[\\s,;:\.!-\]\+\/, ''\)/.test(src),
+       '"stop, forward it" leaves ", forward it" in the card she reads back');
+    ck('  and the log says what it carried',
+       /carrying "/.test(src),
+       'a barge-in that silently drops the instruction is the bug being fixed');
+
     // ── "IT SHOWS LISTENING AND DOES NOTHING" ───────────────────────────
     // Apsara, 2026-09-09: "now when i say hey jarvis eventhough it shows
     // listening-it is not transcribing/responding back."

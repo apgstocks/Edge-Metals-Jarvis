@@ -1220,20 +1220,119 @@
                     }
                     return;
                 }
-                if (WAKE.test(txt) || BARGE_WORDS.test(txt)) {
-                    // A real interruption. Anything she said AFTER the stop
-                    // word is carried into the capture as a seed, so "stop —
-                    // make it FOB instead" does not lose the instruction.
+                // ── HOW ALEXA AND SIRI ACTUALLY DO THIS ──────────────────
+                // Apsara asked, mid-fix: "how does alexa and siri handle this
+                // normal humanely interaction". Checked rather than assumed,
+                // and the answer changed how confident this code should be.
+                //
+                // 1. THEY HAVE HARDWARE WE DO NOT. Barge-in on a real device
+                //    needs full-duplex audio and ACOUSTIC ECHO CANCELLATION:
+                //    the device knows its own output signal and subtracts it
+                //    from the microphone before anything else runs. That is
+                //    why an Echo can listen while talking without hearing
+                //    itself. In a browser there is no AEC — isOwnVoice() is a
+                //    STRING COMPARISON standing in for a DSP problem, which is
+                //    also why it latches off after two failures.
+                //
+                // 2. ALEXA STILL WANTS THE WAKE WORD TO BARGE IN WITH A NEW
+                //    REQUEST. Amazon's own documentation: while Alexa is
+                //    speaking, the customer barges in "with wake word, PTT or
+                //    TTT". A button, or the wake word. Wordless interruption
+                //    is limited to stop-type commands.
+                //
+                // 3. WHEN THEY DROP THE WAKE WORD, THEY REPLACE IT WITH
+                //    SOMETHING. Follow-Up Mode allows interrupting without it
+                //    on Echo Show devices — but only "when your device detects
+                //    you are in view of the camera and facing the screen". A
+                //    second modality answering the same question. And Alexa's
+                //    natural turn-taking work is explicitly a model for
+                //    recognising "when their speech is directed at the device,
+                //    when it's not".
+                //
+                // SO: the question I am answering with a verb list is the one
+                // Amazon built a dedicated model and a camera for. That is not
+                // a reason to give up, but it is a reason to be conservative —
+                // and it means "Hey Jarvis, forward this to trucker" mid-
+                // sentence is the RELIABLE path, exactly as it is on an Echo,
+                // while the verb heuristic is a convenience on top.
+                //
+                // ── INTERRUPTING IS SPEAKING, NOT SAYING A PASSWORD ──────
+                // Apsara, 2026-09-09: "say now, jarvis telling something and i
+                // say cut the crap and just forward this to trucker".
+                //
+                // That sentence did NOTHING. It matched neither WAKE nor
+                // BARGE_WORDS — a list of nine approved interruption words —
+                // so it fell to the "ignored outright" return below, and she
+                // had to wait for Jarvis to finish and say it again.
+                //
+                // The list was the wrong idea, for the same reason every other
+                // list this week has been. When somebody talks over you, you
+                // stop. You do not first check whether they used a sanctioned
+                // word. The only genuine question is WHOSE VOICE IT IS, and
+                // isOwnVoice() above already answers that — it is the guard
+                // that stops Jarvis interrupting itself, and it has just run.
+                //
+                // So: her voice, while it is talking, is an interruption.
+                //
+                // WHAT THE LIST IS STILL FOR. Stripping. "Stop" and "shut up"
+                // carry no instruction, so removing them leaves nothing and
+                // the capture simply opens. "Cut the crap and just forward
+                // this to trucker" leaves the instruction, which is carried
+                // into the capture as a seed and acted on. That is the
+                // difference between silencing it and redirecting it, and it
+                // falls out of the same line.
+                //
+                // ── AND IT HAS TO BE ADDRESSED TO JARVIS ─────────────────
+                // My first version made ANY sentence an interruption, and a
+                // test written for exactly this caught it: "no not that one
+                // the other pile" is her talking to somebody in the YARD, and
+                // Jarvis acting on it is worse than Jarvis ignoring it. She
+                // would have reported that within the hour.
+                //
+                // So the test is whether the sentence is an INSTRUCTION — a
+                // thing she is telling Jarvis to do. "Cut the crap and just
+                // forward this to trucker" is; "the other pile" is not.
+                //
+                // YES, THIS IS A VERB LIST, and I have spent the week arguing
+                // against those. The difference, stated so the next person can
+                // judge it: the browser has no model to ask. Server-side that
+                // question is answered by helpers/answerCards.IS_INSTRUCTION
+                // and by Gemini; here there is nothing but the words. The two
+                // are kept in step by a test that compares them, so this
+                // cannot quietly fall behind.
+                //
+                // And the failure directions are not symmetric. A miss means
+                // she says it again, which is what happens today. An
+                // over-trigger means Jarvis interrupts a conversation it was
+                // not part of and acts on it. Erring towards the first.
+                //
+                // THE FLOOR: two syllables of noise is not a sentence.
+                var ADDRESSED = /\b(forward|assign|share|send|pass|hand|shoot|give|email|mail|message|tell|notify|inform|dispatch|book|relay|create|make|draft|raise|show|list|find|check|cancel|archive|recall|pay|record|add|remove|delete|update|change|set)\b/i;
+                var meantIt = txt.replace(/[^a-z0-9]/gi, '').length >= 3 && ADDRESSED.test(txt);
+                if (WAKE.test(txt) || BARGE_WORDS.test(txt) || meantIt) {
                     selfTriggers = 0;
-                    var tail = txt.replace(WAKE, '').replace(BARGE_WORDS, '').trim();
+                    var tail = txt.replace(WAKE, '').replace(BARGE_WORDS, '')
+                        // Politeness that carries no instruction. Left as a
+                        // SMALL list on purpose: it only ever trims words off
+                        // the front of something already being acted on, so a
+                        // miss costs a slightly odd-looking seed and never a
+                        // dropped command.
+                        .replace(/^\s*(?:cut the crap|shut it|be quiet|no no|ok ok|okay okay|listen|hey)\b[,;:.!\s-]*/i, '')
+                        .replace(/^\s*(?:and|but|just|please)\b\s*/i, '')
+                        // "stop, forward it to Sher" leaves ", forward it..."
+                        // once the stop word is removed. Harmless to the model
+                        // and ugly in the log and the card, which is where she
+                        // reads back what it thinks she said.
+                        .replace(/^[\s,;:.!-]+/, '')
+                        .trim();
                     if (tail) pendingSeed = tail;
                     suppressAck = true;
-                    console.log('[VOICE] barge-in: "' + txt.slice(0, 60) + '"');
+                    console.log('[VOICE] barge-in: "' + txt.slice(0, 60) + '"'
+                        + (tail ? ' → carrying "' + tail.slice(0, 60) + '"' : ' (nothing to carry)'));
                     interrupt();
                 }
-                // Anything else while speaking is ignored outright. Not
-                // buffered, not queued: she was talking over an answer and
-                // did not ask for anything.
+                // Below the floor: a cough, a syllable, a fragment of the room.
+                // Not buffered, not queued.
                 return;
             }
 
