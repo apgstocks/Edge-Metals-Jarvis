@@ -185,6 +185,15 @@ console.log('\n=== separate invoice / packing list ===');
 
   const dash = fs.readFileSync(R('dashboard/documents.html'), 'utf8');
   ck('the dashboard offers the checkbox', /id="inv_separate"/.test(dash), true);
+  // Apsara, 2026-09-09: "Separate flag not coming" — she was on the SHIPMENT
+  // PICKER (Step 2), where the flag did not exist; it only lived on the Step 3
+  // review screen. The batch flow steps through Step 3 once per group, so a
+  // per-review-only checkbox would have to be re-ticked for every container.
+  ck('...on the batch bar too, not only the review screen',
+     /id="inv_separate_bulk"/.test(dash), true);
+  ck('...and the two are kept in sync', /function syncInvSeparate\(/.test(dash), true);
+  ck('...and generate reads EITHER of them',
+     /sepEl && sepEl\.checked\) \|\| \(sepBulkEl && sepBulkEl\.checked/.test(dash), true);
   ck('...and downloads both files', /saved_filenames/.test(dash), true);
 }
 

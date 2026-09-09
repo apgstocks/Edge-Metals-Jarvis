@@ -230,6 +230,17 @@ body[data-theme="light"] {
             <input type="checkbox" id="invMergeAll" style="width:15px; height:15px; cursor:pointer;">
             Merge all selected into ONE invoice
           </label>
+          <!-- Apsara, 2026-09-09: "Separate flag not coming" — she was looking
+               HERE, on the shipment picker, and the flag only existed on the
+               Step 3 review screen. She was right to look here: the batch flow
+               steps through Step 3 once per group, so a per-review checkbox
+               would have to be re-ticked for every container in the queue.
+               This one is the batch-wide setting; the two are kept in sync
+               (see syncInvSeparate() below) so ticking either is enough. -->
+          <label id="invSeparateBulkWrap" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); cursor:pointer;">
+            <input type="checkbox" id="inv_separate_bulk" style="width:15px; height:15px; cursor:pointer;">
+            Separate invoice &amp; packing list
+          </label>
           <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Review &amp; generate selected</button>
         </div>
       </div>
@@ -3739,6 +3750,23 @@ async function downloadSavedInvoice(filename, containerNo) {
   return true;
 }
 
+// ── the separate-PDF flag lives in TWO places ─────────────────────────────
+// Step 2's bulk bar (batch-wide, ticked once before a queue of invoices) and
+// Step 3's review screen (per invoice, for the single-container path). They
+// are the same setting, so ticking either ticks the other — otherwise the
+// batch flow silently ignores whichever one she did not use, which is exactly
+// the confusion that produced "Separate flag not coming".
+function syncInvSeparate(fromId) {
+  const a = $('inv_separate'), b = $('inv_separate_bulk');
+  if (!a || !b) return;
+  const src = fromId === 'inv_separate_bulk' ? b : a;
+  a.checked = b.checked = src.checked;
+}
+for (const id of ['inv_separate', 'inv_separate_bulk']) {
+  const el = $(id);
+  if (el) el.addEventListener('change', () => syncInvSeparate(id));
+}
+
 $('btnInvGenerate').addEventListener('click', async () => {
   const payload = collectInvoicePayload();
   if (!payload.inv_no || !payload.line_items.length) { alert('Invoice No and at least one item are required.'); return; }
@@ -3746,8 +3774,10 @@ $('btnInvGenerate').addEventListener('click', async () => {
   setButtonLoading(btn, true, 'Generating…');
   $('invSuccessMsg').textContent = '';
   try {
-    const sepEl = $('inv_separate');
-    payload.separate = !!(sepEl && sepEl.checked);
+    // Either checkbox counts. They are kept in sync, but reading both means a
+    // stale one can never quietly win.
+    const sepEl = $('inv_separate'), sepBulkEl = $('inv_separate_bulk');
+    payload.separate = !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
     const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
     // Separate mode returns saved_filenames (both documents); combined returns
     // the single saved_filename it always has. Downloading in sequence rather
