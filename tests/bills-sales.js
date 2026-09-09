@@ -58,6 +58,17 @@ fs.writeFileSync(cfg.BOOKINGS_FILE, JSON.stringify({
         containers: [{ seq: 1, size: '40HC', container_number: 'MSKU1234567',
                        supplier: 'Eccomelt', trucker: 'Bayou Haulage' }],
     },
+    // TWO containers, because that is her case: "There might be two
+    // containers under a booking. Container number will be different for
+    // every load." One bill is one container.
+    'DALA23991600': {
+        booking_number: 'DALA23991600', carrier: 'HMM',
+        port_of_loading: 'LOS ANGELES', port_of_discharge: 'BUSAN',
+        containers: [
+            { seq: 1, size: '40HC', container_number: 'HMMU1111111', supplier: 'Eccomelt', trucker: 'Sher Trucking' },
+            { seq: 2, size: '40HC', container_number: 'HMMU2222222', supplier: 'Oakland Metals', trucker: 'Sher Trucking' },
+        ],
+    },
 }, null, 2));
 
 const bills = require(path.join(ROOT, 'helpers/bills'));
@@ -93,14 +104,19 @@ section('A — her formulas, exactly as she gave them');
     // 44,000 gross with 29,500 of tares. Her formula: Net = Gross − (Truck +
     // Container + Chassis + Boxes).
     const b = bills.compute({ gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
-                              supplier_price: 0.32, trucking_amount: 1200, advance: 2000 });
+                              supplier_price: 0.32, trucking_amount: 1200 });
     ck('Total is the four tares added up', b.total === 29500, String(b.total));
     ck('  Net (lbs) is gross minus that', b.net_lb === 14500, String(b.net_lb));
     ck('  Net (MT) is lbs over 2204.62262', b.net_mt === 6.577, String(b.net_mt));
     ck('  a price under $10 is read as per POUND', b.price_unit === 'lb', String(b.price_unit));
     ck('  so the amount is net_lb x price', b.amount === 4640, String(b.amount));
-    // Her words: "Amount − Trucking − Advance".
-    ck('  Balance is amount minus trucking minus advance', b.balance === 1440, String(b.balance));
+    // Her formula was "Amount − Trucking − Advance"; she removed Advance on
+    // 2026-09-10, so it is Amount − Trucking.
+    ck('  Balance is amount minus trucking', b.balance === 3440, String(b.balance));
+    ck('  and Advance is gone entirely, not just hidden',
+       !bills.COLUMNS.some((c) => c.key === 'advance') && !bills.WRITABLE.includes('advance')
+       && !('advance' in bills.summary([])),
+       'a column dropped from a form is still a number sitting in a record affecting a balance');
 
     // ── THE $10 BOUNDARY, BOTH SIDES ─────────────────────────────────────
     // This is the assertion that matters most in the file. lbs and MT differ
@@ -177,19 +193,20 @@ section('D — her columns, in her order');
     const wanted = ['Source/Destination', 'Carrier', 'Trucking', 'Date', 'Supplier', 'Invoice no',
         'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck', 'Container',
         'Chassis', 'Boxes', 'Total', 'Net weight (lbs)', 'Net weight (MT)', 'Supplier price',
-        'Supplier invoice amount', 'Trucking', 'Advance', 'Balance'];
-    ck('the bill has all 23 columns she listed', bills.COLUMNS.length === 23, String(bills.COLUMNS.length));
-    ck('  in her order', bills.COLUMNS.map((c) => c.label).join('|') === wanted.join('|'),
-       bills.COLUMNS.map((c) => c.label).join('|'));
+        'Supplier invoice amount', 'Trucking', 'Balance'];
+    ck('the bill has her columns, less the Advance she removed',
+       bills.tableColumns().length === 22, String(bills.tableColumns().length));
+    ck('  in her order', bills.tableColumns().map((c) => c.label).join('|') === wanted.join('|'),
+       bills.tableColumns().map((c) => c.label).join('|'));
     ck('  with the six computed ones marked',
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(',')
        === 'total,net_lb,net_mt,amount,balance', bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
 
     const sw = ['Customer name', 'Date', 'Invoice number', 'HBL number', 'Proforma date',
         'Reference', 'Weight', 'Invoice price', 'Invoice amount', 'Freight charges'];
-    ck('the sale has all 10 she listed', sales.COLUMNS.length === 10, String(sales.COLUMNS.length));
-    ck('  in her order', sales.COLUMNS.map((c) => c.label).join('|') === sw.join('|'),
-       sales.COLUMNS.map((c) => c.label).join('|'));
+    ck('the sale has all 10 she listed', sales.tableColumns().length === 10, String(sales.tableColumns().length));
+    ck('  in her order', sales.tableColumns().map((c) => c.label).join('|') === sw.join('|'),
+       sales.tableColumns().map((c) => c.label).join('|'));
 
     // A client that could post a balance not following from its own weights
     // is a client that can disagree with the server about money.
@@ -209,17 +226,29 @@ section('E — the routes, because a helper nothing calls is not a feature');
     let r = await req('GET', '/api/bills', { sid: admin });
     ck('GET /api/bills answers', r.status === 200, String(r.status));
     ck('  and ships the columns with the data',
-       Array.isArray(r.json.columns) && r.json.columns.length === 23,
+       Array.isArray(r.json.columns) && r.json.columns.length === 22,
        'the table is built from the server list, so the two cannot drift');
+    // The FORM walks groups, the TABLE walks her order. Both travel, so
+    // neither client re-derives one from the other and gets it subtly wrong.
+    ck('  plus the grouped fields the form needs',
+       Array.isArray(r.json.fields) && Array.isArray(r.json.groups) && r.json.groups.length === 4,
+       JSON.stringify((r.json.groups || []).map((g) => g.id)));
+    ck('  with the two Truckings told apart for the form',
+       r.json.fields.filter((c) => /^trucking/i.test(c.key))
+         .every((c) => c.formLabel && c.formLabel !== 'Trucking'),
+       'both were labelled TRUCKING on two identical empty boxes — her screenshot');
+    ck('  and the typeable invoice amount carries the key to post it under',
+       (r.json.fields.find((c) => c.key === 'amount') || {}).writeKey === 'supplier_invoice_amount',
+       'without writeKey the derived column gets no input and her figure cannot be entered');
 
     r = await req('POST', '/api/bills', { sid: admin, body: {
         date: '2026-09-10', supplier: 'Eccomelt', booking_no: '272766480',
         gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
-        supplier_price: 0.32, trucking_amount: 1200, advance: 2000 } });
+        supplier_price: 0.32, trucking_amount: 1200 } });
     ck('POST /api/bills saves it', r.status === 200 && !!r.json.bill, r.raw.slice(0, 120));
     const billId = r.json.bill && r.json.bill.id;
     ck('  and the response carries the arithmetic',
-       r.json.bill.net_lb === 14500 && r.json.bill.balance === 1440 && r.json.bill.price_unit === 'lb',
+       r.json.bill.net_lb === 14500 && r.json.bill.balance === 3440 && r.json.bill.price_unit === 'lb',
        JSON.stringify({ n: r.json.bill.net_lb, b: r.json.bill.balance }));
 
     // The derived columns are computed server-side even when a client tries
@@ -234,7 +263,7 @@ section('E — the routes, because a helper nothing calls is not a feature');
 
     r = await req('GET', '/api/bills', { sid: admin });
     ck('  the list totals reconcile with the row',
-       r.json.summary.count === 1 && r.json.summary.balance === 1440,
+       r.json.summary.count === 1 && r.json.summary.balance === 3440,
        JSON.stringify(r.json.summary));
 
     // ── PRE-FILL FROM THE BOOKING SHE PICKS ──────────────────────────────
@@ -266,6 +295,49 @@ section('E — the routes, because a helper nothing calls is not a feature');
     }
     r = await req('GET', '/api/bills/from-booking/NOPE999', { sid: admin });
     ck('  an unknown booking says so rather than filling nothing silently', r.status === 404);
+
+    // ── ONE BILL IS ONE CONTAINER ────────────────────────────────────────
+    // Apsara, 2026-09-10: "There might be two containers under a booking.
+    // Container number will be different for every load." The first version
+    // filled container 1 and said nothing, so three bills off a 3-container
+    // booking would have carried the same container number.
+    const one = await req('GET', '/api/bills/from-booking/DALA23991600?container=1', { sid: admin });
+    const two = await req('GET', '/api/bills/from-booking/DALA23991600?container=2', { sid: admin });
+    ck('each container on a booking pre-fills its OWN number',
+       one.json.prefill.container_no === 'HMMU1111111'
+       && two.json.prefill.container_no === 'HMMU2222222',
+       JSON.stringify([one.json.prefill.container_no, two.json.prefill.container_no]));
+    ck('  and its own supplier, which also differs per container',
+       one.json.prefill.supplier === 'Eccomelt' && two.json.prefill.supplier === 'Oakland Metals',
+       JSON.stringify([one.json.prefill.supplier, two.json.prefill.supplier]));
+    ck('  while the booking-level fields stay the same on both',
+       one.json.prefill.carrier === two.json.prefill.carrier
+       && one.json.prefill.route === two.json.prefill.route);
+    ck('  and both containers are offered so she can pick',
+       Array.isArray(two.json.containers) && two.json.containers.length === 2,
+       'nothing is filled until she says which one this bill is for');
+
+    // ── THE LIVE TOTALS COME FROM THE SERVER ─────────────────────────────
+    // She fills five weights and four money fields to produce a Balance she
+    // could not see until she saved. The preview shows it as she types — and
+    // asks the server, rather than being a second implementation of her
+    // formulas in the browser.
+    r = await req('POST', '/api/bills/preview', { sid: admin, body: {
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        supplier_price: 0.32, trucking_amount: 1200 } });
+    ck('a preview computes without saving',
+       r.status === 200 && r.json.net_lb === 14500 && r.json.balance === 3440,
+       JSON.stringify({ n: r.json.net_lb, b: r.json.balance }));
+    ck('  and really saves nothing',
+       (await req('GET', '/api/bills', { sid: admin })).json.summary.count === 1,
+       'a preview that writes a row is a row she did not ask for');
+    ck('  a half-filled form previews what it can, without inventing zeros',
+       (await req('POST', '/api/bills/preview', { sid: admin, body: { gross: 44000 } }))
+         .json.missing_tares.length === 4,
+       'the warning is what tells her the total is not finished');
+    const sp = await req('POST', '/api/sales/preview', { sid: admin, body: { weight: 29000, invoice_price: 0.41, freight_charges: 1500 } });
+    ck('  and sales previews too', sp.json.amount === 11890 && sp.json.net_of_freight === 10390,
+       JSON.stringify(sp.json));
 
     r = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { seal_no: 'SEAL-1' } });
     ck('PUT patches one field', r.status === 200 && r.json.bill.seal_no === 'SEAL-1');
@@ -333,6 +405,20 @@ section('F — who may see her supplier prices');
     ck('  and the price cell shows its unit',
        /'\/lb'/.test(html) && /'\/MT'/.test(html),
        'her answer: "Yes — show \'/lb\' or \'/MT\' on the row"');
+
+    // ── "This is ugly and not user friendly" (2026-09-10) ────────────────
+    ck('the form uses the app\'s own field styling, not browser default',
+       /<div class="field">\s*<label>\$\{esc\(c\.formLabel/.test(html),
+       'bare inputs render white on a dark page — every other form here uses .field');
+    ck('  and arrives in sections rather than one wall of boxes',
+       /ledgerState\.groups/.test(html) && /c\.group === g\.id/.test(html),
+       '23 identical boxes with no grouping is what she was looking at');
+    ck('  with the running totals asked of the SERVER',
+       /\$\{K\.path\}\/preview/.test(html),
+       'computing her formulas in the browser would be a second implementation');
+    ck('  and a container picker when a booking has more than one',
+       /boxes\.length > 1/.test(html) && /led-box/.test(html),
+       '"There might be two containers under a booking"');
 }
 
 if (server) server.close();

@@ -4658,10 +4658,10 @@ const LEDGER_KINDS = {
   bills: {
     eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill',
     path: '/api/bills', listKey: 'bills', itemKey: 'bill',
-    money: ['supplier_price', 'amount', 'trucking_amount', 'advance', 'balance'],
+    money: ['supplier_price', 'amount', 'trucking_amount', 'balance'],
     weights: ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt'],
-    cards: [['Net (MT)', 'net_mt', 'num'], ['Invoiced', 'amount', 'money'],
-            ['Advance', 'advance', 'money'], ['Balance', 'balance', 'money']],
+    cards: [['Net (lbs)', 'net_lb', 'num'], ['Net (MT)', 'net_mt', 'num'],
+            ['Invoiced', 'amount', 'money'], ['Balance', 'balance', 'money']],
   },
   sales: {
     eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale',
@@ -4717,7 +4717,8 @@ async function renderLedgerTab(kind) {
   const rows = asArray(data[K.listKey]) .length ? data[K.listKey] : (data[K.listKey] || []);
   const columns = Array.isArray(data.columns) ? data.columns : [];
   const sum = data.summary || {};
-  ledgerState = { kind, rows, columns, summary: sum, writable: data.writable || [] };
+  ledgerState = { kind, rows, columns, summary: sum, writable: data.writable || [],
+                  fields: data.fields || columns, groups: data.groups || [] };
 
   const cards = K.cards.map(([label, key, how]) => `
     <div class="card" style="padding:12px;">
@@ -4781,79 +4782,203 @@ async function renderLedgerTab(kind) {
   });
 }
 
-// The add form. Built from the same COLUMNS list, so a field added to the
-// store appears here without an edit — and the DERIVED ones are deliberately
-// absent, because a client that could post a balance not following from its
-// own weights is a client that can disagree with the server about money.
+// ── THE ADD FORM ─────────────────────────────────────────────────────────
+// Apsara, 2026-09-10, on the first version: "This is ugly and not user
+// friendly." It was: seventeen identical browser-default white boxes on a
+// dark page, in one undifferentiated 3-column wall, with the word TRUCKING
+// appearing twice — and no way at all to see what the numbers added up to
+// until she pressed Save.
+//
+// Four things were actually wrong, and only the first was cosmetic:
+//   1. It ignored the app's own `.field` convention, so the inputs fell back
+//      to browser default. Everything else on this page uses .field.
+//   2. 23 fields with no grouping. They arrive as four short sections now.
+//   3. Two fields both labelled "Trucking" — the haulier and the cost. In the
+//      TABLE her column order tells them apart; in a form it cannot, so the
+//      store carries a `formLabel` for exactly those.
+//   4. No live totals. She fills five weights and four money fields to
+//      produce a Balance she cannot see. The preview below fixes that, and it
+//      asks the SERVER rather than doing her arithmetic a second time here.
+//
+// Built from the `fields` the server sends, so a column added to the store
+// appears here without an edit.
 function openLedgerForm(kind) {
   const K = LEDGER_KINDS[kind];
-  const cols = ledgerState.columns.filter((c) => !c.derived);
-  const isNum = (k) => K.money.includes(k) || K.weights.includes(k);
-  const fields = cols.map((c) => `
-    <label style="display:block; margin-bottom:8px;">
-      <span style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:3px;">${esc(c.label)}</span>
-      <input name="${esc(c.key)}" ${isNum(c.key) ? 'type="number" step="any"' : 'type="text"'}
-             ${isLedgerDate(c.key) ? 'placeholder="MM/DD/YYYY" data-ledger-date="1"' : ''}
-             style="width:100%; padding:6px 8px; font-size:12px;">
-    </label>`).join('');
+  const all = ledgerState.fields || [];
+  const groups = ledgerState.groups || [];
 
+  // Derived columns get an input ONLY when the store gave them a writeKey —
+  // "Supplier invoice amount" is computed by default AND typeable off the
+  // supplier's paperwork, and compute() prefers hers. Everything else derived
+  // is read-only by construction: a client that could post its own Balance is
+  // a client that can disagree with the server about money.
+  const inputFor = (c) => {
+    const name = c.writeKey || c.key;
+    const attrs = [
+      `name="${esc(name)}"`,
+      c.num ? 'type="number" step="any"' : 'type="text"',
+      c.date ? 'placeholder="MM/DD/YYYY" data-ledger-date="1" autocomplete="off"'
+             : (c.placeholder ? `placeholder="${esc(c.placeholder)}"` : ''),
+      c.num ? 'data-ledger-num="1"' : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="field">
+        <label>${esc(c.formLabel || c.label)}${c.unit ? ` <span style="opacity:.6;">(${esc(c.unit)})</span>` : ''}</label>
+        <input ${attrs}>
+        ${c.hint ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:4px;">${esc(c.hint)}</div>` : ''}
+      </div>`;
+  };
+
+  const sections = groups.map((g) => {
+    const mine = all.filter((c) => c.group === g.id && (!c.derived || c.writeKey));
+    if (!mine.length) return '';
+    return `
+      <div style="margin-bottom:20px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); padding-bottom:5px; margin-bottom:12px;">${esc(g.label)}</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px 14px;">${mine.map(inputFor).join('')}</div>
+      </div>`;
+  }).join('');
+
+  // ── ONE BILL IS ONE CONTAINER ────────────────────────────────────────
+  // Apsara, 2026-09-10: "There might be two containers under a booking.
+  // Container number will be different for every load."
+  //
+  // That is the whole reason this picker exists. The first version filled
+  // container 1 and said nothing — so on a 3-container booking she would have
+  // got the same container number on all three bills, which is the kind of
+  // wrong that reaches a customs entry.
   const prefill = kind === 'bills' ? `
-    <div class="card" style="padding:10px 12px; margin-bottom:12px;">
-      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:5px;">Start from a booking</div>
-      <div style="display:flex; gap:6px;">
-        <input id="ledPrefillBkg" placeholder="Booking number" style="flex:1; padding:6px 8px; font-size:12px;">
-        <button id="ledPrefillGo" class="btn btn-ghost" style="font-size:11px; padding:6px 10px;">Fill</button>
+    <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:20px; background:var(--surface-sunken);">
+      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px;">Start from a booking</div>
+      <div style="display:flex; gap:8px;">
+        <input id="ledPrefillBkg" placeholder="Booking number" autocomplete="off"
+               style="flex:1; padding:9px 11px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:13px;">
+        <button id="ledPrefillGo" class="btn btn-secondary" style="font-size:12px; padding:8px 16px;">Fill</button>
       </div>
-      <div id="ledPrefillNote" style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:5px;">Carrier, route, container, supplier and trucker come off the booking. All still editable.</div>
+      <div id="ledPrefillPick" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:9px;"></div>
+      <div id="ledPrefillNote" style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:7px;">One bill is one container. Carrier, route, seal, supplier and trucker come off the booking — all still editable.</div>
     </div>` : '';
 
   const html = `
-    <div id="ledgerModal" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:9000; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 16px;">
-      <div class="card" style="width:min(760px,100%); padding:20px;">
-        <h3 style="margin:0 0 12px; font-size:15px; text-transform:uppercase;">${K.addLabel.replace('+ ', '')}</h3>
-        ${prefill}
-        <form id="ledgerForm" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:0 12px;">${fields}</form>
-        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
-          <button id="ledCancel" class="btn btn-ghost" style="font-size:12px;">Cancel</button>
-          <button id="ledSave" class="btn btn-primary" style="font-size:12px;">Save</button>
+    <div id="ledgerModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9000; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(880px,100%); padding:24px 26px 20px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px;">
+          <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${K.addLabel.replace('+ ', '')}</h3>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(K.eyebrow.replace('// ', ''))}</span>
         </div>
-        <div id="ledErr" style="color:var(--status-warn); font-family:var(--font-mono); font-size:11px; margin-top:8px;"></div>
+        ${prefill}
+        <form id="ledgerForm">${sections}</form>
+        <div id="ledPreview" style="border-top:1px solid var(--border-subtle); padding-top:14px; margin-top:4px; display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px;"></div>
+        <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:10px;"></div>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+          <button id="ledCancel" class="btn btn-secondary" style="font-size:12px; padding:9px 18px;">Cancel</button>
+          <button id="ledSave" class="btn btn-primary" style="font-size:12px; padding:9px 22px;">Save</button>
+        </div>
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+
   // Every date box gets the text-plus-hidden-picker treatment, so it reads
   // MM/DD/YYYY on any device AND still opens the platform calendar. Wired
-  // here rather than in the markup above, which is the whole point of
+  // here rather than in the markup, which is the whole point of
   // wireUsDateField — a call site cannot forget one it does not write.
   document.querySelectorAll('#ledgerForm [data-ledger-date]').forEach((el) => wireUsDateField(el));
   const close = () => { const m = $('ledgerModal'); if (m) m.remove(); };
   $('ledCancel').onclick = close;
 
+  const readForm = () => {
+    const body = {};
+    new FormData($('ledgerForm')).forEach((v, k) => { if (String(v).trim() !== '') body[k] = v; });
+    return body;
+  };
+
+  // ── THE RUNNING TOTAL, COMPUTED WHERE IT IS ALWAYS COMPUTED ──────────
+  // Asks /api/{kind}/preview rather than doing the sums here. Debounced so
+  // typing a five-digit weight is one call, not five.
+  let previewTimer = null;
+  const paintPreview = async () => {
+    try {
+      const r = await api(`${K.path}/preview`, { method: 'POST', body: JSON.stringify(readForm()) });
+      const cells = K.cards.map(([label, key, how]) => {
+        const v = r[key];
+        const shown = how === 'money' ? ledMoney(v) : ledNum(v);
+        return `<div>
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${label}</div>
+          <div style="font-size:15px; font-weight:700; margin-top:3px; color:${v === null || v === undefined ? 'var(--text-faint)' : 'var(--text-strong)'};">${shown}</div>
+        </div>`;
+      });
+      // The unit is the thing worth shouting about — see helpers/bills.js.
+      if (r.price_unit) {
+        cells.push(`<div>
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Priced per</div>
+          <div style="font-size:15px; font-weight:700; margin-top:3px;">${r.price_unit === 'lb' ? 'pound' : 'metric ton'}</div>
+        </div>`);
+      }
+      // Warnings, because a total that cannot be trusted must say so rather
+      // than sit there looking finished.
+      let warn = '';
+      if (r.missing_tares && r.missing_tares.length) {
+        warn += `<div style="grid-column:1/-1; font-family:var(--font-mono); font-size:10px; color:var(--status-warn);">No weight for ${esc(r.missing_tares.join(', '))} — the net is computed without ${r.missing_tares.length === 1 ? 'it' : 'them'}.</div>`;
+      }
+      if (r.amount_differs !== null && r.amount_differs !== undefined) {
+        warn += `<div style="grid-column:1/-1; font-family:var(--font-mono); font-size:10px; color:var(--status-warn);">Your figure is ${ledMoney(r.amount_differs)} off the ${ledMoney(r.computed_amount)} the weight and price give.</div>`;
+      }
+      $('ledPreview').innerHTML = cells.join('') + warn;
+    } catch (e) { /* a preview that fails must never block the form */ }
+  };
+  $('ledgerForm').addEventListener('input', () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(paintPreview, 220);
+  });
+  paintPreview();
+
   if (kind === 'bills') {
+    const fillFrom = (prefillObj, label) => {
+      let filled = 0;
+      Object.entries(prefillObj || {}).forEach(([k, v]) => {
+        const el = document.querySelector(`#ledgerForm [name="${k}"]`);
+        if (el && v !== null && v !== undefined && v !== '') { el.value = v; filled += 1; }
+      });
+      // SAID, not silent. Filling six fields without saying so is six fields
+      // she will not think to check.
+      $('ledPrefillNote').textContent = filled
+        ? `Filled ${filled} field${filled === 1 ? '' : 's'} from ${label} — check them before saving.`
+        : `${label} had nothing to fill in.`;
+      paintPreview();
+    };
+
     $('ledPrefillGo').onclick = async () => {
       const bkg = ($('ledPrefillBkg').value || '').trim();
       if (!bkg) return;
+      $('ledPrefillPick').innerHTML = '';
       try {
         const r = await api(`/api/bills/from-booking/${encodeURIComponent(bkg)}`);
-        let filled = 0;
-        Object.entries(r.prefill || {}).forEach(([k, v]) => {
-          const el = document.querySelector(`#ledgerForm [name="${k}"]`);
-          if (el && v !== null && v !== undefined && v !== '') { el.value = v; filled += 1; }
-        });
-        // SAID, not silent. Filling five fields without saying so is five
-        // fields she will not think to check.
-        $('ledPrefillNote').textContent = filled
-          ? `Filled ${filled} field${filled === 1 ? '' : 's'} from ${bkg} — check them before saving.`
-          : `Booking ${bkg} had nothing to fill in.`;
+        const boxes = Array.isArray(r.containers) ? r.containers : [];
+        if (boxes.length > 1) {
+          // Her case, in her words. Nothing is filled until she picks WHICH
+          // container, because the container number is the one field that
+          // differs between two bills off the same booking.
+          $('ledPrefillPick').innerHTML = boxes.map((c) => `
+            <button type="button" class="btn btn-secondary led-box" data-seq="${esc(c.seq)}" style="font-size:11px; padding:6px 11px;">
+              ${esc(c.container_number || `Container ${c.seq}`)}${c.size ? ` · ${esc(c.size)}` : ''}${c.supplier ? ` · ${esc(c.supplier)}` : ''}
+            </button>`).join('');
+          $('ledPrefillNote').textContent = `${boxes.length} containers on ${bkg} — pick the one this bill is for.`;
+          document.querySelectorAll('.led-box').forEach((b) => {
+            b.onclick = async () => {
+              const rr = await api(`/api/bills/from-booking/${encodeURIComponent(bkg)}?container=${encodeURIComponent(b.dataset.seq)}`);
+              fillFrom(rr.prefill, `${bkg} container ${b.dataset.seq}`);
+            };
+          });
+          return;
+        }
+        fillFrom(r.prefill, bkg);
       } catch (e) { $('ledPrefillNote').textContent = e.message || 'Could not read that booking'; }
     };
   }
 
   $('ledSave').onclick = async () => {
-    const body = {};
-    new FormData($('ledgerForm')).forEach((v, k) => { if (String(v).trim() !== '') body[k] = v; });
+    $('ledErr').textContent = '';
     try {
-      await api(K.path, { method: 'POST', body: JSON.stringify(body) });
+      await api(K.path, { method: 'POST', body: JSON.stringify(readForm()) });
       close();
       renderLedgerTab(kind);
     } catch (e) { $('ledErr').textContent = e.message || 'Could not save it'; }

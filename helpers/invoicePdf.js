@@ -16,7 +16,6 @@
 // substitution from the old template is not used by this one.
 
 const fs = require('fs');
-const { round2 } = require('./money');
 const path = require('path');
 const puppeteer = require('puppeteer');
 
@@ -87,6 +86,52 @@ function itemLabel(itemDesc, invNo) {
     return '';
 }
 
+// EVERY material on the invoice, not just the first one.
+//
+// Apsara, 2026-09-09: "Invoice description should be Aluminium combo, regular
+// combo as both are there."
+//
+// The header label was built from lineItems[0] alone, so an invoice covering
+// two containers of different materials announced itself as whichever one
+// happened to be first — "AL-ALUMINIUM COMBO" on a document that is half
+// regular combo. On a customs document that is not a cosmetic problem.
+//
+// TWO SOURCES, in order of how much they can be trusted:
+//
+//   1. Each line item's own description, matched against ITEM_CODE_MAP.
+//      De-duplicated and kept in the order they appear, so a five-container
+//      invoice of one material still reads as one label.
+//
+//   2. Only if NOT ONE description matched: the codes carried in the Inv No.
+//      itself. getItemCode already does this per item, but it returns the
+//      FIRST code it finds in the number — so on "260901_AL_26JY96_260901_RC_
+//      26JY97" every unmatched item resolved to AL, quietly relabelling the
+//      regular combo as aluminium. Reading ALL of them instead is both more
+//      honest and exactly what she asked for.
+function itemLabels(lineItems, invNo) {
+    const out = [];
+    const seen = new Set();
+    const push = (label) => {
+        if (!label || seen.has(label)) return;
+        seen.add(label);
+        out.push(label);
+    };
+
+    for (const it of lineItems || []) {
+        // Deliberately NOT passing invNo here. The per-item pass must answer
+        // "what did THIS line say"; letting it fall back to the number is what
+        // produced the mislabel above.
+        push(itemLabel(it && it.item_desc, null));
+    }
+    if (out.length) return out.join(', ');
+
+    for (const t of String(invNo || '').split(/[\s_]+/)) {
+        const code = t.toUpperCase();
+        if (ITEM_CODE_MAP[code]) push(`${code}-${ITEM_CODE_MAP[code]}`);
+    }
+    return out.join(', ');
+}
+
 // Normalizes whatever the client sent into a flat [{label, amount}, ...]
 // list. Apsara's redesign ("Invoice Notes" — replaces the old dedicated
 // Freight Deduction field) lets her add arbitrary labeled adjustment rows,
@@ -126,10 +171,7 @@ function buildInvoiceClassicHtml(data) {
     const itemRowsHtml = lineItems.map((item, i) => {
         const qty = Number(item.weight) || 0;
         const rate = Number(item.rate) || 0;
-        // round2 on the fallback: when the sheet supplied no amount this
-        // computes one, and qty * rate is raw floating point. An invoice line
-        // reading 15.524999999999999 is not a thing to send a customer.
-        const amount = round2(Number(item.amount != null ? item.amount : qty * rate));
+        const amount = Number(item.amount != null ? item.amount : qty * rate);
         // Booking#/Container#/Seal# use a smaller 8.5pt (was 8pt, bumped
         // one step less than the other columns' +1pt) + tighter padding
         // and nowrap+hidden-overflow — real Helvetica (reportlab) renders
@@ -189,7 +231,8 @@ function buildInvoiceClassicHtml(data) {
     const rest = addr.length > 1 ? addr.slice(1) : [];
     const buyerAddressLines = rest.map(escapeHtml).join('<br>');
 
-    const firstItemDesc = lineItems.length ? lineItems[0].item_desc : '';
+    // (firstItemDesc removed 2026-09-09 — the header label now reads EVERY
+    //  line item via itemLabels(), not just the first one.)
     const otherRefParts = [];
     if (data.reference) otherRefParts.push(escapeHtml(data.reference));
     if (data.proforma_date) otherRefParts.push(`Proforma Date: ${escapeHtml(formatDate(data.proforma_date))}`);
@@ -219,8 +262,15 @@ function buildInvoiceClassicHtml(data) {
 
     let html = loadTemplate();
     const subs = {
-        inv_no: escapeHtml(data.inv_no || ''),
-        item_label: escapeHtml(itemLabel(firstItemDesc, data.inv_no)),
+        // <wbr> after each underscore: a real break OPPORTUNITY that
+        // contributes no character, so the wrapped number still copies out of
+        // the PDF as plain text. Without it, overflow-wrap breaks at the box
+        // edge wherever that lands — splitting "26JY96" into "26JY9" and "6"
+        // on a financial document. With it, a combined number breaks between
+        // whole invoice numbers. Escape FIRST, then insert the tag, or the
+        // angle brackets get escaped too.
+        inv_no: escapeHtml(data.inv_no || '').replace(/_/g, '_<wbr>'),
+        item_label: escapeHtml(itemLabels(lineItems, data.inv_no)),
         inv_date: escapeHtml(formatDate(data.inv_date)),
         other_ref: otherRef,
         buyer_name: escapeHtml(buyerName),
@@ -237,12 +287,6 @@ function buildInvoiceClassicHtml(data) {
         packing_rows: packingRowsHtml.join('\n'),
         total_net_lbs_fmt: formatInt(totalNetLbs),
         total_net_mt_fmt: totalNetMt.toFixed(3),
-        // The signature used to be base64-inlined directly in the template.
-        // Pulled out to assets/shared/signature.png so the proforma can draw
-        // the SAME image — one file, not two copies that can drift apart.
-        // Dimensions preserved exactly (9mm block, 8mm x 35mm image) so this
-        // renders pixel-identically to what it replaced.
-        signature_block: require('./signature').signatureBlockHtml({ height: '9mm', maxHeight: '8mm', maxWidth: '35mm', align: 'center', justify: 'center', marginBottom: null }),
     };
     for (const [key, val] of Object.entries(subs)) {
         html = html.split(`{{${key}}}`).join(val);
@@ -259,26 +303,11 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
-        // One page, per Apsara 2026-08-29 ("pdf should be one page only
-        // always") after an invoice put its entire body on page 1 and only
-        // the declaration and signature on page 2.
-        //
-        // The height is measured in the browser and the scale derived from
-        // it, rather than a fixed factor: every extra item adds a row to the
-        // item table AND to the packing list, so the right scale is different
-        // for a 4-line invoice and a 12-line one. See helpers/pdfFit.js for
-        // why this scales rather than tightening the layout — the fixed mm
-        // heights in this template ARE the layout she asked to be reproduced
-        // exactly.
-        //
-        // @page here is 210mm x 297mm and preferCSSPageSize honours it, so
-        // A4 is the height to fit to.
-        const { pdfFittedToOnePage } = require('./pdfFit');
-        const pdf = await pdfFittedToOnePage(page, {
+        const pdf = await page.pdf({
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        }, { pageHeightMm: 297, pageWidthMm: 210, label: `invoice ${data && data.inv_no ? data.inv_no : ''}`.trim() });
+        });
         // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
         // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
         return Buffer.from(pdf);

@@ -117,17 +117,36 @@ function compute(input) {
 // computes, so the client renders them read-only and cannot post a total that
 // does not follow from its own weight and price.
 const COLUMNS = [
-    { key: 'customer',       label: 'Customer name' },
-    { key: 'date',           label: 'Date' },
-    { key: 'invoice_no',     label: 'Invoice number' },
-    { key: 'hbl_no',         label: 'HBL number' },
-    { key: 'proforma_date',  label: 'Proforma date' },
-    { key: 'reference',      label: 'Reference' },
-    { key: 'weight',         label: 'Weight' },
-    { key: 'invoice_price',  label: 'Invoice price' },
-    { key: 'amount',         label: 'Invoice amount',  derived: true },
-    { key: 'freight_charges', label: 'Freight charges' },
+    { key: 'customer',       label: 'Customer name',  group: 'customer' },
+    { key: 'date',           label: 'Date',           group: 'customer', date: true },
+    { key: 'reference',      label: 'Reference',      group: 'customer' },
+
+    { key: 'invoice_no',     label: 'Invoice number', group: 'documents' },
+    { key: 'hbl_no',         label: 'HBL number',     group: 'documents', placeholder: 'House B/L' },
+    { key: 'proforma_date',  label: 'Proforma date',  group: 'documents', date: true },
+
+    { key: 'weight',         label: 'Weight',         group: 'money', num: true, unit: 'lbs',
+      hint: 'pounds unless you say otherwise' },
+    { key: 'invoice_price',  label: 'Invoice price',  group: 'money', num: true, unit: '$',
+      hint: 'under $10 is read as per lb, $10+ as per MT' },
+    // Same split as bills: stored under `amount`, typed as `invoice_amount`,
+    // and hers wins over the computed figure.
+    { key: 'amount',         label: 'Invoice amount', group: 'money', derived: true, unit: '$',
+      writeKey: 'invoice_amount', num: true, hint: 'leave blank to use the computed figure' },
+    { key: 'freight_charges', label: 'Freight charges', group: 'money', num: true, unit: '$' },
 ];
+
+// Her ten, in the order she listed them, for the table. The form uses GROUPS.
+const TABLE_ORDER = ['customer', 'date', 'invoice_no', 'hbl_no', 'proforma_date',
+    'reference', 'weight', 'invoice_price', 'amount', 'freight_charges'];
+
+const GROUPS = [
+    { id: 'customer',  label: 'Customer' },
+    { id: 'documents', label: 'Documents' },
+    { id: 'money',     label: 'Weight & money' },
+];
+
+const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
 
 // `amount` is derived but ALSO writable — she can type the figure off the
 // customer's invoice, and compute() prefers it when she does. That is why it
@@ -232,7 +251,7 @@ function summary(rows) {
 }
 
 module.exports = {
-    COLUMNS, WRITABLE,
+    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE,
     compute, withTotals, list, listWithTotals, getSale,
     addSale, editSale, deleteSale, summary,
 };

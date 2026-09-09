@@ -108,11 +108,11 @@ function compute(input) {
     const amountUsed = stated !== null ? stated : amount;
 
     const trucking = num(b.trucking_amount);
-    const advance = num(b.advance);
 
-    // Her formula, verbatim from the answer: Amount − Trucking − Advance.
+    // Her formula was "Amount − Trucking − Advance"; she removed Advance on
+    // 2026-09-10, so it is now Amount − Trucking.
     const balance = amountUsed === null ? null
-        : round2(amountUsed - (trucking || 0) - (advance || 0));
+        : round2(amountUsed - (trucking || 0));
 
     return {
         total: gross === null && !Object.keys(tare).some((k) => tare[k] !== null) ? null : round3(total),
@@ -144,31 +144,86 @@ function newId() {
 // The columns she named, in her order, so the table and the store cannot
 // disagree about what a bill is. `key` is the stored field; `label` is what
 // she called it; `derived` marks the six this file computes.
+// ── AND WHAT THE FORM NEEDS, WHICH IS NOT THE SAME THING ─────────────────
+// Apsara, 2026-09-10, on the first version of the add form: "This is ugly and
+// not user friendly." She was right, and one line of the screenshot was worse
+// than cosmetic: TRUCKING appeared TWICE, on two identical empty boxes.
+//
+// That is not a mistake in her list — she has two of them, and in the TABLE
+// their position tells you which is which (one sits beside Carrier, the other
+// beside Advance). Stacked in a form grid, position says nothing.
+//
+// So a column carries three extra things, and the table keeps using `label`:
+//   formLabel — what the field is called when it stands alone, out of order
+//   unit      — lbs, $ — the thing that makes a number checkable
+//   group     — so 23 fields arrive as four short sections instead of a wall
+//
+// Kept HERE rather than in the client for the same reason COLUMNS is here at
+// all: the store defines what a bill is, and a second list in the dashboard
+// is a copy that drifts.
 const COLUMNS = [
-    { key: 'route',            label: 'Source/Destination' },
-    { key: 'carrier',          label: 'Carrier' },
-    { key: 'trucking_company', label: 'Trucking' },
-    { key: 'date',             label: 'Date' },
-    { key: 'supplier',         label: 'Supplier' },
-    { key: 'invoice_no',       label: 'Invoice no' },
-    { key: 'booking_no',       label: 'Booking no' },
-    { key: 'container_no',     label: 'Container no' },
-    { key: 'seal_no',          label: 'Seal no' },
-    { key: 'description',      label: 'Item description' },
-    { key: 'gross',            label: 'Gross' },
-    { key: 'truck',            label: 'Truck' },
-    { key: 'container',        label: 'Container' },
-    { key: 'chassis',          label: 'Chassis' },
-    { key: 'boxes',            label: 'Boxes' },
-    { key: 'total',            label: 'Total',              derived: true },
-    { key: 'net_lb',           label: 'Net weight (lbs)',   derived: true },
-    { key: 'net_mt',           label: 'Net weight (MT)',    derived: true },
-    { key: 'supplier_price',   label: 'Supplier price' },
-    { key: 'amount',           label: 'Supplier invoice amount', derived: true },
-    { key: 'trucking_amount',  label: 'Trucking' },
-    { key: 'advance',          label: 'Advance' },
-    { key: 'balance',          label: 'Balance',            derived: true },
+    { key: 'route',            label: 'Source/Destination', group: 'shipment', placeholder: 'HOUSTON / BUSAN' },
+    { key: 'carrier',          label: 'Carrier',            group: 'shipment', placeholder: 'MSC, Maersk…' },
+    { key: 'booking_no',       label: 'Booking no',         group: 'shipment' },
+    { key: 'container_no',     label: 'Container no',       group: 'shipment', placeholder: 'MSKU1234567' },
+    { key: 'seal_no',          label: 'Seal no',            group: 'shipment' },
+    { key: 'trucking_company', label: 'Trucking',           group: 'shipment',
+      formLabel: 'Trucking company', placeholder: 'who hauled it' },
+
+    { key: 'date',             label: 'Date',               group: 'purchase', date: true },
+    { key: 'supplier',         label: 'Supplier',           group: 'purchase' },
+    { key: 'invoice_no',       label: 'Invoice no',         group: 'purchase' },
+    { key: 'description',      label: 'Item description',   group: 'purchase', placeholder: 'Auto cast, shredded…' },
+
+    { key: 'gross',            label: 'Gross',              group: 'weights', unit: 'lbs', num: true },
+    { key: 'truck',            label: 'Truck',              group: 'weights', unit: 'lbs', num: true, formLabel: 'Truck tare' },
+    { key: 'container',        label: 'Container',          group: 'weights', unit: 'lbs', num: true, formLabel: 'Container tare' },
+    { key: 'chassis',          label: 'Chassis',            group: 'weights', unit: 'lbs', num: true, formLabel: 'Chassis tare' },
+    { key: 'boxes',            label: 'Boxes',              group: 'weights', unit: 'lbs', num: true, formLabel: 'Boxes tare' },
+    { key: 'total',            label: 'Total',              group: 'weights', unit: 'lbs', derived: true, formLabel: 'Total tare' },
+    { key: 'net_lb',           label: 'Net weight (lbs)',   group: 'weights', unit: 'lbs', derived: true },
+    { key: 'net_mt',           label: 'Net weight (MT)',    group: 'weights', unit: 'MT',  derived: true },
+
+    { key: 'supplier_price',   label: 'Supplier price',     group: 'money', unit: '$', num: true,
+      formLabel: 'Supplier price', hint: 'under $10 is read as per lb, $10+ as per MT' },
+    // Stored under `amount`, but the field she TYPES is
+    // supplier_invoice_amount — compute() prefers hers over the computed one.
+    // `writeKey` is what the form must post; without it this column had no
+    // input at all and the stated-amount branch was unreachable.
+    { key: 'amount',           label: 'Supplier invoice amount', group: 'money', unit: '$', derived: true,
+      writeKey: 'supplier_invoice_amount', num: true,
+      hint: 'leave blank to use the computed figure' },
+    { key: 'trucking_amount',  label: 'Trucking',           group: 'money', unit: '$', num: true,
+      formLabel: 'Trucking cost' },
+    // ── ADVANCE REMOVED ──────────────────────────────────────────────────
+    // Apsara, 2026-09-10: "Remove advance on this". It was in her original
+    // 23 and it is out, which also drops it from her balance formula — that
+    // was "Amount − Trucking − Advance" and is now "Amount − Trucking".
+    //
+    // Safe to remove outright rather than hide: bills.json has never existed
+    // in production (nothing imported helpers/bills.js until today), so there
+    // is no stored advance to strand. If there had been, this would need a
+    // migration instead — a column dropped from a form is still a number
+    // sitting in a record affecting a balance.
+    { key: 'balance',          label: 'Balance',            group: 'money', unit: '$', derived: true },
 ];
+
+// The order she READS them in, which is the order she gave and not the order
+// the form groups them. The table walks this; the form walks GROUPS.
+const TABLE_ORDER = ['route', 'carrier', 'trucking_company', 'date', 'supplier', 'invoice_no',
+    'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck', 'container',
+    'chassis', 'boxes', 'total', 'net_lb', 'net_mt', 'supplier_price', 'amount',
+    'trucking_amount', 'balance'];
+
+const GROUPS = [
+    { id: 'shipment', label: 'Shipment' },
+    { id: 'purchase', label: 'Purchase' },
+    { id: 'weights',  label: 'Weights' },
+    { id: 'money',    label: 'Money' },
+];
+
+// Her 23, in her order, for the table.
+const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
 
 // Fields a client may write. Everything else on a stored bill is derived or
 // housekeeping, and accepting it from a request would let a client post a
@@ -196,7 +251,7 @@ function clean(input) {
     // Typed as a number where it is one, so the arithmetic never depends on a
     // client having sent the right JSON type.
     for (const k of ['gross', 'truck', 'container', 'chassis', 'boxes',
-                     'supplier_price', 'supplier_invoice_amount', 'trucking_amount', 'advance']) {
+                     'supplier_price', 'supplier_invoice_amount', 'trucking_amount']) {
         if (k in out) out[k] = num(out[k]);
     }
     return out;
@@ -273,12 +328,11 @@ function summary(rows) {
         net_mt: round3(r.reduce((s, x) => s + (x.net_mt || 0), 0)),
         amount: sum('amount'),
         trucking_amount: sum('trucking_amount'),
-        advance: sum('advance'),
         balance: sum('balance'),
     };
 }
 
 module.exports = {
-    COLUMNS, WRITABLE, LB_PER_MT, PER_LB_CEILING,
+    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
 };

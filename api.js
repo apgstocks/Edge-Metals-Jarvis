@@ -3541,7 +3541,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             res.json({
                 bills: rows,
                 summary: b.summary(rows),
-                columns: b.COLUMNS,
+                // tableColumns() is her order; COLUMNS is grouped for the
+                // form. Both travel, so neither client re-derives one from
+                // the other and gets it subtly wrong.
+                columns: b.tableColumns(),
+                fields: b.COLUMNS,
+                groups: b.GROUPS,
                 writable: b.WRITABLE,
                 // So the form can show "/lb" or "/MT" beside the price and
                 // she can override the inference — her choice when asked:
@@ -3594,6 +3599,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── LIVE TOTALS WHILE SHE TYPES, WITHOUT A SECOND IMPLEMENTATION ──────
+    // Apsara, 2026-09-10: "This is ugly and not user friendly." Part of what
+    // made it so was that she filled in five weights and four money fields and
+    // saw nothing until she saved — the whole point of computing net, amount
+    // and balance is that she can check them against the supplier's invoice.
+    //
+    // The obvious way to show them live is to do the arithmetic in the
+    // browser. That would be a SECOND implementation of her formulas, and
+    // helpers/bills.js's own header says why not: three implementations of one
+    // sum is two chances to disagree about money. So the preview asks the
+    // server, which is the only thing that knows how to compute a bill.
+    //
+    // Writes nothing, and deliberately has no id: it is compute() over a
+    // request body and back.
+    app.post('/api/bills/preview', (req, res) => {
+        try { res.json({ ok: true, ...require('./helpers/bills').compute(req.body || {}) }); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/sales/preview', (req, res) => {
+        try { res.json({ ok: true, ...require('./helpers/sales').compute(req.body || {}) }); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/bills', async (req, res) => {
         try {
             const b = require('./helpers/bills');
@@ -3625,7 +3653,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             res.json({
                 sales: rows,
                 summary: s.summary(rows),
-                columns: s.COLUMNS,
+                columns: s.tableColumns(),
+                fields: s.COLUMNS,
+                groups: s.GROUPS,
                 writable: s.WRITABLE,
                 per_lb_ceiling: require('./helpers/bills').PER_LB_CEILING,
                 lb_per_mt: require('./helpers/bills').LB_PER_MT,
