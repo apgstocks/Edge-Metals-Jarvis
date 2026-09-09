@@ -578,8 +578,14 @@ section('F — who may see her supplier prices');
        'her answer: "Yes — show \'/lb\' or \'/MT\' on the row"');
 
     // ── "This is ugly and not user friendly" (2026-09-10) ────────────────
+    // Checked on the CLASS, not on the exact markup around it. The first
+    // version matched a literal `<div class="field">\n<label>${esc(...)` and
+    // went red when the label gained a style attribute — a correct form
+    // failing a test that was pinned to whitespace. tests/ledger-render.js
+    // asserts the rendered result properly; this only needs to catch the
+    // field class going missing entirely.
     ck('the form uses the app\'s own field styling, not browser default',
-       /<div class="field">\s*<label>\$\{esc\(c\.formLabel/.test(html),
+       /class="field"/.test(html) && /\.field input/.test(html),
        'bare inputs render white on a dark page — every other form here uses .field');
     ck('  and arrives in sections rather than one wall of boxes',
        /ledgerState\.groups/.test(html) && /c\.group === g\.id/.test(html),
