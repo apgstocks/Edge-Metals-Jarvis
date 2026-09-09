@@ -679,7 +679,7 @@ section('G2 — the Pay form: one transfer, several containers');
             { id: 'B3', supplier: 'Oakland Metals', container_no: 'TGHU3333333', balance: 120 },
         ],
         credit: { Eccomelt: 1680 },
-        modes: ['Zelle', 'Wire'],
+        modes: require(path.join(ROOT, 'helpers/billPayments')).BILL_PAYMENT_MODES,
         banks: ['Chase', 'BofA'],
     };
     const posted = [];
@@ -723,6 +723,23 @@ section('G2 — the Pay form: one transfer, several containers');
        'ledlist-* only exist while the BILL form is mounted');
 
     const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+
+    // Cash: offered, and without a bank box. helpers/banks.js THROWS if a
+    // bank is supplied on a cash payment, so leaving the dropdown up would
+    // show her choosing something about to be refused.
+    ck('Cash is on the method list',
+       [...doc.getElementById('bpMode').options].some((o) => o.value === 'Cash'),
+       [...doc.getElementById('bpMode').options].map((o) => o.value).join(','));
+    ck('  the bank box is there for a wire',
+       doc.getElementById('bpBankField').style.display !== 'none');
+    doc.getElementById('bpMode').value = 'Cash'; fire(doc.getElementById('bpMode'), 'change');
+    ck('  and gone for cash',
+       doc.getElementById('bpBankField').style.display === 'none',
+       doc.getElementById('bpBankField').style.display);
+    doc.getElementById('bpMode').value = 'Wire'; fire(doc.getElementById('bpMode'), 'change');
+    ck('  and back again if she changes her mind',
+       doc.getElementById('bpBankField').style.display !== 'none');
+
     const amt = doc.getElementById('bpAmount');
     amt.value = '7000'; fire(amt, 'input');
     ck('typing the amount shows it all still to allocate',

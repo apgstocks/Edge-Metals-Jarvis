@@ -725,6 +725,53 @@ const MUTATIONS = [
       find: '    if (!POINTS_BACK.test(t)) {',
       to:   '    if (POINTS_BACK.test(t)) {' },
 
+    // ── EDGE METALS MONEY, 2026-09-10 ────────────────────────────────────
+    { name: 'metals cash drains the EDGE YARD petty cash box',
+      file: 'helpers/payments.js', suites: ['bills-sales'],
+      find: "const drawsPettyCash = mode === 'Cash' && loadKind !== 'bill';",
+      to:   "const drawsPettyCash = mode === 'Cash';" },
+    // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-09-10 ────────
+    // Removing the `&& load_kind !== 'bill'` guard from either delete path in
+    // helpers/payments.js SURVIVES, and it should: pettyCash.reverseForPayment
+    // opens with `if (!taken.length) return list;  // never drew on cash`, so
+    // a Metals cash payment — which never withdrew — cannot be refunded no
+    // matter who asks. The guards stay because they state the rule where it is
+    // read, but they are belt to that file's braces, not the protection.
+    //
+    // They are not in this catalogue because a mutation that can never be
+    // killed is worse than no mutation: it puts a permanent line in the
+    // SURVIVED list, and a survivors list you have learned to skim is a
+    // survivors list that no longer works. Written down so nobody adds them
+    // back and spends the same hour.
+    { name: 'a cash payment is made to demand a bank it cannot have',
+      file: 'helpers/billPayments.js', suites: ['bills-sales'],
+      find: "if (mode !== 'Cash' && !String(input.bank || '').trim()) {",
+      to:   "if (!String(input.bank || '').trim()) {" },
+    { name: 'deleting a payment leaves its row in the spend ledger',
+      file: 'helpers/billPayments.js', suites: ['bills-sales'],
+      find: 'await deletePaymentsForLoad(doomed.id);',
+      to:   'void deletePaymentsForLoad;' },
+    { name: 'deleting a payment is not audited',
+      file: 'api.js', suites: ['bills-sales'],
+      find: "action: doomed.kind === 'advance' ? 'delete-bill-advance' : 'delete-bill-payment',",
+      to:   "action: 'not-a-real-action'," },
+    { name: 'the Shipment tab is not told the payment is gone',
+      file: 'api.js', suites: ['bills-sales'],
+      find: "ship.logBillSafely({ ...bill, paid: paid[bill.id] || 0 }, 'payment-removed');",
+      to:   "void ship;" },
+    { name: 'a part-allocated transfer can be saved as a full payment',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '      : (sent > 0 && Math.abs(left) < 0.005);',
+      to:   '      : (sent > 0);' },
+    { name: 'one click deletes a payment, with no confirm',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '      if (armed !== btn) {',
+      to:   '      if (false) {' },
+    { name: 'a new bill is dated by the browser clock, not by Los Angeles',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: "toUsDate(todayYardDateStr()) : undefined;",
+      to:   "toUsDate(todayLocalDateStr()) : undefined;" },
+
     { name: 'instruction: "share" reads as a question about the rows on screen',
       file: 'helpers/answerCards.js', suites: ['phrasebook', 'answer-cards'],
       find: 'forward|assign|send|share|pass|hand|shoot|give|message|email|mail|tell|notify|inform|dispatch|book|relay',

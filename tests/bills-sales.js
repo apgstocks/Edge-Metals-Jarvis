@@ -691,6 +691,18 @@ section('K — deleting a payment takes everything it touched with it');
            entries[0].detail && (entries[0].detail.allocations || []).length === 2);
     }
 
+    // The sheet write is disabled under JARVIS_TEST (deliberately — a probe
+    // without it put a junk row in her live Edge Metals spreadsheet on
+    // 2026-09-10), so this is asserted against the source. Weak, and named as
+    // weak: what it catches is the mirror being dropped from the delete path,
+    // which is how the sheet ends up showing a payment that no longer exists.
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const delRoute = apiSrc.slice(apiSrc.indexOf("app.delete('/api/bill-payments/:id'"),
+                                  apiSrc.indexOf("app.get('/api/sales'"));
+    ck('  and the Shipment tab is told the payment is gone',
+       /logBillSafely/.test(delRoute) && /payment-removed/.test(delRoute),
+       'POST re-mirrors every container it touches; DELETE moves the same numbers back');
+
     const twice = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
     ck('deleting it again is a clean 404, not a 500', twice.status === 404, twice.raw);
 
@@ -699,6 +711,86 @@ section('K — deleting a payment takes everything it touched with it');
     const staff = (await login('staff-pw-ccccccccccc')).json.sid;
     const denied = await req('DELETE', '/api/bill-payments/anything', { sid: staff });
     ck('staff cannot delete a payment at all', denied.status === 403, String(denied.status));
+}
+
+section('L — cash, and the yard cash box it must not touch');
+{
+    // Apsara, 2026-09-10: "Always add cash as payment method."
+    // Asked whether Edge Metals cash should draw down the yard's Petty cash
+    // reserve: "No — Edge Metals cash is separate."
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const bp = require(path.join(ROOT, 'helpers/billPayments'));
+    const petty = require(path.join(ROOT, 'helpers/pettyCash'));
+    const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
+
+    ck('Cash is offered as a payment method', bp.BILL_PAYMENT_MODES.includes('Cash'),
+       bp.BILL_PAYMENT_MODES.join(', '));
+
+    const seen = await req('GET', '/api/bill-payments', { sid: admin });
+    ck('  and the form is told about it',
+       (seen.json.modes || []).includes('Cash'), JSON.stringify(seen.json.modes));
+
+    const bill = (await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier: 'Cashy Metals', container_no: 'CASH1',
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0,
+        supplier_price: 0.25,
+    } })).json.bill;
+
+    // Top the box up so a draw-down would be VISIBLE. Starting from zero
+    // would let a wrong implementation pass by refusing rather than by
+    // leaving the box alone.
+    await petty.addTopUp({ date: '09/10/2026', amount: 4000, note: 'test float' });
+    const before = petty.balance();
+    ck('the yard cash box has money in it to take', before === 4000, String(before));
+
+    const cash = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 500, mode: 'Cash',
+        supplier: 'Cashy Metals', allocations: [{ bill_id: bill.id, amount: 500 }],
+    } });
+    ck('a cash payment records with no bank at all', cash.status === 200, cash.raw);
+    ck('  and stores no bank, because there is not one',
+       cash.json.payment && cash.json.payment.bank === null,
+       JSON.stringify(cash.json.payment && cash.json.payment.bank));
+    ck('  the container counts it as paid',
+       (bp.paidByBill()[bill.id] || 0) === 500, String(bp.paidByBill()[bill.id]));
+
+    // THE ONE THAT MATTERS.
+    ck('  the EDGE YARD petty cash box does not move', petty.balance() === before,
+       `${before} -> ${petty.balance()} — "Edge Metals cash is separate"`);
+
+    const row = listPayments().find((x) => x.load_id === cash.json.payment.id);
+    ck('  but it is still in the spend ledger', !!row && row.mode === 'Cash',
+       'separate from petty cash is not the same as invisible');
+    ck('    filed against Edge Metals, not a yard load',
+       row && row.load_kind === 'bill', row && row.load_kind);
+    ck('    and carrying no petty-cash withdrawal',
+       row && !row.petty_cash_entry_id, JSON.stringify(row && row.petty_cash_entry_id));
+
+    // Deleting must not PAY money INTO a box the cash never came out of.
+    const gone = await req('DELETE', `/api/bill-payments/${cash.json.payment.id}`, { sid: admin });
+    ck('deleting a cash payment succeeds', gone.status === 200, gone.raw);
+    ck('  and still does not move the yard box', petty.balance() === before,
+       `refunding it would credit the yard with cash it never spent: ${before} -> ${petty.balance()}`);
+    ck('  while the container owes again', (bp.paidByBill()[bill.id] || 0) === 0);
+
+    // ── THE OTHER DOOR INTO THE SAME ROOM ────────────────────────────────
+    // deleteBillPayment goes through deletePaymentsForLoad. deletePayment(id)
+    // is the single-row door, unreachable from the Bills tab today and wide
+    // open to the yard assistant and DELETE /api/payments/:id. A mutation run
+    // on 2026-09-10 showed its guard was pinned by nothing: removing it
+    // survived every suite. Tested directly so the two doors cannot drift.
+    const pay = require(path.join(ROOT, 'helpers/payments'));
+    const lone = await pay.addPayment({ load_id: 'BP_LONE', load_kind: 'bill', amount: 250,
+                                    mode: 'Cash', paid_on: '2026-09-10' });
+    ck('a metals cash row can be deleted one at a time', await pay.deletePayment(lone.id) === true);
+    ck('  and THAT door does not refund the yard box either', petty.balance() === before,
+       `${before} -> ${petty.balance()}`);
+
+    // A YARD cash payment must be unaffected by all of this.
+    await pay.addPayment({ load_id: 'YARDLOAD1', load_kind: 'purchase', amount: 300,
+                       mode: 'Cash', paid_on: '2026-09-10' });
+    ck('a YARD cash payment still draws the box down', petty.balance() === before - 300,
+       `${before} -> ${petty.balance()} — the yard rule must be untouched`);
 }
 
 if (server) server.close();
