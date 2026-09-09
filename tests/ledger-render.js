@@ -563,9 +563,17 @@ section('G — close, and autosave from the first value');
     ck('  and it says so rather than saving silently',
        /Saved/.test(doc.getElementById('ledSaveState').textContent),
        doc.getElementById('ledSaveState').textContent);
+    // Was "still needs date and supplier" until 2026-09-10, when the date
+    // started arriving pre-filled with today in LA. One fewer thing to chase.
     ck('  naming what is still missing',
-       /still needs date and supplier/.test(doc.getElementById('ledSaveState').textContent),
+       /still needs supplier/.test(doc.getElementById('ledSaveState').textContent),
        'saved and unfinished are both worth knowing');
+    ck('  and the autosaved row already carries the LA date',
+       /^\d\d\/\d\d\/\d{4}$/.test(String(posts[0] && posts[0].body.date || '')),
+       JSON.stringify(posts[0] && posts[0].body.date));
+    ck('  which is not something she had to type',
+       !doc.getElementById('ledSaveState').textContent.includes('date'),
+       doc.getElementById('ledSaveState').textContent);
 
     await type('supplier', 'Eccomelt');
     const puts = saves().filter((c) => c.method === 'PUT');
@@ -577,6 +585,337 @@ section('G — close, and autosave from the first value');
 
     doc.getElementById('ledClose').click();
     ck('close removes the form', !doc.getElementById('ledgerModal'));
+    // Closing fires renderLedgerTab() without awaiting it — correct in the
+    // browser, fatal here: tearing the window down mid-flight makes that
+    // promise resume against a dead document and take the whole process with
+    // it. It surfaced only when a section was added AFTER this one, which is
+    // why it sat here green for a day.
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
+section('G1 — a new bill is dated today in LA, not wherever she is sitting');
+{
+    // Apsara, 2026-09-10: "Bill date and invoice date should be by default
+    // today in LA date".
+    //
+    // Frozen instant, chosen so the two answers DISAGREE: 2026-09-11T03:00Z
+    // is still the 10th in Los Angeles and already the 11th in UTC and in
+    // India. Anything reading the browser's clock returns the 11th and fails
+    // here. (If the runner itself is in LA the two agree and this weakens to
+    // a smoke test — hence the UTC cross-check on the line below.)
+    const FROZEN = Date.parse('2026-09-11T03:00:00Z');
+    const ROWS = [{ id: 'S1', customer: 'Daekwang', date: '09/10/2026', invoice_no: 'INV-1',
+                    weight: 22, invoice_price: 300 }].map(sales.withTotals);
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/sales': (q) => {
+        const rows = sales.filterRows(ROWS, q);
+        return { sales: rows, summary: sales.summary(rows), columns: sales.tableColumns(),
+                 fields: sales.COLUMNS, groups: sales.GROUPS, facets: sales.facets(ROWS),
+                 filterable: sales.FILTERABLE, total_unfiltered: ROWS.length };
+    }, '/api/bills/preview': () => bills.compute({}), '/api/sales/preview': () => sales.compute({}) });
+
+    const RealDate = w.Date;
+    w.Date = class extends RealDate {
+        constructor(...a) { super(...(a.length ? a : [FROZEN])); }
+        static now() { return FROZEN; }
+    };
+    ck('the two clocks really do disagree at this instant',
+       new RealDate(FROZEN).toISOString().slice(0, 10) === '2026-09-11',
+       'if they agreed the assertions below would prove nothing');
+    ck('todayYardDateStr is anchored to Los Angeles',
+       w.todayYardDateStr() === '2026-09-10', w.todayYardDateStr());
+
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills');
+    let form = w.document.getElementById('ledgerForm');
+    ck('a new bill opens dated today in LA',
+       form.querySelector('[name="date"]').value === '09/10/2026',
+       form.querySelector('[name="date"]').value);
+    ck('  and it still gets a picker, so she can change it',
+       form.querySelector('[name="date"]').dataset.dpWired === '1');
+    w.document.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 40));
+
+    await w.renderLedgerTab('sales');
+    w.openLedgerForm('sales');
+    form = w.document.getElementById('ledgerForm');
+    ck('a new invoice opens dated today in LA too',
+       form.querySelector('[name="date"]').value === '09/10/2026',
+       form.querySelector('[name="date"]').value);
+    // A guessed date on someone else's document is worse than a blank box:
+    // it looks filled in and nobody checks it again.
+    ck('  but the proforma date is left blank',
+       form.querySelector('[name="proforma_date"]').value === '',
+       form.querySelector('[name="proforma_date"]').value);
+    w.document.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 40));
+
+    // EDITING must never re-date a bill she entered last month.
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills', BILL_ROWS[1]);          // dated 08/02/2026
+    form = w.document.getElementById('ledgerForm');
+    ck('editing an old bill keeps its own date',
+       form.querySelector('[name="date"]').value === '08/02/2026',
+       form.querySelector('[name="date"]').value);
+
+    w.Date = RealDate;
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
+section('G2 — the Pay form: one transfer, several containers');
+{
+    // Apsara, 2026-09-10: "Pay button-->Add it".
+    //
+    // The thing being tested is the ARITHMETIC SHE CAN SEE. She types what
+    // left the bank and divides it; if the remainder is wrong or stale she
+    // finds out from a server refusal after filling the whole form. So these
+    // assertions drive real keystrokes and read the remainder off the DOM.
+    const PAY_ROUTE = {
+        payments: [], summary: { total: 0 },
+        open_bills: [
+            { id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1111111', balance: 3440 },
+            { id: 'B2', supplier: 'Eccomelt', container_no: 'HMMU2222222', balance: 3440 },
+            { id: 'B3', supplier: 'Oakland Metals', container_no: 'TGHU3333333', balance: 120 },
+        ],
+        credit: { Eccomelt: 1680 },
+        modes: ['Zelle', 'Wire'],
+        banks: ['Chase', 'BofA'],
+    };
+    const posted = [];
+    const { w, dom, err } = await mount({
+        '/api/bill-payments': (q, opts) => {
+            if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true }; }
+            return PAY_ROUTE;
+        },
+        '/api/bills': billsRoute,
+        '/api/health': { build: 'test' },
+    });
+    ck('page evaluates', !err, err && err.message);
+    const doc = w.document;
+
+    await w.renderLedgerTab('bills');
+    const payBtn = doc.getElementById('btnPay');
+    ck('the Bills tab has a Pay button', !!payBtn);
+    ck('  and it is wired to something that exists',
+       typeof w.openBillPayForm === 'function',
+       'the first version called openPayForm(), which was never written');
+
+    // The id namespace. dashboard/index.html already carries a STATIC
+    // id="payModal" for the Edge Yard load payment. getElementById returns
+    // the first in document order, so a second one would make close() remove
+    // the yard's modal instead of this one — permanently, for the session.
+    ck('the pay form does not reuse the yard modal ids',
+       (html.match(/id="payModal"/g) || []).length === 1,
+       'two #payModal means close() deletes the wrong one');
+
+    await w.openBillPayForm();
+    const m = doc.getElementById('bpModal');
+    ck('the form opens', !!m);
+    ck('  listing every container still owing', doc.querySelectorAll('#bpRows tr[data-bill]').length === 3);
+    ck('  with the amount owed shown per container',
+       /\$3,440\.00/.test(doc.getElementById('bpRows').textContent));
+    ck('  and the supplier credit she already has',
+       /1,680/.test(m.textContent), 'an advance she cannot see is an advance she pays twice');
+    ck('  the date defaults to today', /^\d\d\/\d\d\/\d{4}$/.test(doc.getElementById('bpDate').value));
+    ck('  supplier offers what she has typed before',
+       !!doc.querySelector('#bplist-supplier option[value="Eccomelt"]'),
+       'ledlist-* only exist while the BILL form is mounted');
+
+    const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+    const amt = doc.getElementById('bpAmount');
+    amt.value = '7000'; fire(amt, 'input');
+    ck('typing the amount shows it all still to allocate',
+       doc.getElementById('bpLeft').textContent === '$7,000.00',
+       doc.getElementById('bpLeft').textContent);
+    ck('  and Record payment is refused until it is divided',
+       doc.getElementById('bpSave').disabled === true,
+       'the server refuses this too — the button should not pretend otherwise');
+
+    const pick = (id) => { const cb = doc.querySelector(`.bpPick[data-bill="${id}"]`); cb.checked = true; fire(cb, 'change'); };
+    pick('B1');
+    ck('ticking a container fills in what it owes',
+       doc.querySelector('.bpAmt[data-bill="B1"]').value === '3440.00',
+       doc.querySelector('.bpAmt[data-bill="B1"]').value);
+    ck('  and the remainder drops by exactly that',
+       doc.getElementById('bpLeft').textContent === '$3,560.00',
+       doc.getElementById('bpLeft').textContent);
+    pick('B2');
+    pick('B3');
+    ck('three containers, one wire, nothing left over',
+       doc.getElementById('bpLeft').textContent === '$0.00',
+       doc.getElementById('bpLeft').textContent);
+
+    // The cap. B3 owes 120 and 120 is what remains, so the fill must not
+    // reach for the full balance of a container the transfer cannot cover.
+    const b3 = doc.querySelector('.bpAmt[data-bill="B3"]');
+    ck('  a tick never allocates more than the transfer has left',
+       Number(b3.value) <= 120.001, b3.value);
+
+    b3.value = '120'; fire(b3, 'input');
+    ck('fully allocated turns the remainder green and unlocks Save',
+       doc.getElementById('bpSave').disabled === false);
+    ck('  allocated reads back the full transfer',
+       doc.getElementById('bpAllocated').textContent === '$7,000.00',
+       doc.getElementById('bpAllocated').textContent);
+
+    // Over-allocation has to be visible BEFORE submit.
+    b3.value = '900'; fire(b3, 'input');
+    ck('over-allocating locks Save again', doc.getElementById('bpSave').disabled === true);
+    ck('  and says so in red', doc.getElementById('bpLeft').style.color === 'rgb(179, 38, 30)',
+       doc.getElementById('bpLeft').style.color);
+    b3.value = '120'; fire(b3, 'input');
+
+    doc.getElementById('bpBank').value = 'Chase';
+    doc.getElementById('bpSave').click();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('saving posts one payment, not one per container', posted.length === 1, JSON.stringify(posted));
+    if (posted.length) {
+        const body = posted[0];
+        ck('  the amount is the transfer', Number(body.amount) === 7000);
+        ck('  with three allocations under it', (body.allocations || []).length === 3);
+        ck('  summing to the transfer',
+           Math.abs(body.allocations.reduce((s, a) => s + a.amount, 0) - 7000) < 0.005);
+        ck('  and it is a payment, not an advance', body.kind === 'payment');
+        ck('  carrying the bank, which Zelle and Wire require', body.bank === 'Chase');
+    }
+    ck('a successful save closes the form', !doc.getElementById('bpModal'));
+    await new Promise((r) => setTimeout(r, 40));
+
+    // The advance path: same form, no containers ticked.
+    await w.openBillPayForm();
+    const a2 = doc.getElementById('bpAmount');
+    a2.value = '5000'; fire(a2, 'input');
+    doc.getElementById('bpBank').value = 'Chase';
+    doc.getElementById('bpSupplier').value = 'Eccomelt';
+    ck('an unallocated amount cannot be saved as a payment',
+       doc.getElementById('bpSave').disabled === true);
+    ck('  but Save as advance is always available',
+       !!doc.getElementById('bpAdvance') && doc.getElementById('bpAdvance').disabled !== true,
+       'that is the escape hatch the server error tells her to use');
+    doc.getElementById('bpAdvance').click();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('the advance posts against the supplier',
+       posted.length === 2 && posted[1].kind === 'advance' && posted[1].supplier === 'Eccomelt',
+       JSON.stringify(posted[1] || null));
+    ck('  with no allocations — she chooses when to apply it',
+       (posted[1].allocations || []).length === 0,
+       'her answer was "I choose when to apply it"');
+
+    await w.openBillPayForm();
+    doc.getElementById('bpClose').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('close removes the form', !doc.getElementById('bpModal'));
+    // ── EDGE YARD IS NOT EDGE METALS ─────────────────────────────────────
+    // Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge
+    // Metals is different." The Yard's load-payment modal is id="payModal"
+    // with id="payErr" inside it, built into a view template. This form is
+    // Edge Metals. The first draft of it reused both ids, so close() would
+    // have called .remove() on whichever came first in document order — the
+    // Yard's — and errors here would have been written into a hidden Yard
+    // element. Asserted against the source, because the Yard modal is not in
+    // the DOM while the Metals tab is the one rendered.
+    const payFn = html.slice(html.indexOf('async function openBillPayForm'),
+                             html.indexOf('// ── THE ADD FORM'));
+    ck('  the Metals pay form touches no Edge Yard id',
+       !/\bpayModal\b|\bpayErr\b|\bpay_date\b|\bpayingLoad\b/.test(payFn),
+       (payFn.match(/\bpayModal\b|\bpayErr\b|\bpay_date\b|\bpayingLoad\b/g) || []).join(','));
+    ck('  and the Yard keeps sole ownership of #payModal',
+       (html.match(/id="payModal"/g) || []).length === 1);
+    dom.window.close();
+}
+
+section('G3 — spending an advance she already paid');
+{
+    // Her answer: "I choose when to apply it." So credit sits until she says
+    // so — which means there has to be a way to say so. An advance she can
+    // create and never apply is a number that only goes up.
+    const applied = [];
+    const ROUTE = {
+        payments: [
+            { id: 'P9', kind: 'advance', supplier: 'Eccomelt', date: '09/01/2026',
+              mode: 'Wire', ref: 'W-77', amount: 5000, allocations: [{ bill_id: 'B0', amount: 3320 }] },
+            { id: 'P8', kind: 'advance', supplier: 'Eccomelt', date: '08/20/2026',
+              mode: 'Zelle', amount: 400, allocations: [{ bill_id: 'B0', amount: 400 }] },
+            { id: 'P7', kind: 'payment', supplier: 'Eccomelt', date: '08/01/2026',
+              mode: 'Wire', amount: 900, allocations: [{ bill_id: 'B0', amount: 900 }] },
+        ],
+        summary: { total: 0 },
+        open_bills: [
+            { id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1111111', balance: 3440 },
+            { id: 'B3', supplier: 'Oakland Metals', container_no: 'TGHU3333333', balance: 120 },
+        ],
+        credit: { Eccomelt: 1680 },
+        modes: ['Zelle', 'Wire'], banks: ['Chase'],
+    };
+    const { w, dom } = await mount({
+        '/api/bills': billsRoute,
+        '/api/bill-payments': (q, opts) => (opts && opts.method === 'POST' ? { ok: true } : ROUTE),
+        '/api/bill-payments/P9/apply': (q, opts) => { applied.push(JSON.parse(opts.body)); return { ok: true }; },
+    });
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    await w.openBillPayForm();
+
+    const link = doc.querySelector('.bpApply[data-supplier="Eccomelt"]');
+    ck('the credit she holds is a button, not just a number', !!link);
+    link.click();
+    await new Promise((r) => setTimeout(r, 40));
+
+    ck('it reopens in apply mode', /Apply advance/.test(doc.getElementById('bpModal').textContent));
+    const sel = doc.getElementById('bpAdvSel');
+    ck('  offering the advances with credit left', !!sel && sel.options.length === 1,
+       sel ? [...sel.options].map((o) => o.textContent).join(' | ') : 'no picker');
+    ck('  and only the ones not already used up',
+       sel && ![...sel.options].some((o) => /08\/20\/2026/.test(o.textContent)),
+       'a fully-applied advance is not credit');
+    ck('  a plain payment is not an advance', sel && sel.options.length === 1);
+    ck('  showing what is left on it, not what was sent',
+       /1,680/.test(sel.options[0].textContent), sel.options[0].textContent);
+
+    // Nothing here moves money, so nothing here asks about banks.
+    ck('the bank and method fields are gone',
+       doc.getElementById('bpBank').closest('div').style.display === 'none' &&
+       doc.getElementById('bpAmount').closest('div').style.display === 'none',
+       'applying credit does not touch a bank account');
+    ck('  and so is "Save as advance"', !doc.getElementById('bpAdvance'),
+       'an advance cannot be turned into another advance');
+    ck('only this supplier’s containers are listed',
+       doc.querySelectorAll('#bpRows tr[data-bill]').length === 1 &&
+       !!doc.querySelector('#bpRows tr[data-bill="B1"]'),
+       'Eccomelt credit against an Oakland Metals container is a wrong entry waiting to happen');
+
+    ck('nothing to apply yet, so Apply is refused',
+       doc.getElementById('bpSave').disabled === true);
+
+    const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+    const amt = doc.querySelector('.bpAmt[data-bill="B1"]');
+    amt.value = '1680'; fire(amt, 'input');
+    ck('putting the whole credit on a container unlocks Apply',
+       doc.getElementById('bpSave').disabled === false);
+
+    // Partial is normal: $1,680 of credit against a $3,440 container.
+    amt.value = '500'; fire(amt, 'input');
+    ck('  and applying only part of it is allowed',
+       doc.getElementById('bpSave').disabled === false,
+       'unlike a payment, an advance may be left partly unspent');
+    amt.value = '9000'; fire(amt, 'input');
+    ck('  but never more than the advance has left',
+       doc.getElementById('bpSave').disabled === true);
+
+    amt.value = '1680'; fire(amt, 'input');
+    doc.getElementById('bpSave').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('applying posts to the advance, not to a new payment',
+       applied.length === 1, JSON.stringify(applied));
+    ck('  carrying just the allocation',
+       applied.length === 1 && applied[0].allocations.length === 1 &&
+       applied[0].allocations[0].bill_id === 'B1' && applied[0].allocations[0].amount === 1680,
+       JSON.stringify(applied[0]));
+    ck('  and no second ledger row is implied',
+       applied.length === 1 && applied[0].amount === undefined,
+       'the money left the bank on the day of the advance and was counted then');
+    await new Promise((r) => setTimeout(r, 40));
     dom.window.close();
 }
 

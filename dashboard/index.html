@@ -3876,6 +3876,27 @@ function todayLocalDateStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// ── TODAY WHERE THE BUSINESS IS, NOT WHERE THE LAPTOP IS ─────────────────
+// Apsara, 2026-09-10: "Bill date and invoice date should be by default today
+// in LA date".
+//
+// todayLocalDateStr() above reads the BROWSER's clock. Opened from India at
+// nine in the morning, that is already tomorrow by Los Angeles reckoning, so
+// every bill and invoice created before ~12:30pm IST would carry a date the
+// yard has not reached yet — and it would go straight into the Edge Metals
+// Shipment tab that way. Same bug class as helpers/bookingRequest.js, where
+// a server-local getDate() turned "cut off 20 Sep" into 21 Sep.
+//
+// en-CA gives YYYY-MM-DD directly, so there is no month-name parsing to get
+// wrong. Deliberately a SECOND function rather than a change to the one
+// above: the Edge Yard forms (load date, trucker bill, yard payment) still
+// use browser-local, and moving their dates is a money-visible change to the
+// spend report's ranges that she has not asked for.
+const YARD_TZ = 'America/Los_Angeles';
+function todayYardDateStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: YARD_TZ });
+}
+
 // ── Purchase vs sale ──────────────────────────────────────────────────────
 // Apsara, 2026-08-24: "next to create invoice, i want another button as sales
 // replicating the same template — only change is: i want buyer and buyer
@@ -4884,7 +4905,7 @@ async function renderLedgerTab(kind) {
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
   }).catch(() => {});
 
-  if ($('btnPay')) $('btnPay').onclick = () => openPayForm();
+  if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
@@ -4912,6 +4933,18 @@ async function renderLedgerTab(kind) {
   });
 }
 
+// ── THE LIGHT SHEET ──────────────────────────────────────────────────────
+// Apsara, 2026-09-10: "i want light colour on that bill".
+// Scoped to the Edge Metals ledger modals only — the rest of the app stays
+// dark. Lives at the top level because BOTH the bill form and the bill
+// payment form use it; it used to sit inside openLedgerForm, which made it
+// invisible to anything declared above and threw a ReferenceError the moment
+// a second form reached for it.
+const LEDGER_LIGHT = {
+  paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
+  ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
+};
+
 // ── PAYING FOR CONTAINERS ────────────────────────────────────────────────
 // Apsara, 2026-09-10: "We need pay option.in payment,there is a possible of
 // giving advance deduction and multiple container paynebt at once."
@@ -4928,10 +4961,25 @@ async function renderLedgerTab(kind) {
 //
 // An ADVANCE is the same form with no containers ticked: money against the
 // supplier, sitting as credit until she applies it.
-async function openPayForm() {
+async function openBillPayForm(opts = {}) {
   const L = LEDGER_LIGHT;
   const data = await api('/api/bill-payments');
-  const open = data.open_bills || [];
+  // ── APPLYING CREDIT SHE ALREADY PAID ─────────────────────────────────
+  // Her answer when asked whether an advance should apply itself: "I choose
+  // when to apply it." So the same form has a second mode. Shipping the
+  // advance without this would let credit accumulate with no way to spend
+  // it — a number that only ever goes up is not a feature.
+  //
+  // Applying moves NO money and writes NO ledger row: the cash left the bank
+  // on the day of the advance and was counted then. This only attaches it.
+  const applying = !!opts.applySupplier;
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const advances = (data.payments || [])
+    .filter((p) => p.kind === 'advance' && (!applying || p.supplier === opts.applySupplier))
+    .map((p) => ({ ...p, available: round2(p.amount - (p.allocations || []).reduce((s, a) => s + Number(a.amount || 0), 0)) }))
+    .filter((p) => p.available > 0.005);
+  const open = (data.open_bills || [])
+    .filter((b) => !applying || b.supplier === opts.applySupplier);
   const banks = data.banks || [];
   const credit = data.credit || {};
 
@@ -4941,34 +4989,38 @@ async function openPayForm() {
 
   const rows = open.map((b) => `
     <tr data-bill="${esc(b.id)}" style="border-top:1px solid ${L.lineSoft};">
-      <td style="padding:6px 8px;"><input type="checkbox" class="payPick" data-bill="${esc(b.id)}"></td>
+      <td style="padding:6px 8px;"><input type="checkbox" class="bpPick" data-bill="${esc(b.id)}"></td>
       <td style="padding:6px 8px; font-size:12px; color:${L.ink};">${esc(b.supplier || '—')}</td>
       <td style="padding:6px 8px; font-size:12px; color:${L.inkMuted}; font-family:var(--font-mono);">${esc(b.container_no || b.booking_no || '—')}</td>
       <td style="padding:6px 8px; font-size:12px; text-align:right; font-family:var(--font-mono); color:${L.inkMuted};">${money(b.balance)}</td>
       <td style="padding:6px 8px;">
-        <input class="payAmt" data-bill="${esc(b.id)}" data-balance="${esc(b.balance)}" inputmode="decimal" autocomplete="off"
+        <input class="bpAmt" data-bill="${esc(b.id)}" data-balance="${esc(b.balance)}" inputmode="decimal" autocomplete="off"
           style="width:110px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
       </td>
     </tr>`).join('');
 
+  // Clickable, because credit she can see and cannot spend is worse than no
+  // credit at all — she would pay the same money twice and find out at close.
   const creditLines = Object.entries(credit).map(([sup, amt]) =>
-    `<span style="font-size:11px; color:${L.inkMuted};">${esc(sup)} <b style="color:#2F7D22;">${money(amt)}</b></span>`).join(' · ');
+    `<button class="bpApply" data-supplier="${esc(sup)}" style="background:none; border:none; padding:0 2px; cursor:pointer; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted;">${esc(sup)} <b style="color:#2F7D22;">${money(amt)}</b> — apply</button>`).join(' · ');
 
   document.body.insertAdjacentHTML('beforeend', `
-    <div id="payModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+    <div id="bpModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px;">
-          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Record a payment</h3>
-          <button id="payClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">${applying ? `Apply advance — ${esc(opts.applySupplier)}` : 'Record a payment'}</h3>
+          <button id="bpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
 
-        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
-          <div><label style="${lab}">Date</label><input id="payDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
-          <div><label style="${lab}">Amount sent</label><input id="payAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
-          <div><label style="${lab}">Method</label><select id="payMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
-          <div><label style="${lab}">Bank</label><select id="payBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
-          <div><label style="${lab}">Reference</label><input id="payRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
-          <div><label style="${lab}">Supplier</label><input id="paySupplier" autocomplete="off" list="ledlist-supplier" style="${fieldCss}"></div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;${applying ? 'display:block;' : ''}">
+        ${applying ? `<div><label style="${lab}">Which advance</label>
+          <select id="bpAdvSel" style="${fieldCss}">${advances.map((a) => `<option value="${esc(a.id)}" data-available="${esc(a.available)}">${esc(a.date)} · ${esc(a.mode)}${a.ref ? ' · ' + esc(a.ref) : ''} · ${money(a.available)} left</option>`).join('')}</select></div>` : ''}
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Date</label><input id="bpDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Amount sent</label><input id="bpAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Method</label><select id="bpMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Bank</label><select id="bpBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Reference</label><input id="bpRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
+          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Supplier</label><input id="bpSupplier" autocomplete="off" list="bplist-supplier" style="${fieldCss}"></div>
         </div>
 
         <div style="font-size:12px; color:${L.inkFaint}; margin:14px 0 6px;">Which containers does it cover?</div>
@@ -4981,57 +5033,85 @@ async function openPayForm() {
               <th style="padding:6px 8px; text-align:right; font-size:11px; color:${L.inkMuted}; font-weight:400;">Owing</th>
               <th style="padding:6px 8px; text-align:right; font-size:11px; color:${L.inkMuted}; font-weight:400;">Pay</th>
             </tr></thead>
-            <tbody id="payRows">${rows || `<tr><td colspan="5" style="padding:20px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing owing. Record this as an advance instead.</td></tr>`}</tbody>
+            <tbody id="bpRows">${rows || `<tr><td colspan="5" style="padding:20px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing owing. Record this as an advance instead.</td></tr>`}</tbody>
           </table>
         </div>
         ${creditLines ? `<div style="margin-top:8px; font-size:11px; color:${L.inkFaint};">Credit on hand · ${creditLines}</div>` : ''}
 
         <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
-          <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="payAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
-          <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="payLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="bpAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="bpLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
           <div style="flex:1;"></div>
           <div style="display:flex; gap:8px;">
-            <button id="payCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-            <button id="payAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>
-            <button id="paySave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record payment</button>
+            <button id="bpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
+            ${applying ? '' : `<button id="bpAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>`}
+            <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">${applying ? 'Apply' : 'Record payment'}</button>
           </div>
         </div>
-        <div id="payErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="bpErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <datalist id="bplist-supplier">${[...new Set(open.map((b) => b.supplier).concat(Object.keys(credit)).filter(Boolean))].map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist>
       </div>
     </div>`);
 
-  wireUsDateField($('payDate'));
-  const close = () => { const m = $('payModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  $('bpDate').value = toUsDate(todayYardDateStr());
+  // The string form on purpose: tests/mobile-layout.js audits the source for
+  // wireUsDateField('<id>') to prove no date box ships without a picker.
+  // Passing the element works but is invisible to that audit, and a date field
+  // with no calendar is exactly what she complained about in the first place.
+  wireUsDateField('bpDate');
+  const close = () => { const m = $('bpModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
-  $('payClose').onclick = close;
-  $('payCancel').onclick = close;
+  $('bpClose').onclick = close;
+  $('bpCancel').onclick = close;
 
   const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
-  const allocations = () => [...document.querySelectorAll('.payAmt')]
+  const allocations = () => [...document.querySelectorAll('.bpAmt')]
     .map((el) => ({ bill_id: el.dataset.bill, amount: num(el.value) }))
     .filter((a) => a.amount > 0);
 
   // Recomputed on every keystroke — the remainder is the thing she is
   // working towards, and it turns red the moment she has over-allocated so
   // she sees it before the server refuses it.
+  const sentAmount = () => {
+    if (!applying) return num($('bpAmount').value);
+    const o = $('bpAdvSel') && $('bpAdvSel').selectedOptions[0];
+    return o ? num(o.dataset.available) : 0;
+  };
   const retotal = () => {
-    const sent = num($('payAmount').value);
+    const sent = sentAmount();
     const alloc = allocations().reduce((s, a) => s + a.amount, 0);
     const left = Math.round((sent - alloc) * 100) / 100;
-    $('payAllocated').textContent = money(alloc);
-    $('payLeft').textContent = money(left);
-    $('payLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    $('bpAllocated').textContent = money(alloc);
+    $('bpLeft').textContent = money(left);
+    $('bpLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+
+    // helpers/billPayments.js cleanAllocations() REFUSES a plain payment whose
+    // allocations don't sum to the amount — "record it as an advance instead".
+    // The button mirrors that rule rather than letting her fill the whole form
+    // and be told no on submit. The rule lives on the server; this is only its
+    // reflection, so the server stays the one that decides.
+    const settled = applying
+      ? (sent > 0 && alloc > 0.005 && left > -0.005)   // partial is fine here
+      : (sent > 0 && Math.abs(left) < 0.005);
+    $('bpSave').disabled = !settled;
+    $('bpSave').style.opacity = settled ? '1' : '.45';
+    $('bpSave').style.cursor = settled ? 'pointer' : 'not-allowed';
+    $('bpSave').title = settled ? (applying ? 'Apply this credit' : 'Record this payment')
+      : (sent <= 0 ? (applying ? 'No credit left on this advance' : 'Enter the amount that left the bank')
+        : (left < -0.005 ? `That is more than this ${applying ? 'advance has left' : 'transfer'}`
+          : (applying ? 'Put some of it against a container'
+            : `${money(left)} is not on any container yet — allocate it, or save it as an advance`)));
   };
 
   // Ticking a container fills its balance in, capped by what is left of the
   // transfer — the commonest case is "this wire clears these three".
-  document.querySelectorAll('.payPick').forEach((cb) => {
+  document.querySelectorAll('.bpPick').forEach((cb) => {
     cb.onchange = () => {
-      const amt = document.querySelector(`.payAmt[data-bill="${cb.dataset.bill}"]`);
+      const amt = document.querySelector(`.bpAmt[data-bill="${cb.dataset.bill}"]`);
       if (!amt) return;
       if (cb.checked) {
-        const sent = num($('payAmount').value);
+        const sent = sentAmount();
         const already = allocations().reduce((s, a) => s + a.amount, 0);
         const room = sent > 0 ? Math.max(0, sent - already) : Infinity;
         const bal = num(amt.dataset.balance);
@@ -5040,27 +5120,45 @@ async function openPayForm() {
       retotal();
     };
   });
-  document.querySelectorAll('.payAmt').forEach((el) => { el.oninput = retotal; });
-  $('payAmount').oninput = retotal;
+  document.querySelectorAll('.bpAmt').forEach((el) => { el.oninput = retotal; });
+  $('bpAmount').oninput = retotal;
+  if ($('bpAdvSel')) $('bpAdvSel').onchange = () => {
+    document.querySelectorAll('.bpPick').forEach((cb) => { cb.checked = false; });
+    document.querySelectorAll('.bpAmt').forEach((el) => { el.value = ''; });
+    retotal();
+  };
+  document.querySelectorAll('.bpApply').forEach((btn) => {
+    btn.onclick = () => { close(); openBillPayForm({ applySupplier: btn.dataset.supplier }); };
+  });
   retotal();
 
   const send = async (asAdvance) => {
-    $('payErr').textContent = '';
+    $('bpErr').textContent = '';
     try {
+      if (applying) {
+        const id = $('bpAdvSel') && $('bpAdvSel').value;
+        if (!id) throw new Error('pick an advance');
+        // No ledger row here. See helpers/billPayments.applyAdvance.
+        await api(`/api/bill-payments/${encodeURIComponent(id)}/apply`,
+                  { method: 'POST', body: JSON.stringify({ allocations: allocations() }) });
+        close();
+        await renderLedgerTab('bills');
+        return;
+      }
       const body = {
         kind: asAdvance ? 'advance' : 'payment',
-        date: $('payDate').value, amount: $('payAmount').value,
-        mode: $('payMode').value, bank: $('payBank').value,
-        ref: $('payRef').value, supplier: $('paySupplier').value,
+        date: $('bpDate').value, amount: $('bpAmount').value,
+        mode: $('bpMode').value, bank: $('bpBank').value,
+        ref: $('bpRef').value, supplier: $('bpSupplier').value,
         allocations: allocations(),
       };
       await api('/api/bill-payments', { method: 'POST', body: JSON.stringify(body) });
       close();
-      renderLedgerTab('bills');
-    } catch (e) { $('payErr').textContent = e.message || 'Could not record it'; }
+      await renderLedgerTab('bills');
+    } catch (e) { $('bpErr').textContent = e.message || 'Could not record it'; }
   };
-  $('paySave').onclick = () => send(false);
-  $('payAdvance').onclick = () => send(true);
+  $('bpSave').onclick = () => send(false);
+  if ($('bpAdvance')) $('bpAdvance').onclick = () => send(true);
 }
 
 // ── THE ADD FORM ─────────────────────────────────────────────────────────
@@ -5104,10 +5202,6 @@ function openLedgerForm(kind, existing) {
 // off paper, and a light sheet is what a document looks like. Declared as
 // local variables so every rule below reads the same way it does everywhere
 // else in this file — the only difference is what the names resolve to.
-const LEDGER_LIGHT = {
-  paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
-  ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
-};
 
 // ── ONE FIELD ────────────────────────────────────────────────────────
   // Apsara, 2026-09-10, on the previous version: "still it looks ugly and
@@ -5125,7 +5219,12 @@ const LEDGER_LIGHT = {
   //     line up down a column. Right-aligned monospace now.
   const inputFor = (c) => {
     const name = c.writeKey || c.key;
-    const val = existing ? existing[name] : undefined;
+    // A new bill or invoice starts dated today in LA. Only the field actually
+    // called `date` — proforma_date is a real historical date on someone
+    // else's document, and pre-filling it with today would be a plausible
+    // wrong answer, which is worse than a blank box.
+    const fallback = (!existing && name === 'date') ? toUsDate(todayYardDateStr()) : undefined;
+    const val = existing ? existing[name] : fallback;
     const existingVal = val;
 
     if (c.textarea) {
