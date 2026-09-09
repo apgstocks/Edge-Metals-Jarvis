@@ -263,7 +263,23 @@ function installGemini(mode, log, o) {
             const composerFail = { 'composer-auth': 'auth', 'composer-quota': 'quota',
                                    'composer-down': 'unreachable', 'composer-junk': 'unusable' }[mode];
             if (composerFail) { failure = composerFail; return null; }
-            return { subject: 'Houston cutoff', body: 'Hi,\n\nCould you confirm the cutoff?\n\nApsara' };
+            // ── THE STUB HAS TO CARRY THE BRIEF ──────────────────────────
+            // It used to return this fixed body whatever it was asked, which
+            // meant every assertion in the suite about what an email SAYS was
+            // vacuous: "need bookings from HOUSTON to BUSAN 2x40HC with cut
+            // off as 20 Sep 2026" could be dropped entirely and the tests
+            // stayed green, because the stub was never going to include it.
+            //
+            // Same class of fault as this file's own composerFail note above:
+            // a stub whose contract differs from the real function's makes the
+            // test measure something that cannot happen. A real model handed
+            // "the email must contain this sentence" puts the sentence in. So
+            // the stub does too — lifted VERBATIM out of the prompt, which
+            // also means a caller that stops passing its facts through is
+            // caught here rather than in production.
+            const must = /must contain this sentence[^"]*"([^"]+)"/i.exec(prompt);
+            const body = ['Hi,', '', must ? must[1] : 'Could you confirm the cutoff?', '', 'Apsara'].join('\n');
+            return { subject: must ? 'Booking request' : 'Houston cutoff', body };
         }
 
         // ── THE BRAIN'S OWN ACTION CLASSIFIER ────────────────────────────

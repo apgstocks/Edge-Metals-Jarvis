@@ -162,9 +162,16 @@ section('D — how many, ANSWERING the question');
     // refuses a bare "two" — so the commonest possible answer would have been
     // re-asked for ever.
     const acts = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
-    const seg = acts.slice(acts.indexOf("pending.type === 'await_booking_details'"));
+    // Bounded by the NEXT pending's handler rather than by a character count.
+    // The window was 1200 chars and the cutoff branch, added above the count
+    // branch on 2026-09-09, pushed countInAnswer past it — a green assertion
+    // turning red because correct code moved, which is the third time a
+    // fixed-width slice has done that in this suite.
+    const segFrom = acts.indexOf("pending.type === 'await_booking_details'");
+    const segTo = acts.indexOf("pending.type === 'confirm_proforma'", segFrom);
+    const seg = acts.slice(segFrom, segTo);
     ck('the resolver uses countInAnswer, not containersIn',
-       /br\.countInAnswer\(said\)/.test(seg.slice(0, 1200)),
+       /br\.countInAnswer\(said\)/.test(seg),
        'containersIn refuses a bare "two" — the resolver would loop for ever on the commonest reply');
 }
 
@@ -182,20 +189,39 @@ section('D2 — the question itself');
 section('E — what the drafter is told');
 {
     const d = br.details(2, '40HC', 'ask Yurim for a booking please');
-    ck('the count is stated', /\b2\b/.test(d), d);
-    ck('  and the size', /40HC/.test(d), d);
-    ck('  as an instruction to state it explicitly',
-       /explicit/i.test(d),
-       'a booking request without a quantity gets a reply asking for one');
+    ck('the count is stated', /\b2x40HC\b/.test(d), d);
+    ck('  as a sentence the drafter may not reword',
+       /exact/i.test(d) && /do not[\s\S]{0,80}re-?word/i.test(d),
+       'every figure in that line is a commitment to a carrier');
     ck('  with her original words kept', /ask Yurim for a booking please/.test(d), d);
     ck('  and the routing words stripped',
        !/^\s*hey jarvis/i.test(br.details(2, null, 'Hey Jarvis, send an email to Yurim asking for a booking from Houston')),
        br.details(2, null, 'Hey Jarvis, send an email to Yurim asking for a booking from Houston'));
 
-    ck('one container is singular', /1 40HC container\b/.test(br.details(1, '40HC', '')),
-       br.details(1, '40HC', ''));
-    ck('  and no size still reads properly',
-       /2 containers/.test(br.details(2, null, '')), br.details(2, null, ''));
+    // ── HER SENTENCE, HER WORDS ──────────────────────────────────────────
+    // Apsara, 2026-09-09: "I want jarvis to communicate in similar terms like
+    // need bookings from Houston to Busan 1x40HC with cut off as [date].
+    // [Optional:ERD]" — checked against that shape literally, because the
+    // point of it is that it reads the way she writes and not the way a
+    // language model would summarise her.
+    const full = br.line({
+        from: 'Houston', to: 'Busan', count: 1, size: '40HC',
+        cutoff: br.cutoffInAnswer('the 20th', new Date('2026-09-09T12:00:00-07:00')),
+    });
+    ck('the line is the one she asked for',
+       /^Need bookings from HOUSTON to BUSAN 1x40HC with cut off as \d{1,2} \w{3} \d{4}\.$/.test(full), full);
+    ck('  ERD rides along when it is known, and only then',
+       / ERD 15 Sep 2026\.$/.test(br.line({ count: 1, size: '40HC', erd: new Date(Date.UTC(2026, 8, 15, 19)) }))
+       && !/ERD/.test(full), full);
+    ck('  a missing cutoff is left out, not written as a blank',
+       br.line({ from: 'Houston', to: 'Busan', count: 2, size: '40HC' })
+           === 'Need bookings from HOUSTON to BUSAN 2x40HC.',
+       br.line({ from: 'Houston', to: 'Busan', count: 2, size: '40HC' }));
+    // "3xcontainers" is not English and not a booking request. Found by
+    // printing the output rather than by reading the code.
+    ck('  and with no size it falls back to words',
+       br.line({ count: 3 }) === 'Need bookings 3 containers.', br.line({ count: 3 }));
+    ck('  one container is singular', /1 container\./.test(br.line({ count: 1 })), br.line({ count: 1 }));
 
     // The count and size are FACTS handed over, not prose to embellish. Tone
     // is writingStyle.js's job and must not be duplicated here.
@@ -210,6 +236,135 @@ section('E — what the drafter is told');
        'the wording is writingStyle.js\'s job — a second voice here would drift from hers');
 }
 
+section('E2 — the dates, and the timezone that got one wrong');
+{
+    const now = new Date('2026-09-09T12:00:00-07:00');
+    const f = br.forCarrier;
+
+    // ── THE BUG THIS SECTION EXISTS FOR ──────────────────────────────────
+    // "cutoff 20 sep" came back as "21 Sep 2026". chrono had it right —
+    // 2026-09-20T19:00Z is midday in Houston — and then .getDate() read that
+    // instant in the SERVER's timezone, which on the box I measured on is
+    // Asia/Calcutta, where it is already half past midnight on the 21st.
+    //
+    // Run under four zones on purpose. A single-zone assertion passes on the
+    // developer's machine and ships a cutoff a day out, which is a booking
+    // request for a vessel that has sailed.
+    const zones = ['America/Los_Angeles', 'Asia/Calcutta', 'UTC', 'Pacific/Auckland'];
+    const seen = new Set();
+    for (const tz of zones) {
+        const before = process.env.TZ;
+        process.env.TZ = tz;
+        // laParts asks Intl each time, so no module cache to bust — but the
+        // Date constructor does read process.env.TZ lazily on some builds, so
+        // the value is recomputed rather than reused from an earlier loop.
+        seen.add(f(br.cutoffInAnswer('sept 20', now)));
+        process.env.TZ = before;
+    }
+    ck('the same date in four timezones is the same date',
+       seen.size === 1 && seen.has('20 Sep 2026'), [...seen].join(' | '));
+
+    ck('a cutoff is written unambiguously for a carrier',
+       /^\d{1,2} \w{3} \d{4}$/.test(f(br.cutoffInAnswer('the 20th', now))),
+       '"09/20/2026" is 9 December to half the world, and this mail goes to Korea');
+    ck('  while the store keeps her own MM/DD/YYYY',
+       br.forStore(br.cutoffInAnswer('the 20th', now)) === '09/20/2026',
+       'bookings.json is US-format and must not be changed under her');
+
+    // ── LABELLED ONLY ────────────────────────────────────────────────────
+    // A date in a sentence is not a cutoff unless she said it was. "send it
+    // tomorrow" is a SCHEDULE — resolveScheduledFor's job — and reading it as
+    // a cutoff puts a wrong date in front of a carrier.
+    ck('a bare date in a sentence is NOT a cutoff',
+       br.datesIn('ask zimex for space and send it tomorrow', now).cutoff === null,
+       '"send it tomorrow" schedules the send, it does not close the vessel');
+    ck('  but a labelled one is',
+       f(br.datesIn('ask zimex for space, cut off the 20th', now).cutoff) === '20 Sep 2026');
+    ck('  and two labels in one sentence do not collide',
+       f(br.datesIn('cutoff 20 sep, erd the 15th', now).cutoff) === '20 Sep 2026'
+       && f(br.datesIn('cutoff 20 sep, erd the 15th', now).erd) === '15 Sep 2026',
+       JSON.stringify(br.datesIn('cutoff 20 sep, erd the 15th', now)));
+
+    // Once the question HAS been asked, the whole reply is the answer — the
+    // same asymmetry as countInAnswer, and for the same reason.
+    ck('an answer to the question needs no label', f(br.cutoffInAnswer('the 20th', now)) === '20 Sep 2026');
+    ck('  chrono returns null for a bare day of the month, so it is handled here',
+       require('../helpers/time').parseNaturalTime('the 25th', now) === null
+       && f(br.cutoffInAnswer('the 25th', now)) === '25 Sep 2026',
+       'one of the commonest ways she says a near date');
+    ck('  a day already past rolls to next month',
+       f(br.cutoffInAnswer('the 5th', now)) === '5 Oct 2026', f(br.cutoffInAnswer('the 5th', now)));
+    ck('  and a day that month does not have is skipped, not rolled',
+       f(br.cutoffInAnswer('the 31st', now)) === '31 Oct 2026',
+       'September has 30 days; new Date(y,8,31) is 1 Oct, which is not the date she said');
+    ck('  something with no date in it is refused, not defaulted',
+       br.cutoffInAnswer('soon', now) === null && br.cutoffInAnswer('', now) === null);
+}
+
+section('E3 — what her own bookings will and will not tell you');
+{
+    // MEASURED, NOT ASSUMED. Every booking in bookings.json today discharges
+    // at BUSAN and every container is a 40HC, across three different load
+    // ports — so the destination and box size are safe to fill in and the LOAD
+    // port is not. That is a fact about her data, so it is read off her data.
+    const u = br.usualRoute('HOUSTON');
+    ck('the discharge port is inferable', u.to === 'BUSAN', JSON.stringify(u));
+    ck('  and the box size', u.size === '40HC', JSON.stringify(u));
+    ck('  and nothing claims to know the load port',
+       !('from' in u), 'Houston, Los Angeles and Oakland are all in there — there is nothing to infer');
+
+    // The threshold, on synthetic tallies rather than on her live file, so the
+    // rule is pinned even when her data changes.
+    ck('a unanimous history is offered', br.commonest(['BUSAN', 'BUSAN']).value === 'BUSAN');
+    ck('  a clear majority too', br.commonest(['BUSAN', 'BUSAN', 'QINGDAO']).value === 'BUSAN');
+    ck('  but a split leaves it EMPTY, rather than guessing',
+       br.commonest(['BUSAN', 'QINGDAO']) === null,
+       'naming the wrong discharge port is worse than leaving the forwarder to ask');
+    ck('  and nothing at all is not an answer either', br.commonest([]) === null);
+}
+
+section('E4 — correcting the draft, and refusing to');
+{
+    const now = new Date('2026-09-09T12:00:00-07:00');
+    const state = { from: 'HOUSTON', to: 'BUSAN', count: 2, size: '40HC' };
+    const c = (t) => br.correctionIn(t, state, now);
+
+    ck('"no, Qingdao not Busan" changes the discharge port', c('no, Qingdao not Busan')?.to === 'QINGDAO');
+    ck('  either way round', c('not Busan, Qingdao')?.to === 'QINGDAO');
+    ck('  and a label works without a negation', c('POD Qingdao')?.to === 'QINGDAO');
+    ck('  the load port too', c('no not Houston, Savannah')?.from === 'SAVANNAH');
+    ck('"make it 3 containers" changes the count', c('make it 3 containers')?.count === 3);
+    ck('  and a bare number is a COUNT, not a day of the month',
+       c('make it 3')?.count === 3 && c('make it 3')?.cutoff === undefined,
+       'the first version read "make it 3" as "cut off 3 Oct" — a date she never said, on a mail to a carrier');
+    ck('  while an ordinal is a date', br.forCarrier(c('make it the 3rd')?.cutoff) === '3 Oct 2026');
+    ck('"cut off the 25th" moves the cutoff', br.forCarrier(c('cut off the 25th')?.cutoff) === '25 Sep 2026');
+    ck('  and an ERD is kept apart from it', br.forCarrier(c('ERD the 22nd')?.erd) === '22 Sep 2026');
+
+    // ── AND THE ONES IT MUST REFUSE ──────────────────────────────────────
+    // helpers/draftIntent.js records "forward that to Sher Trucking" silently
+    // rewriting the buyer on an invoice, because "to X" parses as a company.
+    // The same shape here would put a haulier's name in the discharge port of
+    // a booking request.
+    for (const t of ['send it to Zimex', 'yes', 'no', 'looks good', 'thanks', 'ok go',
+                     'schedule this at 7am', 'any bookings from houston', 'make it shorter']) {
+        ck(`  "${t}" is not a correction`, c(t) === null, JSON.stringify(c(t)));
+    }
+    ck('  and neither is restating what the draft already says',
+       c('make it 2') === null && c('2') === null,
+       'a "correction" that changes nothing would re-draft for no reason');
+    ck('  nor a negation of something not on the draft',
+       c('no, Qingdao not Shanghai') === null,
+       'the rejected half has to be what the draft says, or this is not about this draft');
+
+    // SAID OUT LOUD. The guard that replaces a cue word: a mis-parse has to be
+    // audible before she is asked to confirm again.
+    ck('what changed is describable', /3 containers/.test(br.describeCorrection({ count: 3 })));
+    ck('  including ports and dates',
+       /to QINGDAO/.test(br.describeCorrection({ to: 'QINGDAO' }))
+       && /cut off 20 Sep 2026/.test(br.describeCorrection({ cutoff: new Date(Date.UTC(2026, 8, 20, 19)) })));
+}
+
 section('F — the handover, in the right order');
 {
     const acts = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8')
@@ -218,28 +373,67 @@ section('F — the handover, in the right order');
     // Asked AFTER the address is resolved. Asking "how many containers?" and
     // only then discovering there is no email address for them is two
     // questions where one would do.
-    const iAsk = acts.indexOf("type: 'await_booking_details'");
+    // ── ONE PLACE DECIDES WHAT IS STILL MISSING ──────────────────────────
+    // 2026-09-09: this used to be two copies — the entry path asked for the
+    // count, the resolver drafted — and adding the cutoff question would have
+    // made it two copies of a two-step sequence. continueBookingRequest is now
+    // the only thing that decides, and both entry points call it. Same move as
+    // resolveSpokenBooking, for the same reason: the forward and assign paths
+    // drifted apart for exactly as long as they were separate.
+    const iSeq = acts.indexOf('async function continueBookingRequest(');
+    ck('one function decides what is still missing', iSeq !== -1,
+       'two copies of the sequence is two places for the cutoff step to be wrong');
+    const seqEnd = acts.indexOf('async function draftEmailWithAddress(', iSeq);
+    const seq = acts.slice(iSeq, seqEnd);
+    ck('  and both entry points go through it',
+       (acts.match(/continueBookingRequest\(chatId,/g) || []).length >= 3,
+       'the request path, the count answer and the cutoff answer all resume here');
+
     const iDraft = acts.indexOf('return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor);');
-    ck('the question is staged before the draft', iAsk !== -1 && iDraft !== -1 && iAsk < iDraft);
+    // Asked AFTER the address is resolved — asking "how many containers?" and
+    // only then finding there is no email address for them is two questions
+    // where one would do — and BEFORE the ordinary-draft fallthrough, which is
+    // what would otherwise send a quantity-less request to a carrier.
+    ck('the question is staged before the ordinary draft',
+       iSeq !== -1 && iDraft !== -1
+       && acts.indexOf('return continueBookingRequest(chatId, state);') !== -1
+       && acts.indexOf('return continueBookingRequest(chatId, state);') < iDraft);
 
     // AND THE QUESTION IS ACTUALLY ASKED. Deleting this one line left every
     // other assertion in the file green: the pending would be staged, she
     // would be asked nothing at all, and the blocking pending would sit there
     // swallowing her next few sentences. Silence is the worst failure shape
     // this codebase has, and I nearly shipped another one.
-    const stageBlock = acts.slice(iAsk, iAsk + 900);
     ck('  and the question is actually sent',
-       /_send\(chatId, br\.ask\(/.test(stageBlock),
+       /await _send\(chatId, question\)/.test(seq),
        'staging a pending and asking nothing leaves her in silence with everything blocked');
     ck('  naming who it is for',
-       /br\.ask\(targetName\)/.test(stageBlock) && /\$\{who/.test(
+       /br\.ask\(s\.target_name\)/.test(seq) && /\$\{who/.test(
            fs.readFileSync(path.join(ROOT, 'helpers/bookingRequest.js'), 'utf8')),
        '"How many containers?" with two drafts in flight is ambiguous');
     ck('  and a queued pending says so rather than going quiet',
-       /staged\.queued/.test(stageBlock), stageBlock.slice(0, 120));
+       /staged\.queued/.test(seq), seq.slice(0, 120));
     ck('  and the pending carries everything needed to resume',
-       /target_name: targetName, details: details \|\| null, bkg_no: bkgNo \|\| null,\s*\n?\s*to, to_source: toSource/.test(acts),
+       /target_name: s\.target_name/.test(seq) && /to: s\.to, to_source: s\.to_source/.test(seq),
        'a pending missing the address means re-resolving it later, and a different answer');
+    // Named fields, not a spread. A prior pending is spread INTO this
+    // function, carrying setPending's own created_at/expires_at — re-storing
+    // those would pin the new question to the old question's expiry, so a
+    // cutoff asked late in a slow exchange could arrive already dead.
+    ck('  without carrying the previous pending\'s expiry',
+       !/setPending\(chatId, \{\s*type: 'await_booking_details', \.\.\./.test(seq),
+       'a re-staged pending must start its own clock, not inherit a spent one');
+
+    // ── COUNT FIRST, THEN CUTOFF ─────────────────────────────────────────
+    // Her instruction was one question at a time. The order is not arbitrary:
+    // a carrier cannot reply at all without a quantity.
+    ck('  the count is asked before the cutoff',
+       seq.indexOf('br.ask(s.target_name)') !== -1
+       && seq.indexOf('br.ask(s.target_name)') < seq.indexOf('br.askCutoff('),
+       'two questions in one breath is the form-read-aloud she rejected');
+    ck('  and the cutoff is never inferred',
+       !/usualRoute[\s\S]{0,200}cutoff/.test(seq) && /br\.askCutoff\(/.test(seq),
+       'a cutoff comes from when the metal is ready — the last booking\'s is a date in the past');
 
     // Resumes through the SAME drafting tail, not a second one.
     // Bounded by something that SURVIVES comment-stripping. I first ended
@@ -254,7 +448,7 @@ section('F — the handover, in the right order');
        'from ' + resFrom + ' to ' + resTo);
     const res = acts.slice(resFrom, resTo);
     ck('  it resumes into the existing drafter',
-       /return draftEmailWithAddress\(/.test(res),
+       /return continueBookingRequest\(/.test(res) && /return draftEmailWithAddress\(/.test(seq),
        'a second drafting path would not get writingStyle.js and would drift');
     ck('  never sending directly',
        !/sendEmail|sendDraftedEmail/.test(res),
@@ -270,17 +464,39 @@ section('F — the handover, in the right order');
        && /booking_details_reasked/.test(res),
        'defaulting to one container is a real commitment to a shipping line');
     ck('    and keeps the pending open',
-       res.indexOf('booking_details_reasked') < res.indexOf('await clearPending'),
+       res.indexOf('booking_details_reasked') < res.lastIndexOf('await clearPending'),
        'clearing it would drop the question and lose the email');
+
+    // ── THE SECOND QUESTION, IN THE SAME PENDING ─────────────────────────
+    // Which question is outstanding is read off the STATE (a count already
+    // stored means the count step is behind us), not from a flag set when the
+    // question was asked. A flag goes stale the moment she answers "two, cut
+    // off the 20th" — one reply that settles both.
+    ck('  the cutoff answer is told apart by the state, not a flag',
+       /const awaitingCutoff = pending\.count != null/.test(res),
+       'a flag set at ask-time is wrong as soon as she answers both at once');
+    ck('  an unreadable date re-asks rather than drafting without one',
+       /didn't catch a date/.test(res) && /booking_cutoff_reasked/.test(res),
+       'a wrong cutoff books the wrong vessel');
+    ck('  and "skip" is a real answer, not a cancel',
+       /cutoff_skipped: true/.test(res),
+       'she can say "not sure" — re-asking for ever is worse than sending without one');
 
     ck('  and "no" still cancels',
        /pending\.type === 'await_booking_details' && answer !== 'no'/.test(res),
        'declining to say how many means do not send the mail');
 
-    // A number in the FIRST sentence means no question at all.
+    // A number in the FIRST sentence means no question at all — the entry
+    // path hands the count it already read straight into the sequence, which
+    // then only asks for what is still missing.
     ck('a count given up front is not asked about again',
-       /details = br\.details\(count, size, said\)/.test(acts),
+       /said, from_port: fromPort, count, size,/.test(acts)
+       && /if \(s\.count == null\) \{[\s\S]{0,200}br\.ask\(/.test(seq),
        'asking for something she just said is the form-in-disguise this flow exists to avoid');
+    ck('  and a cutoff given up front is not asked about either',
+       /const dates = br\.datesIn\(said\)/.test(acts)
+       && /if \(!s\.cutoff && !s\.cutoff_skipped\)/.test(seq),
+       'same rule, second question');
 
     // And the whole check must never be able to lose the email.
     const guard = acts.slice(acts.indexOf("const br = require('../helpers/bookingRequest')"), iDraft);

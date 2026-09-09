@@ -1592,6 +1592,45 @@ if (pending.type === 'await_booking_details' && answer !== 'no') {
     // many containers?" has just been asked, so the whole reply IS the answer
     // and "two" is what a person actually says. Using the strict one here
     // would have re-asked for ever on the commonest possible reply.
+    // ── WHICH QUESTION IS THIS ANSWERING? ────────────────────────────────
+    // The same pending type now covers two questions asked in sequence, and
+    // the pending itself says which one is outstanding: a count already on it
+    // means the count question is behind us and this reply is the cutoff.
+    //
+    // Read off the STATE rather than from a flag set when the question was
+    // asked, deliberately. A flag can go stale — she can answer the count
+    // question by giving the count AND the cutoff in one breath, and then the
+    // flag says "waiting on a cutoff" while the state already has one.
+    const awaitingCutoff = pending.count != null;
+
+    if (awaitingCutoff) {
+        // "skip", "not sure", "no cut off yet" — a real answer, and the one
+        // she will give when the metal has not been weighed. Taken as an
+        // answer instead of re-asked, and the request goes without a cutoff.
+        // Handled here and not by the generic 'no' branch above, which would
+        // throw the whole email away.
+        const SKIP = /^\s*(?:skip|no cut ?off|none|not sure|dunno|don'?t know|no idea|later|leave it (?:out|blank)|whenever|asap)\b/i;
+        if (SKIP.test(said)) {
+            await clearPending(chatId);
+            return continueBookingRequest(chatId, { ...pending, cutoff_skipped: true });
+        }
+        const cutoff = br.cutoffInAnswer(said);
+        if (!cutoff) {
+            await _send(chatId, `I didn't catch a date in "${said || '(nothing)'}". What cut off? Say "the 20th", or "next Friday" — or "skip" to send it without one.`);
+            return { action_taken: 'booking_cutoff_reasked' };
+        }
+        // An ERD said in the same breath is kept — she often gives both, and
+        // asking for something she just said is the failure mode this whole
+        // flow exists to avoid.
+        const alsoErd = br.datesIn(said).erd;
+        await clearPending(chatId);
+        return continueBookingRequest(chatId, {
+            ...pending,
+            cutoff: cutoff.toISOString(),
+            erd: alsoErd ? alsoErd.toISOString() : (pending.erd || null),
+        });
+    }
+
     const { count, size } = br.countInAnswer(said);
 
     // NEVER GUESSED. A booking request commits her to a carrier for a number
@@ -1603,12 +1642,16 @@ if (pending.type === 'await_booking_details' && answer !== 'no') {
         return { action_taken: 'booking_details_reasked' };
     }
 
+    // A cutoff volunteered alongside the count skips the second question
+    // entirely — "two 40s, cut off the 20th" is one answer, not two.
+    const alongside = br.datesIn(said);
     await clearPending(chatId);
-    return draftEmailWithAddress(
-        chatId, pending.target_name,
-        br.details(count, size, pending.details || ''),
-        pending.bkg_no, pending.to, pending.to_source,
-        pending.scheduled_for ? new Date(pending.scheduled_for) : null);
+    return continueBookingRequest(chatId, {
+        ...pending,
+        count, size: size || pending.size || null,
+        cutoff: alongside.cutoff ? alongside.cutoff.toISOString() : (pending.cutoff || null),
+        erd: alongside.erd ? alongside.erd.toISOString() : (pending.erd || null),
+    });
 }
 
 // Proforma confirmation (2026-08-23). Placed before the generic 'no' branch
@@ -3183,12 +3226,25 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
     // already resolved — asking "how many containers?" and only then finding
     // there is no email address for them is two questions where one would do.
     //
-    // Deliberately NOT asked for port, commodity, size or ready date. That is
-    // a form read aloud, and her verdict on those is on record: "I want how a
-    // human asissyant will handle it." A person who has sent these for years
-    // asks the one thing that changes and infers the rest from the last one —
-    // which is exactly what the drafter does when it grounds itself in the
-    // previous correspondence with that same contact.
+    // Deliberately NOT asked for port, commodity or ready date. That is a form
+    // read aloud, and her verdict on those is on record: "I want how a human
+    // asissyant will handle it." A person who has sent these for years asks the
+    // one thing that changes and infers the rest from the last one — which is
+    // exactly what the drafter does when it grounds itself in the previous
+    // correspondence with that same contact.
+    //
+    // TWO things change every time, not one. Apsara, 2026-09-09: "I want jarvis
+    // to communicate in similar terms like need bookings from Houston to Busan
+    // 1x40HC with cut off as [date]. [Optional:ERD]" — she STATES the cutoff
+    // when she asks. I had assumed it came back from the forwarder. So the
+    // count is asked, and then the cutoff, and nothing else.
+    //
+    // ONE AT A TIME, AND THEN SHOWN. Asked how she wanted the missing pieces
+    // gathered, she said "Both 1 and 3" — one question at a time for what is
+    // missing, AND everything in the draft for her to correct. Those only fit
+    // together if what CAN be inferred is inferred instead of asked, and then
+    // said out loud. usualRoute() does the inferring off her own bookings, and
+    // the confirmation line below names every field that came from a guess.
     try {
         const br = require('../helpers/bookingRequest');
         const said = [details, rawText].filter(Boolean).join(' ');
@@ -3219,28 +3275,28 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
                 } catch (e) { /* no proforma open is the normal case */ }
             }
 
-            if (count == null) {
-                const staged = await setPending(chatId, {
-                    type: 'await_booking_details',
-                    target_name: targetName, details: details || null, bkg_no: bkgNo || null,
-                    to, to_source: toSource,
-                    scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
-                });
-                if (staged.queued) {
-                    await _send(chatId, `I'll ask how many containers for ${targetName} once your pending ${describePending(staged.blockedBy)} is resolved.`);
-                    return { action_taken: 'booking_details_queued' };
-                }
-                await _send(chatId, br.ask(targetName));
-                return { action_taken: 'booking_details_asked' };
-            }
-            // She said the number in the same breath — or it came from the
-            // proforma she is in the middle of. Either way, no question: an
-            // assistant that asks for something you just told it is the
-            // form-in-disguise this whole flow exists to avoid.
-            details = br.details(count, size, said);
-            if (inherited) {
-                await _send(chatId, `Using ${count} container${count === 1 ? '' : 's'} from the proforma you're drafting.`);
-            }
+            // ── THE LOAD PORT ARRIVES BESIDE THE SENTENCE, NOT INSIDE IT ──
+            // When she accepted "want me to ask a forwarder for space?",
+            // api.js stashed the port it had already resolved. Taking it here
+            // — single use, cleared on read — is what stops the port having to
+            // survive a round trip through Jarvis's own English, which it has
+            // twice failed to do.
+            let fromPort = null;
+            try { fromPort = require('../helpers/voiceMemory').takeRequestPort(); }
+            catch (e) { /* not a voice turn, or nothing stashed */ }
+
+            const dates = br.datesIn(said);
+
+            const state = {
+                target_name: targetName, details: details || null, bkg_no: bkgNo || null,
+                to, to_source: toSource,
+                scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+                said, from_port: fromPort, count, size,
+                cutoff: dates.cutoff ? dates.cutoff.toISOString() : null,
+                erd: dates.erd ? dates.erd.toISOString() : null,
+                inherited,
+            };
+            return continueBookingRequest(chatId, state);
         }
     } catch (err) {
         // A booking request drafted WITHOUT the quantity is worse than one
@@ -3252,12 +3308,175 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
     return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor);
 }
 
+// ── ONE QUESTION AT A TIME, AND ONLY FOR WHAT IS MISSING ─────────────────
+// The single place that decides whether a booking request is ready to draft.
+// Called on the way in (from draftEmailForConfirm) AND on the way back from
+// each answer (from the await_booking_details resolver), so the sequence is
+// written once instead of once per entry point — the mistake the forward and
+// assign paths made until resolveSpokenBooking pulled them together.
+//
+// Order is not arbitrary. Count first: it is the thing a carrier cannot reply
+// without. Cutoff second. Everything else is inferred and shown, never asked.
+async function continueBookingRequest(chatId, state) {
+    const br = require('../helpers/bookingRequest');
+    const s = state || {};
+
+    // Named one by one rather than spread. This function is called with a
+    // whole prior `pending` object spread into it, which carries setPending's
+    // own created_at/expires_at housekeeping — and re-storing those would pin
+    // the new question to the OLD question's expiry, so a cutoff asked at the
+    // end of a slow exchange could arrive already dead. Listing the fields
+    // also means a field added to a pending later cannot silently ride along.
+    const stage = async (question, taken, queuedNote) => {
+        const staged = await setPending(chatId, {
+            type: 'await_booking_details',
+            target_name: s.target_name, details: s.details || null, bkg_no: s.bkg_no || null,
+            to: s.to, to_source: s.to_source, scheduled_for: s.scheduled_for || null,
+            said: s.said || null, from_port: s.from_port || null,
+            count: s.count == null ? null : s.count, size: s.size || null,
+            cutoff: s.cutoff || null, erd: s.erd || null,
+            to_override: s.to_override || null,
+            cutoff_skipped: !!s.cutoff_skipped, inherited: !!s.inherited,
+        });
+        if (staged.queued) {
+            await _send(chatId, `${queuedNote} once your pending ${describePending(staged.blockedBy)} is resolved.`);
+            return { action_taken: 'booking_details_queued' };
+        }
+        await _send(chatId, question);
+        return { action_taken: taken };
+    };
+
+    if (s.count == null) {
+        return stage(br.ask(s.target_name), 'booking_details_asked',
+            `I'll ask how many containers for ${s.target_name}`);
+    }
+
+    // She said the number in the same breath — or it came from the proforma
+    // she is in the middle of. Said out loud either way: this commits her to
+    // a carrier for a number she did not speak in this sentence.
+    if (s.inherited) {
+        await _send(chatId, `Using ${s.count} container${s.count === 1 ? '' : 's'} from the proforma you're drafting.`);
+        s.inherited = false;
+    }
+
+    // ── THE CUTOFF IS ASKED, NOT GUESSED ─────────────────────────────────
+    // Nothing in her data predicts it. A cutoff is set by when the metal will
+    // be ready, and the last booking's cutoff is a date in the past. Inferring
+    // one would put a wrong date in front of a carrier, which is the whole
+    // class of error this file keeps refusing to make.
+    //
+    // `cutoff_skipped` is how she gets out of it. She can say "skip" or "not
+    // sure" and the request goes without one — a real thing to send, and she
+    // can still type the date into the draft before it goes. Re-asking for
+    // ever would be worse than sending it without.
+    if (!s.cutoff && !s.cutoff_skipped) {
+        return stage(br.askCutoff(s.target_name), 'booking_cutoff_asked',
+            `I'll ask what cut off you need for ${s.target_name}`);
+    }
+
+    // ── WHAT IS INFERRED IS SAID ─────────────────────────────────────────
+    // Destination and box size come off her own bookings (helpers/
+    // bookingRequest.js:usualRoute — today every one of them is BUSAN and
+    // 40HC, and it is measured rather than hardcoded so it follows her). That
+    // is her "put it in the draft" half. The line below is what makes it
+    // correctable rather than merely present: a field filled in silently is a
+    // field nobody thinks to check.
+    let usual = { to: null, size: null };
+    try { usual = br.usualRoute(s.from_port); }
+    catch (e) { console.warn('[ACTIONS] could not infer the usual route:', e.message); }
+
+    const guessed = [];
+    const size = s.size || (usual.size ? (guessed.push(`${usual.size} boxes`), usual.size) : null);
+    // A port SHE corrected wins over the one her history suggests, and is not
+    // announced as a guess a second time — she is the one who said it.
+    const to = s.to_override
+        || (usual.to ? (guessed.push(`discharge at ${usual.to}`), usual.to) : null);
+
+    const cutoff = s.cutoff ? new Date(s.cutoff) : null;
+    const erd = s.erd ? new Date(s.erd) : null;
+
+    const details = br.details(s.count, size, s.said || s.details || '', {
+        from: s.from_port, to, cutoff, erd,
+    });
+
+    if (guessed.length) {
+        await _send(chatId, `Going with ${guessed.join(' and ')} — that's what your last ${usual.of === 1 ? 'booking' : `${usual.of} bookings`}${usual.same_origin && s.from_port ? ` out of ${s.from_port}` : ''} did. Say so in your reply if it's different this time.`);
+    }
+    if (!s.cutoff && s.cutoff_skipped) {
+        await _send(chatId, "Leaving the cut off out — add it to the draft before you send it if you want one in there.");
+    }
+
+    // The state travels WITH the draft. Without it a correction at the confirm
+    // step has nothing to correct — the ports, count, size and dates would
+    // have to be read back out of the drafted prose, which is the model's
+    // output and not a fact.
+    return draftEmailWithAddress(
+        chatId, s.target_name, details, s.bkg_no, s.to, s.to_source,
+        s.scheduled_for ? new Date(s.scheduled_for) : null,
+        { ...s, to_port: to, size, from: s.from_port });
+}
+
+// ── "NO, QINGDAO NOT BUSAN" ──────────────────────────────────────────────
+// Reached only from brain.js's policy catch, and only when an
+// await_email_confirm carrying a booking-request state is open AND
+// bookingRequest.correctionIn could name a field and a value. Everything else
+// keeps today's behaviour exactly.
+async function correctBookingDraft(chatId, pending, said) {
+    const br = require('../helpers/bookingRequest');
+    const req = (pending && pending.req) || null;
+    if (!req) {
+        console.warn('[ACTIONS] correctBookingDraft with no request state — ignoring');
+        return { action_taken: 'booking_correction_no_state' };
+    }
+    const patch = br.correctionIn(said, {
+        from: req.from_port, to: req.to_port, count: req.count, size: req.size,
+    });
+    if (!patch) {
+        // brain.js only routes here when correctionIn already said yes, so
+        // this is a disagreement between two calls and not a normal path. Say
+        // so rather than silently cancelling her email.
+        await _send(chatId, `I couldn't tell what to change from "${said}". Reply yes to send it as it is, no to drop it, or name the change — "3 containers", "cut off the 25th", "Qingdao not Busan".`);
+        return { action_taken: 'booking_correction_unclear' };
+    }
+
+    // SAID OUT LOUD BEFORE THE RE-DRAFT. The guard helpers/draftIntent.js
+    // relies on for the same reason: a mis-read correction is only survivable
+    // if she can hear it. She still gets the whole new draft and a yes/no
+    // after this, so nothing goes anywhere on the strength of it.
+    // "Changing it to to QINGDAO" — describeCorrection already supplies the
+    // preposition ("to QINGDAO", "out of SAVANNAH", "cut off 25 Sep"), so the
+    // lead-in must not add another. Seen in the live transcript, not in a test.
+    await _send(chatId, `Right — ${br.describeCorrection(patch)}. Redrafting.`);
+    await clearPending(chatId);
+
+    return continueBookingRequest(chatId, {
+        ...req,
+        count: patch.count != null ? patch.count : req.count,
+        size: patch.size || req.size,
+        from_port: patch.from || req.from_port,
+        // A corrected discharge port is HERS, and must not be overwritten by
+        // the usual-route inference on the next pass through.
+        to_override: patch.to || req.to_override || null,
+        cutoff: patch.cutoff ? patch.cutoff.toISOString() : req.cutoff,
+        erd: patch.erd ? patch.erd.toISOString() : req.erd,
+        // Already answered once; a correction must never re-open the
+        // questions she has been through.
+        cutoff_skipped: !!req.cutoff_skipped, inherited: false,
+    });
+}
+
 // Shared drafting tail — called once an address is known, whether resolved
 // via contacts, mail search, or (after the await_manual_email_address
 // pending above) typed directly by the manager. Factored out 2026-08-03 so
 // all three paths produce an identical draft/preview/confirm flow instead of
 // three slightly-diverging copies.
-async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor = null) {
+// `req` is the booking-request state, present ONLY when this draft came out
+// of continueBookingRequest. It rides along on the confirm pending so that
+// "no, Qingdao not Busan" can be applied to the FACTS and the request rebuilt,
+// rather than handed to the model as prose that contradicts the brief it was
+// given. Null for every other kind of email, and the correction branch is
+// gated on it, so no other drafting path changes behaviour.
+async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor = null, req = null) {
     const { callGeminiJSON } = require('../helpers/gemini');
     const bkg = bkgNo ? getBooking(bkgNo) : null;
     const bookingLine = bkg
@@ -3355,6 +3574,7 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         to, cc, bcc, subject: draft.subject, body: draft.body,
         target_name: targetName, bkg_no: bkgNo || null,
         scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+        req: req || null,
     });
     const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
@@ -6783,6 +7003,7 @@ showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    continueBookingRequest, correctBookingDraft,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
     startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,

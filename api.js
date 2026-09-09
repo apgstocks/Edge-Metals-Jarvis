@@ -2156,6 +2156,13 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     // second. The draft went to a contact that does not exist.
                     // A comma ends the name.
                     asked = `send a mail to ${who}, asking for space out of ${offer.port}`;
+                    // AND THE PORT AGAIN, THIS TIME AS A FACT. The sentence
+                    // above still has to read like a request so isRequest sees
+                    // it, but the port in it is English and English is what
+                    // keeps getting reinterpreted on the way through. This is
+                    // the copy the draft actually uses — see voiceMemory's
+                    // setRequestPort for why it is single-use.
+                    if (mem.setRequestPort) mem.setRequestPort(offer.port);
                     rewrittenAsOrder = true;
                     console.log(`[VOICE] asking ${who} for space at ${offer.port} — "${asked}"`);
                 }

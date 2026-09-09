@@ -870,6 +870,48 @@ function policyDecide(ctx) {
             if (clause) return { intent: 'reschedule_pending_email', resolvedBy: 'policy', data: { send_at_text: clause } };
             return { intent: 'reply', resolvedBy: 'policy', data: { reply: 'Schedule it for when? e.g. "schedule this at 7am LA time" or "schedule for tomorrow 9am".' } };
         }
+        // ── "NO, QINGDAO NOT BUSAN" ──────────────────────────────────────
+        // Apsara, 2026-09-09, on gathering the missing pieces of a booking
+        // request: "Both 1 and 3.." — ask one at a time for what is missing,
+        // AND put it in the draft for her to edit. This is the editing half.
+        //
+        // Same failure shape as the "Schedule this mail" bug documented right
+        // above, and still live for corrections: a correction typed at an
+        // open email confirm is not yes, not no, not a numbered option, so it
+        // falls through to general classification, is read as a brand new
+        // request, finds the same pending unresolved and queues a second draft
+        // behind it. Today her only usable move is "no", which bins the mail
+        // and both answers she just gave.
+        //
+        // THREE LOCKS, and each is doing work:
+        //  1. `p.req` — only a draft that CAME FROM the booking-request flow
+        //     has a state to correct. Every other email confirm in this app is
+        //     untouched, which matters: this branch is new and the reply
+        //     drafts, the quote requests and the proforma covering notes have
+        //     no coverage for it.
+        //  2. correctionIn must name a FIELD and a VALUE. That is the test
+        //     helpers/draftIntent.js states, and it is what keeps "send it to
+        //     Zimex" from being read as a discharge port — the exact mistake
+        //     that file records putting the wrong company on a document.
+        //  3. the re-draft still ends at a yes/no. Nothing is sent on the
+        //     strength of a parsed correction.
+        if (p.type === 'await_email_confirm' && p.req) {
+            try {
+                const patch = require('../helpers/bookingRequest').correctionIn(ctx.text, {
+                    from: p.req.from_port, to: p.req.to_port,
+                    count: p.req.count, size: p.req.size,
+                });
+                if (patch) {
+                    return { intent: 'correct_booking_draft', resolvedBy: 'policy',
+                        data: { said: ctx.text } };
+                }
+            } catch (e) {
+                // A correction that cannot be parsed must never cost her the
+                // draft — fall through to exactly today's behaviour.
+                console.warn('[BRAIN] booking-draft correction check failed:', e.message);
+            }
+        }
+
         // ── "HOW MANY CONTAINERS?" ───────────────────────────────────────
         // Apsara, 2026-09-06: "it should ask how many containers."
         //
@@ -2263,6 +2305,7 @@ async function route(decision, ctx, sendMessage) {
         // can be honest about what it did and didn't actually cancel.
         case 'resolve_pending':        return actions.resolvePending(chatId, ctx.pendingAction, d.answer, d.selection, d.cancelText);
         case 'reschedule_pending_email': return actions.reschedulePendingEmail(chatId, ctx.pendingAction, d.send_at_text);
+        case 'correct_booking_draft': return actions.correctBookingDraft(chatId, ctx.pendingAction, d.said);
         case 'resolve_fact_batch':     return actions.resolveFactBatch(chatId, ctx.pendingAction, d.selection);
         case 'resolve_fact_conflict':  return actions.resolveFactConflict(chatId, ctx.pendingAction, d.answer);
         case 'show_menu':              return actions.showMenu(chatId);

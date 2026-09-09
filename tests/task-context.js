@@ -106,8 +106,13 @@ section('D — the container count inherits, and says so');
     // Her exact case: a proforma for two containers is open, she asks for a
     // booking without naming a number.
     const acts = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+    // Runs to the end of continueBookingRequest, not to the ordinary-draft
+    // line. 2026-09-09: the sequence moved into that function so the cutoff
+    // question could share it, and the announcement moved with it — the
+    // inheritance is now declared BETWEEN the two questions, which is the only
+    // place it can go if she is not to hear it twice.
     const seg = acts.slice(acts.indexOf('let inherited = false;'),
-                           acts.indexOf('return draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor);'));
+                           acts.indexOf('async function draftEmailWithAddress('));
 
     ck('an unstated count falls back to the open proforma',
        /openContainerCount\(\)/.test(seg), seg.slice(0, 200));
@@ -118,8 +123,14 @@ section('D — the container count inherits, and says so');
     // SAID OUT LOUD. This commits her to a carrier for a figure she did not
     // speak in this sentence.
     ck('  and it is said out loud when inherited',
-       /Using \$\{count\} container/.test(seg),
+       /Using \$\{s\.count\} container/.test(seg),
        'a silent inheritance is a number she never agreed to, at a shipping line');
+    // AND ONLY ONCE. The flag is cleared as it is announced, so a cutoff
+    // question staged straight afterwards does not carry it into the next
+    // turn and say it again.
+    ck('    and only once',
+       /s\.inherited = false;/.test(seg),
+       'repeating it every turn is the assistant not listening, in the other direction');
     // The FLAG BEING SET, not merely the `if (inherited)` block existing.
     // A mutation that took the count and never set the flag left the block
     // in place, the announcement unreachable, and this assertion green — the
@@ -132,8 +143,14 @@ section('D — the container count inherits, and says so');
     // convenience on top of a confirmation, not a replacement for one.
     const res = acts.slice(acts.indexOf("pending.type === 'await_booking_details'"),
                            acts.indexOf("pending.type === 'confirm_proforma'"));
+    // The resolver hands back to continueBookingRequest, which is the only
+    // thing that reaches the drafter — and the drafter still stages an
+    // await_email_confirm rather than sending. Both halves checked, because
+    // asserting only the first would pass on a resolver that resumed into
+    // something that sent directly.
     ck('the yes/no gate before sending is untouched',
-       /draftEmailWithAddress\(/.test(res) && !/sendEmail/.test(res),
+       /continueBookingRequest\(/.test(res) && !/sendEmail/.test(res)
+       && /return draftEmailWithAddress\(/.test(seg) && !/sendEmail/.test(seg),
        'inheritance without a confirmation would be guessing with consequences');
 }
 

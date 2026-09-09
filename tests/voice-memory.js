@@ -620,6 +620,42 @@ section('CENTER — "the erd of that booking" with ten on screen');
        'two names or none, and it stays where it was rather than picking');
 }
 
+section('H — the port handed over as a fact, and consumed exactly once');
+{
+    // ── WHY THIS EXISTS ──────────────────────────────────────────────────
+    // When she accepts "want me to ask a forwarder for space?", api.js knows
+    // the port already. It used to travel only inside the sentence Jarvis
+    // writes for itself — and that sentence has been reinterpreted by Jarvis's
+    // own parsers twice ("...asking for a booking from HOUSTON" was claimed by
+    // the location rule; "to zimex asking for space" made the recipient "zimex
+    // asking"). So it travels beside the sentence now.
+    //
+    // WRITTEN AFTER A MUTATION SURVIVED. Deleting `requestPort = null` — the
+    // single-use guard, which has a paragraph of comment justifying it —
+    // changed nothing that any of 83 suites noticed. A guard nothing tests is
+    // a guard nobody knows is working.
+    mem.setRequestPort('houston');
+    ck('the port comes back once, upper-cased', mem.takeRequestPort() === 'HOUSTON');
+    ck('  and is GONE on the second read',
+       mem.takeRequestPort() === null,
+       'a port that lingers joins the next unrelated email she dictates — "need bookings from HOUSTON" on a mail about an invoice');
+
+    // Same 2-minute life as the offer that produced it. Anything older is not
+    // context, it is an assumption.
+    mem.setRequestPort('OAKLAND');
+    const mod = require(path.join(ROOT, 'helpers/voiceMemory.js'));
+    ck('  it is not read back after its offer has expired',
+       /Date\.now\(\) - requestPort\.ts <= 120000/.test(
+           require('fs').readFileSync(path.join(ROOT, 'helpers/voiceMemory.js'), 'utf8')),
+       'a stale port is worse than none — it is confidently wrong');
+    mod.takeRequestPort();
+
+    ck('  and nothing stashed is simply null', mem.takeRequestPort() === null);
+    ck('  a falsy set clears rather than stores',
+       (mem.setRequestPort('HOUSTON'), mem.setRequestPort(null), mem.takeRequestPort()) === null,
+       'clearing has to actually clear, or the previous turn\'s port survives');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

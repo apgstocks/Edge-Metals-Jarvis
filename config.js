@@ -146,6 +146,21 @@ const FILES = {
     // identifies an account. So unlike bank-item.json it is not excluded from
     // the nightly Drive backup; losing it would mean retyping her own banks.
     BANKS_FILE: path.join(DATA_DIR, 'banks.json'),
+    // ── PURCHASE BILLS, EDGE METALS SIDE ──────────────────────────────────
+    // Apsara, 2026-09-09, opening with "This is for edge metals not for edge
+    // yard": a bill per container against a booking — weights off the
+    // weighbridge, the supplier's price, what the haulier charged, what has
+    // been advanced.
+    //
+    // ITS OWN FILE, beside PAYMENTS_FILE and for the same reason written
+    // there: bookings are re-saved wholesale by several paths, and a bill
+    // hanging off a booking would be one dropped field away from losing a
+    // weighbridge figure nobody can reconstruct.
+    //
+    // NOT trucker_bills.json, which is the YARD owing its hauliers. Two
+    // stores with "bill" in the name is a hurried afternoon away from a
+    // mistake, so the distinction is written here as well as in each file.
+    BILLS_FILE: path.join(DATA_DIR, 'bills.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

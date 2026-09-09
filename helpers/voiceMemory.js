@@ -162,6 +162,34 @@ function lastOffer() {
 }
 function clearOffer() { offer = null; }
 
+// ── THE PORT, HANDED OVER AS A FACT INSTEAD OF AS ENGLISH ────────────────
+// When she accepts "want me to ask a forwarder for space?", api.js turns that
+// into a sentence and re-feeds it through the whole pipeline. The load port
+// has to survive that trip, and putting it in the sentence has already gone
+// wrong twice: "...asking for a booking from HOUSTON" was claimed by the
+// brain's own location rule, and "to zimex asking for space" made the
+// recipient "zimex asking". The comment above that line in api.js is a record
+// of two rounds of working around Jarvis's own parsers.
+//
+// So the port travels beside the sentence rather than inside it, and the
+// sentence is left free to be whatever reads best.
+//
+// SINGLE USE, deliberately. take() clears it. A port that lingers would
+// attach itself to the next unrelated email she dictates, and "need bookings
+// from HOUSTON" on a mail about an invoice is exactly the kind of confident
+// wrongness this app keeps having to be taught out of. It also carries the
+// same 2-minute life as the offer that produced it — anything older is not
+// context, it is an assumption.
+let requestPort = null;
+function setRequestPort(p) { requestPort = p ? { port: String(p).toUpperCase(), ts: Date.now() } : null; }
+function takeRequestPort() {
+    if (!requestPort) return null;
+    const fresh = Date.now() - requestPort.ts <= 120000;
+    const p = fresh ? requestPort.port : null;
+    requestPort = null;
+    return p;
+}
+
 let queryFrame = null;
 function setQueryFrame(f) { queryFrame = f ? { ...f, ts: Date.now() } : null; }
 function lastQueryFrame() {
@@ -456,6 +484,7 @@ function distinguishers() {
 module.exports = {
     remember, setReferents, currentReferents, setCenter, currentCenter,
     setQueryFrame, lastQueryFrame, setOffer, lastOffer, clearOffer,
+    setRequestPort, takeRequestPort,
     history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,

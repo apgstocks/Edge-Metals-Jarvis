@@ -482,7 +482,41 @@ section('C2d — nothing available, so ask a forwarder');
        /for zimex\b/i.test(A(named)),
        '"to zimex asking for space" made the recipient "zimex asking", with an address invented to match');
 
-    const draft = await j.say('2');
+    // ── THEN THE CUT OFF, AND NOTHING ELSE ───────────────────────────────
+    // Apsara, 2026-09-09: "I want jarvis to communicate in similar terms like
+    // need bookings from Houston to Busan 1x40HC with cut off as [date].
+    // [Optional:ERD]" — she STATES the cutoff when she asks for space. Asked
+    // how the missing pieces should be gathered she said "Both 1 and 3": one
+    // question at a time for what is missing, everything else in the draft.
+    //
+    // So exactly two questions, in this order, and no third one. A test that
+    // only checked the cutoff was asked would pass just as happily on a form
+    // read aloud, which is the thing she has rejected twice in writing.
+    const cut = await j.say('2');
+    ck('  then it asks the cut off — the other thing that changes every time',
+       /cut ?off/i.test(A(cut)), A(cut));
+    ck('    and still nothing has been sent',
+       (j.mails || []).length === 0, 'a question is not a send');
+
+    const draft = await j.say('the 20th');
+    // ── WHAT WAS INFERRED IS SAID ────────────────────────────────────────
+    // Her instruction was "Both 1 and 3.." — ask for what is missing AND put
+    // it in the draft for her to correct. The second half only works if she
+    // can SEE which fields were filled in for her. A discharge port that
+    // appears silently is a discharge port nobody thinks to check.
+    //
+    // WRITTEN AFTER A MUTATION SURVIVED: deleting the whole announcement left
+    // every other assertion green. The point of the inference is that it is
+    // audible, and nothing was testing the audible part.
+    ck('  it says which fields it filled in for her',
+       /busan/i.test(A(draft)) && /(your last|usual|that'?s what)/i.test(A(draft)),
+       A(draft).slice(0, 400));
+    ck('    and invites the correction',
+       /say so|if it'?s different|different this time/i.test(A(draft)),
+       'a guess she is not invited to challenge is a guess she will not challenge');
+    ck('  and that is the LAST question — no port, no commodity, no ready date',
+       !/\?/.test(A(draft).split('Send this')[0].replace(/\(yes\/no\)/i, '')) || /draft email/i.test(A(draft)),
+       'a form read aloud is what she rejected: "I want how a human asissyant will handle it"');
     ck('  the draft is SHOWN before anything is sent',
        /draft email to zimex/i.test(A(draft)) && /subject:/i.test(A(draft)), A(draft));
     ck('    and it asks before sending', /yes\/no|send this/i.test(A(draft)), A(draft));
@@ -495,6 +529,164 @@ section('C2d — nothing available, so ask a forwarder');
     ck('    to the address it showed her',
        (j.mails || []).length === 1 && /zimex/.test(String((j.mails || [])[0].to || '')),
        JSON.stringify(j.mails));
+
+    // ── THE SENTENCE THAT ACTUALLY LEAVES THE BUILDING ───────────────────
+    // The whole point of the change. Checked on the mail that was SENT, not
+    // on the brief handed to the drafter — a prompt saying "must contain this
+    // line" proves nothing about whether the line survived the model.
+    //
+    // POL from the offer she accepted, POD and box size off her own bookings,
+    // count and cutoff from the two questions. Every one of them is a
+    // commitment to a carrier, so every one of them is asserted.
+    const body = String((j.mails || [])[0]?.body || '');
+    ck('  and the mail says it the way she says it',
+       /need bookings/i.test(body), body.slice(0, 300));
+    ck('    naming the load port she was asking about',
+       /houston/i.test(body), body.slice(0, 300));
+    ck('    the discharge port her own bookings all use',
+       /busan/i.test(body),
+       'inferred rather than asked — usualRoute reads it off bookings.json, and it is stated so she can correct it');
+    ck('    the count and box size as one figure',
+       /2\s*x\s*40HC/i.test(body), body.slice(0, 300));
+    ck('    and the cut off she gave, unambiguously',
+       /cut ?off/i.test(body) && /20 Sep 2026/.test(body),
+       '"09/20/2026" reads as 9 December to half the world, and a cutoff a month out misses a vessel');
+    await j.stop();
+}
+
+section('C2d2 — both answers in one breath, and one question fewer');
+{
+    // "two 40s, cut off the 20th" is ONE answer, not two. A flow that asked
+    // for the cutoff anyway would be the assistant not listening — the exact
+    // complaint behind the count question in the first place.
+    const fsx = require('fs');
+    const px = require('path');
+    const j = await boot({});
+    fsx.writeFileSync(px.join(j.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+
+    await j.say('show me available bookings from houston');
+    await j.say('zimex');
+    const draft = await j.say('2 x 40HC, cut off the 20th');
+    ck('answering both at once skips the second question',
+       /draft email to zimex/i.test(A(draft)) && !/what cut ?off/i.test(A(draft)), A(draft));
+    ck('  and the cutoff she volunteered is the one that goes',
+       /20 Sep 2026/.test(String((j.mails || [])[0]?.body || A(draft))), A(draft).slice(0, 400));
+    await j.stop();
+}
+
+section('C2d4 — correcting the draft, instead of binning it');
+{
+    // The other half of "Both 1 and 3..". Everything inferred goes into the
+    // draft, and the draft has to be CORRECTABLE — otherwise her only move
+    // against a wrong discharge port is "no", which throws away the mail and
+    // the two answers she just gave with it.
+    const fsx = require('fs');
+    const px = require('path');
+    const j = await boot({});
+    fsx.writeFileSync(px.join(j.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+
+    await j.say('show me available bookings from houston');
+    await j.say('zimex');
+    await j.say('2');
+    const first = await j.say('the 20th');
+    ck('the first draft carries the inferred port', /busan/i.test(A(first)), A(first).slice(0, 300));
+
+    const fixed = await j.say('no, Qingdao not Busan');
+    ck('  a correction re-drafts instead of cancelling',
+       /draft email to zimex/i.test(A(fixed)), A(fixed).slice(0, 400));
+    ck('    saying what it changed, so a mis-read is audible',
+       /Right — to QINGDAO\. Redrafting\./.test(A(fixed)), A(fixed).slice(0, 200));
+    ck('      and reading like a sentence',
+       !/\bto to\b/i.test(A(fixed)),
+       'describeCorrection supplies the preposition; a lead-in that adds another says "changing it to to QINGDAO"');
+    ck('    the corrected port is in the mail',
+       /qingdao/i.test(A(fixed)) && !/to BUSAN/i.test(A(fixed)), A(fixed).slice(0, 400));
+    ck('    the answers she already gave survive it',
+       /2\s*x\s*40HC/i.test(A(fixed)) && /20 Sep 2026/.test(A(fixed)),
+       'a correction that re-asks how many is the assistant not listening');
+    ck('    and still nothing has been sent',
+       (j.mails || []).length === 0, 'a re-draft is still a draft');
+
+    const sent = await j.say('yes');
+    ck('  and yes sends the CORRECTED one',
+       /qingdao/i.test(String((j.mails || [])[0]?.body || '')), JSON.stringify(j.mails));
+    await j.stop();
+
+    // ── AND WHAT MUST NOT BE READ AS A CORRECTION ────────────────────────
+    // "send it to Zimex" parses as a discharge port every bit as well as
+    // "to Qingdao" does. helpers/draftIntent.js records that exact shape
+    // putting the wrong company on a financial document. Here it is her YES.
+    const j2 = await boot({});
+    fsx.writeFileSync(px.join(j2.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+    await j2.say('show me available bookings from houston');
+    await j2.say('zimex');
+    await j2.say('2');
+    await j2.say('the 20th');
+    const notACorrection = await j2.say('send it to Zimex');
+    // ASSERTED ON THE ABSENCE OF THE CORRECTION, not on the absence of the
+    // word "zimex". My first version was `!/to ZIMEX/i` and it failed against
+    // correct code: the "(Still waiting: send this email to zimex ...)"
+    // reminder tail is part of the answer, so the pattern matched Jarvis's own
+    // output. Fourth time this session a check has read my own text back —
+    // the fix each time is to assert the thing that would actually be wrong.
+    ck('"send it to Zimex" is not read as a discharge port',
+       !/changing it to/i.test(A(notACorrection))
+       && !/to QINGDAO|to ZIMEX 2x|Need bookings from HOUSTON to ZIMEX/i.test(A(notACorrection)),
+       A(notACorrection).slice(0, 300));
+    ck('  and the draft it already showed her is untouched',
+       /Need bookings from HOUSTON to BUSAN 2x40HC/.test(A(notACorrection)),
+       'a sentence that is not a correction must leave the request exactly as it was');
+    // KNOWN GAP, stated rather than hidden. helpers/draftIntent.js's own rules
+    // say "send it to Daekwang" during a confirm is her YES, not a change —
+    // but that judgement lives in the proforma flow, and an email confirm
+    // still drops this to "I couldn't pin that down". Nothing is lost (the
+    // pending survives, as the reminder tail below proves, so "yes" still
+    // works) and fixing it touches every email path in the app, so it is
+    // carried as its own piece of work rather than bolted on here.
+    ck('  and the pending survives, so nothing she said is lost',
+       /Still waiting/i.test(A(notACorrection)),
+       'the email must still be there to say yes to');
+    await j2.stop();
+}
+
+section('C2d3 — "not sure" is an answer, not a dead end');
+{
+    // She will not always know. Re-asking for ever is worse than sending
+    // without one, and the draft is on screen for her to type it into.
+    const fsx = require('fs');
+    const px = require('path');
+    const j = await boot({});
+    fsx.writeFileSync(px.join(j.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+
+    await j.say('show me available bookings from houston');
+    await j.say('zimex');
+    await j.say('2');
+    const draft = await j.say('not sure');
+    ck('"not sure" still produces a sendable request',
+       /draft email to zimex/i.test(A(draft)), A(draft));
+    ck('  it just goes without a cut off, and says so',
+       !/cut ?off as/i.test(String((j.mails || [])[0]?.body || A(draft))), A(draft).slice(0, 400));
+    ck('  and the email is still a real request',
+       /need bookings/i.test(A(draft)) || /2\s*x\s*40HC/i.test(A(draft)), A(draft).slice(0, 400));
+
+    // AND AN UNREADABLE ANSWER IS NOT SILENTLY TREATED AS "SKIP".
+    // "soon" is not a date and not a refusal; drafting a request with no
+    // cutoff because a word did not parse would be a silent failure, which is
+    // the shape this codebase keeps having to be taught out of.
+    const j2 = await boot({});
+    fsx.writeFileSync(px.join(j2.dir, 'workflow.json'),
+        JSON.stringify({ HOU111: { supplier: 'Eccomelt' }, HOU222: { supplier: 'Eccomelt' } }, null, 2));
+    await j2.say('show me available bookings from houston');
+    await j2.say('zimex');
+    await j2.say('2');
+    const huh = await j2.say('soon');
+    ck('an unreadable date re-asks instead of quietly dropping it',
+       /didn't catch a date/i.test(A(huh)) && (j2.mails || []).length === 0, A(huh));
+    await j2.stop();
     await j.stop();
 }
 
