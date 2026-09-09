@@ -286,6 +286,7 @@ async function addBill(input = {}) {
 async function editBill(id, input = {}) {
     const patch = clean(input);
     let found = null;
+    let problem = null;
     await mutateJson(cfg.BILLS_FILE, [], (all) => {
         const rows = Array.isArray(all) ? all : [];
         const i = rows.findIndex((r) => r.id === id);
@@ -294,10 +295,20 @@ async function editBill(id, input = {}) {
         // editLoad rebuilding a record wholesale and dropping pdf_link; a bill
         // has twenty-three columns and the same mistake here would silently
         // erase a seal number nobody was editing.
-        rows[i] = { ...rows[i], ...patch, updated_at: new Date().toISOString() };
+        const merged = { ...rows[i], ...patch, updated_at: new Date().toISOString() };
+        // ── AN EDIT MUST NOT BLANK WHAT AN ADD INSISTS ON ────────────────
+        // addBill/addSale refuse a row with no date or no supplier, and an edit
+        // that could clear either would leave a record the create path would
+        // never have allowed. The client sends empty strings on edit (that is
+        // how a field gets CLEARED), so this is reachable by simply deleting
+        // the text and pressing Save.
+        if (!merged.date) { problem = 'a bill needs a date'; return rows; }
+        if (!merged.supplier) { problem = 'a bill needs a supplier'; return rows; }
+        rows[i] = merged;
         found = rows[i];
         return rows;
     });
+    if (problem) throw new Error(problem);
     if (!found) throw new Error(`no bill ${id}`);
     return withTotals(found);
 }

@@ -345,6 +345,39 @@ section('E — the routes, because a helper nothing calls is not a feature');
        r.json.bill.supplier === 'Eccomelt' && r.json.bill.gross === 44000,
        'the editLoad lesson: rebuilding a record wholesale dropped pdf_link');
 
+    // ── EDIT ─────────────────────────────────────────────────────────────
+    // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
+    // seal number meant deleting the row and retyping eighteen fields.
+    r = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { seal_no: 'SEAL-2', gross: 46000 } });
+    ck('an edit recomputes the derived columns',
+       r.json.bill.net_lb === 16500 && r.json.bill.amount === 5280,
+       JSON.stringify({ n: r.json.bill.net_lb, a: r.json.bill.amount }));
+
+    // ── AND A CLEARED FIELD REALLY CLEARS ────────────────────────────────
+    // The client sends every input on an edit, empty ones included, BECAUSE
+    // the server PATCHes: dropping blanks would mean clearing a seal number
+    // sends nothing for it and the old value survives. She would clear a
+    // field, save, and watch it come back.
+    r = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { seal_no: '' } });
+    ck('  clearing a field actually clears it', r.json.bill.seal_no === '', JSON.stringify(r.json.bill.seal_no));
+    ck('    without touching anything else',
+       r.json.bill.supplier === 'Eccomelt' && r.json.bill.gross === 46000);
+
+    // ── BUT NOT THE ONES AN ADD INSISTS ON ───────────────────────────────
+    // addBill refuses a row with no date or supplier. An edit that could
+    // blank either would leave a record the create path would never allow —
+    // and it is reachable by deleting the text and pressing Save.
+    for (const [field, why] of [['supplier', 'supplier'], ['date', 'date']]) {
+        const bad = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { [field]: '' } });
+        ck(`  an edit cannot blank the ${why}`, bad.status >= 400, String(bad.status));
+    }
+    const after = (await req('GET', '/api/bills', { sid: admin })).json.bills.find((x) => x.id === billId);
+    ck('  and a refused edit leaves the row untouched',
+       after.supplier === 'Eccomelt' && !!after.date, JSON.stringify({ s: after.supplier, d: after.date }));
+
+    r = await req('PUT', '/api/bills/NOPE', { sid: admin, body: { seal_no: 'x' } });
+    ck('  editing a row that is not there is an error, not a silent no-op', r.status >= 400);
+
     // Sales, same shape.
     r = await req('POST', '/api/sales', { sid: admin, body: {
         date: '2026-09-10', customer: 'Daekwang', invoice_no: 'INV-1', hbl_no: 'HBL-9',
@@ -416,6 +449,20 @@ section('F — who may see her supplier prices');
     ck('  with the running totals asked of the SERVER',
        /\$\{K\.path\}\/preview/.test(html),
        'computing her formulas in the browser would be a second implementation');
+    ck('  every row offers an edit, not just a delete',
+       /class="btn btn-secondary ledger-edit"/.test(html) && /openLedgerForm\(kind, row\)/.test(html),
+       'a typo in a seal number should not mean retyping eighteen fields');
+    ck('  and the SAME form does add and edit',
+       /function openLedgerForm\(kind, existing\)/.test(html)
+       && (html.match(/const sections = groups\.map/g) || []).length === 1,
+       'two copies of an 18-field layout is two things to keep in step');
+    ck('  an edit sends the emptied fields too',
+       /if \(!\(k in body\)\) body\[k\] = ''/.test(html),
+       'the server PATCHes, so a dropped blank means the old value survives');
+    ck('  the running totals name the columns she asked for',
+       /'Net weight \(lbs\)'/.test(html) && /'Net weight \(MT\)'/.test(html)
+       && /'Supplier invoice amount'/.test(html),
+       '"net lbs,net mt needs to be calculated and supplier invoice amount need to be displayed before save"');
     ck('  and a container picker when a booking has more than one',
        /boxes\.length > 1/.test(html) && /led-box/.test(html),
        '"There might be two containers under a booking"');

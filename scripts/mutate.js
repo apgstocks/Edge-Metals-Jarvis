@@ -46,6 +46,20 @@ const R = (p) => path.join(ROOT, p);
 // would take an hour and nobody would run it. The narrowing is itself a
 // claim being tested: if a mutation dies only in a suite not listed here,
 // that is worth knowing.
+// Parses the inline <script> blocks of an HTML file, and reports the same
+// { status } shape spawnSync does so the caller does not care which it got.
+function checkHtml(file) {
+    try {
+        const html = fs.readFileSync(file, 'utf8');
+        const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)];
+        if (!blocks.length) return { status: 0 };
+        for (const b of blocks) new Function(b[1]);
+        return { status: 0 };
+    } catch (e) {
+        return { status: 1, stderr: e.message };
+    }
+}
+
 const MUTATIONS = [
     // ── the follow-up / discourse work ──────────────────────────────────
     { name: 'follow-up: the model can no longer veto',
@@ -496,6 +510,22 @@ const MUTATIONS = [
       file: 'api.js', suites: ['bills-sales'],
       find: '                containers: (bk.containers || []).map((c) => ({',
       to:   '                containers: [].map((c) => ({' },
+    { name: 'edit: a cleared field comes back on the next save',
+      file: 'dashboard/index.html', suites: ['bills-sales'],
+      find: "        new FormData($('ledgerForm')).forEach((v, k) => { if (!(k in body)) body[k] = ''; });",
+      to:   '        void 0;' },
+    { name: 'edit: an edit may blank the supplier an add insists on',
+      file: 'helpers/bills.js', suites: ['bills-sales'],
+      find: "        if (!merged.supplier) { problem = 'a bill needs a supplier'; return rows; }",
+      to:   '        void 0;' },
+    { name: 'edit: a refused edit is written anyway',
+      file: 'helpers/bills.js', suites: ['bills-sales'],
+      find: "        if (!merged.date) { problem = 'a bill needs a date'; return rows; }",
+      to:   '        void 0;' },
+    { name: 'edit: the row loses its Edit button',
+      file: 'dashboard/index.html', suites: ['bills-sales'],
+      find: '<button class="btn btn-secondary ledger-edit"',
+      to:   '<button class="btn btn-secondary ledger-editX"' },
     { name: 'form: the two Truckings are indistinguishable again',
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: "      formLabel: 'Trucking company', placeholder: 'who hauled it' },",
@@ -849,7 +879,19 @@ for (const m of chosen) {
         fs.writeFileSync(file, after);
         // A syntax error is not a passing mutation; it is a broken one, and
         // it would "die" in every suite for the wrong reason.
-        const chk = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+        // ── AND AN .html FILE IS CHECKED BY ITS INLINE SCRIPT ────────────
+        // `node --check` cannot parse HTML, so every dashboard/index.html
+        // mutation was reported NOT APPLIED — which meant the whole website
+        // was unmutatable and nobody had noticed, because nobody had tried.
+        // Found 2026-09-10 adding the first two.
+        //
+        // The check is the same one the mobile-layout suite makes: pull the
+        // inline <script> out and parse THAT. A mutation that breaks the page
+        // still fails it; a mutation that only edits markup now passes, which
+        // is the point.
+        const chk = /\.html$/i.test(m.file)
+            ? checkHtml(file)
+            : spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
         if (chk.status !== 0) {
             notApplied.push({ name: m.name, hits: 'syntax error' });
             console.log(`  ✗ NOT APPLIED  ${m.name} — mutation broke the syntax`);

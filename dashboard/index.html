@@ -4656,20 +4656,22 @@ function truckerBadge(b) {
 // renders whatever it is handed.
 const LEDGER_KINDS = {
   bills: {
-    eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill',
+    eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill', editLabel: 'Edit bill',
     path: '/api/bills', listKey: 'bills', itemKey: 'bill',
     money: ['supplier_price', 'amount', 'trucking_amount', 'balance'],
     weights: ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt'],
-    cards: [['Net (lbs)', 'net_lb', 'num'], ['Net (MT)', 'net_mt', 'num'],
-            ['Invoiced', 'amount', 'money'], ['Balance', 'balance', 'money']],
+    cards: [['Total tare', 'total', 'num'], ['Net weight (lbs)', 'net_lb', 'num'],
+            ['Net weight (MT)', 'net_mt', 'num'],
+            ['Supplier invoice amount', 'amount', 'money'], ['Balance', 'balance', 'money']],
   },
   sales: {
-    eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale',
+    eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale', editLabel: 'Edit sale',
     path: '/api/sales', listKey: 'sales', itemKey: 'sale',
     money: ['invoice_price', 'amount', 'freight_charges'],
     weights: ['weight'],
-    cards: [['Weight (MT)', 'weight_mt', 'num'], ['Invoiced', 'amount', 'money'],
-            ['Freight', 'freight_charges', 'money'], ['Net of freight', 'net_of_freight', 'money']],
+    cards: [['Weight (lbs)', 'weight_lb', 'num'], ['Weight (MT)', 'weight_mt', 'num'],
+            ['Invoice amount', 'amount', 'money'],
+            ['Freight charges', 'freight_charges', 'money'], ['Net of freight', 'net_of_freight', 'money']],
   },
 };
 
@@ -4739,6 +4741,7 @@ async function renderLedgerTab(kind) {
           ? `<span title="No weight recorded for: ${esc(r.missing_tares.join(', '))} — the net is computed without them" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${esc(r.missing_tares.length)} tare${r.missing_tares.length === 1 ? '' : 's'}</span> ` : ''}
         ${(r.amount_differs !== null && r.amount_differs !== undefined)
           ? `<span title="You typed ${ledMoney(r.amount)}; the weight and price give ${ledMoney(r.computed_amount)}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${ledMoney(r.amount_differs)}</span> ` : ''}
+        <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
         <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
       </td>
     </tr>`).join('')
@@ -4771,6 +4774,21 @@ async function renderLedgerTab(kind) {
     </div>`;
 
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
+  // ── EDIT ─────────────────────────────────────────────────────────────
+  // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
+  // seal number meant deleting the row and typing all 18 fields again.
+  //
+  // The SAME form does both — one place that knows how a bill is laid out,
+  // so an edit form cannot drift from the add form the way two copies would.
+  // The row is taken from what is already on screen rather than re-fetched:
+  // it is the row she clicked, and a second GET could hand back a different
+  // one if something changed underneath.
+  document.querySelectorAll('.ledger-edit').forEach((b) => {
+    b.onclick = () => {
+      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
+      if (row) openLedgerForm(kind, row);
+    };
+  });
   document.querySelectorAll('.ledger-del').forEach((b) => {
     b.onclick = async () => {
       if (!confirm('Delete this row?')) return;
@@ -4802,8 +4820,11 @@ async function renderLedgerTab(kind) {
 //
 // Built from the `fields` the server sends, so a column added to the store
 // appears here without an edit.
-function openLedgerForm(kind) {
+// `existing` present = editing that row; absent = adding a new one. ONE
+// function for both, so the two layouts cannot drift apart.
+function openLedgerForm(kind, existing) {
   const K = LEDGER_KINDS[kind];
+  const editing = !!(existing && existing.id);
   const all = ledgerState.fields || [];
   const groups = ledgerState.groups || [];
 
@@ -4814,8 +4835,15 @@ function openLedgerForm(kind) {
   // a client that can disagree with the server about money.
   const inputFor = (c) => {
     const name = c.writeKey || c.key;
+    // The value she TYPED, not the resolved one. For "Supplier invoice
+    // amount" the record holds both: `amount` is what compute() settled on,
+    // `supplier_invoice_amount` is what she entered — and putting the
+    // resolved figure in the box would turn a computed amount into a stated
+    // one the moment she saved an unrelated edit.
+    const val = existing ? existing[name] : undefined;
     const attrs = [
       `name="${esc(name)}"`,
+      (val === null || val === undefined || val === '') ? '' : `value="${esc(String(val))}"`,
       c.num ? 'type="number" step="any"' : 'type="text"',
       c.date ? 'placeholder="MM/DD/YYYY" data-ledger-date="1" autocomplete="off"'
              : (c.placeholder ? `placeholder="${esc(c.placeholder)}"` : ''),
@@ -4846,7 +4874,7 @@ function openLedgerForm(kind) {
   // container 1 and said nothing — so on a 3-container booking she would have
   // got the same container number on all three bills, which is the kind of
   // wrong that reaches a customs entry.
-  const prefill = kind === 'bills' ? `
+  const prefill = (kind === 'bills' && !editing) ? `
     <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:20px; background:var(--surface-sunken);">
       <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px;">Start from a booking</div>
       <div style="display:flex; gap:8px;">
@@ -4862,7 +4890,7 @@ function openLedgerForm(kind) {
     <div id="ledgerModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9000; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" style="width:min(880px,100%); padding:24px 26px 20px;">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px;">
-          <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${K.addLabel.replace('+ ', '')}</h3>
+          <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${editing ? K.editLabel : K.addLabel.replace('+ ', '')}</h3>
           <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(K.eyebrow.replace('// ', ''))}</span>
         </div>
         ${prefill}
@@ -4871,7 +4899,7 @@ function openLedgerForm(kind) {
         <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:10px;"></div>
         <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
           <button id="ledCancel" class="btn btn-secondary" style="font-size:12px; padding:9px 18px;">Cancel</button>
-          <button id="ledSave" class="btn btn-primary" style="font-size:12px; padding:9px 22px;">Save</button>
+          <button id="ledSave" class="btn btn-primary" style="font-size:12px; padding:9px 22px;">${editing ? 'Save changes' : 'Save'}</button>
         </div>
       </div>
     </div>`;
@@ -4931,7 +4959,7 @@ function openLedgerForm(kind) {
   });
   paintPreview();
 
-  if (kind === 'bills') {
+  if (kind === 'bills' && !editing) {
     const fillFrom = (prefillObj, label) => {
       let filled = 0;
       Object.entries(prefillObj || {}).forEach(([k, v]) => {
@@ -4978,7 +5006,20 @@ function openLedgerForm(kind) {
   $('ledSave').onclick = async () => {
     $('ledErr').textContent = '';
     try {
-      await api(K.path, { method: 'POST', body: JSON.stringify(readForm()) });
+      // ── AN EDIT SENDS EVERY FIELD, INCLUDING THE EMPTIED ONES ────────
+      // readForm() drops blanks, which is right for a new row and WRONG for
+      // an edit: clearing a seal number would send nothing for it, and the
+      // server PATCHes, so the old value would survive. She would clear a
+      // field, save, and watch it come back.
+      //
+      // So on edit every input is sent, empty string included, and the store
+      // records the clearing.
+      const body = readForm();
+      if (editing) {
+        new FormData($('ledgerForm')).forEach((v, k) => { if (!(k in body)) body[k] = ''; });
+      }
+      await api(editing ? `${K.path}/${encodeURIComponent(existing.id)}` : K.path,
+                { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });
       close();
       renderLedgerTab(kind);
     } catch (e) { $('ledErr').textContent = e.message || 'Could not save it'; }
