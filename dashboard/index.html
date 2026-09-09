@@ -4793,13 +4793,15 @@ async function renderLedgerTab(kind) {
   const body = rows.length ? rows.map((r, i) => `
     <tr data-id="${esc(r.id)}" style="border-top:1px solid var(--line);">
       ${columns.map((c) => `<td style="padding:7px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
-      <td style="padding:7px 9px; white-space:nowrap;">
-        ${(r.missing_tares && r.missing_tares.length)
-          ? `<span title="No weight recorded for: ${esc(r.missing_tares.join(', '))} — the net is computed without them" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${esc(r.missing_tares.length)} tare${r.missing_tares.length === 1 ? '' : 's'}</span> ` : ''}
-        ${(r.amount_differs !== null && r.amount_differs !== undefined)
-          ? `<span title="You typed ${ledMoney(r.amount)}; the weight and price give ${ledMoney(r.computed_amount)}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${ledMoney(r.amount_differs)}</span> ` : ''}
+      <td style="padding:7px 9px; white-space:nowrap; position:sticky; right:0; background:var(--surface-card); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:2;">
         <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
         <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
+        ${(r.missing_tares && r.missing_tares.length)
+          ? ` <span title="No weight recorded for: ${esc(r.missing_tares.join(', '))} — the net is computed without them" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${esc(r.missing_tares.length)}</span>` : ''}
+        ${(r.incomplete && r.incomplete.length)
+          ? ` <span title="Still needs: ${esc(r.incomplete.join(', '))}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">◦ ${esc(r.incomplete.join(', '))}</span>` : ''}
+        ${(r.amount_differs !== null && r.amount_differs !== undefined)
+          ? ` <span title="You typed ${ledMoney(r.amount)}; the weight and price give ${ledMoney(r.computed_amount)}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${ledMoney(r.amount_differs)}</span>` : ''}
       </td>
     </tr>`).join('')
     : `<tr><td colspan="${columns.length + 1}" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing here yet.</td></tr>`;
@@ -4830,14 +4832,14 @@ async function renderLedgerTab(kind) {
           <thead>
             <tr style="background:var(--bg-sunken);">
               ${columns.map((c) => `<th style="padding:8px 9px; text-align:left; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c.label)}${c.derived ? '<span title="Computed by the server from the other columns — not typed" style="opacity:.6;"> ƒ</span>' : ''}</th>`).join('')}
-              <th style="padding:8px 9px;"></th>
+              <th style="padding:8px 9px; position:sticky; right:0; background:var(--bg-sunken); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:3;"></th>
             </tr>
           </thead>
           <tbody>${body}</tbody>
         </table>
       </div>
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
-        ${rows.length} row${rows.length === 1 ? '' : 's'} · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
+        ${rows.length} row${rows.length === 1 ? '' : 's'} · Edit and Delete stay pinned on the right as the table scrolls · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
       </div>
     </div>`;
 

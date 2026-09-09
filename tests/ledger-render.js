@@ -267,6 +267,75 @@ section('F — and the sales tab renders too');
     dom.window.close();
 }
 
+section('F2 — a bill she just added is editable, and REACHABLE');
+{
+    // Apsara, 2026-09-10: "addedbill doesnt have an edit option.."
+    //
+    // The button was there the whole time. The table is 22 columns wide and
+    // scrolls horizontally, so the actions cell sat roughly 2,400px past the
+    // right edge of the screen — present in the DOM, unreachable in practice.
+    // "It exists" is not "you can use it", and a jsdom test cannot see layout,
+    // so what is asserted here is the thing that FIXES it: the cell is pinned.
+    let store = [];
+    const { w, dom } = await mount({});
+    w.api = async (p, o) => {
+        const [base] = String(p).split('?');
+        if (o && o.method === 'POST' && base === '/api/bills') {
+            const b = bills.withTotals({ id: 'NEW1', ...JSON.parse(o.body) });
+            store = [b]; return { ok: true, bill: b };
+        }
+        if (o && o.method === 'PUT') {
+            const b = bills.withTotals({ id: 'NEW1', ...JSON.parse(o.body) });
+            store = [b]; return { ok: true, bill: b };
+        }
+        if (base === '/api/bills/preview') return bills.compute(JSON.parse((o && o.body) || '{}'));
+        if (base === '/api/bills') {
+            return { bills: store, summary: bills.summary(store), columns: bills.tableColumns(),
+                     fields: bills.COLUMNS, groups: bills.GROUPS, writable: bills.WRITABLE,
+                     facets: bills.facets(store), total_unfiltered: store.length };
+        }
+        return {};
+    };
+    await w.renderLedgerTab('bills');
+    const doc = w.document;
+    ck('the table starts empty', doc.querySelectorAll('#viewRoot tbody tr[data-id]').length === 0);
+
+    w.openLedgerForm('bills');
+    const el = doc.querySelector('#ledgerForm [name="container_no"]');
+    el.value = 'MSKU777';
+    doc.getElementById('ledgerForm').dispatchEvent(new w.Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 1500));
+    doc.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const rows = doc.querySelectorAll('#viewRoot tbody tr[data-id]');
+    ck('the bill she just added is in the table', rows.length === 1, String(rows.length));
+    ck('  and it has an Edit button like any other row',
+       doc.querySelectorAll('#viewRoot .ledger-edit').length === 1);
+
+    // ── THE ACTUAL FIX ───────────────────────────────────────────────────
+    const cell = rows[0].lastElementChild;
+    ck('  in a cell pinned to the right edge',
+       /position:\s*sticky/.test(cell.getAttribute('style') || '')
+       && /right:\s*0/.test(cell.getAttribute('style') || ''),
+       '22 columns put it 2,400px off-screen — present in the DOM, unreachable');
+    const th = doc.querySelectorAll('#viewRoot thead th');
+    ck('  with its header pinned too, or the column drifts under the others',
+       /position:\s*sticky/.test(th[th.length - 1].getAttribute('style') || ''));
+    ck('  opaque, so the scrolling columns do not show through it',
+       /background:/.test(cell.getAttribute('style') || ''));
+    ck('  and the buttons come FIRST in the cell, before any warnings',
+       cell.innerHTML.indexOf('ledger-edit') < cell.innerHTML.indexOf('status-warn')
+       || !/status-warn/.test(cell.innerHTML),
+       'a cell whose width depends on how many warnings a row has is a moving target');
+
+    // The half-finished bill says so on the row, not only in the form.
+    ck('  and an unfinished bill is marked as such on its row',
+       /still needs|◦/.test(cell.textContent) || /date, supplier/.test(cell.textContent),
+       cell.textContent.trim().slice(0, 80));
+    dom.window.close();
+}
+
 section('G — close, and autosave from the first value');
 {
     // Apsara, 2026-09-10: "at top right close option should be there in
