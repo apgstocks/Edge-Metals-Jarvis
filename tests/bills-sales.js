@@ -197,10 +197,13 @@ section('D — her columns, in her order');
     // "Trucker needs to there next to Trucking Amount in bill" (2026-09-10) —
     // so the haulier moved down from beside Carrier to sit with what the haul
     // cost, and took her own word as its name.
+    // Photos moved to the END on 2026-09-10: "in bills post saving,i want
+    // photo column to be there at the last."
     const wanted = ['Source/Destination', 'Date', 'Supplier', 'Invoice no',
-        'Photos', 'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck',
+        'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck',
         'Container', 'Chassis', 'Boxes', 'Total', 'Net weight (lbs)', 'Net weight (MT)',
-        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Balance'];
+        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Balance',
+        'Photos'];
     ck('the bill has her columns, less Advance and Carrier, plus Photos',
        bills.tableColumns().length === 22, String(bills.tableColumns().length));
     ck('  Carrier is off the table but still on the form',
@@ -213,6 +216,16 @@ section('D — her columns, in her order');
        '"weights should be in single line" — the auto-fit grid wrapped them 4 + 1');
     ck('  in her order', bills.tableColumns().map((c) => c.label).join('|') === wanted.join('|'),
        bills.tableColumns().map((c) => c.label).join('|'));
+    ck('  with Photos last', bills.tableColumns().slice(-1)[0].key === 'photos',
+       '"in bills post saving,i want photo column to be there at the last"');
+    // The list she is building as she types — supplier and item description
+    // offer what is already on her bills.
+    ck('  supplier and item description suggest from her own data',
+       bills.COLUMNS.filter((c) => c.suggest).map((c) => c.key).sort().join(',') === 'description,supplier',
+       bills.COLUMNS.filter((c) => c.suggest).map((c) => c.key).join(','));
+    ck('    fed by facets, so a new one joins the list when the bill saves',
+       Object.keys(bills.facets([{ supplier: 'X', description: 'Y' }])).includes('description'),
+       JSON.stringify(Object.keys(bills.facets([]))));
     ck('  with the six computed ones marked',
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(',')
        === 'total,net_lb,net_mt,amount,balance', bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
@@ -246,7 +259,7 @@ section('E — the routes, because a helper nothing calls is not a feature');
     // The FORM walks groups, the TABLE walks her order. Both travel, so
     // neither client re-derives one from the other and gets it subtly wrong.
     ck('  plus the grouped fields the form needs',
-       Array.isArray(r.json.fields) && Array.isArray(r.json.groups) && r.json.groups.length === 4,
+       Array.isArray(r.json.fields) && Array.isArray(r.json.groups) && r.json.groups.length === 5,
        JSON.stringify((r.json.groups || []).map((g) => g.id)));
     // The original complaint was two columns both headed TRUCKING on two
     // identical empty boxes. Naming one of them "Trucker" fixes that at the

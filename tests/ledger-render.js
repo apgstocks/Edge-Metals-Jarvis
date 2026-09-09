@@ -436,6 +436,74 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
        w.document.getElementById('ledPreview').parentElement
          .contains(w.document.getElementById('ledSave')));
 
+    // ── THE LIGHT SHEET, AND THE ALIGNMENT IT FIXES ──────────────────────
+    // Apsara, 2026-09-10: "alignmnet not proper and i want light colour on
+    // that bill".
+    const sheet = w.document.querySelector('#ledgerModal .card');
+    ck('the bill form is a light sheet',
+       /background:#F6F7F8/.test(sheet.getAttribute('style') || ''),
+       sheet.getAttribute('style'));
+    // Only the NAMED fields. wireUsDateField appends a hidden native
+    // <input type="date"> beside each date box purely to open the platform
+    // calendar; it carries no name and is never seen, so styling it proves
+    // nothing and sweeping it in fails a correct form.
+    ck('  with dark text in its fields, not white on white',
+       // Read off style.color, not the raw attribute. jsdom normalises
+       // "#14181B" to "rgb(20, 24, 27)" the moment anything else touches the
+       // element — wireUsDateField sets paddingRight on the date box — so a
+       // literal hex match failed on a correctly-styled field.
+       inputs.filter((i) => i.name).every((i) => /20,\s*24,\s*27|#14181B/i.test(i.style.color || '')),
+       inputs.filter((i) => i.name && !/20,\s*24,\s*27|#14181B/i.test(i.style.color || ''))
+             .map((i) => `${i.name}=${i.style.color}`).join(',') || 'invisible form');
+
+    // The alignment complaint itself: two of five weight labels wrapped to a
+    // second line, so those inputs sat a line lower than the other three.
+    const wLabels = ['gross', 'truck', 'container', 'chassis', 'boxes']
+        .map((n) => form.querySelector(`[name="${n}"]`).closest('.field').querySelector('label'));
+    ck('no weight label can wrap',
+       wLabels.every((l) => /white-space:\s*nowrap/.test(l.getAttribute('style') || '')),
+       'a label that wraps pushes its input a line below its neighbours');
+    ck('  and none is long enough to need to',
+       wLabels.every((l) => l.textContent.trim().length <= 9),
+       wLabels.map((l) => l.textContent.trim()).join(','));
+
+    // "$ 0.14 /lb" rendered as "0/.14" — right-aligned text running under an
+    // absolutely-positioned suffix, in a field she reads a price from.
+    const price = form.querySelector('[name="supplier_price"]');
+    ck('the price field reserves room for its /lb suffix',
+       /padding:0 34px/.test(price.getAttribute('style') || ''),
+       price.getAttribute('style'));
+
+    // The photo textarea sat mid-column and pushed everything below it out of
+    // step with the column beside it.
+    const photos = form.querySelector('textarea[name="photos"]');
+    ck('photo links get their own full-width row',
+       photos && /grid-column:1\/-1/.test(photos.closest('.field').getAttribute('style') || ''),
+       'a three-line box in the middle of a column breaks the grid');
+
+    // ── THE LIST THAT LEARNS ─────────────────────────────────────────────
+    // Apsara, 2026-09-10: "Supplier should be dynamically listed in text box.
+    // first time,when we type,it needs to added to the list,next time when i
+    // tye,it should start showing matching case." Then: "so as Item
+    // description."
+    for (const f of ['supplier', 'description']) {
+        const el = form.querySelector(`[name="${f}"]`);
+        ck(`  ${f} offers what has been typed before`,
+           !!el && el.getAttribute('list') === `ledlist-${f}`,
+           el ? String(el.getAttribute('list')) : '(no field)');
+        const dl = form.querySelector(`#ledlist-${f}`);
+        ck(`    from a real list, not an empty one`,
+           !!dl && dl.querySelectorAll('option').length > 0,
+           dl ? String(dl.querySelectorAll('option').length) : '(no datalist)');
+    }
+    ck('  the options are the values already on her bills',
+       [...form.querySelectorAll('#ledlist-supplier option')].map((o) => o.value).sort().join(',')
+         === 'Eccomelt,Oakland Metals',
+       [...form.querySelectorAll('#ledlist-supplier option')].map((o) => o.value).join(','));
+    ck('  and typing something new is still allowed',
+       form.querySelector('[name="supplier"]').tagName === 'INPUT',
+       'a datalist suggests; a select would refuse a supplier she has not used before');
+
     // And her last instruction: "Swap places of route and supplier".
     const order = [...form.querySelectorAll('[name]')].map((i) => i.name);
     ck('route and supplier are swapped',

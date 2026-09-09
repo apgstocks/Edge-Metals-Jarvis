@@ -192,7 +192,7 @@ function newId() {
 // all: the store defines what a bill is, and a second list in the dashboard
 // is a copy that drifts.
 const COLUMNS = [
-    { key: 'supplier',         label: 'Supplier',           group: 'shipment' },
+    { key: 'supplier',         label: 'Supplier',           group: 'shipment', suggest: true },
     { key: 'carrier',          label: 'Carrier',            group: 'shipment', placeholder: 'MSC, Maersk…' },
     { key: 'booking_no',       label: 'Booking no',         group: 'shipment' },
     { key: 'container_no',     label: 'Container no',       group: 'shipment', placeholder: 'MSKU1234567' },
@@ -201,9 +201,7 @@ const COLUMNS = [
     // Apsara, 2026-09-10: "In bill,i want photos field where url can be
     // pasted." One per line — a container gets photographed several times and
     // one box for one link would have her keeping the rest somewhere else.
-    { key: 'photos',           label: 'Photos',             group: 'shipment',
-      formLabel: 'Photo links', textarea: true,
-      placeholder: 'paste one link per line', hint: 'http/https links only' },
+
 
     { key: 'date',             label: 'Date',               group: 'purchase', date: true },
     // Apsara, 2026-09-10: "Swap places of route and supplier". Route sits
@@ -212,13 +210,23 @@ const COLUMNS = [
     { key: 'route',            label: 'Source/Destination', group: 'purchase',
       formLabel: 'Route', placeholder: 'HOUSTON / BUSAN' },
     { key: 'invoice_no',       label: 'Invoice no',         group: 'purchase' },
-    { key: 'description',      label: 'Item description',   group: 'purchase', placeholder: 'Auto cast, shredded…' },
+    { key: 'description',      label: 'Item description',   group: 'purchase', suggest: true,
+      placeholder: 'Auto cast, shredded…' },
 
     { key: 'gross',            label: 'Gross',              group: 'weights', unit: 'lbs', num: true },
-    { key: 'truck',            label: 'Truck',              group: 'weights', unit: 'lbs', num: true, formLabel: 'Truck tare' },
-    { key: 'container',        label: 'Container',          group: 'weights', unit: 'lbs', num: true, formLabel: 'Container tare' },
-    { key: 'chassis',          label: 'Chassis',            group: 'weights', unit: 'lbs', num: true, formLabel: 'Chassis tare' },
-    { key: 'boxes',            label: 'Boxes',              group: 'weights', unit: 'lbs', num: true, formLabel: 'Boxes tare' },
+    // ── SHORT ENOUGH NOT TO WRAP ─────────────────────────────────────────
+    // Apsara, 2026-09-10: "alignmnet not proper". "Container tare" and
+    // "Chassis tare" wrapped onto two lines while Gross, Truck and Boxes did
+    // not, so those two inputs sat a line lower than the other three — five
+    // boxes in a row, at two different heights.
+    //
+    // Fixed by naming, not by CSS: the section header already says "Weights ·
+    // lbs" and Gross is listed separately, so "tare" was doing no work on
+    // four of the five labels. A label that cannot wrap cannot misalign.
+    { key: 'truck',            label: 'Truck',              group: 'weights', unit: 'lbs', num: true },
+    { key: 'container',        label: 'Container',          group: 'weights', unit: 'lbs', num: true },
+    { key: 'chassis',          label: 'Chassis',            group: 'weights', unit: 'lbs', num: true },
+    { key: 'boxes',            label: 'Boxes',              group: 'weights', unit: 'lbs', num: true },
     { key: 'total',            label: 'Total',              group: 'weights', unit: 'lbs', derived: true, formLabel: 'Total tare' },
     { key: 'net_lb',           label: 'Net weight (lbs)',   group: 'weights', unit: 'lbs', derived: true },
     { key: 'net_mt',           label: 'Net weight (MT)',    group: 'weights', unit: 'MT',  derived: true },
@@ -230,7 +238,7 @@ const COLUMNS = [
     // `writeKey` is what the form must post; without it this column had no
     // input at all and the stated-amount branch was unreachable.
     { key: 'amount',           label: 'Supplier invoice amount', group: 'money', unit: '$', derived: true,
-      writeKey: 'supplier_invoice_amount', num: true,
+      writeKey: 'supplier_invoice_amount', num: true, formLabel: 'Invoice amount',
       hint: 'leave blank to use the computed figure' },
     // ── THE TRUCKER SITS WITH WHAT THE TRUCKING COST ─────────────────────
     // Apsara, 2026-09-10: "Trucker needs to there next to Trucking Amount in
@@ -257,6 +265,13 @@ const COLUMNS = [
     // migration instead — a column dropped from a form is still a number
     // sitting in a record affecting a balance.
     { key: 'balance',          label: 'Balance',            group: 'money', unit: '$', derived: true },
+
+    // Its own row at the end, full width. Sitting in the middle of the
+    // Shipment column, a three-line textarea pushed everything below it out
+    // of step with the column beside it.
+    { key: 'photos',           label: 'Photos',             group: 'links',
+      formLabel: 'Photo links', textarea: true,
+      placeholder: 'paste one link per line', hint: 'http/https links only' },
 ];
 
 // The order she READS them in, which is the order she gave and not the order
@@ -269,11 +284,16 @@ const COLUMNS = [
 // walks COLUMNS, the table walks this. It is still STORED and still comes off
 // the booking on pre-fill; it just is not one of the columns she reads across.
 // Nothing about the record changed, which is why it is still there to edit.
+// ── PHOTOS LAST ──────────────────────────────────────────────────────────
+// Apsara, 2026-09-10: "in bills post saving,i want photo column to be there
+// at the last". It sat fifth, between Invoice no and Booking no — a column of
+// "#1 #2" links wedged among the paperwork numbers she reads across. At the
+// end it is somewhere to go rather than something to scroll past.
 const TABLE_ORDER = ['route', 'date', 'supplier', 'invoice_no',
-    'photos',
-    'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck', 'container',
-    'chassis', 'boxes', 'total', 'net_lb', 'net_mt', 'supplier_price', 'amount',
-    'trucking_company', 'trucking_amount', 'balance'];
+    'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck',
+    'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt',
+    'supplier_price', 'amount', 'trucking_company', 'trucking_amount', 'balance',
+    'photos'];
 
 // ── FILTERS, AND SEVERAL AT ONCE ─────────────────────────────────────────
 // Apsara, 2026-09-10: "also i want filter.ultiple filters can also be
@@ -343,9 +363,22 @@ function filterRows(rows, q = {}, fields = FILTERABLE) {
 // The values actually present, so the dropdowns can only offer something that
 // will match. A filter list built from a hardcoded set offers choices that
 // return nothing, which reads as broken.
+// ── THE LIST LEARNS ITSELF ───────────────────────────────────────────────
+// Apsara, 2026-09-10: "Supplier should be dynamically listed in text box.
+// first time,when we type,it needs to added to the list,next time when i tye,
+// it should start showing matching case." And then: "so as Item description".
+//
+// No new store, and nothing to maintain. The list of suppliers she uses IS
+// the set of distinct suppliers on her bills — so typing one adds it the
+// moment the bill saves, and it is offered from then on. A separate
+// "supplier list" would be a second thing to keep in step, and the first time
+// it disagreed with the bills nobody would know which was right.
+//
+// carrier and trucking_company get the same treatment for free; they were
+// already faceted for the filter dropdowns.
 function facets(rows) {
     const out = {};
-    for (const f of ['supplier', 'carrier', 'trucking_company']) {
+    for (const f of ['supplier', 'carrier', 'trucking_company', 'description']) {
         out[f] = [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
     }
     return out;
@@ -361,6 +394,7 @@ const GROUPS = [
     // five ways and they belong on one line.
     { id: 'weights',  label: 'Weights', cols: 5 },
     { id: 'money',    label: 'Money' },
+    { id: 'links',    label: 'Photos', full: true },
 ];
 
 // Her 23, in her order, for the table.

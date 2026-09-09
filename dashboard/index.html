@@ -4777,7 +4777,8 @@ async function renderLedgerTab(kind) {
   const columns = Array.isArray(data.columns) ? data.columns : [];
   const sum = data.summary || {};
   ledgerState = { kind, rows, columns, summary: sum, writable: data.writable || [],
-                  fields: data.fields || columns, groups: data.groups || [] };
+                  fields: data.fields || columns, groups: data.groups || [],
+                  facets: data.facets || {} };
 
   const cards = K.cards.map(([label, key, how]) => `
     <div class="card" style="padding:12px;">
@@ -4813,7 +4814,10 @@ async function renderLedgerTab(kind) {
           <div class="eyebrow">${K.eyebrow}</div>
           <h2 style="font-size:19px; text-transform:uppercase; margin:0;">${K.title}</h2>
         </div>
-        <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
+        <div style="display:flex; gap:8px;">
+          ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
+          <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
+        </div>
       </div>
       <div style="display:grid; grid-template-columns:repeat(${K.cards.length}, 1fr); gap:8px; margin-bottom:12px;">${cards}</div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
@@ -4880,6 +4884,7 @@ async function renderLedgerTab(kind) {
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
   }).catch(() => {});
 
+  if ($('btnPay')) $('btnPay').onclick = () => openPayForm();
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
@@ -4905,6 +4910,157 @@ async function renderLedgerTab(kind) {
       } catch (e) { alert(e.message || 'Could not delete it'); }
     };
   });
+}
+
+// ── PAYING FOR CONTAINERS ────────────────────────────────────────────────
+// Apsara, 2026-09-10: "We need pay option.in payment,there is a possible of
+// giving advance deduction and multiple container paynebt at once."
+//
+// One transfer, several containers, and she types the amount per container —
+// her choice when asked, over splitting evenly or filling balances in order.
+// Supplier invoices rarely divide evenly, so exact beats fast here.
+//
+// THE RUNNING REMAINDER IS THE WHOLE INTERACTION. She enters what left the
+// bank, then divides it. Without a live "still to allocate" figure she is
+// doing subtraction in her head against a number she typed thirty seconds
+// ago, and the server will reject the total she guessed wrong. So it is
+// computed on every keystroke and it is the biggest thing on the panel.
+//
+// An ADVANCE is the same form with no containers ticked: money against the
+// supplier, sitting as credit until she applies it.
+async function openPayForm() {
+  const L = LEDGER_LIGHT;
+  const data = await api('/api/bill-payments');
+  const open = data.open_bills || [];
+  const banks = data.banks || [];
+  const credit = data.credit || {};
+
+  const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
+  const lab = `display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:5px; white-space:nowrap;`;
+
+  const rows = open.map((b) => `
+    <tr data-bill="${esc(b.id)}" style="border-top:1px solid ${L.lineSoft};">
+      <td style="padding:6px 8px;"><input type="checkbox" class="payPick" data-bill="${esc(b.id)}"></td>
+      <td style="padding:6px 8px; font-size:12px; color:${L.ink};">${esc(b.supplier || '—')}</td>
+      <td style="padding:6px 8px; font-size:12px; color:${L.inkMuted}; font-family:var(--font-mono);">${esc(b.container_no || b.booking_no || '—')}</td>
+      <td style="padding:6px 8px; font-size:12px; text-align:right; font-family:var(--font-mono); color:${L.inkMuted};">${money(b.balance)}</td>
+      <td style="padding:6px 8px;">
+        <input class="payAmt" data-bill="${esc(b.id)}" data-balance="${esc(b.balance)}" inputmode="decimal" autocomplete="off"
+          style="width:110px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
+      </td>
+    </tr>`).join('');
+
+  const creditLines = Object.entries(credit).map(([sup, amt]) =>
+    `<span style="font-size:11px; color:${L.inkMuted};">${esc(sup)} <b style="color:#2F7D22;">${money(amt)}</b></span>`).join(' · ');
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="payModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Record a payment</h3>
+          <button id="payClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
+          <div><label style="${lab}">Date</label><input id="payDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
+          <div><label style="${lab}">Amount sent</label><input id="payAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+          <div><label style="${lab}">Method</label><select id="payMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+          <div><label style="${lab}">Bank</label><select id="payBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div><label style="${lab}">Reference</label><input id="payRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
+          <div><label style="${lab}">Supplier</label><input id="paySupplier" autocomplete="off" list="ledlist-supplier" style="${fieldCss}"></div>
+        </div>
+
+        <div style="font-size:12px; color:${L.inkFaint}; margin:14px 0 6px;">Which containers does it cover?</div>
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:260px; overflow-y:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <thead><tr style="background:${L.sunken};">
+              <th style="padding:6px 8px; width:28px;"></th>
+              <th style="padding:6px 8px; text-align:left; font-size:11px; color:${L.inkMuted}; font-weight:400;">Supplier</th>
+              <th style="padding:6px 8px; text-align:left; font-size:11px; color:${L.inkMuted}; font-weight:400;">Container</th>
+              <th style="padding:6px 8px; text-align:right; font-size:11px; color:${L.inkMuted}; font-weight:400;">Owing</th>
+              <th style="padding:6px 8px; text-align:right; font-size:11px; color:${L.inkMuted}; font-weight:400;">Pay</th>
+            </tr></thead>
+            <tbody id="payRows">${rows || `<tr><td colspan="5" style="padding:20px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing owing. Record this as an advance instead.</td></tr>`}</tbody>
+          </table>
+        </div>
+        ${creditLines ? `<div style="margin-top:8px; font-size:11px; color:${L.inkFaint};">Credit on hand · ${creditLines}</div>` : ''}
+
+        <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
+          <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="payAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="payLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div style="flex:1;"></div>
+          <div style="display:flex; gap:8px;">
+            <button id="payCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
+            <button id="payAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>
+            <button id="paySave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record payment</button>
+          </div>
+        </div>
+        <div id="payErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+
+  wireUsDateField($('payDate'));
+  const close = () => { const m = $('payModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('payClose').onclick = close;
+  $('payCancel').onclick = close;
+
+  const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
+  const allocations = () => [...document.querySelectorAll('.payAmt')]
+    .map((el) => ({ bill_id: el.dataset.bill, amount: num(el.value) }))
+    .filter((a) => a.amount > 0);
+
+  // Recomputed on every keystroke — the remainder is the thing she is
+  // working towards, and it turns red the moment she has over-allocated so
+  // she sees it before the server refuses it.
+  const retotal = () => {
+    const sent = num($('payAmount').value);
+    const alloc = allocations().reduce((s, a) => s + a.amount, 0);
+    const left = Math.round((sent - alloc) * 100) / 100;
+    $('payAllocated').textContent = money(alloc);
+    $('payLeft').textContent = money(left);
+    $('payLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+  };
+
+  // Ticking a container fills its balance in, capped by what is left of the
+  // transfer — the commonest case is "this wire clears these three".
+  document.querySelectorAll('.payPick').forEach((cb) => {
+    cb.onchange = () => {
+      const amt = document.querySelector(`.payAmt[data-bill="${cb.dataset.bill}"]`);
+      if (!amt) return;
+      if (cb.checked) {
+        const sent = num($('payAmount').value);
+        const already = allocations().reduce((s, a) => s + a.amount, 0);
+        const room = sent > 0 ? Math.max(0, sent - already) : Infinity;
+        const bal = num(amt.dataset.balance);
+        amt.value = (room === Infinity ? bal : Math.min(bal, room)).toFixed(2);
+      } else { amt.value = ''; }
+      retotal();
+    };
+  });
+  document.querySelectorAll('.payAmt').forEach((el) => { el.oninput = retotal; });
+  $('payAmount').oninput = retotal;
+  retotal();
+
+  const send = async (asAdvance) => {
+    $('payErr').textContent = '';
+    try {
+      const body = {
+        kind: asAdvance ? 'advance' : 'payment',
+        date: $('payDate').value, amount: $('payAmount').value,
+        mode: $('payMode').value, bank: $('payBank').value,
+        ref: $('payRef').value, supplier: $('paySupplier').value,
+        allocations: allocations(),
+      };
+      await api('/api/bill-payments', { method: 'POST', body: JSON.stringify(body) });
+      close();
+      renderLedgerTab('bills');
+    } catch (e) { $('payErr').textContent = e.message || 'Could not record it'; }
+  };
+  $('paySave').onclick = () => send(false);
+  $('payAdvance').onclick = () => send(true);
 }
 
 // ── THE ADD FORM ─────────────────────────────────────────────────────────
@@ -4940,7 +5096,20 @@ function openLedgerForm(kind, existing) {
   // supplier's paperwork, and compute() prefers hers. Everything else derived
   // is read-only by construction: a client that could post its own Balance is
   // a client that can disagree with the server about money.
-  // ── ONE FIELD ────────────────────────────────────────────────────────
+  // ── A LIGHT SHEET FOR THE BILL ───────────────────────────────────────
+// Apsara, 2026-09-10: "i want light colour on that bill".
+//
+// Scoped to this modal, NOT applied app-wide. The rest of Jarvis is dark and
+// she has not asked for that to change; a bill is a document she is copying
+// off paper, and a light sheet is what a document looks like. Declared as
+// local variables so every rule below reads the same way it does everywhere
+// else in this file — the only difference is what the names resolve to.
+const LEDGER_LIGHT = {
+  paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
+  ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
+};
+
+// ── ONE FIELD ────────────────────────────────────────────────────────
   // Apsara, 2026-09-10, on the previous version: "still it looks ugly and
   // clumsy and not user friendly". Six things were wrong and they compounded:
   //
@@ -4961,9 +5130,9 @@ function openLedgerForm(kind, existing) {
 
     if (c.textarea) {
       return `<div class="field" style="grid-column:1/-1;">
-        <label>${esc(c.formLabel || c.label)}</label>
+        <label style="display:block; font-size:11px; letter-spacing:.02em; text-transform:none; color:${LEDGER_LIGHT.inkMuted}; margin-bottom:5px; white-space:nowrap;">${esc(c.formLabel || c.label)}</label>
         <textarea name="${esc(name)}" rows="2" placeholder="${esc(c.placeholder || '')}"
-          style="width:100%; padding:8px 10px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12px; resize:vertical;">${esc(Array.isArray(existingVal) ? existingVal.join('\n') : (existingVal || ''))}</textarea>
+          style="width:100%; padding:8px 10px; background:${LEDGER_LIGHT.paper}; border:1px solid ${LEDGER_LIGHT.line}; border-radius:var(--radius-sm); color:${LEDGER_LIGHT.ink}; outline:none; font-family:var(--font-mono); font-size:12px; resize:vertical;">${esc(Array.isArray(existingVal) ? existingVal.join('\n') : (existingVal || ''))}</textarea>
       </div>`;
     }
 
@@ -4980,18 +5149,43 @@ function openLedgerForm(kind, existing) {
       c.num ? 'data-ledger-num="1"' : '',
       // The hint that used to sit under the box, so the row keeps its height.
       c.hint ? `title="${esc(c.hint)}"` : '',
-      `style="width:100%; height:34px; padding:0 ${money ? '10px 0 20px' : '10px'}; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:13px;${numeric ? ' text-align:right; font-family:var(--font-mono);' : ''}"`,
+      // ── THE LIST SHE IS BUILDING AS SHE TYPES ────────────────────────
+      // Apsara, 2026-09-10: "Supplier should be dynamically listed in text
+      // box.first time,when we type,it needs to added to the list,next time
+      // when i tye,it should start showing matching case." Then: "so as Item
+      // description."
+      //
+      // A native <datalist>, not a hand-rolled dropdown. It filters as she
+      // types, it does not stop her entering something new, and it needs no
+      // JavaScript — so it cannot break the way a custom menu can when a
+      // click lands slightly wrong. The options come from the values already
+      // on her bills, so typing a new supplier puts it in the list the moment
+      // the bill saves. Nothing to maintain and nothing to fall out of step.
+      c.suggest ? `list="ledlist-${esc(c.key)}"` : '',
+      // ── ROOM FOR THE UNIT, OR IT SITS ON THE NUMBER ──────────────────
+      // The price field renders "$ 0.14 /lb" with the $ and /lb absolutely
+      // positioned. Right-aligned text ran straight under the suffix and came
+      // out as "0/.14" — two numbers overlapping in a field she reads a price
+      // from. The padding now reserves the space each adornment occupies.
+      `style="width:100%; height:34px; padding:0 ${c.key === 'supplier_price' ? '34px' : '10px'} 0 ${money ? '20px' : '10px'}; background:${LEDGER_LIGHT.paper}; border:1px solid ${LEDGER_LIGHT.line}; border-radius:var(--radius-sm); color:${LEDGER_LIGHT.ink}; outline:none; font-size:13px;${numeric ? ' text-align:right; font-family:var(--font-mono);' : ''}"`,
     ].filter(Boolean).join(' ');
 
     // The unit as an adornment, not part of the label.
     const prefix = money
-      ? '<span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--text-faint); font-size:13px; pointer-events:none;">$</span>' : '';
+      ? `<span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:${LEDGER_LIGHT.inkFaint}; font-size:13px; pointer-events:none;">$</span>` : '';
     const suffix = (c.key === 'supplier_price')
-      ? '<span id="ledPriceUnit" style="position:absolute; right:9px; top:50%; transform:translateY(-50%); color:var(--text-faint); font-size:11px; font-family:var(--font-mono); pointer-events:none;"></span>' : '';
+      ? `<span id="ledPriceUnit" style="position:absolute; right:9px; top:50%; transform:translateY(-50%); color:${LEDGER_LIGHT.inkFaint}; font-size:11px; font-family:var(--font-mono); pointer-events:none;"></span>` : '';
+
+    // white-space:nowrap is the other half of the alignment fix — a label
+    // that cannot wrap cannot push its input a line below its neighbours.
+    const opts = c.suggest ? ((ledgerState.facets || {})[c.key] || []) : [];
+    const datalist = c.suggest
+      ? `<datalist id="ledlist-${esc(c.key)}">${opts.map((o) => `<option value="${esc(o)}"></option>`).join('')}</datalist>`
+      : '';
 
     return `<div class="field">
-        <label style="font-size:11px; letter-spacing:.04em; text-transform:none; margin-bottom:5px;">${esc(c.formLabel || c.label)}</label>
-        <div style="position:relative;">${prefix}<input ${attrs}>${suffix}</div>
+        <label style="display:block; font-size:11px; letter-spacing:.02em; text-transform:none; color:${LEDGER_LIGHT.inkMuted}; margin-bottom:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(c.formLabel || c.label)}</label>
+        <div style="position:relative;">${prefix}<input ${attrs}>${suffix}</div>${datalist}
       </div>`;
   };
 
@@ -4999,8 +5193,8 @@ function openLedgerForm(kind, existing) {
     const mine = all.filter((c) => c.group === g.id && (!c.derived || c.writeKey));
     if (!mine.length) return '';
     return `
-      <div style="margin-bottom:16px;">
-        <div style="font-size:12px; color:var(--text-faint); margin-bottom:9px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="opacity:.6;">· lbs</span>' : ''}</div>
+      <div style="margin-bottom:16px;${g.full ? ' grid-column:1/-1;' : ''}">
+        <div style="font-size:12px; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:9px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="opacity:.7;">· lbs</span>' : ''}</div>
         <div style="display:grid; grid-template-columns:${g.cols ? `repeat(${g.cols}, minmax(0, 1fr))` : 'repeat(2, minmax(0, 1fr))'}; gap:10px;">${mine.map(inputFor).join('')}</div>
       </div>`;
   }).join('');
@@ -5014,28 +5208,28 @@ function openLedgerForm(kind, existing) {
   // got the same container number on all three bills, which is the kind of
   // wrong that reaches a customs entry.
   const prefill = (kind === 'bills' && !editing) ? `
-    <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:20px; background:var(--surface-sunken);">
-      <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px;">Start from a booking</div>
+    <div style="border:1px solid ${LEDGER_LIGHT.line}; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:16px; background:${LEDGER_LIGHT.paper};">
+      <div style="font-size:12px; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:8px;">Start from a booking</div>
       <div style="display:flex; gap:8px;">
         <input id="ledPrefillBkg" placeholder="Booking number" autocomplete="off"
-               style="flex:1; padding:9px 11px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:13px;">
-        <button id="ledPrefillGo" class="btn btn-secondary" style="font-size:12px; padding:8px 16px;">Fill</button>
+               style="flex:1; padding:9px 11px; background:${LEDGER_LIGHT.paper}; border:1px solid ${LEDGER_LIGHT.line}; border-radius:var(--radius-sm); color:${LEDGER_LIGHT.ink}; outline:none; font-size:13px;">
+        <button id="ledPrefillGo" class="btn btn-secondary" style="font-size:12px; padding:8px 16px; background:${LEDGER_LIGHT.sunken}; color:${LEDGER_LIGHT.ink}; border-color:${LEDGER_LIGHT.line};">Fill</button>
       </div>
       <div id="ledPrefillPick" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:9px;"></div>
-      <div id="ledPrefillNote" style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:7px;">One bill is one container. Carrier, route, seal, supplier and trucker come off the booking — all still editable.</div>
+      <div id="ledPrefillNote" style="font-size:11px; color:${LEDGER_LIGHT.inkFaint}; margin-top:7px;">One bill is one container. Carrier, route, seal, supplier and trucker come off the booking — all still editable.</div>
     </div>` : '';
 
   const html = `
     <div id="ledgerModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9000; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
-      <div class="card" style="width:min(900px,100%); padding:20px 22px 18px;">
+      <div class="card" style="width:min(900px,100%); padding:20px 22px 18px; background:${LEDGER_LIGHT.sunken}; border-color:${LEDGER_LIGHT.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px;">
-          <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${editing ? K.editLabel : K.addLabel.replace('+ ', '')}</h3>
+          <h3 style="margin:0; font-size:16px; text-transform:none; letter-spacing:0; color:${LEDGER_LIGHT.ink};">${editing ? K.editLabel : K.addLabel.replace('+ ', '')}</h3>
           <div style="display:flex; align-items:center; gap:12px;">
-            <span id="ledSaveState" style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);"></span>
+            <span id="ledSaveState" style="font-family:var(--font-mono); font-size:10px; color:${LEDGER_LIGHT.inkFaint};"></span>
             <!-- Apsara, 2026-09-10: "at top right close option should be
                  there in bill." Escape closes it too. -->
             <button id="ledClose" title="Close (Esc)" aria-label="Close"
-              style="background:none; border:none; color:var(--text-muted); font-size:22px; line-height:1; cursor:pointer; padding:0 2px;">&times;</button>
+              style="background:none; border:none; color:${LEDGER_LIGHT.inkMuted}; font-size:22px; line-height:1; cursor:pointer; padding:0 2px;">&times;</button>
           </div>
         </div>
         ${prefill}
@@ -5046,15 +5240,15 @@ function openLedgerForm(kind, existing) {
         <!-- ONE BAR: the numbers she is checking and the buttons she presses,
              on the same line. Previously a totals block and a separate button
              row, which is two things to look at for one decision. -->
-        <div style="border-top:1px solid var(--border-subtle); padding-top:13px; margin-top:2px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
+        <div style="border-top:1px solid ${LEDGER_LIGHT.line}; padding-top:13px; margin-top:2px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
           <div id="ledPreview" style="display:flex; gap:24px; flex-wrap:wrap;"></div>
           <div style="flex:1;"></div>
           <div style="display:flex; gap:8px;">
-            <button id="ledCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px;">Cancel</button>
+            <button id="ledCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${LEDGER_LIGHT.paper}; color:${LEDGER_LIGHT.inkMuted}; border-color:${LEDGER_LIGHT.line};">Cancel</button>
             <button id="ledSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">${editing ? 'Save changes' : 'Save'}</button>
           </div>
         </div>
-        <div id="ledWarn" style="font-size:11px; color:var(--status-warn); margin-top:9px;"></div>
+        <div id="ledWarn" style="font-size:11px; color:#8A5A00; margin-top:9px;"></div>
         <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:6px;"></div>
       </div>
     </div>`;
@@ -5144,8 +5338,8 @@ function openLedgerForm(kind, existing) {
         const v = r[key];
         const shown = how === 'money' ? ledMoney(v) : ledNum(v);
         return `<div>
-          <div style="font-size:11px; color:var(--text-faint);">${label}</div>
-          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? 'var(--text-faint)' : (key === 'balance' ? 'var(--accent)' : 'var(--text-strong)')};">${shown}</div>
+          <div style="font-size:11px; color:#8B949B;">${label}</div>
+          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? '#8B949B' : (key === 'balance' ? '#2F7D22' : '#14181B')};">${shown}</div>
         </div>`;
       });
       $('ledPreview').innerHTML = cells.join('');
@@ -5203,7 +5397,7 @@ function openLedgerForm(kind, existing) {
           // container, because the container number is the one field that
           // differs between two bills off the same booking.
           $('ledPrefillPick').innerHTML = boxes.map((c) => `
-            <button type="button" class="btn btn-secondary led-box" data-seq="${esc(c.seq)}" style="font-size:11px; padding:6px 11px;">
+            <button type="button" class="btn btn-secondary led-box" data-seq="${esc(c.seq)}" style="font-size:11px; padding:6px 11px; background:${LEDGER_LIGHT.sunken}; color:${LEDGER_LIGHT.ink}; border-color:${LEDGER_LIGHT.line};">
               ${esc(c.container_number || `Container ${c.seq}`)}${c.size ? ` · ${esc(c.size)}` : ''}${c.supplier ? ` · ${esc(c.supplier)}` : ''}
             </button>`).join('');
           $('ledPrefillNote').textContent = `${boxes.length} containers on ${bkg} — pick the one this bill is for.`;

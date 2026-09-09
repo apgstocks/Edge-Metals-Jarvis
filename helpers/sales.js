@@ -117,7 +117,7 @@ function compute(input) {
 // computes, so the client renders them read-only and cannot post a total that
 // does not follow from its own weight and price.
 const COLUMNS = [
-    { key: 'customer',       label: 'Customer name',  group: 'customer' },
+    { key: 'customer',       label: 'Customer name',  group: 'customer', suggest: true },
     { key: 'date',           label: 'Date',           group: 'customer', date: true },
     { key: 'reference',      label: 'Reference',      group: 'customer' },
 
@@ -153,8 +153,11 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 // the wrong list would leave the search box quietly matching nothing.
 const FILTERABLE = ['customer', 'invoice_no', 'hbl_no', 'reference'];
 const filterRows = (rows, q) => bills.filterRows(rows, q, FILTERABLE);
+// Same self-learning list as bills — the customers she has invoiced are the
+// customers offered. See helpers/bills.js:facets.
 function facets(rows) {
-    return { customer: [...new Set((rows || []).map((r) => String(r.customer || '').trim()).filter(Boolean))].sort() };
+    const of = (f) => [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
+    return { customer: of('customer'), reference: of('reference') };
 }
 
 // `amount` is derived but ALSO writable — she can type the figure off the
