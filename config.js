@@ -161,6 +161,11 @@ const FILES = {
     // stores with "bill" in the name is a hurried afternoon away from a
     // mistake, so the distinction is written here as well as in each file.
     BILLS_FILE: path.join(DATA_DIR, 'bills.json'),
+    // The other half of the Edge Metals pair: what a container SOLD for.
+    // Deliberately not the yard's kind:'sale' loads, which stay in loads.json
+    // — see helpers/sales.js's header for why ocean paperwork does not belong
+    // on a weighbridge ticket.
+    SALES_FILE: path.join(DATA_DIR, 'sales.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

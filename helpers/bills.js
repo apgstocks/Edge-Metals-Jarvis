@@ -173,7 +173,18 @@ const COLUMNS = [
 // Fields a client may write. Everything else on a stored bill is derived or
 // housekeeping, and accepting it from a request would let a client post a
 // balance that does not follow from its own weights.
-const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key).concat(['price_unit', 'note']);
+// `supplier_invoice_amount` is listed EXPLICITLY, and it has to be. Her
+// "Supplier invoice amount" column is stored under the key `amount`, which is
+// marked derived — so the filter below excluded it and there was no way for
+// her to type the figure off the supplier's invoice at all. compute()'s
+// stated-amount-wins branch, and the amount_differs warning that goes with
+// it, were both unreachable through the API: dead code guarding nothing.
+//
+// Found 2026-09-10 by the test that checks her 23 columns are all writable
+// or computed. The arithmetic had been right the whole time and one of her
+// columns simply could not be filled in.
+const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
+    .concat(['supplier_invoice_amount', 'price_unit', 'note']);
 
 function clean(input) {
     const out = {};

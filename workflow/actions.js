@@ -3518,7 +3518,23 @@ async function correctBookingDraft(chatId, pending, said) {
 // gated on it, so no other drafting path changes behaviour.
 async function draftEmailWithAddress(chatId, targetName, details, bkgNo, to, toSource, scheduledFor = null, req = null) {
     const { callGeminiJSON } = require('../helpers/gemini');
-    const bkg = bkgNo ? getBooking(bkgNo) : null;
+    // ── getBooking RETURNS A WRAPPER, NOT THE BOOKING ────────────────────
+    // REAL BUG, found 2026-09-10 by a test written for a different feature.
+    // helpers/booking.js:getBooking returns { booking, status } — every other
+    // caller in this file destructures it, and these two did not. So every
+    // field below read off the wrapper and came back undefined, and the line
+    // handed to the drafter was, verbatim:
+    //
+    //     Booking undefined: carrier —, ERD —, cutoff —, POL —, POD —.
+    //
+    // Silent, because the prompt says "use only what's relevant" and a model
+    // given a row of dashes simply writes around them. "Email Zimex about
+    // DALA123's cutoff" has been drafted with no cutoff in it — the data was
+    // sitting right there and never reached the draft.
+    //
+    // Same shape as the hasSupplierAssigned(b) single-argument bug in July:
+    // a helper whose contract changed under callers that still compile.
+    const { booking: bkg } = bkgNo ? getBooking(bkgNo) : { booking: null };
     const bookingLine = bkg
         ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}, POL ${bkg.port_of_loading || '—'}, POD ${bkg.port_of_discharge || '—'}.`
         : '';
@@ -4792,7 +4808,11 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     const loadEmailContacts = () => require('../helpers/emailContacts').loadContacts();
     const ccForAddress = (addr) => loadEmailContacts().find((c) => c.email.toLowerCase() === String(addr).toLowerCase())?.cc;
 
-    const bkg = bkgNo ? getBooking(bkgNo) : null;
+    // Same wrapper bug as draftEmailWithAddress — see the comment there. Both
+    // sites were written the same day and both read fields off { booking,
+    // status }, so every reply drafted about a booking carried "Booking
+    // undefined" and three dashes.
+    const { booking: bkg } = bkgNo ? getBooking(bkgNo) : { booking: null };
     const bookingLine = bkg
         ? `Booking ${bkg.booking_number}: carrier ${bkg.carrier || '—'}, ERD ${bkg.erd_date || '—'}, cutoff ${bkg.cutoff_date || '—'}.`
         : '';

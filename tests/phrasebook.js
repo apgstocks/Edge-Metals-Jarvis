@@ -649,6 +649,43 @@ section('C2c2 — "send email to X asking for booking from Houston" is NOT a sea
     }
 }
 
+section('C2c1 — the booking data actually reaches the drafter');
+{
+    // ── A LIVE BUG, FOUND 2026-09-10 BY A TEST FOR A DIFFERENT FEATURE ───
+    // helpers/booking.js:getBooking returns { booking, status }. Two places in
+    // workflow/actions.js read the fields straight off that wrapper, so the
+    // line handed to the email drafter was, verbatim:
+    //
+    //     Booking undefined: carrier —, ERD —, cutoff —, POL —, POD —.
+    //
+    // Every email drafted about a booking went to the model with no booking
+    // number and five dashes. It was silent because the prompt says "use only
+    // what's relevant" and a model given dashes simply writes around them:
+    // "email Zimex about DALA123's cutoff" produced a mail with no cutoff in
+    // it, while the cutoff sat in bookings.json the whole time.
+    //
+    // ASSERTED ON THE PROMPT, not on the source line. A regex over actions.js
+    // would pass the moment the destructure looks right and prove nothing
+    // about whether the value arrives — which is exactly how this survived.
+    // "email zimex about HOU111 cutoff" is a QUESTION about a cutoff and
+    // routes to the mail search, which was my first phrasing here and made
+    // this look like the fix had failed. This one unambiguously asks for a
+    // mail to be written about a named booking.
+    const j = await boot({});
+    await j.say('send an email to zimex about booking HOU111');
+    const drafting = (j.prompts || []).filter((p) => /Relevant booking data/.test(p));
+    ck('the drafter is given the booking at all', drafting.length > 0,
+       `${(j.prompts || []).length} prompts, none carrying booking data`);
+    if (drafting.length) {
+        const line = (/Relevant booking data[^\n]*/.exec(drafting[drafting.length - 1]) || [''])[0];
+        ck('  with a real booking number, not "undefined"',
+           /Booking HOU111/.test(line) && !/undefined/.test(line), line.slice(0, 200));
+        ck('  and real fields, not a row of dashes',
+           !/carrier —, ERD —, cutoff —/.test(line), line.slice(0, 200));
+    }
+    await j.stop();
+}
+
 section('C2c3 — "no no..delete that", through the real endpoint');
 {
     // Apsara, 2026-09-09, with the Iron Man reference: "say i have said

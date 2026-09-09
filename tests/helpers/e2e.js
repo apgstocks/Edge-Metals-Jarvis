@@ -343,8 +343,19 @@ function installGemini(mode, log, o) {
             try { namesAParty = require('../../helpers/bookingRequest').isRequestToSomeone(t); }
             catch (e) { /* helper not loadable in this fixture */ }
             if (namesAParty || (/\b(?:e?mail|mail)\b/i.test(t) && /\b(?:send|write|draft|shoot)\b/i.test(t))) {
+                // ── bkg_no WAS ALWAYS null, AND THAT HID A LIVE BUG ──────
+                // The real classifier is told "bkg_no = the booking if
+                // relevant", and returns one whenever she names it. This stub
+                // returned null unconditionally, so NOTHING in the suite ever
+                // drafted an email with a booking attached — and the
+                // "Relevant booking data" line, which was handing the model
+                // "Booking undefined: carrier —, ERD —, cutoff —" because of
+                // a wrapper-object mistake in workflow/actions.js, could not
+                // be reached by any test. Third time this session a stub too
+                // dumb to walk a real path has been the reason a bug survived.
+                const bkg = (/\b([A-Z]{2,6}\d{3,}|\d{6,})\b/.exec(t) || [])[1] || null;
                 return { action: 'draft_email', target_name: who, email_details: null,
-                         bkg_no: null, confidence: 0.95, reasoning: 'stub' };
+                         bkg_no: bkg, confidence: 0.95, reasoning: 'stub' };
             }
             return { action: 'NEED_DATA', confidence: 0, reasoning: 'stub: not classified' };
         }

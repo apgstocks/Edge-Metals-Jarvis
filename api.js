@@ -3509,6 +3509,154 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── Bills and Sales — the Edge Metals pair ────────────────────────────
+    // Apsara, 2026-09-09: "This is for edge metals not for edge yard. now i
+    // want to build a bill tab which contains Source/Destination,Carrier,
+    // TRUCKING,Date,SUPPLIER,Invoice no,Booking no,Container no,Seal no,item
+    // Description,GROSS,Truck,container,Chassis,Boxes,Total,Net weight(lbs),
+    // Net weight(MT),supplier price,Supplier invoice amount,Trucking,Advance,
+    // Balance in one tab.. In sales tab-i want customer name,date,invoice
+    // number,HBL number,Proforma date,Reference,weight,invoice price,invoice
+    // amount,Freight charges to be there"
+    //
+    // What a container COST her, and what it SOLD for.
+    //
+    // ── NOT ON STAFF_ALLOWED_PATH_PREFIXES, AND THAT IS THE POINT ─────────
+    // '/api/bills' and '/api/sales' are deliberately absent from that list,
+    // so a staff session gets a flat 403. These are supplier prices, customer
+    // invoices and margins on the freight side of the business — a different
+    // thing entirely from the yard paperwork staff own. Same reasoning that
+    // keeps '/api/payments' and '/api/trade-catalog' off it. Say the word and
+    // each is one entry, but widening it silently inside a request about a
+    // tab would be the wrong way to change who sees her pricing.
+    //
+    // EVERY DERIVED NUMBER IS COMPUTED SERVER-SIDE, in helpers/bills.js and
+    // helpers/sales.js, and the COLUMNS list travels with the payload — so
+    // the table is built from the server's idea of what a bill is and the two
+    // cannot drift into disagreeing about which fields exist.
+    app.get('/api/bills', (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const rows = b.listWithTotals();
+            res.json({
+                bills: rows,
+                summary: b.summary(rows),
+                columns: b.COLUMNS,
+                writable: b.WRITABLE,
+                // So the form can show "/lb" or "/MT" beside the price and
+                // she can override the inference — her choice when asked:
+                // "Yes — show '/lb' or '/MT' on the row".
+                per_lb_ceiling: b.PER_LB_CEILING,
+                lb_per_mt: b.LB_PER_MT,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── PRE-FILL FROM THE BOOKING SHE PICKS ───────────────────────────────
+    // Her answer when asked how a bill should start: "Pick a booking, the rest
+    // fills in." Everything here is already on the booking record, so typing
+    // it again is an invitation to mistype a container number.
+    //
+    // Returns a SUGGESTION, never a saved row. Nothing is written until she
+    // posts it, and every field stays editable — a booking's port pair is
+    // right almost always, and "almost always" is not a reason to lock it.
+    app.get('/api/bills/from-booking/:bkgNo', (req, res) => {
+        try {
+            const bkgNo = String(req.params.bkgNo || '').trim();
+            // DESTRUCTURED. getBooking returns { booking, status }, and my
+            // first version read the fields straight off that wrapper — so an
+            // unknown booking came back 200 with every field null instead of
+            // 404, and a real one pre-filled nothing. Caught by the test in
+            // tests/bills-sales.js, which then found the same mistake sitting
+            // live in two places in workflow/actions.js.
+            const { booking: bk } = require('./helpers/booking').getBooking(bkgNo);
+            if (!bk) return res.status(404).json({ error: `no booking ${bkgNo}` });
+            const seq = Number(req.query.container || 1);
+            const box = (bk.containers || []).find((c) => Number(c.seq) === seq)
+                || (bk.containers || [])[0] || {};
+            res.json({
+                ok: true,
+                prefill: {
+                    booking_no: bk.booking_number || bkgNo,
+                    carrier: bk.carrier || null,
+                    route: [bk.port_of_loading, bk.port_of_discharge].filter(Boolean).join(' / ') || null,
+                    container_no: box.container_number || null,
+                    supplier: box.supplier || null,
+                    trucking_company: box.trucker || null,
+                },
+                // So the form can offer the other containers on the same
+                // booking rather than making her go back for each one.
+                containers: (bk.containers || []).map((c) => ({
+                    seq: c.seq, size: c.size, container_number: c.container_number,
+                    supplier: c.supplier, trucker: c.trucker,
+                })),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/bills', async (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const bill = await b.addBill({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, bill });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.put('/api/bills/:id', async (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const bill = await b.editBill(String(req.params.id), req.body || {});
+            res.json({ ok: true, bill });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/bills/:id', async (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            await b.deleteBill(String(req.params.id));
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get('/api/sales', (req, res) => {
+        try {
+            const s = require('./helpers/sales');
+            const rows = s.listWithTotals();
+            res.json({
+                sales: rows,
+                summary: s.summary(rows),
+                columns: s.COLUMNS,
+                writable: s.WRITABLE,
+                per_lb_ceiling: require('./helpers/bills').PER_LB_CEILING,
+                lb_per_mt: require('./helpers/bills').LB_PER_MT,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/sales', async (req, res) => {
+        try {
+            const s = require('./helpers/sales');
+            const sale = await s.addSale({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, sale });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.put('/api/sales/:id', async (req, res) => {
+        try {
+            const s = require('./helpers/sales');
+            const sale = await s.editSale(String(req.params.id), req.body || {});
+            res.json({ ok: true, sale });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/sales/:id', async (req, res) => {
+        try {
+            const s = require('./helpers/sales');
+            await s.deleteSale(String(req.params.id));
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── Spend report ──────────────────────────────────────────────────────
     // Per Apsara 2026-09-02: "a report ... where i can track the monthly spent
     // of cash/zelle/wire. date wise filter can also be there like quickbook."
