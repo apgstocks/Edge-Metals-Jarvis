@@ -166,6 +166,12 @@ const FILES = {
     // — see helpers/sales.js's header for why ocean paperwork does not belong
     // on a weighbridge ticket.
     SALES_FILE: path.join(DATA_DIR, 'sales.json'),
+    // Payments against Edge Metals bills, and supplier advances. Separate
+    // from PAYMENTS_FILE (the yard's money ledger) because one of these can
+    // cover several containers at once and an advance covers none yet — see
+    // helpers/billPayments.js. Every row here ALSO writes one row to
+    // PAYMENTS_FILE so the spend report still sees the money.
+    BILL_PAYMENTS_FILE: path.join(DATA_DIR, 'bill_payments.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

@@ -109,10 +109,23 @@ function compute(input) {
 
     const trucking = num(b.trucking_amount);
 
-    // Her formula was "Amount − Trucking − Advance"; she removed Advance on
-    // 2026-09-10, so it is now Amount − Trucking.
+    // ── BALANCE IS WHAT IS STILL OWED ────────────────────────────────────
+    // Her formula on 2026-09-09 was "Amount − Trucking − Advance". She then
+    // removed Advance as a column, and on 2026-09-10, asked what Balance
+    // should mean once payments exist, chose "Amount − Trucking − Paid".
+    //
+    // So the column changed question: it used to answer "what did this
+    // container come to", it now answers "what do I still owe on it". Worth
+    // being explicit about, because a column that quietly changes meaning is
+    // one she reads the old way for a month.
+    //
+    // `paid` is passed IN rather than looked up here — helpers/billPayments.js
+    // requires helpers/bills.js to validate allocations, so reaching back the
+    // other way would be a require cycle. listWithTotals resolves it once for
+    // the whole table instead of once per row.
+    const paid = num(b.paid) || 0;
     const balance = amountUsed === null ? null
-        : round2(amountUsed - (trucking || 0));
+        : round2(amountUsed - (trucking || 0) - paid);
 
     return {
         total: gross === null && !Object.keys(tare).some((k) => tare[k] !== null) ? null : round3(total),
@@ -128,6 +141,7 @@ function compute(input) {
         amount_differs: (stated !== null && amount !== null && Math.abs(stated - amount) >= 0.01)
             ? round2(stated - amount) : null,
         balance,
+        paid: round2(paid),
         missing_tares: missing,
         // ── INCOMPLETE IS A STATE, NOT AN ERROR ──────────────────────────
         // Apsara, 2026-09-10: "if i start adding atleast one value in bill,it
@@ -409,7 +423,13 @@ function withTotals(b) {
     return { ...b, ...compute(b) };
 }
 
-function listWithTotals() { return list().map(withTotals); }
+function listWithTotals() {
+    // One pass over the payments for the whole table, not one per row.
+    let paid = {};
+    try { paid = require('./billPayments').paidByBill(); }
+    catch (e) { console.warn('[BILLS] could not read payments:', e.message); }
+    return list().map((b) => withTotals({ ...b, paid: paid[b.id] || 0 }));
+}
 
 async function addBill(input = {}) {
     const rec = clean(input);

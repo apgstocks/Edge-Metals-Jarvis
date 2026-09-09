@@ -97,8 +97,22 @@ function collectRows({ payments, expenses, from, to }) {
         // story — the kind of wrong that survives a long time.
         const isSale = p.load_kind === 'sale';
         const isTrucker = p.load_kind === 'trucker';
+        // ── FOURTH KIND: EDGE METALS BILLS ───────────────────────────────
+        // Apsara 2026-09-10 asked for a pay option on bills, with one payment
+        // able to cover several containers and advances held against a
+        // supplier. helpers/billPayments.js writes ONE row here per real
+        // transfer (load_kind:'bill', load_id = the payment's own id), so the
+        // money is counted once on the day it left the bank — including an
+        // advance that is not yet attached to any container.
+        //
+        // Labelled separately for the same reason trucker payments are: "what
+        // did we pay for metal at the yard" and "what did we pay a supplier
+        // for a container" are different questions, and folding the second
+        // into the Loads line would overstate it with the right grand total —
+        // right number, wrong story, which survives a long time.
+        const isBill = p.load_kind === 'bill';
         rows.push({
-            kind: isTrucker ? 'trucker' : 'load',
+            kind: isTrucker ? 'trucker' : isBill ? 'supplier' : 'load',
             direction: isSale ? 'in' : 'out',
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
@@ -117,7 +131,7 @@ function collectRows({ payments, expenses, from, to }) {
             // which is correct: there is no account behind them.
             bank: (p.bank && String(p.bank).trim()) || NOT_RECORDED,
             amount: round2(amount),
-            label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : 'Load'} ${p.load_id}`.trim(),
+            label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : isBill ? 'Supplier' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
         });
     }
@@ -195,7 +209,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // used. A bank with no spend in this window does not appear, which is
     // right — an empty column invites the question "why is that zero".
     const byBank = {};
-    let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0;
+    let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0, supplierTotal = 0;
 
     for (const r of rows) {
         const m = monthOf(r.date);
@@ -213,6 +227,13 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // seeing a wrong number.
         if (r.kind === 'load') loadTotal = round2(loadTotal + r.amount);
         else if (r.kind === 'trucker') truckerTotal = round2(truckerTotal + r.amount);
+        // ── NAMED, NOT LEFT TO THE else ──────────────────────────────────
+        // The else below is expenses. A new kind that is not listed here does
+        // not fail loudly — it is quietly added to "what we spent on
+        // expenses", which is a wrong story with a right grand total. That is
+        // precisely how supplier payments would have landed if this branch
+        // had been left out.
+        else if (r.kind === 'supplier') supplierTotal = round2(supplierTotal + r.amount);
         else expenseTotal = round2(expenseTotal + r.amount);
     }
 
@@ -287,6 +308,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // that does not reconcile with its own total is a report that invites
         // the reader to pick which number to believe.
         truckerTotal,
+        supplierTotal,
         count: rows.length,
         cash,
         rows,                      // the drill-down, already sorted newest first

@@ -169,7 +169,21 @@ async function addPayment(input = {}) {
         //
         // Anything unrecognised still falls back to 'purchase', so records
         // written before this field existed keep their meaning.
-        load_kind: ['sale', 'trucker'].includes(input.load_kind) ? input.load_kind : 'purchase',
+        // ── 'bill' ADDED 2026-09-10, AND THE SILENT DOWNGRADE NAMED ──────
+        // This is an allowlist, which is right — but anything not on it was
+        // quietly relabelled 'purchase', and 'purchase' means a yard load.
+        // helpers/billPayments.js passed 'bill' and got 'purchase' back, so a
+        // supplier's container payment was filed as money spent at the yard.
+        // Silent, and the grand total stayed correct the whole time.
+        //
+        // Still an allowlist — a typo must not invent a category — but an
+        // unknown kind now says so instead of pretending to be a load.
+        load_kind: (() => {
+            const k = String(input.load_kind || '').trim();
+            if (!k || k === 'purchase') return 'purchase';
+            if (['sale', 'trucker', 'bill'].includes(k)) return k;
+            throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
+        })(),
         mode,
         // Null on Cash and Cheque, and null on every payment written before
         // 2026-09-09. Nothing migrates them: an old Zelle whose account nobody

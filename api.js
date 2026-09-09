@@ -3666,6 +3666,80 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── Paying for containers ─────────────────────────────────────────────
+    // Apsara, 2026-09-10: "We need pay option.in payment,there is a possible
+    // of giving advance deduction and multiple container paynebt at once."
+    //
+    // One payment, N containers, amount typed per container — her choice when
+    // asked. An advance is the same shape with no containers yet. See
+    // helpers/billPayments.js for why this is not helpers/payments.js.
+    //
+    // Same staff rule as /api/bills: absent from STAFF_ALLOWED_PATH_PREFIXES,
+    // so the yard cannot see or move supplier money.
+    app.get('/api/bill-payments', (req, res) => {
+        try {
+            const bp = require('./helpers/billPayments');
+            const b = require('./helpers/bills');
+            const unpaid = b.listWithTotals()
+                .filter((x) => (x.balance === null ? false : x.balance > 0.005))
+                .map((x) => ({ id: x.id, date: x.date, supplier: x.supplier,
+                               container_no: x.container_no, booking_no: x.booking_no,
+                               amount: x.amount, paid: x.paid, balance: x.balance }));
+            res.json({
+                payments: bp.list(),
+                summary: bp.summary(),
+                // What is still owed, so the pay form can list containers to
+                // tick rather than making her remember which are open.
+                open_bills: unpaid,
+                credit: bp.creditBySupplier(),
+                modes: bp.BILL_PAYMENT_MODES,
+                banks: require('./helpers/banks').options(),
+                other: require('./helpers/banks').OTHER,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/bill-payments', async (req, res) => {
+        try {
+            const bp = require('./helpers/billPayments');
+            const body = { ...(req.body || {}), created_by: (req.role || null) };
+            const rec = body.kind === 'advance'
+                ? await bp.addAdvance(body)
+                : await bp.addBillPayment(body);
+            require('./helpers/shipmentSheetLog');   // loaded lazily elsewhere
+            // Every container this touched moves in the sheet too — its
+            // Balance changed, and the Shipment tab is meant to mirror the
+            // bill. Non-fatal, coalesced, same as any other bill write.
+            try {
+                const bills = require('./helpers/bills');
+                const ship = require('./helpers/shipmentSheetLog');
+                const paid = bp.paidByBill();
+                for (const a of (rec.allocations || [])) {
+                    const bill = bills.list().find((x) => x.id === a.bill_id);
+                    if (bill) ship.logBillSafely({ ...bill, paid: paid[bill.id] || 0 }, 'paid');
+                }
+            } catch (e) { console.warn('[BILL-PAY] sheet mirror skipped:', e.message); }
+            res.json({ ok: true, payment: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Applying an advance moves NO money — it attaches credit that was
+    // already paid and already counted. See billPayments.applyAdvance.
+    app.post('/api/bill-payments/:id/apply', async (req, res) => {
+        try {
+            const bp = require('./helpers/billPayments');
+            const rec = await bp.applyAdvance(String(req.params.id), (req.body || {}).allocations || []);
+            res.json({ ok: true, payment: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/bill-payments/:id', async (req, res) => {
+        try {
+            await require('./helpers/billPayments').deleteBillPayment(String(req.params.id));
+            res.json({ ok: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.get('/api/sales', (req, res) => {
         try {
             const s = require('./helpers/sales');
