@@ -4940,35 +4940,58 @@ function openLedgerForm(kind, existing) {
   // supplier's paperwork, and compute() prefers hers. Everything else derived
   // is read-only by construction: a client that could post its own Balance is
   // a client that can disagree with the server about money.
+  // ── ONE FIELD ────────────────────────────────────────────────────────
+  // Apsara, 2026-09-10, on the previous version: "still it looks ugly and
+  // clumsy and not user friendly". Six things were wrong and they compounded:
+  //
+  //   · type="number" draws SPINNER ARROWS on every weight and money box —
+  //     useless for a five-digit weight, and ten of them at once is noise.
+  //     inputmode="decimal" gives a phone the number pad without the arrows.
+  //   · the unit lived in the LABEL, so "Supplier invoice amount ($)" wrapped
+  //     onto two lines and pushed its input below its neighbours. That is why
+  //     the Money row was visibly crooked. It sits INSIDE the field now.
+  //   · hint text under a field made every row a different height, so nothing
+  //     lined up. Moved to the tooltip.
+  //   · numbers were left-aligned in a proportional font, so digits did not
+  //     line up down a column. Right-aligned monospace now.
   const inputFor = (c) => {
     const name = c.writeKey || c.key;
-    // The value she TYPED, not the resolved one. For "Supplier invoice
-    // amount" the record holds both: `amount` is what compute() settled on,
-    // `supplier_invoice_amount` is what she entered — and putting the
-    // resolved figure in the box would turn a computed amount into a stated
-    // one the moment she saved an unrelated edit.
     const val = existing ? existing[name] : undefined;
     const existingVal = val;
+
     if (c.textarea) {
       return `<div class="field" style="grid-column:1/-1;">
         <label>${esc(c.formLabel || c.label)}</label>
-        <textarea name="${esc(name)}" rows="3" placeholder="${esc(c.placeholder || '')}"
-          style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12px; resize:vertical;">${esc(Array.isArray(existingVal) ? existingVal.join('\n') : (existingVal || ''))}</textarea>
-        ${c.hint ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:4px;">${esc(c.hint)}</div>` : ''}
+        <textarea name="${esc(name)}" rows="2" placeholder="${esc(c.placeholder || '')}"
+          style="width:100%; padding:8px 10px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12px; resize:vertical;">${esc(Array.isArray(existingVal) ? existingVal.join('\n') : (existingVal || ''))}</textarea>
       </div>`;
     }
+
+    const money = c.unit === '$';
+    const weight = c.unit === 'lbs' || c.unit === 'MT';
+    const numeric = money || weight || c.num;
     const attrs = [
       `name="${esc(name)}"`,
+      'type="text"',
+      numeric ? 'inputmode="decimal" autocomplete="off"' : '',
       (val === null || val === undefined || val === '') ? '' : `value="${esc(String(val))}"`,
-      c.num ? 'type="number" step="any"' : 'type="text"',
       c.date ? 'placeholder="MM/DD/YYYY" data-ledger-date="1" autocomplete="off"'
              : (c.placeholder ? `placeholder="${esc(c.placeholder)}"` : ''),
       c.num ? 'data-ledger-num="1"' : '',
+      // The hint that used to sit under the box, so the row keeps its height.
+      c.hint ? `title="${esc(c.hint)}"` : '',
+      `style="width:100%; height:34px; padding:0 ${money ? '10px 0 20px' : '10px'}; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:13px;${numeric ? ' text-align:right; font-family:var(--font-mono);' : ''}"`,
     ].filter(Boolean).join(' ');
+
+    // The unit as an adornment, not part of the label.
+    const prefix = money
+      ? '<span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:var(--text-faint); font-size:13px; pointer-events:none;">$</span>' : '';
+    const suffix = (c.key === 'supplier_price')
+      ? '<span id="ledPriceUnit" style="position:absolute; right:9px; top:50%; transform:translateY(-50%); color:var(--text-faint); font-size:11px; font-family:var(--font-mono); pointer-events:none;"></span>' : '';
+
     return `<div class="field">
-        <label>${esc(c.formLabel || c.label)}${c.unit ? ` <span style="opacity:.6;">(${esc(c.unit)})</span>` : ''}</label>
-        <input ${attrs}>
-        ${c.hint ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:4px;">${esc(c.hint)}</div>` : ''}
+        <label style="font-size:11px; letter-spacing:.04em; text-transform:none; margin-bottom:5px;">${esc(c.formLabel || c.label)}</label>
+        <div style="position:relative;">${prefix}<input ${attrs}>${suffix}</div>
       </div>`;
   };
 
@@ -4976,9 +4999,9 @@ function openLedgerForm(kind, existing) {
     const mine = all.filter((c) => c.group === g.id && (!c.derived || c.writeKey));
     if (!mine.length) return '';
     return `
-      <div style="margin-bottom:20px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); padding-bottom:5px; margin-bottom:12px;">${esc(g.label)}</div>
-        <div style="display:grid; grid-template-columns:${g.cols ? `repeat(${g.cols}, minmax(0, 1fr))` : 'repeat(auto-fit,minmax(190px,1fr))'}; gap:12px 14px;">${mine.map(inputFor).join('')}</div>
+      <div style="margin-bottom:16px;">
+        <div style="font-size:12px; color:var(--text-faint); margin-bottom:9px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="opacity:.6;">· lbs</span>' : ''}</div>
+        <div style="display:grid; grid-template-columns:${g.cols ? `repeat(${g.cols}, minmax(0, 1fr))` : 'repeat(2, minmax(0, 1fr))'}; gap:10px;">${mine.map(inputFor).join('')}</div>
       </div>`;
   }).join('');
 
@@ -5004,7 +5027,7 @@ function openLedgerForm(kind, existing) {
 
   const html = `
     <div id="ledgerModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9000; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
-      <div class="card" style="width:min(880px,100%); padding:24px 26px 20px;">
+      <div class="card" style="width:min(900px,100%); padding:20px 22px 18px;">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px;">
           <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${editing ? K.editLabel : K.addLabel.replace('+ ', '')}</h3>
           <div style="display:flex; align-items:center; gap:12px;">
@@ -5016,13 +5039,23 @@ function openLedgerForm(kind, existing) {
           </div>
         </div>
         ${prefill}
-        <form id="ledgerForm">${sections}</form>
-        <div id="ledPreview" style="border-top:1px solid var(--border-subtle); padding-top:14px; margin-top:4px; display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px;"></div>
-        <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:10px;"></div>
-        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
-          <button id="ledCancel" class="btn btn-secondary" style="font-size:12px; padding:9px 18px;">Cancel</button>
-          <button id="ledSave" class="btn btn-primary" style="font-size:12px; padding:9px 22px;">${editing ? 'Save changes' : 'Save'}</button>
+        <!-- TWO COLUMNS, and a cap. The old form stretched to the whole
+             window — four fields spread across 1670px, so reading one row
+             meant crossing the screen. -->
+        <form id="ledgerForm" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(330px,1fr)); gap:0 24px; align-items:start;">${sections}</form>
+        <!-- ONE BAR: the numbers she is checking and the buttons she presses,
+             on the same line. Previously a totals block and a separate button
+             row, which is two things to look at for one decision. -->
+        <div style="border-top:1px solid var(--border-subtle); padding-top:13px; margin-top:2px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
+          <div id="ledPreview" style="display:flex; gap:24px; flex-wrap:wrap;"></div>
+          <div style="flex:1;"></div>
+          <div style="display:flex; gap:8px;">
+            <button id="ledCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px;">Cancel</button>
+            <button id="ledSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">${editing ? 'Save changes' : 'Save'}</button>
+          </div>
         </div>
+        <div id="ledWarn" style="font-size:11px; color:var(--status-warn); margin-top:9px;"></div>
+        <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:6px;"></div>
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
@@ -5111,27 +5144,28 @@ function openLedgerForm(kind, existing) {
         const v = r[key];
         const shown = how === 'money' ? ledMoney(v) : ledNum(v);
         return `<div>
-          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${label}</div>
-          <div style="font-size:15px; font-weight:700; margin-top:3px; color:${v === null || v === undefined ? 'var(--text-faint)' : 'var(--text-strong)'};">${shown}</div>
+          <div style="font-size:11px; color:var(--text-faint);">${label}</div>
+          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? 'var(--text-faint)' : (key === 'balance' ? 'var(--accent)' : 'var(--text-strong)')};">${shown}</div>
         </div>`;
       });
-      // The unit is the thing worth shouting about — see helpers/bills.js.
-      if (r.price_unit) {
-        cells.push(`<div>
-          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Priced per</div>
-          <div style="font-size:15px; font-weight:700; margin-top:3px;">${r.price_unit === 'lb' ? 'pound' : 'metric ton'}</div>
-        </div>`);
-      }
-      // Warnings, because a total that cannot be trusted must say so rather
-      // than sit there looking finished.
-      let warn = '';
+      $('ledPreview').innerHTML = cells.join('');
+
+      // ── THE PRICE UNIT GOES IN THE PRICE FIELD ─────────────────────────
+      // It used to be a sixth figure in the totals row, which is the wrong
+      // place: the unit is a property of the price she typed, and showing it
+      // beside the price is what makes a wrong one obvious as she types.
+      const pu = $('ledPriceUnit');
+      if (pu) pu.textContent = r.price_unit === 'lb' ? '/lb' : r.price_unit === 'mt' ? '/MT' : '';
+
+      const warn = [];
       if (r.missing_tares && r.missing_tares.length) {
-        warn += `<div style="grid-column:1/-1; font-family:var(--font-mono); font-size:10px; color:var(--status-warn);">No weight for ${esc(r.missing_tares.join(', '))} — the net is computed without ${r.missing_tares.length === 1 ? 'it' : 'them'}.</div>`;
+        warn.push(`No weight for ${esc(r.missing_tares.join(' or '))} — net computed without ${r.missing_tares.length === 1 ? 'it' : 'them'}.`);
       }
       if (r.amount_differs !== null && r.amount_differs !== undefined) {
-        warn += `<div style="grid-column:1/-1; font-family:var(--font-mono); font-size:10px; color:var(--status-warn);">Your figure is ${ledMoney(r.amount_differs)} off the ${ledMoney(r.computed_amount)} the weight and price give.</div>`;
+        warn.push(`Your figure is ${ledMoney(r.amount_differs)} off the ${ledMoney(r.computed_amount)} the weight and price give.`);
       }
-      $('ledPreview').innerHTML = cells.join('') + warn;
+      const wEl = $('ledWarn');
+      if (wEl) wEl.textContent = warn.join(' ');
     } catch (e) { /* a preview that fails must never block the form */ }
   };
   $('ledgerForm').addEventListener('input', () => {

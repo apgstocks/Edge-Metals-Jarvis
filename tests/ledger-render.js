@@ -380,6 +380,70 @@ section('F3 — the page says which build it is');
     f.dom.window.close();
 }
 
+section('F4 — "ugly and clumsy": the six things that were wrong');
+{
+    // Apsara, 2026-09-10, twice: "This is ugly and not user friendly", then
+    // "still it looks ugly and clumsy and not user friendly". Six specific
+    // faults, each asserted here so none of them can come back quietly.
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bills/preview': () => bills.compute({}) });
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills');
+    const form = w.document.getElementById('ledgerForm');
+    const inputs = [...form.querySelectorAll('input')];
+
+    // 1. Spinner arrows on ten weight and money boxes at once.
+    ck('no number spinners anywhere on the form',
+       !inputs.some((i) => i.type === 'number'),
+       inputs.filter((i) => i.type === 'number').map((i) => i.name).join(','));
+    ck('  but numeric fields still get a number pad on a phone',
+       inputs.filter((i) => ['gross', 'truck', 'supplier_price'].includes(i.name))
+             .every((i) => i.getAttribute('inputmode') === 'decimal'),
+       'inputmode is what replaces type=number without the arrows');
+
+    // 2. The unit lived in the LABEL, so "Supplier invoice amount ($)"
+    //    wrapped to two lines and pushed its input out of alignment.
+    const labels = [...form.querySelectorAll('label')].map((l) => l.textContent.trim());
+    ck('no unit suffixes left in the labels',
+       !labels.some((l) => /\(\$\)|\(lbs\)|\(MT\)/i.test(l)), labels.join(' | '));
+    ck('  the $ sits inside the money fields instead',
+       form.querySelectorAll('div[style*="position:relative"] span').length >= 3,
+       'as an adornment, so the label stays one line');
+
+    // 3. Hints under fields made every row a different height.
+    ck('hints moved off the layout and onto the field',
+       !/leave blank to use the computed figure<\/div>/.test(form.innerHTML)
+       && inputs.some((i) => /computed figure/i.test(i.getAttribute('title') || '')),
+       'block hints under a box are why nothing lined up');
+
+    // 4. Numbers left-aligned in a proportional font do not line up.
+    ck('numbers are right-aligned monospace',
+       inputs.filter((i) => ['gross', 'truck', 'boxes'].includes(i.name))
+             .every((i) => /text-align:\s*right/.test(i.getAttribute('style') || '')
+                        && /font-mono/.test(i.getAttribute('style') || '')));
+
+    // 5. The form stretched to the whole window.
+    const card = w.document.querySelector('#ledgerModal .card');
+    ck('the form is capped, not full-window',
+       /width:\s*min\(900px/.test(card.getAttribute('style') || ''),
+       card.getAttribute('style'));
+    ck('  and laid out in columns rather than one wide row',
+       /repeat\(auto-fit,minmax\(330px/.test(form.getAttribute('style') || ''),
+       form.getAttribute('style'));
+
+    // 6. Totals block and button row were two things to look at for one
+    //    decision.
+    ck('the totals and the buttons share one bar',
+       w.document.getElementById('ledPreview').parentElement
+         .contains(w.document.getElementById('ledSave')));
+
+    // And her last instruction: "Swap places of route and supplier".
+    const order = [...form.querySelectorAll('[name]')].map((i) => i.name);
+    ck('route and supplier are swapped',
+       order.indexOf('supplier') < order.indexOf('route'),
+       order.join(','));
+    dom.window.close();
+}
+
 section('G — close, and autosave from the first value');
 {
     // Apsara, 2026-09-10: "at top right close option should be there in

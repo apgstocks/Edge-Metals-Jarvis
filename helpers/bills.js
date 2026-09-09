@@ -192,7 +192,7 @@ function newId() {
 // all: the store defines what a bill is, and a second list in the dashboard
 // is a copy that drifts.
 const COLUMNS = [
-    { key: 'route',            label: 'Source/Destination', group: 'shipment', placeholder: 'HOUSTON / BUSAN' },
+    { key: 'supplier',         label: 'Supplier',           group: 'shipment' },
     { key: 'carrier',          label: 'Carrier',            group: 'shipment', placeholder: 'MSC, Maersk…' },
     { key: 'booking_no',       label: 'Booking no',         group: 'shipment' },
     { key: 'container_no',     label: 'Container no',       group: 'shipment', placeholder: 'MSKU1234567' },
@@ -206,7 +206,11 @@ const COLUMNS = [
       placeholder: 'paste one link per line', hint: 'http/https links only' },
 
     { key: 'date',             label: 'Date',               group: 'purchase', date: true },
-    { key: 'supplier',         label: 'Supplier',           group: 'purchase' },
+    // Apsara, 2026-09-10: "Swap places of route and supplier". Route sits
+    // where Supplier was and Supplier where Route was — her reading order,
+    // not mine. The group each belongs to went with it.
+    { key: 'route',            label: 'Source/Destination', group: 'purchase',
+      formLabel: 'Route', placeholder: 'HOUSTON / BUSAN' },
     { key: 'invoice_no',       label: 'Invoice no',         group: 'purchase' },
     { key: 'description',      label: 'Item description',   group: 'purchase', placeholder: 'Auto cast, shredded…' },
 
