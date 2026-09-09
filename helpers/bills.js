@@ -129,6 +129,22 @@ function compute(input) {
             ? round2(stated - amount) : null,
         balance,
         missing_tares: missing,
+        // ── INCOMPLETE IS A STATE, NOT AN ERROR ──────────────────────────
+        // Apsara, 2026-09-10: "if i start adding atleast one value in bill,it
+        // should get autosaved."
+        //
+        // That settles a question I had answered wrongly. addBill used to
+        // THROW without a date and a supplier — my rule, never hers — and an
+        // hour earlier I extended it so an edit could not blank either. Both
+        // are incompatible with how she actually works: a bill is filled in as
+        // the information arrives, and the weighbridge ticket, the supplier
+        // invoice and the trucker's number turn up on different days.
+        //
+        // So the store stopped refusing and started REPORTING, which is the
+        // rule this file already followed for tares: a bill that cannot be
+        // computed says why rather than showing a confident zero, and a bill
+        // that is not finished says so rather than being impossible to keep.
+        incomplete: ['date', 'supplier'].filter((k) => !String(b[k] || '').trim()),
     };
 }
 
@@ -167,8 +183,13 @@ const COLUMNS = [
     { key: 'booking_no',       label: 'Booking no',         group: 'shipment' },
     { key: 'container_no',     label: 'Container no',       group: 'shipment', placeholder: 'MSKU1234567' },
     { key: 'seal_no',          label: 'Seal no',            group: 'shipment' },
-    { key: 'trucking_company', label: 'Trucking',           group: 'shipment',
-      formLabel: 'Trucking company', placeholder: 'who hauled it' },
+
+    // Apsara, 2026-09-10: "In bill,i want photos field where url can be
+    // pasted." One per line — a container gets photographed several times and
+    // one box for one link would have her keeping the rest somewhere else.
+    { key: 'photos',           label: 'Photos',             group: 'shipment',
+      formLabel: 'Photo links', textarea: true,
+      placeholder: 'paste one link per line', hint: 'http/https links only' },
 
     { key: 'date',             label: 'Date',               group: 'purchase', date: true },
     { key: 'supplier',         label: 'Supplier',           group: 'purchase' },
@@ -193,6 +214,18 @@ const COLUMNS = [
     { key: 'amount',           label: 'Supplier invoice amount', group: 'money', unit: '$', derived: true,
       writeKey: 'supplier_invoice_amount', num: true,
       hint: 'leave blank to use the computed figure' },
+    // ── THE TRUCKER SITS WITH WHAT THE TRUCKING COST ─────────────────────
+    // Apsara, 2026-09-10: "Trucker needs to there next to Trucking Amount in
+    // bill." It used to live up beside Carrier, which is where her original
+    // column list put it — who hauled it and what the haul cost were at
+    // opposite ends of a 22-column table.
+    //
+    // AND IT IS CALLED "Trucker" NOW. Her word, and it retires the workaround
+    // underneath the original complaint: two different columns were both
+    // headed "Trucking", so the form needed a separate formLabel to tell them
+    // apart. One of them having its own name fixes that at the source instead.
+    { key: 'trucking_company', label: 'Trucker',            group: 'money',
+      placeholder: 'who hauled it' },
     { key: 'trucking_amount',  label: 'Trucking',           group: 'money', unit: '$', num: true,
       formLabel: 'Trucking cost' },
     // ── ADVANCE REMOVED ──────────────────────────────────────────────────
@@ -210,15 +243,105 @@ const COLUMNS = [
 
 // The order she READS them in, which is the order she gave and not the order
 // the form groups them. The table walks this; the form walks GROUPS.
-const TABLE_ORDER = ['route', 'carrier', 'trucking_company', 'date', 'supplier', 'invoice_no',
+// ── CARRIER IS ON THE FORM BUT NOT IN THE TABLE ──────────────────────────
+// Apsara, 2026-09-10: "on bill after saving,i dont want carrier to be
+// displayed.on edit it can be there."
+//
+// So it is absent from TABLE_ORDER and still present in COLUMNS — the form
+// walks COLUMNS, the table walks this. It is still STORED and still comes off
+// the booking on pre-fill; it just is not one of the columns she reads across.
+// Nothing about the record changed, which is why it is still there to edit.
+const TABLE_ORDER = ['route', 'date', 'supplier', 'invoice_no',
+    'photos',
     'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck', 'container',
     'chassis', 'boxes', 'total', 'net_lb', 'net_mt', 'supplier_price', 'amount',
-    'trucking_amount', 'balance'];
+    'trucking_company', 'trucking_amount', 'balance'];
+
+// ── FILTERS, AND SEVERAL AT ONCE ─────────────────────────────────────────
+// Apsara, 2026-09-10: "also i want filter.ultiple filters can also be
+// applied."
+//
+// SERVER-SIDE, like everything else here, and for a reason beyond consistency:
+// summary() has to agree with what she is looking at. Filtering in the browser
+// would leave the totals row summing rows that are no longer on screen, which
+// is a worse bug than having no filter at all — she would read a balance that
+// belongs to a different set of bills.
+//
+// EVERY FILTER IS AN "AND". That is what "multiple filters can also be
+// applied" means: supplier Eccomelt AND booking 272766480 AND this month
+// narrows; it does not accumulate matches. Any field left blank is not a
+// filter at all rather than a filter matching nothing.
+//
+// `q` is a free-text sweep across the text columns — the one box that finds a
+// container number without her having to know which field it lives in.
+const FILTERABLE = ['supplier', 'carrier', 'booking_no', 'container_no',
+    'trucking_company', 'invoice_no', 'seal_no', 'route', 'description'];
+
+// MM/DD/YYYY (how she types and how bookings.json stores) to a sortable
+// YYYY-MM-DD, so a range comparison is a string comparison. Anything it
+// cannot read returns null and is simply not range-filtered — a date it does
+// not understand must not silently drop the row.
+function sortableDate(v) {
+    const s = String(v || '').trim();
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+    if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    return null;
+}
+
+// `fields` lets another store reuse this with its OWN columns. Sales has
+// customer, HBL and reference where a bill has supplier and container — and
+// passing bills' list would have made the Sales search box find nothing,
+// silently. Defaults to a bill's fields so existing callers are unchanged.
+function filterRows(rows, q = {}, fields = FILTERABLE) {
+    const FILTERABLE = fields;
+    const has = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+    const norm = (v) => String(v === null || v === undefined ? '' : v).toLowerCase();
+    const text = has(q.q) ? norm(q.q).trim() : null;
+    const from = has(q.from) ? sortableDate(q.from) : null;
+    const to = has(q.to) ? sortableDate(q.to) : null;
+
+    return (rows || []).filter((r) => {
+        for (const f of FILTERABLE) {
+            if (!has(q[f])) continue;
+            if (!norm(r[f]).includes(norm(q[f]).trim())) return false;
+        }
+        if (text && !FILTERABLE.some((f) => norm(r[f]).includes(text))) return false;
+        if (from || to) {
+            const d = sortableDate(r.date);
+            // A row with an unreadable date is kept, not dropped. Dropping it
+            // would hide a bill from a date range it might well belong to,
+            // and a hidden bill is one she stops chasing.
+            if (d) {
+                if (from && d < from) return false;
+                if (to && d > to) return false;
+            }
+        }
+        return true;
+    });
+}
+
+// The values actually present, so the dropdowns can only offer something that
+// will match. A filter list built from a hardcoded set offers choices that
+// return nothing, which reads as broken.
+function facets(rows) {
+    const out = {};
+    for (const f of ['supplier', 'carrier', 'trucking_company']) {
+        out[f] = [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
+    }
+    return out;
+}
 
 const GROUPS = [
     { id: 'shipment', label: 'Shipment' },
     { id: 'purchase', label: 'Purchase' },
-    { id: 'weights',  label: 'Weights' },
+    // ── ALL FIVE WEIGHTS ON ONE LINE ─────────────────────────────────────
+    // Apsara, 2026-09-10: "weights should be in single line". The auto-fit
+    // grid wrapped them 4 + 1, which puts Boxes on a row of its own and makes
+    // it read like a different kind of thing. They are one measurement taken
+    // five ways and they belong on one line.
+    { id: 'weights',  label: 'Weights', cols: 5 },
     { id: 'money',    label: 'Money' },
 ];
 
@@ -241,6 +364,28 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
     .concat(['supplier_invoice_amount', 'price_unit', 'note']);
 
+// ── A PASTED LINK IS RENDERED, SO IT IS CHECKED ──────────────────────────
+// These come back out into the table as clickable links. A "javascript:..."
+// URL pasted into that field would run when clicked, so ONLY http and https
+// survive — anything else is dropped rather than stored and rendered.
+//
+// Split on newlines, commas and whitespace, because "paste one per line" is
+// what the box says and not necessarily what a paste from Drive or WhatsApp
+// produces. De-duplicated, order kept.
+function cleanPhotos(v) {
+    if (v === null || v === undefined || v === '') return [];
+    const parts = Array.isArray(v) ? v : String(v).split(/[\s,]+/);
+    const out = [];
+    for (const raw of parts) {
+        const u = String(raw || '').trim().replace(/[),.]+$/, '');
+        if (!u) continue;
+        let ok = false;
+        try { ok = /^https?:$/.test(new URL(u).protocol); } catch (e) { ok = false; }
+        if (ok && !out.includes(u)) out.push(u);
+    }
+    return out;
+}
+
 function clean(input) {
     const out = {};
     for (const k of WRITABLE) {
@@ -254,6 +399,7 @@ function clean(input) {
                      'supplier_price', 'supplier_invoice_amount', 'trucking_amount']) {
         if (k in out) out[k] = num(out[k]);
     }
+    if ('photos' in out) out.photos = cleanPhotos(out.photos);
     return out;
 }
 
@@ -267,8 +413,14 @@ function listWithTotals() { return list().map(withTotals); }
 
 async function addBill(input = {}) {
     const rec = clean(input);
-    if (!rec.date) throw new Error('a bill needs a date');
-    if (!rec.supplier) throw new Error('a bill needs a supplier');
+    // Deliberately NOT refused for a missing date or supplier — see the
+    // `incomplete` note in compute(). What IS refused is a bill with nothing
+    // in it at all: "at least one value" is her own threshold, and a row
+    // created by opening a form and closing it again is litter.
+    if (!Object.values(rec).some((v) => v !== null && v !== undefined && String(v).trim() !== ''
+                                        && !(Array.isArray(v) && !v.length))) {
+        throw new Error('a bill needs at least one value');
+    }
     const row = {
         id: newId(),
         ...rec,
@@ -296,14 +448,11 @@ async function editBill(id, input = {}) {
         // has twenty-three columns and the same mistake here would silently
         // erase a seal number nobody was editing.
         const merged = { ...rows[i], ...patch, updated_at: new Date().toISOString() };
-        // ── AN EDIT MUST NOT BLANK WHAT AN ADD INSISTS ON ────────────────
-        // addBill/addSale refuse a row with no date or no supplier, and an edit
-        // that could clear either would leave a record the create path would
-        // never have allowed. The client sends empty strings on edit (that is
-        // how a field gets CLEARED), so this is reachable by simply deleting
-        // the text and pressing Save.
-        if (!merged.date) { problem = 'a bill needs a date'; return rows; }
-        if (!merged.supplier) { problem = 'a bill needs a supplier'; return rows; }
+        // The date/supplier guard that used to live here is GONE, on
+        // purpose — see compute()'s `incomplete` note. Autosave writes a bill
+        // the moment she types one value, so a rule requiring two specific
+        // fields would make her own workflow unsaveable. What is missing is
+        // reported on the row instead.
         rows[i] = merged;
         found = rows[i];
         return rows;
@@ -345,5 +494,6 @@ function summary(rows) {
 
 module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING,
+    FILTERABLE, filterRows, facets, sortableDate, cleanPhotos,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
 };

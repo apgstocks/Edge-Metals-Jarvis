@@ -148,6 +148,15 @@ const GROUPS = [
 
 const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
 
+// A sale's own filterable columns. NOT bills' — a sale has a customer and an
+// HBL number where a bill has a supplier and a container number, and reusing
+// the wrong list would leave the search box quietly matching nothing.
+const FILTERABLE = ['customer', 'invoice_no', 'hbl_no', 'reference'];
+const filterRows = (rows, q) => bills.filterRows(rows, q, FILTERABLE);
+function facets(rows) {
+    return { customer: [...new Set((rows || []).map((r) => String(r.customer || '').trim()).filter(Boolean))].sort() };
+}
+
 // `amount` is derived but ALSO writable — she can type the figure off the
 // customer's invoice, and compute() prefers it when she does. That is why it
 // is listed here explicitly instead of being taken from !derived.
@@ -262,7 +271,7 @@ function summary(rows) {
 }
 
 module.exports = {
-    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE,
+    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, FILTERABLE, filterRows, facets,
     compute, withTotals, list, listWithTotals, getSale,
     addSale, editSale, deleteSale, summary,
 };

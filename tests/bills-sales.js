@@ -190,12 +190,27 @@ section('D — her columns, in her order');
     // Checked against her message verbatim. A table built from a list that
     // has drifted from what she asked for is a table with a heading over the
     // wrong number.
-    const wanted = ['Source/Destination', 'Carrier', 'Trucking', 'Date', 'Supplier', 'Invoice no',
-        'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck', 'Container',
-        'Chassis', 'Boxes', 'Total', 'Net weight (lbs)', 'Net weight (MT)', 'Supplier price',
-        'Supplier invoice amount', 'Trucking', 'Balance'];
-    ck('the bill has her columns, less the Advance she removed',
+    // Her original list, less the two she changed her mind about on
+    // 2026-09-10 — "Remove advance on this" and "i dont want carrier to be
+    // displayed" — plus the one she added: "i want photos field where url can
+    // be pasted."
+    // "Trucker needs to there next to Trucking Amount in bill" (2026-09-10) —
+    // so the haulier moved down from beside Carrier to sit with what the haul
+    // cost, and took her own word as its name.
+    const wanted = ['Source/Destination', 'Date', 'Supplier', 'Invoice no',
+        'Photos', 'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck',
+        'Container', 'Chassis', 'Boxes', 'Total', 'Net weight (lbs)', 'Net weight (MT)',
+        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Balance'];
+    ck('the bill has her columns, less Advance and Carrier, plus Photos',
        bills.tableColumns().length === 22, String(bills.tableColumns().length));
+    ck('  Carrier is off the table but still on the form',
+       !bills.tableColumns().some((c) => c.key === 'carrier')
+       && bills.COLUMNS.some((c) => c.key === 'carrier')
+       && bills.WRITABLE.includes('carrier'),
+       '"on bill after saving,i dont want carrier to be displayed.on edit it can be there"');
+    ck('  and all five weights sit on one line',
+       (bills.GROUPS.find((g) => g.id === 'weights') || {}).cols === 5,
+       '"weights should be in single line" — the auto-fit grid wrapped them 4 + 1');
     ck('  in her order', bills.tableColumns().map((c) => c.label).join('|') === wanted.join('|'),
        bills.tableColumns().map((c) => c.label).join('|'));
     ck('  with the six computed ones marked',
@@ -233,10 +248,18 @@ section('E — the routes, because a helper nothing calls is not a feature');
     ck('  plus the grouped fields the form needs',
        Array.isArray(r.json.fields) && Array.isArray(r.json.groups) && r.json.groups.length === 4,
        JSON.stringify((r.json.groups || []).map((g) => g.id)));
-    ck('  with the two Truckings told apart for the form',
-       r.json.fields.filter((c) => /^trucking/i.test(c.key))
-         .every((c) => c.formLabel && c.formLabel !== 'Trucking'),
-       'both were labelled TRUCKING on two identical empty boxes — her screenshot');
+    // The original complaint was two columns both headed TRUCKING on two
+    // identical empty boxes. Naming one of them "Trucker" fixes that at the
+    // source, so no two columns share a heading at all any more.
+    ck('  no two columns share a heading',
+       new Set(r.json.columns.map((c) => c.label)).size === r.json.columns.length,
+       r.json.columns.map((c) => c.label).join('|'));
+    ck('    and the trucker sits next to what the trucking cost',
+       (() => { const L = r.json.columns.map((c) => c.key);
+                return L.indexOf('trucking_company') === L.indexOf('trucking_amount') - 1; })(),
+       r.json.columns.map((c) => c.key).join(','));
+    ck('    on the form too, in the money section',
+       (r.json.fields.find((c) => c.key === 'trucking_company') || {}).group === 'money');
     ck('  and the typeable invoice amount carries the key to post it under',
        (r.json.fields.find((c) => c.key === 'amount') || {}).writeKey === 'supplier_invoice_amount',
        'without writeKey the derived column gets no input and her figure cannot be entered');
@@ -363,17 +386,36 @@ section('E — the routes, because a helper nothing calls is not a feature');
     ck('    without touching anything else',
        r.json.bill.supplier === 'Eccomelt' && r.json.bill.gross === 46000);
 
-    // ── BUT NOT THE ONES AN ADD INSISTS ON ───────────────────────────────
-    // addBill refuses a row with no date or supplier. An edit that could
-    // blank either would leave a record the create path would never allow —
-    // and it is reachable by deleting the text and pressing Save.
-    for (const [field, why] of [['supplier', 'supplier'], ['date', 'date']]) {
-        const bad = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { [field]: '' } });
-        ck(`  an edit cannot blank the ${why}`, bad.status >= 400, String(bad.status));
-    }
-    const after = (await req('GET', '/api/bills', { sid: admin })).json.bills.find((x) => x.id === billId);
-    ck('  and a refused edit leaves the row untouched',
-       after.supplier === 'Eccomelt' && !!after.date, JSON.stringify({ s: after.supplier, d: after.date }));
+    // ── INCOMPLETE IS A STATE, NOT AN ERROR ──────────────────────────────
+    // This section used to assert the OPPOSITE: that an edit could not blank
+    // the date or supplier, because addBill refused a bill without them.
+    // That was my rule, never hers, and on 2026-09-10 she asked for autosave
+    // — "if i start adding atleast one value in bill,it should get
+    // autosaved" — which makes a two-required-fields rule incompatible with
+    // how she fills a bill in. So the store reports instead of refusing.
+    const blanked = await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { supplier: '' } });
+    ck('an unfinished bill can be saved', blanked.status === 200, String(blanked.status));
+    ck('  and says what it is still missing',
+       (blanked.json.bill.incomplete || []).join(',') === 'supplier',
+       JSON.stringify(blanked.json.bill.incomplete));
+    await req('PUT', `/api/bills/${billId}`, { sid: admin, body: { supplier: 'Eccomelt' } });
+    ck('  a finished one reports nothing missing',
+       ((await req('GET', '/api/bills', { sid: admin })).json.bills
+         .find((x) => x.id === billId).incomplete || []).length === 0);
+
+    // What is still refused: a row with nothing in it at all. "At least one
+    // value" is her own threshold, and a bill created by opening the form and
+    // closing it again is litter in her table and in her sheet.
+    const empty = await req('POST', '/api/bills', { sid: admin, body: {} });
+    ck('  but an empty bill is still refused', empty.status >= 400, String(empty.status));
+    const ws = await req('POST', '/api/bills', { sid: admin, body: { supplier: '   ' } });
+    ck('    and so is one holding only whitespace', ws.status >= 400, String(ws.status));
+
+    // Autosave creates from the FIRST value, so this has to work.
+    const seed = await req('POST', '/api/bills', { sid: admin, body: { container_no: 'MSKU-AUTO' } });
+    ck('  a single value is enough to create one', seed.status === 200 && !!seed.json.bill.id,
+       'that is what autosave posts the moment she types');
+    await req('DELETE', `/api/bills/${seed.json.bill.id}`, { sid: admin });
 
     r = await req('PUT', '/api/bills/NOPE', { sid: admin, body: { seal_no: 'x' } });
     ck('  editing a row that is not there is an error, not a silent no-op', r.status >= 400);
@@ -405,6 +447,102 @@ section('E — the routes, because a helper nothing calls is not a feature');
        && (await req('GET', '/api/sales', { sid: admin })).json.sales.length === 0);
     r = await req('DELETE', '/api/sales/NOPE', { sid: admin });
     ck('  and deleting nothing is an error, not a silent success', r.status >= 400);
+}
+
+section('E2 — photos, filters, and the Shipment sheet row');
+{
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+
+    // ── PHOTOS ───────────────────────────────────────────────────────────
+    // Apsara: "In bill,i want photos field where url can be pasted."
+    let r = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/11/2026', supplier: 'PhotoCo',
+        photos: 'https://drive.example.com/a.jpg\nhttps://drive.example.com/b.jpg' } });
+    ck('pasted links are stored as a list', 
+       Array.isArray(r.json.bill.photos) && r.json.bill.photos.length === 2,
+       JSON.stringify(r.json.bill.photos));
+    const photoId = r.json.bill.id;
+
+    // These come back out as clickable links, so the scheme is checked at the
+    // door rather than trusted at render time.
+    r = await req('PUT', `/api/bills/${photoId}`, { sid: admin, body: {
+        photos: 'javascript:alert(1) https://ok.example.com/c.jpg data:text/html,x file:///etc/passwd' } });
+    ck('  a javascript: URL never reaches the record',
+       r.json.bill.photos.join(',') === 'https://ok.example.com/c.jpg',
+       JSON.stringify(r.json.bill.photos));
+    ck('  and neither do data: or file:',
+       !r.json.bill.photos.some((u) => /^(data|file):/i.test(u)));
+
+    // ── FILTERS, SEVERAL AT ONCE ─────────────────────────────────────────
+    // Apsara: "also i want filter.ultiple filters can also be applied."
+    const all = (await req('GET', '/api/bills', { sid: admin })).json;
+    ck('unfiltered returns everything', all.bills.length === all.total_unfiltered,
+       `${all.bills.length} of ${all.total_unfiltered}`);
+    ck('  and offers only values that exist',
+       (all.facets.supplier || []).includes('PhotoCo') && (all.facets.supplier || []).includes('Eccomelt'),
+       JSON.stringify(all.facets.supplier));
+
+    const one = (await req('GET', '/api/bills?supplier=photoco', { sid: admin })).json;
+    ck('one filter narrows, case-insensitively', one.bills.length === 1, String(one.bills.length));
+    ck('  and the SUMMARY follows the filter, not the whole table',
+       one.summary.count === 1 && one.summary.count !== all.summary.count,
+       'totals describing rows that are not on screen is worse than no filter');
+    ck('  while the facets still list every supplier',
+       (one.facets.supplier || []).length === (all.facets.supplier || []).length,
+       'narrowing by supplier must not empty the dropdown she just used');
+
+    const both = (await req('GET', '/api/bills?supplier=photoco&from=09/01/2026&to=09/30/2026', { sid: admin })).json;
+    ck('two filters AND together', both.bills.length === 1, String(both.bills.length));
+    const none = (await req('GET', '/api/bills?supplier=photoco&from=01/01/2027', { sid: admin })).json;
+    ck('  and a combination matching nothing returns nothing, not everything',
+       none.bills.length === 0, String(none.bills.length));
+
+    // ── THE SHIPMENT ROW ─────────────────────────────────────────────────
+    // Apsara: "post save of a bill,i want Shipment tab to be created in edge
+    // metals sheet.on every edit of the bill,i want that row to be modified."
+    const ship = require(path.join(ROOT, 'helpers/shipmentSheetLog'));
+    ck('the tab is called Shipment', ship.TAB_NAME === 'Shipment');
+    const header = ship.headerRow();
+    ck('  its header is built from the bill columns, not typed out again',
+       bills.tableColumns().every((c) => header.includes(c.label)),
+       'a column added to the store must not need a second edit here');
+    ck('  carrier is in the SHEET even though it left the table',
+       header.includes('Carrier'), header.join(' | '));
+
+    // The key is what makes an edit modify the row instead of adding one.
+    const row = ship.rowFor({ id: 'BILL_X', date: '09/10/2026', supplier: 'Eccomelt',
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500, supplier_price: 0.32 });
+    ck('  every row is as wide as the header', row.length === header.length,
+       `${row.length} vs ${header.length}`);
+    ck('  and the LAST cell is the bill id the upsert matches on',
+       row[row.length - 1] === 'BILL_X', JSON.stringify(row[row.length - 1]));
+    // Counted, never hand-written: adding a bill column would otherwise point
+    // the upsert at the wrong column and turn every edit into a new row.
+    const letter = ship.keyColumnLetter();
+    const idx = letter.split('').reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    ck('  the key column letter tracks the header width', idx === header.length,
+       `${letter} = ${idx}, header is ${header.length}`);
+    ck('  the computed figures go to the sheet, not just the typed ones',
+       row[header.indexOf('Net weight (lbs)')] === 14500 && row[header.indexOf('Balance')] === 4640,
+       JSON.stringify([row[header.indexOf('Net weight (lbs)')], row[header.indexOf('Balance')]]));
+
+    // ── AND IT MUST NOT BE ABLE TO COST HER A BILL ───────────────────────
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/shipmentSheetLog.js'), 'utf8');
+    ck('a sheet failure is caught, not thrown at the Save',
+       /\.catch\(\(e\) =>/.test(src) && /the bill IS saved/.test(src),
+       'Drive being unreachable is not a reason to lose eighteen typed fields');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const postIdx = apiSrc.indexOf("app.post('/api/bills'");
+    const seg = apiSrc.slice(postIdx, postIdx + 900);
+    ck('  and it runs AFTER the bill is stored',
+       seg.indexOf('addBill') < seg.indexOf('logBillSafely'),
+       'writing the sheet first would risk a row for a bill that failed to save');
+    ck('  an edit logs it too, so the row is modified',
+       /logBillSafely\(bill, 'edited'\)/.test(apiSrc));
+    ck('  and a test run can never touch her real spreadsheet',
+       /JARVIS_TEST/.test(src), 'this file talks to the live Edge Metals sheet');
+
+    await req('DELETE', `/api/bills/${photoId}`, { sid: admin });
 }
 
 section('F — who may see her supplier prices');

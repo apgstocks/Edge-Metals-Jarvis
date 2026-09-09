@@ -3537,10 +3537,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/bills', (req, res) => {
         try {
             const b = require('./helpers/bills');
-            const rows = b.listWithTotals();
+            const all = b.listWithTotals();
+            // ── FILTERED HERE, SO THE TOTALS AGREE WITH THE TABLE ────────
+            // Apsara: "also i want filter.ultiple filters can also be
+            // applied." Doing it in the browser would leave summary() adding
+            // up rows that are no longer on screen — a balance belonging to a
+            // different set of bills, which is worse than no filter at all.
+            const rows = b.filterRows(all, req.query || {});
             res.json({
                 bills: rows,
                 summary: b.summary(rows),
+                // Built from EVERY row, not the filtered ones, or narrowing by
+                // supplier would empty the supplier dropdown she just used.
+                facets: b.facets(all),
+                filterable: b.FILTERABLE,
+                total_unfiltered: all.length,
                 // tableColumns() is her order; COLUMNS is grouped for the
                 // form. Both travel, so neither client re-derives one from
                 // the other and gets it subtly wrong.
@@ -3626,6 +3637,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const b = require('./helpers/bills');
             const bill = await b.addBill({ ...(req.body || {}), created_by: (req.role || null) });
+            // Apsara: "post save of a bill,i want Shipment tab to be created
+            // in edge metals sheet." AFTER the bill is safely in bills.json,
+            // and non-fatally — a Drive hiccup must not fail a Save she has
+            // just typed eighteen fields into. See shipmentSheetLog's header.
+            require('./helpers/shipmentSheetLog').logBillSafely(bill, 'saved');
             res.json({ ok: true, bill });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -3634,6 +3650,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const b = require('./helpers/bills');
             const bill = await b.editBill(String(req.params.id), req.body || {});
+            // "on every edit of the bill,i want that row to be modified" —
+            // upsertRowsByKey matches on the bill id, so this updates the row
+            // it wrote before instead of appending a second one.
+            require('./helpers/shipmentSheetLog').logBillSafely(bill, 'edited');
             res.json({ ok: true, bill });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -3649,10 +3669,17 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/sales', (req, res) => {
         try {
             const s = require('./helpers/sales');
-            const rows = s.listWithTotals();
+            const all = s.listWithTotals();
+            // ONE filter implementation (bills.filterRows), given the SALE's
+            // own columns. Sharing the code is right; sharing bills' field
+            // list would have made this search box match nothing.
+            const rows = s.filterRows(all, req.query || {});
             res.json({
                 sales: rows,
                 summary: s.summary(rows),
+                facets: s.facets(all),
+                filterable: s.FILTERABLE,
+                total_unfiltered: all.length,
                 columns: s.tableColumns(),
                 fields: s.COLUMNS,
                 groups: s.GROUPS,

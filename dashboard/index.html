@@ -4659,6 +4659,7 @@ const LEDGER_KINDS = {
     eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill', editLabel: 'Edit bill',
     path: '/api/bills', listKey: 'bills', itemKey: 'bill',
     money: ['supplier_price', 'amount', 'trucking_amount', 'balance'],
+    filters: ['supplier', 'carrier', 'trucking_company'],
     weights: ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt'],
     cards: [['Total tare', 'total', 'num'], ['Net weight (lbs)', 'net_lb', 'num'],
             ['Net weight (MT)', 'net_mt', 'num'],
@@ -4668,6 +4669,7 @@ const LEDGER_KINDS = {
     eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale', editLabel: 'Edit sale',
     path: '/api/sales', listKey: 'sales', itemKey: 'sale',
     money: ['invoice_price', 'amount', 'freight_charges'],
+    filters: ['customer'],
     weights: ['weight'],
     cards: [['Weight (lbs)', 'weight_lb', 'num'], ['Weight (MT)', 'weight_mt', 'num'],
             ['Invoice amount', 'amount', 'money'],
@@ -4676,6 +4678,37 @@ const LEDGER_KINDS = {
 };
 
 let ledgerState = { kind: null, rows: [], columns: [], summary: null };
+
+const activeFilterCount = (f) => Object.values(f || {}).filter((v) => String(v || '').trim() !== '').length;
+
+function ledFilterBox(key, label, placeholder, value, width) {
+  return `<div>
+    <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">${label}</div>
+    <input data-led-filter="${key}" value="${esc(value || '')}" placeholder="${esc(placeholder)}" autocomplete="off"
+      style="width:${width}px; padding:7px 9px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:12px;">
+  </div>`;
+}
+
+// Built from the values actually PRESENT, so it can never offer a choice that
+// returns nothing — a dropdown with an option that finds no rows reads as
+// broken. The server sends facets computed over every row, not the filtered
+// ones, or narrowing by supplier would empty the supplier list she just used.
+function ledFilterSelect(key, facets, value) {
+  const opts = (facets[key] || []);
+  if (!opts.length) return '';
+  // The column's OWN label, so the dropdown says "Trucker" like the table
+  // does. Deriving it from the key gave "Trucking Company" — a third name for
+  // one thing, on the same screen as the other two.
+  const col = (ledgerState.fields || []).find((c) => c.key === key);
+  const label = col ? col.label : key.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+  return `<div>
+    <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">${esc(label)}</div>
+    <select data-led-filter="${key}" style="padding:7px 9px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:12px;">
+      <option value="">All</option>
+      ${opts.map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+    </select>
+  </div>`;
+}
 
 // ── NO BARE <input type="date"> ──────────────────────────────────────────
 // Caught by tests/mobile-layout.js, which has been guarding this since the
@@ -4703,6 +4736,19 @@ const ledText = (v) => (v === null || v === undefined || v === '') ? '—' : esc
 // this is the only thing that makes a bad inference visible at a glance.
 function ledgerCell(row, col, cfgK) {
   const v = row[col.key];
+  // ── PHOTOS ARE LINKS, AND THE URL WAS PASTED BY HAND ─────────────────
+  // Apsara, 2026-09-10: "In bill,i want photos field where url can be
+  // pasted." Rendered as links rather than as raw text, because a column of
+  // 90-character URLs makes the table unreadable.
+  //
+  // helpers/bills.js:cleanPhotos already dropped anything that is not http
+  // or https before it was stored — a "javascript:" URL pasted here would
+  // otherwise run on click. esc() on top, because the href is her text.
+  if (col.key === 'photos') {
+    const urls = Array.isArray(v) ? v : [];
+    if (!urls.length) return '—';
+    return urls.map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:none;">#${i + 1}</a>`).join(' ');
+  }
   if (col.key === 'supplier_price' || col.key === 'invoice_price') {
     if (v === null || v === undefined || v === '') return '—';
     const u = row.price_unit === 'lb' ? '/lb' : row.price_unit === 'mt' ? '/MT' : '';
@@ -4713,9 +4759,20 @@ function ledgerCell(row, col, cfgK) {
   return ledText(v);
 }
 
+// ── FILTERS, AND SEVERAL AT ONCE ─────────────────────────────────────────
+// Apsara, 2026-09-10: "also i want filter.ultiple filters can also be
+// applied." Held per tab so switching to Sales and back does not silently
+// lose what she narrowed to.
+const ledgerFilters = { bills: {}, sales: {} };
+
 async function renderLedgerTab(kind) {
   const K = LEDGER_KINDS[kind];
-  const data = await api(K.path);
+  const f = ledgerFilters[kind] || {};
+  // Sent to the SERVER, which filters and then totals — so the summary row
+  // always describes the rows on screen. See /api/bills for why.
+  const qs = Object.entries(f).filter(([, v]) => String(v || '').trim() !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  const data = await api(K.path + (qs ? `?${qs}` : ''));
   const rows = asArray(data[K.listKey]) .length ? data[K.listKey] : (data[K.listKey] || []);
   const columns = Array.isArray(data.columns) ? data.columns : [];
   const sum = data.summary || {};
@@ -4756,7 +4813,18 @@ async function renderLedgerTab(kind) {
         </div>
         <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
       </div>
-      <div style="display:grid; grid-template-columns:repeat(${K.cards.length}, 1fr); gap:8px; margin-bottom:16px;">${cards}</div>
+      <div style="display:grid; grid-template-columns:repeat(${K.cards.length}, 1fr); gap:8px; margin-bottom:12px;">${cards}</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+        ${ledFilterBox('q', 'Search', 'any field', f.q, 200)}
+        ${(K.filters || []).map((key) => ledFilterSelect(key, data.facets || {}, f[key])).join('')}
+        ${ledFilterBox('from', 'From', 'MM/DD/YYYY', f.from, 120)}
+        ${ledFilterBox('to', 'To', 'MM/DD/YYYY', f.to, 120)}
+        <button id="ledClear" class="btn btn-secondary" style="font-size:11px; padding:8px 14px;">Clear</button>
+        <div style="flex:1;"></div>
+        <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); padding-bottom:9px;">
+          ${activeFilterCount(f) ? `${activeFilterCount(f)} filter${activeFilterCount(f) === 1 ? '' : 's'} · ` : ''}${rows.length} of ${data.total_unfiltered ?? rows.length}
+        </div>
+      </div>
       <div class="card" style="padding:0; overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
           <thead>
@@ -4772,6 +4840,22 @@ async function renderLedgerTab(kind) {
         ${rows.length} row${rows.length === 1 ? '' : 's'} · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
       </div>
     </div>`;
+
+  // Applied on ENTER or on leaving the box, not on every keystroke: each
+  // change is a server round trip, and re-fetching per character would make
+  // the table flicker while she is still typing a container number.
+  document.querySelectorAll('[data-led-filter]').forEach((el) => {
+    const key = el.dataset.ledFilter;
+    const apply = () => {
+      const v = String(el.value || '').trim();
+      if ((ledgerFilters[kind][key] || '') === v) return;   // nothing changed
+      ledgerFilters[kind][key] = v;
+      renderLedgerTab(kind);
+    };
+    el.addEventListener('change', apply);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+  });
+  $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
 
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
@@ -4841,6 +4925,15 @@ function openLedgerForm(kind, existing) {
     // resolved figure in the box would turn a computed amount into a stated
     // one the moment she saved an unrelated edit.
     const val = existing ? existing[name] : undefined;
+    const existingVal = val;
+    if (c.textarea) {
+      return `<div class="field" style="grid-column:1/-1;">
+        <label>${esc(c.formLabel || c.label)}</label>
+        <textarea name="${esc(name)}" rows="3" placeholder="${esc(c.placeholder || '')}"
+          style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:var(--font-mono); font-size:12px; resize:vertical;">${esc(Array.isArray(existingVal) ? existingVal.join('\n') : (existingVal || ''))}</textarea>
+        ${c.hint ? `<div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); margin-top:4px;">${esc(c.hint)}</div>` : ''}
+      </div>`;
+    }
     const attrs = [
       `name="${esc(name)}"`,
       (val === null || val === undefined || val === '') ? '' : `value="${esc(String(val))}"`,
@@ -4862,7 +4955,7 @@ function openLedgerForm(kind, existing) {
     return `
       <div style="margin-bottom:20px;">
         <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); padding-bottom:5px; margin-bottom:12px;">${esc(g.label)}</div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px 14px;">${mine.map(inputFor).join('')}</div>
+        <div style="display:grid; grid-template-columns:${g.cols ? `repeat(${g.cols}, minmax(0, 1fr))` : 'repeat(auto-fit,minmax(190px,1fr))'}; gap:12px 14px;">${mine.map(inputFor).join('')}</div>
       </div>`;
   }).join('');
 
@@ -4891,7 +4984,13 @@ function openLedgerForm(kind, existing) {
       <div class="card" style="width:min(880px,100%); padding:24px 26px 20px;">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:18px;">
           <h3 style="margin:0; font-size:16px; text-transform:uppercase; letter-spacing:.04em;">${editing ? K.editLabel : K.addLabel.replace('+ ', '')}</h3>
-          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${esc(K.eyebrow.replace('// ', ''))}</span>
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span id="ledSaveState" style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);"></span>
+            <!-- Apsara, 2026-09-10: "at top right close option should be
+                 there in bill." Escape closes it too. -->
+            <button id="ledClose" title="Close (Esc)" aria-label="Close"
+              style="background:none; border:none; color:var(--text-muted); font-size:22px; line-height:1; cursor:pointer; padding:0 2px;">&times;</button>
+          </div>
         </div>
         ${prefill}
         <form id="ledgerForm">${sections}</form>
@@ -4910,7 +5009,17 @@ function openLedgerForm(kind, existing) {
   // here rather than in the markup, which is the whole point of
   // wireUsDateField — a call site cannot forget one it does not write.
   document.querySelectorAll('#ledgerForm [data-ledger-date]').forEach((el) => wireUsDateField(el));
-  const close = () => { const m = $('ledgerModal'); if (m) m.remove(); };
+  const close = () => {
+    const m = $('ledgerModal');
+    if (m) m.remove();
+    if (onEscape) document.removeEventListener('keydown', onEscape);
+    // Autosave may have created the row while she typed, so the table behind
+    // has to catch up whichever way she leaves.
+    if (savedId || editing) renderLedgerTab(kind);
+  };
+  const onEscape = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onEscape);
+  $('ledClose').onclick = close;
   $('ledCancel').onclick = close;
 
   const readForm = () => {
@@ -4922,6 +5031,55 @@ function openLedgerForm(kind, existing) {
   // ── THE RUNNING TOTAL, COMPUTED WHERE IT IS ALWAYS COMPUTED ──────────
   // Asks /api/{kind}/preview rather than doing the sums here. Debounced so
   // typing a five-digit weight is one call, not five.
+  // ── AUTOSAVE ─────────────────────────────────────────────────────────
+  // Apsara, 2026-09-10: "if i start adding atleast one value in bill,it
+  // should get autosaved and a entry to be put in edege metals excel under
+  // shipments tab.On every modification,that row needs to e updated."
+  //
+  // The FIRST value POSTs and creates the row; everything after PUTs to that
+  // same id, which is what makes the sheet row update rather than multiply —
+  // helpers/shipmentSheetLog keys its upsert on the bill id.
+  //
+  // Debounced, and not only to spare the server: saving mid-word would put a
+  // half-typed supplier name in front of her in the table behind. The state
+  // is SHOWN in the header, because a thing that saves silently is a thing
+  // she cannot trust to have saved.
+  let savedId = editing ? existing.id : null;
+  let saveTimer = null;
+  let saving = false;
+  const AUTOSAVE_MS = 1200;
+
+  const setState = (t, colour) => {
+    const el = $('ledSaveState');
+    if (el) { el.textContent = t; el.style.color = colour || 'var(--text-faint)'; }
+  };
+
+  const autosave = async () => {
+    if (saving) return;
+    const body = readForm();
+    // "at least one value" — her threshold. Opening the form and closing it
+    // again must not leave a row behind.
+    const anything = Object.values(body).some((v) => String(v || '').trim() !== '');
+    if (!anything) return;
+    if (savedId) new FormData($('ledgerForm')).forEach((v, k) => { if (!(k in body)) body[k] = ''; });
+    saving = true;
+    setState('Saving…');
+    try {
+      const r = savedId
+        ? await api(`${K.path}/${encodeURIComponent(savedId)}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await api(K.path, { method: 'POST', body: JSON.stringify(body) });
+      const rec = r[K.itemKey];
+      if (rec && rec.id) savedId = rec.id;
+      // What is still missing is named, not just "saved" — a bill with no
+      // supplier is saved AND unfinished, and both are worth knowing.
+      const miss = (rec && rec.incomplete) || [];
+      setState(miss.length ? `Saved · still needs ${miss.join(' and ')}` : 'Saved',
+               miss.length ? 'var(--status-warn)' : 'var(--text-faint)');
+    } catch (e) {
+      setState('Not saved — ' + (e.message || 'try again'), 'var(--status-danger)');
+    } finally { saving = false; }
+  };
+
   let previewTimer = null;
   const paintPreview = async () => {
     try {
@@ -4956,6 +5114,8 @@ function openLedgerForm(kind, existing) {
   $('ledgerForm').addEventListener('input', () => {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(paintPreview, 220);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(autosave, AUTOSAVE_MS);
   });
   paintPreview();
 
@@ -5018,10 +5178,12 @@ function openLedgerForm(kind, existing) {
       if (editing) {
         new FormData($('ledgerForm')).forEach((v, k) => { if (!(k in body)) body[k] = ''; });
       }
-      await api(editing ? `${K.path}/${encodeURIComponent(existing.id)}` : K.path,
-                { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });
+      // Autosave has usually written it already; this is the explicit flush
+      // so "Save" always means the same thing whether she paused or not.
+      clearTimeout(saveTimer);
+      await api(savedId ? `${K.path}/${encodeURIComponent(savedId)}` : K.path,
+                { method: savedId ? 'PUT' : 'POST', body: JSON.stringify(body) });
       close();
-      renderLedgerTab(kind);
     } catch (e) { $('ledErr').textContent = e.message || 'Could not save it'; }
   };
 }
