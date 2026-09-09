@@ -50,7 +50,16 @@ const mutateJson = (file, dflt, fn) => mutateJsonRaw(file, dflt, fn, { strict: t
 const ACTIONS = [
     'delete-paid-load',           // a load with payments against it
     'delete-paid-trucker-bill',   // a trucker bill with payments against it
-    'delete-payment',             // one payment removed from a load or bill
+    'delete-payment',             // one payment removed from an EDGE YARD load
+    // ── EDGE METALS, WHICH IS A DIFFERENT COMPANY ────────────────────────
+    // Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge
+    // Metals is different." Kept as their own actions rather than folded into
+    // delete-payment above, so a question about one company's books can be
+    // answered from this log without reading every entry's detail. An advance
+    // is separate again: deleting one un-applies credit from containers that
+    // were showing as settled.
+    'delete-bill-payment',        // a supplier payment removed from Edge Metals
+    'delete-bill-advance',        // a supplier advance removed, un-applying its credit
     'resign-paid-load',           // signature replaced after money moved
     'edit-locked-load',           // the edit-unlock prompt satisfied by this profile
 ];

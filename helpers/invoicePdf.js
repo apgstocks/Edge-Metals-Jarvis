@@ -28,6 +28,42 @@ function loadTemplate() {
     return _templateCache;
 }
 
+// ── Standalone packing-list header ────────────────────────────────────────
+// Apsara, 2026-09-09: "What if i want to have separate invoice and packing
+// list" -> "Use seprate flag.." -> then sent her own separately-created
+// packing list as the reference. Hers carries the FULL invoice header block:
+// Exporter (with FAX), Invoice No & Items, DATE, Other Reference(s), the full
+// Buyer address, Terms, Vessel / Flight No, Payment Terms, and all four port
+// cells including Place of Receipt by Carrier.
+//
+// My first cut hand-wrote a trimmed-down second header in the template. That
+// was wrong twice over: it dropped fields her document has, and it created a
+// second copy of the header that would silently drift the first time anyone
+// edited the real one (this template gets edited often — see the border and
+// wrapping history in it). So instead the region between INV_HEAD_START and
+// INV_HEAD_END is LIFTED from the invoice header and dropped into
+// {{pl_header_rows}}. One source of truth.
+//
+// The lifted markup still contains {{...}} placeholders; it is injected
+// BEFORE the substitution loop runs, so both copies get filled from the same
+// values and cannot disagree about the buyer, the vessel or the ports.
+const INV_HEAD_START = '<!--INV_HEAD_START-->';
+const INV_HEAD_END = '<!--INV_HEAD_END-->';
+
+function extractInvoiceHeader(tpl) {
+    const a = tpl.indexOf(INV_HEAD_START);
+    const b = tpl.indexOf(INV_HEAD_END);
+    if (a === -1 || b === -1 || b < a) {
+        // Fail loudly. Silently rendering a packing list with a blank header
+        // would produce a document that looks fine and is useless to a broker.
+        throw new Error(
+            'invoicePdf: INV_HEAD markers missing from assets/invoice-classic/template.html — '
+            + 'the standalone packing list cannot be built without them.'
+        );
+    }
+    return tpl.slice(a + INV_HEAD_START.length, b);
+}
+
 function escapeHtml(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -41,7 +77,7 @@ function escapeHtml(s) {
 // layout (the old reportlab tool didn't print it either), so it's not
 // imported here.
 const { formatDate, formatRate } = require('./proformaPdf');
-const { ITEM_CODE_MAP } = require('./invoiceSheet');
+const { ITEM_CODE_MAP, deriveItemCodeFromDesc } = require('./invoiceSheet');
 
 function formatMoney2(value) {
     return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -69,6 +105,14 @@ function getItemCode(itemDesc, invNo) {
     for (const [code, desc] of Object.entries(ITEM_CODE_MAP)) {
         if (desc === descUpper) return code;
     }
+    // KEYWORD match, second pass. Exact equality above only catches a
+    // description already written exactly like the canonical name. Her real
+    // line items say "Al combo", which is not "ALUMINIUM COMBO", so a
+    // two-material invoice resolved only the regular combo and printed one
+    // material in the header. Same rules the dashboard and mobile app use.
+    const byKeyword = deriveItemCodeFromDesc(itemDesc);
+    if (byKeyword && ITEM_CODE_MAP[byKeyword]) return byKeyword;
+
     const tokens = String(invNo || '').split(/[\s_]+/);
     for (const t of tokens) {
         const code = t.toUpperCase();
@@ -261,6 +305,10 @@ function buildInvoiceClassicHtml(data) {
     });
 
     let html = loadTemplate();
+    // Clone the invoice header into the standalone packing-list slot before
+    // any substitution happens, so the copy's placeholders are filled by the
+    // same pass that fills the original's.
+    html = html.split('{{pl_header_rows}}').join(extractInvoiceHeader(html));
     const subs = {
         // <wbr> after each underscore: a real break OPPORTUNITY that
         // contributes no character, so the wrapped number still copies out of
@@ -294,8 +342,9 @@ function buildInvoiceClassicHtml(data) {
     return { html, subtotal, notes, finalAmount };
 }
 
-async function generateInvoiceClassicPdf(data, opts = {}) {
-    const { html } = buildInvoiceClassicHtml(data);
+// ONE browser, N renders. Chromium launch is by far the most expensive part
+// of this (~1s), so producing two documents must not pay it twice.
+async function renderModes(html, modes, opts) {
     const browser = await puppeteer.launch({
         headless: true,
         args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -303,17 +352,48 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
-        const pdf = await page.pdf({
-            width: '816px',
-            printBackground: true,
-            preferCSSPageSize: true,
-        });
-        // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
-        // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
-        return Buffer.from(pdf);
+        const out = {};
+        for (const mode of modes) {
+            // The mode is a BODY CLASS, and the CSS in the template hides the
+            // other document. One DOM, re-labelled — no second setContent, and
+            // no possibility of the two PDFs disagreeing about the data.
+            await page.evaluate((m) => {
+                document.body.classList.remove('only-invoice', 'only-packing');
+                if (m) document.body.classList.add(m);
+            }, mode === 'both' ? null : `only-${mode}`);
+            const pdf = await page.pdf({
+                width: '816px',
+                printBackground: true,
+                preferCSSPageSize: true,
+            });
+            // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
+            // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
+            out[mode] = Buffer.from(pdf);
+        }
+        return out;
     } finally {
         await browser.close();
     }
 }
 
-module.exports = { buildInvoiceClassicHtml, generateInvoiceClassicPdf };
+// ── separate ──────────────────────────────────────────────────────────────
+// Apsara, 2026-09-09: "What if i want to have separate invoice and packing
+// list" -> "Use seprate flag."
+//
+// opts.separate falsy (DEFAULT, unchanged)  -> Buffer, both documents in one
+//                                              PDF, exactly as before.
+// opts.separate true                        -> { invoice: Buffer, packing: Buffer }
+//
+// The return type changes with the flag rather than always being an object,
+// so every existing caller keeps working untouched. api.js opts in explicitly.
+async function generateInvoiceClassicPdf(data, opts = {}) {
+    const { html } = buildInvoiceClassicHtml(data);
+    if (!opts.separate) {
+        const { both } = await renderModes(html, ['both'], opts);
+        return both;
+    }
+    const { invoice, packing } = await renderModes(html, ['invoice', 'packing'], opts);
+    return { invoice, packing };
+}
+
+module.exports = { buildInvoiceClassicHtml, generateInvoiceClassicPdf, renderModes, extractInvoiceHeader };

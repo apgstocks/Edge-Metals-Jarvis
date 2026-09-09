@@ -3733,10 +3733,65 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── DELETING A PAYMENT ───────────────────────────────────────────────
+    // Apsara, 2026-09-10: "Now i want to have delete option in payment".
+    //
+    // Two things were missing here before the button existed, and adding the
+    // button without them would have made both easy to hit:
+    //
+    // 1. NO AUDIT. Money coming off the record is the single most
+    //    consequential thing this file does, and the Yard has audited its
+    //    equivalent since 2026-08-30 (delete-payment, delete-paid-trucker-
+    //    bill). Edge Metals is a different company, not a lower standard.
+    //
+    // 2. NO SHEET MIRROR. POST /api/bill-payments rewrites the Shipment tab
+    //    rows for every container it touched, because Paid and Balance moved.
+    //    DELETE moved exactly the same numbers back and told the sheet
+    //    nothing — so her Edge Metals Shipment tab would have kept showing a
+    //    payment that no longer exists, and the only place the two disagreed
+    //    is the place she actually reads.
+    //
+    // Deleting an ADVANCE also un-applies whatever it was covering, which
+    // raises those containers' balances. That is correct, and it is why the
+    // response says which containers moved: the UI names them before asking.
     app.delete('/api/bill-payments/:id', async (req, res) => {
         try {
-            await require('./helpers/billPayments').deleteBillPayment(String(req.params.id));
-            res.json({ ok: true });
+            const bp = require('./helpers/billPayments');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            // Read the allocations BEFORE the row is gone — afterwards there
+            // is nothing left to say which containers to re-mirror.
+            const doomed = bp.list().find((p) => p.id === id) || null;
+            if (!doomed) return res.status(404).json({ error: `no payment ${id}` });
+            const touched = (doomed.allocations || []).map((a) => a.bill_id);
+
+            const entry = await audit.record({
+                action: doomed.kind === 'advance' ? 'delete-bill-advance' : 'delete-bill-payment',
+                subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: {
+                    company: 'edge-metals',
+                    date: doomed.date, mode: doomed.mode, bank: doomed.bank,
+                    ref: doomed.ref, supplier: doomed.supplier, amount: doomed.amount,
+                    allocations: doomed.allocations || [],
+                },
+            });
+
+            await bp.deleteBillPayment(id);
+            await audit.complete(entry, 'done', { containers_reopened: touched.length });
+
+            // Same mirror as the POST path, same non-fatal treatment.
+            try {
+                const bills = require('./helpers/bills');
+                const ship = require('./helpers/shipmentSheetLog');
+                const paid = bp.paidByBill();
+                for (const billId of touched) {
+                    const bill = bills.list().find((x) => x.id === billId);
+                    if (bill) ship.logBillSafely({ ...bill, paid: paid[bill.id] || 0 }, 'payment-removed');
+                }
+            } catch (e) { console.warn('[BILL-PAY] sheet mirror skipped:', e.message); }
+
+            res.json({ ok: true, removed: true, containers_reopened: touched });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
@@ -4787,15 +4842,48 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const body = req.body || {};
             const { generateInvoiceClassicPdf } = require('./helpers/invoicePdf');
-            const pdf = await generateInvoiceClassicPdf(body);
+
+            // ── separate ────────────────────────────────────────────────────
+            // Apsara, 2026-09-09: "Use seprate flag." Off by default, so an
+            // existing client that does not send it gets the combined PDF it
+            // has always got. The old Flask tool used the same field name.
+            const separate = body.separate === true || body.separate === 'true';
+            const out = await generateInvoiceClassicPdf(body, { separate });
 
             if (req.query.preview === '1') {
+                // Preview is a single inline PDF by construction — a browser
+                // tab cannot show two. Previewing the INVOICE half is the
+                // right choice: it is the document with the money on it, and
+                // the packing list is derived from the same rows.
+                const one = separate ? out.invoice : out;
                 res.set('Content-Type', 'application/pdf');
                 res.set('Content-Disposition', 'inline; filename="invoice-preview.pdf"');
-                return res.send(pdf);
+                return res.send(one);
             }
 
             const safeInv = documentsSaved.safeName(body.inv_no || body.container_no || 'INVOICE').replace(/_+/g, '_');
+
+            if (separate) {
+                // Same names the old tool produced, so her filing does not
+                // have to learn a new convention.
+                const invName = `${safeInv}_INVOICE.pdf`;
+                const pkgName = `${safeInv}_PACKING_LIST.pdf`;
+                const invPath = documentsSaved.saveInvoiceCopy(out.invoice, invName, body.container_no || 'UNKNOWN');
+                const pkgPath = documentsSaved.saveInvoiceCopy(out.packing, pkgName, body.container_no || 'UNKNOWN');
+                try {
+                    await invoiceVersions.saveInvoiceVersion(body.container_no, body);
+                } catch (verErr) {
+                    console.error('[invoice] saving version history failed (non-fatal):', verErr.message);
+                }
+                return res.json({
+                    ok: true,
+                    separate: true,
+                    saved_filename: path.basename(invPath),
+                    saved_filenames: [path.basename(invPath), path.basename(pkgPath)],
+                });
+            }
+
+            const pdf = out;
             const filename = `${safeInv}.pdf`;
             const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
 

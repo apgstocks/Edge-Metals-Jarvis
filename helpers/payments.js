@@ -135,9 +135,30 @@ async function addPayment(input = {}) {
     // then does it come back with allow_partial. Her words: "make it as partial
     // payment and notify user" — the notification is the point, so it is a
     // precondition rather than an afterthought.
+    // ── WHOSE CASH BOX, AND WHETHER THERE IS ONE ─────────────────────────
+    // Apsara, 2026-09-10, asked whether an Edge Metals cash payment should
+    // draw down the yard's Petty cash reserve: "No — Edge Metals cash is
+    // separate."
+    //
+    // So petty cash stays an EDGE YARD ledger. A payment carrying
+    // load_kind 'bill' is an Edge Metals supplier payment and never touches
+    // it, whatever its mode. Keyed on the kind rather than on a
+    // skip_petty_cash flag on purpose: a flag is one spread of req.body away
+    // from letting a client silently pay a yard load in cash without the box
+    // moving, and this rule is about which company's books a row belongs to,
+    // which load_kind already answers. It is resolved here rather than inside
+    // the record below so the cash branch and the stored row cannot disagree.
+    const loadKind = (() => {
+        const k = String(input.load_kind || '').trim();
+        if (!k || k === 'purchase') return 'purchase';
+        if (['sale', 'trucker', 'bill'].includes(k)) return k;
+        throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
+    })();
+    const drawsPettyCash = mode === 'Cash' && loadKind !== 'bill';
+
     let cashEntry = null;
     let cashTaken = null;
-    if (mode === 'Cash') {
+    if (drawsPettyCash) {
         const petty = require('./pettyCash');
         const res = await petty.withdrawForPayment({
             amount,
@@ -178,12 +199,7 @@ async function addPayment(input = {}) {
         //
         // Still an allowlist — a typo must not invent a category — but an
         // unknown kind now says so instead of pretending to be a load.
-        load_kind: (() => {
-            const k = String(input.load_kind || '').trim();
-            if (!k || k === 'purchase') return 'purchase';
-            if (['sale', 'trucker', 'bill'].includes(k)) return k;
-            throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
-        })(),
+        load_kind: loadKind,
         mode,
         // Null on Cash and Cheque, and null on every payment written before
         // 2026-09-09. Nothing migrates them: an old Zelle whose account nobody
@@ -272,7 +288,10 @@ async function deletePayment(id) {
         removed = next.length !== list.length;
         return next;
     });
-    if (removed && doomed && doomed.mode === 'Cash') {
+    // An Edge Metals cash payment never came out of this box (see
+    // drawsPettyCash above), so refunding one would credit the yard with cash
+    // it never spent — inventing money, which is worse than losing it.
+    if (removed && doomed && doomed.mode === 'Cash' && doomed.load_kind !== 'bill') {
         // By the withdrawal's own id when we have it, else by payment id —
         // reverseForPayment accepts either, and the entry id is the one that
         // survives a payment written before the link was stamped.
@@ -304,7 +323,7 @@ async function deletePaymentsForLoad(loadId) {
         return next;
     });
     for (const p of doomed) {
-        if (p.mode !== 'Cash') continue;
+        if (p.mode !== 'Cash' || p.load_kind === 'bill') continue;   // see deletePayment
         const key = p.petty_cash_entry_id || p.id;
         try {
             await require('./pettyCash').reverseForPayment(key, { createdBy: null });

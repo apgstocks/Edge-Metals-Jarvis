@@ -70,7 +70,7 @@ function num(v) {
 // container invoice with the yard's cash box is a knot nobody wants to untie
 // later. If she pays a supplier in cash it can be added — as one entry, on
 // purpose, not by accident.
-const BILL_PAYMENT_MODES = ['Zelle', 'Wire'];
+const BILL_PAYMENT_MODES = ['Zelle', 'Wire', 'Cash'];
 
 const list = () => {
     const raw = loadJson(cfg.BILL_PAYMENTS_FILE, []);
@@ -195,7 +195,7 @@ async function mirrorToLedger(rec) {
         note: rec.kind === 'advance'
             ? `Advance to ${rec.supplier || 'supplier'}${rec.ref ? ` (${rec.ref})` : ''}`
             : `Bill payment${rec.supplier ? ` to ${rec.supplier}` : ''}${rec.ref ? ` (${rec.ref})` : ''}`,
-        require_bank: true,
+        require_bank: rec.mode !== 'Cash',
         recorded_by: rec.created_by || null,
     });
 }
@@ -205,7 +205,18 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
     if (amount === null || amount <= 0) throw new Error('a payment amount is required');
     const mode = BILL_PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
     if (!mode) throw new Error(`payment mode must be one of: ${BILL_PAYMENT_MODES.join(', ')}`);
-    if (!String(input.bank || '').trim()) throw new Error('a bank is required for Zelle and Wire');
+    // ── CASH HAS NO BANK, AND NO PETTY CASH EITHER ───────────────────────
+    // Apsara, 2026-09-10: "Always add cash as payment method". Cash was left
+    // off this list on 2026-09-10 morning because of the petty-cash
+    // entanglement; asked directly, her answer was "No — Edge Metals cash is
+    // separate", so helpers/payments.js skips the box for load_kind 'bill'
+    // and this mode is now safe to offer.
+    //
+    // A bank on a cash payment is a false statement, so it is not merely
+    // optional here — banks.resolveForMode throws if one is supplied.
+    if (mode !== 'Cash' && !String(input.bank || '').trim()) {
+        throw new Error('a bank is required for Zelle and Wire');
+    }
     if (!String(input.date || '').trim()) throw new Error('a payment needs a date');
     if (advance && !String(input.supplier || '').trim()) {
         throw new Error('an advance needs a supplier — it is credit against them until you apply it');
@@ -219,7 +230,7 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
         date: String(input.date).trim(),
         amount,
         mode,
-        bank: String(input.bank).trim(),
+        bank: mode === 'Cash' ? null : String(input.bank).trim(),
         ref: String(input.ref || '').trim() || null,
         supplier: String(input.supplier || '').trim() || null,
         note: String(input.note || '').trim() || null,

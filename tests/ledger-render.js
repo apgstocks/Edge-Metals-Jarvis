@@ -919,6 +919,73 @@ section('G3 — spending an advance she already paid');
     dom.window.close();
 }
 
+section('G4 — deleting a payment, and saying what that undoes');
+{
+    // Apsara, 2026-09-10: "Now i want to have delete option in payment."
+    const deleted = [];
+    let payments = [
+        { id: 'P1', kind: 'payment', supplier: 'Eccomelt', date: '09/05/2026', mode: 'Wire',
+          ref: 'W-11', amount: 7000, allocations: [{ bill_id: 'B1', amount: 3440 },
+                                                   { bill_id: 'B2', amount: 3440 },
+                                                   { bill_id: 'B3', amount: 120 }] },
+        { id: 'P2', kind: 'advance', supplier: 'Eccomelt', date: '09/07/2026', mode: 'Zelle',
+          amount: 5000, allocations: [] },
+    ];
+    const route = (q, opts) => {
+        if (opts && opts.method === 'DELETE') return { ok: true };
+        return { payments, summary: { total: 0 },
+                 open_bills: [{ id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1', balance: 3440 }],
+                 credit: {}, modes: ['Zelle', 'Wire'], banks: ['Chase'] };
+    };
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bill-payments': route });
+    // Every DELETE, whatever the path, lands here.
+    const realApi = w.api;
+    w.api = async (pth, opts) => {
+        if (opts && opts.method === 'DELETE') { deleted.push(pth); return { ok: true }; }
+        return realApi(pth, opts);
+    };
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    await w.openBillPayForm();
+
+    ck('the payments already recorded are listed',
+       doc.querySelectorAll('#bpModal div[data-payment]').length === 2,
+       'a delete button for a list she cannot see is not a delete option');
+    ck('  newest first', /09\/07\/2026/.test(doc.querySelector('#bpModal div[data-payment]').textContent),
+       doc.querySelector('#bpModal div[data-payment]').textContent.trim());
+    ck('  showing what each one covered',
+       /3 containers/.test(doc.querySelector('div[data-payment="P1"]').textContent),
+       doc.querySelector('div[data-payment="P1"]').textContent);
+    ck('  and an advance is labelled as one',
+       /Advance/.test(doc.querySelector('div[data-payment="P2"]').textContent),
+       doc.querySelector('div[data-payment="P2"]').textContent);
+
+    const del = doc.querySelector('.bpDel[data-payment="P1"]');
+    del.click();
+    await new Promise((r) => setTimeout(r, 10));
+    ck('one click does not delete anything', deleted.length === 0, JSON.stringify(deleted));
+    ck('  it says what deleting would undo',
+       /reopens 3 containers/.test(del.textContent), del.textContent);
+
+    // Arming one must disarm the other, or two buttons sit live at once and
+    // the second click lands on whichever the mouse happens to be over.
+    const del2 = doc.querySelector('.bpDel[data-payment="P2"]');
+    del2.click();
+    await new Promise((r) => setTimeout(r, 10));
+    ck('arming a second one disarms the first', del.textContent === 'Delete', del.textContent);
+    ck('  and an advance covering nothing just asks',
+       /sure\?/i.test(del2.textContent), del2.textContent);
+
+    del2.click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('the second click deletes', deleted.length === 1, JSON.stringify(deleted));
+    ck('  the one that was armed, by id',
+       deleted[0] === '/api/bill-payments/P2', deleted[0]);
+
+    await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

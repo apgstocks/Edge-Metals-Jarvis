@@ -351,7 +351,17 @@ body[data-theme="light"] {
 
       <div style="text-align:right; font-size:13px; color:var(--text-strong); margin-bottom:6px;">Final Amount: <strong id="invFinalAmountDisplay">$0.00</strong></div>
 
-      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
+      <div style="display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-top:10px;">
+        <!-- Apsara, 2026-09-09: "What if i want to have separate invoice and
+             packing list" -> "Use seprate flag."
+             Per-invoice, and OFF by default so nothing changes for anyone who
+             does not tick it. Separate mode produces two PDFs — the packing
+             list gets its own header block and carries no rates or totals
+             (see assets/invoice-classic/template.html). -->
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-body); cursor:pointer; user-select:none;">
+          <input type="checkbox" id="inv_separate" style="width:auto; margin:0;">
+          Separate invoice &amp; packing list
+        </label>
         <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
         <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
       </div>
@@ -3736,10 +3746,25 @@ $('btnInvGenerate').addEventListener('click', async () => {
   setButtonLoading(btn, true, 'Generating…');
   $('invSuccessMsg').textContent = '';
   try {
+    const sepEl = $('inv_separate');
+    payload.separate = !!(sepEl && sepEl.checked);
     const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
-    if (result.saved_filename) {
-      const ok = await downloadSavedInvoice(result.saved_filename, payload.container_no);
-      $('invSuccessMsg').textContent = ok ? '✓ Saved and downloaded.' : '✓ Saved — download failed, check Saved documents.';
+    // Separate mode returns saved_filenames (both documents); combined returns
+    // the single saved_filename it always has. Downloading in sequence rather
+    // than in parallel — two simultaneous downloads is how a browser decides
+    // one of them is a popup and blocks it.
+    const names = Array.isArray(result.saved_filenames) && result.saved_filenames.length
+      ? result.saved_filenames
+      : (result.saved_filename ? [result.saved_filename] : []);
+    let downloaded = 0;
+    for (const name of names) {
+      const ok = await downloadSavedInvoice(name, payload.container_no);
+      if (ok) downloaded++;
+    }
+    if (names.length) {
+      $('invSuccessMsg').textContent = downloaded === names.length
+        ? (names.length > 1 ? `✓ Saved and downloaded ${names.length} files.` : '✓ Saved and downloaded.')
+        : '✓ Saved — download failed, check Saved documents.';
     }
     // Batch review queue: advance to the next group (single container or
     // booking-merged) instead of leaving her stuck on this screen. A brief

@@ -5001,6 +5001,11 @@ async function openBillPayForm(opts = {}) {
 
   // Clickable, because credit she can see and cannot spend is worse than no
   // credit at all — she would pay the same money twice and find out at close.
+  // Newest first: the one she wants to undo is almost always the last one
+  // she entered, and scrolling a ledger to find it is how the wrong row gets
+  // deleted.
+  const recorded = (data.payments || []).slice().reverse();
+
   const creditLines = Object.entries(credit).map(([sup, amt]) =>
     `<button class="bpApply" data-supplier="${esc(sup)}" style="background:none; border:none; padding:0 2px; cursor:pointer; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted;">${esc(sup)} <b style="color:#2F7D22;">${money(amt)}</b> — apply</button>`).join(' · ');
 
@@ -5018,7 +5023,7 @@ async function openBillPayForm(opts = {}) {
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Date</label><input id="bpDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Amount sent</label><input id="bpAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Method</label><select id="bpMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
-          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Bank</label><select id="bpBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div id="bpBankField" style="${applying ? 'display:none;' : ''}"><label style="${lab}">Bank</label><select id="bpBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Reference</label><input id="bpRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Supplier</label><input id="bpSupplier" autocomplete="off" list="bplist-supplier" style="${fieldCss}"></div>
         </div>
@@ -5037,6 +5042,23 @@ async function openBillPayForm(opts = {}) {
           </table>
         </div>
         ${creditLines ? `<div style="margin-top:8px; font-size:11px; color:${L.inkFaint};">Credit on hand · ${creditLines}</div>` : ''}
+
+        ${applying ? '' : `
+        <div style="font-size:12px; color:${L.inkFaint}; margin:16px 0 6px;">Already recorded</div>
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:200px; overflow-y:auto;">
+          ${recorded.length ? recorded.map((pm) => `
+            <div data-payment="${esc(pm.id)}" style="display:flex; align-items:center; gap:10px; padding:7px 10px; border-bottom:1px solid ${L.lineSoft}; font-size:12px;">
+              <span style="color:${L.inkMuted}; font-family:var(--font-mono); white-space:nowrap;">${esc(pm.date || '—')}</span>
+              <span style="color:${L.ink};">${esc(pm.kind === 'advance' ? 'Advance' : pm.mode || '')}${pm.ref ? ' · ' + esc(pm.ref) : ''}</span>
+              <span style="color:${L.inkMuted}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(pm.supplier || '')}</span>
+              <span style="flex:1;"></span>
+              <span style="color:${L.inkFaint}; white-space:nowrap;">${(pm.allocations || []).length} container${(pm.allocations || []).length === 1 ? '' : 's'}</span>
+              <span style="font-family:var(--font-mono); color:${L.ink}; white-space:nowrap;">${money(pm.amount)}</span>
+              <button class="bpDel" data-payment="${esc(pm.id)}" data-containers="${(pm.allocations || []).length}"
+                style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:#B3261E; cursor:pointer; white-space:nowrap;">Delete</button>
+            </div>`).join('')
+            : `<div style="padding:16px; text-align:center; font-size:12px; color:${L.inkFaint};">No payments recorded yet.</div>`}
+        </div>`}
 
         <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
           <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="bpAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
@@ -5059,6 +5081,19 @@ async function openBillPayForm(opts = {}) {
   // Passing the element works but is invisible to that audit, and a date field
   // with no calendar is exactly what she complained about in the first place.
   wireUsDateField('bpDate');
+
+  // ── CASH HAS NO BANK ─────────────────────────────────────────────────
+  // Apsara, 2026-09-10: "Always add cash as payment method", and separately
+  // that Edge Metals cash is not the yard's petty cash box. helpers/banks.js
+  // THROWS if a bank is supplied on a cash payment, so leaving the dropdown
+  // on screen would show her choosing something that is about to be refused
+  // — or, worse, quietly discarded.
+  const syncBankField = () => {
+    if (!$('bpBankField') || applying) return;
+    $('bpBankField').style.display = ($('bpMode').value === 'Cash') ? 'none' : '';
+  };
+  if ($('bpMode')) $('bpMode').onchange = syncBankField;
+  syncBankField();
   const close = () => { const m = $('bpModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
@@ -5130,6 +5165,50 @@ async function openBillPayForm(opts = {}) {
   document.querySelectorAll('.bpApply').forEach((btn) => {
     btn.onclick = () => { close(); openBillPayForm({ applySupplier: btn.dataset.supplier }); };
   });
+
+  // ── DELETE, ARMED IN TWO CLICKS ──────────────────────────────────────
+  // Apsara, 2026-09-10: "Now i want to have delete option in payment."
+  //
+  // Not window.confirm: it says "Are you sure?" about nothing in particular,
+  // and it is the same dialog for deleting a typo and for deleting a $7,000
+  // wire. The first click makes the button SAY what it is about to undo —
+  // how many containers go back to owing money — and only the second one
+  // does it. Disarms itself after five seconds, so a stray click left
+  // hovering over a live delete button is not a thing that can happen.
+  //
+  // The server audits every one of these (api.js, delete-bill-payment) and
+  // re-mirrors the affected containers to the Shipment tab, so the sheet
+  // does not keep showing a payment that no longer exists.
+  const disarm = (b) => { b.textContent = 'Delete'; b.style.background = 'none'; b.style.color = '#B3261E'; };
+  let armed = null;
+  document.querySelectorAll('.bpDel').forEach((btn) => {
+    btn.onclick = async () => {
+      if (armed !== btn) {
+        document.querySelectorAll('.bpDel').forEach(disarm);
+        armed = btn;
+        const n = Number(btn.dataset.containers || 0);
+        btn.textContent = n ? `Delete — reopens ${n} container${n === 1 ? '' : 's'}?` : 'Delete — sure?';
+        btn.style.background = '#B3261E'; btn.style.color = '#FFFFFF';
+        setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
+        return;
+      }
+      armed = null;
+      btn.disabled = true; btn.textContent = 'Deleting…';
+      try {
+        await api(`/api/bill-payments/${encodeURIComponent(btn.dataset.payment)}`, { method: 'DELETE' });
+        // Reopen rather than splice the row out: the balances, the credit on
+        // hand and the open-container list all moved, and a list that agrees
+        // with itself only in the part you happened to change is worse than
+        // a reload.
+        close();
+        await renderLedgerTab('bills');
+        await openBillPayForm();
+      } catch (e) {
+        btn.disabled = false; disarm(btn);
+        $('bpErr').textContent = e.message || 'Could not delete that payment';
+      }
+    };
+  });
   retotal();
 
   const send = async (asAdvance) => {
@@ -5148,7 +5227,8 @@ async function openBillPayForm(opts = {}) {
       const body = {
         kind: asAdvance ? 'advance' : 'payment',
         date: $('bpDate').value, amount: $('bpAmount').value,
-        mode: $('bpMode').value, bank: $('bpBank').value,
+        mode: $('bpMode').value,
+        bank: $('bpMode').value === 'Cash' ? '' : $('bpBank').value,
         ref: $('bpRef').value, supplier: $('bpSupplier').value,
         allocations: allocations(),
       };

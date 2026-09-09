@@ -158,6 +158,41 @@ function evalFreight(expr) {
 // ITEM_CODE_MAP — Apsara's own list, same as dashboard/documents.html's
 // client-side copy (kept in sync manually; both are small, static, and
 // change together only when she adds a new material code).
+// ── Description -> item code, by KEYWORD not exact equality ───────────────
+// Her real line items read "Al combo", not "Aluminium combo", and
+// helpers/invoicePdf.js matched descriptions by EXACT equality against
+// ITEM_CODE_MAP's canonical names — so the aluminium line resolved to nothing
+// and a two-material invoice printed one material in its header.
+// These rules are NOT new: they are dashboard/documents.html's ITEM_CODE_RULES
+// and the mobile app's docDeriveItemCode, copied verbatim, ORDER INCLUDED, so
+// all three agree. Order is load-bearing — AW before AL, or "aluminium wheels"
+// resolves to aluminium combo. Matching strips every non-letter.
+const ITEM_CODE_RULES = [
+    ['AW', ['ALUMINUM WHEEL', 'ALUMINIUM WHEEL', 'AL WHEEL', 'ALLOY WHEEL']],
+    ['CW', ['CHROME WHEEL']],
+    ['AL', ['ALUMINIUM COMBO', 'ALUMINUM COMBO', 'AL COMBO']],
+    ['AC', ['AUTO CAST']],
+    ['AP', ['SCRAP AUTO PART', 'AUTO PART']],
+    ['RC', ['REGULAR COMBO']],
+    ['BT', ['BATTERY', 'BATTERIES']],
+    ['HW', ['HARNESS WIRE', 'HARNESS']],
+    ['TT', ['TAINT TABOUR', 'TAINT TABOR', 'TOUGH TABOO', 'TAINT TABOO']],
+    ['ML', ['MIXED LOAD']],
+    ['SU', ['SEALED UNIT']],
+    ['MM', ['MIXED MOTOR']],
+    ['RD', ['ROTOR', 'DRUM']],
+    ['MC', ['MIXED COMBO']],
+];
+const normalizeForItemMatch = (v) => String(v || '').toUpperCase().replace(/[^A-Z]/g, '');
+function deriveItemCodeFromDesc(desc) {
+    const norm = normalizeForItemMatch(desc);
+    if (!norm) return null;
+    for (const [code, keywords] of ITEM_CODE_RULES) {
+        if (keywords.some((k) => norm.includes(normalizeForItemMatch(k)))) return code;
+    }
+    return null;
+}
+
 const ITEM_CODE_MAP = {
     AL: 'ALUMINIUM COMBO', AP: 'SCRAP AUTO PARTS', RC: 'REGULAR COMBO', BT: 'BATTERY',
     AW: 'ALUMINIUM WHEELS', CW: 'CHROME WHEELS', HW: 'HARNESS WIRE', TT: 'TAINT TABOUR',
@@ -646,6 +681,7 @@ function findPackingRow(packingRows, itemDesc) {
 }
 
 module.exports = {
+    ITEM_CODE_RULES, deriveItemCodeFromDesc, normalizeForItemMatch,
     findContainersByInvNo, invNoTailCodes,
     findContainersForBuyer,
     findContainersByNumber,

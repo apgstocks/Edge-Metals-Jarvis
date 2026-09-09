@@ -625,6 +625,82 @@ section('F — who may see her supplier prices');
        '"There might be two containers under a booking"');
 }
 
+section('K — deleting a payment takes everything it touched with it');
+{
+    // Apsara, 2026-09-10: "Now i want to have delete option in payment."
+    //
+    // The button is the easy half. What is being tested here is what the
+    // delete has to UNDO: the ledger row that feeds her spend report, the
+    // paid figure on each container, and the audit entry that says who did
+    // it. Money coming off the record is the most consequential thing this
+    // file does, and the Yard has audited its equivalent since 2026-08-30.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const bp = require(path.join(ROOT, 'helpers/billPayments'));
+    const audit = require(path.join(ROOT, 'helpers/audit'));
+    const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
+
+    const mk = async (container, amount) => (await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier: 'Deleteme Metals', container_no: container,
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0,
+        supplier_price: amount / 12000,
+    } })).json.bill;
+    const b1 = await mk('DELU1', 3000);
+    const b2 = await mk('DELU2', 3000);
+    const owed = (id) => {
+        const row = bp.paidByBill()[id] || 0;
+        return row;
+    };
+
+    const made = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 2000, mode: 'Wire', bank: 'Chase', supplier: 'Deleteme Metals',
+        allocations: [{ bill_id: b1.id, amount: 1200 }, { bill_id: b2.id, amount: 800 }],
+    } });
+    ck('a payment across two containers is recorded', made.status === 200, made.raw);
+    const pid = made.json && made.json.payment && made.json.payment.id;
+    ck('  both containers show it as paid', owed(b1.id) === 1200 && owed(b2.id) === 800,
+       `${owed(b1.id)} / ${owed(b2.id)}`);
+    const ledgerBefore = listPayments().filter((x) => x.load_id === pid).length;
+    ck('  and there is one ledger row behind it', ledgerBefore === 1, String(ledgerBefore));
+
+    const gone = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
+    ck('the payment deletes', gone.status === 200, gone.raw);
+    ck('  naming the containers it reopened',
+       Array.isArray(gone.json.containers_reopened) && gone.json.containers_reopened.length === 2,
+       JSON.stringify(gone.json));
+    ck('  both containers owe again', owed(b1.id) === 0 && owed(b2.id) === 0,
+       `${owed(b1.id)} / ${owed(b2.id)}`);
+
+    // THIS is the one that matters. A receipt left in the ledger sums against
+    // nothing and inflates her spend report for the month.
+    ck('  the ledger row goes with it',
+       listPayments().filter((x) => x.load_id === pid).length === 0,
+       'a payment deleted from Bills and left in the spend report is money that never comes back');
+
+    const entries = audit.listEntries().filter((e) => e.subject === pid);
+    ck('  and the delete is audited', entries.length >= 1,
+       'the Yard audits delete-payment; Edge Metals is a different company, not a lower standard');
+    if (entries.length) {
+        ck('    under its own action name, not the Yard\'s',
+           entries[0].action === 'delete-bill-payment', entries[0].action);
+        ck('    which the allowlist actually knows',
+           entries[0].action !== 'unknown-action',
+           'helpers/audit.js ACTIONS is an allowlist — an unregistered action logs as unknown');
+        ck('    saying which company', entries[0].detail && entries[0].detail.company === 'edge-metals');
+        ck('    what it was worth', entries[0].detail && entries[0].detail.amount === 2000);
+        ck('    and what it had been covering',
+           entries[0].detail && (entries[0].detail.allocations || []).length === 2);
+    }
+
+    const twice = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
+    ck('deleting it again is a clean 404, not a 500', twice.status === 404, twice.raw);
+
+    // Staff must not reach this at all — '/api/bill-payments' is deliberately
+    // absent from STAFF_ALLOWED_PATH_PREFIXES.
+    const staff = (await login('staff-pw-ccccccccccc')).json.sid;
+    const denied = await req('DELETE', '/api/bill-payments/anything', { sid: staff });
+    ck('staff cannot delete a payment at all', denied.status === 403, String(denied.status));
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

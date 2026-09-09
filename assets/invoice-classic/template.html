@@ -32,6 +32,45 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
    paints all strokes into one raster where identical overlapping ink just
    stays one line thick. -->
 .seam{margin-top:-1pt;}
+/* ── Separate invoice / packing list (2026-09-09) ─────────────────────────
+   Apsara: "Use seprate flag."
+   ONE template, rendered up to three ways, rather than a second template —
+   two copies of this layout is how the wrap fix ended up living on three
+   files and missing from the fourth.
+     (no class)     both documents, exactly as before. Unchanged default.
+     .only-invoice  commercial invoice alone
+     .only-packing  packing list alone, with its own header block
+   .seam pulls each block up by 1pt so adjacent borders collapse into one
+   line. Whichever block is FIRST after hiding must not do that, or it rides
+   over the outer box's own top border. */
+.pl-header{display:none;}
+body.only-invoice .doc-packing,
+body.only-invoice .pl-header{display:none;}
+body.only-packing .doc-invoice{display:none;}
+body.only-packing .pl-header{display:block;}
+body.only-packing .pl-header > :first-child{margin-top:0;}
+/* Exactly one PACKING LIST banner, whichever mode. The standalone doc leads
+   with the one inside .pl-header; the combined sheet keeps the original in
+   place mid-document. */
+/* !important because that banner carries an INLINE display:flex, and an
+   inline style beats a stylesheet rule. Without it both banners render. */
+body.only-packing .pl-banner-inline{display:none !important;}
+/* Footer declaration: invoice wording by default (combined sheet included),
+   packing wording only when the packing list is standing on its own. */
+.decl-packing{display:none;}
+body.only-packing .decl-invoice{display:none;}
+body.only-packing .decl-packing{display:inline;}
+/* ── the standalone packing list carries NO blue ──────────────────────────
+   Apsara, 2026-09-09: "packing list separate colour should not contain blue".
+   The header block is a CLONE of the invoice header, so it arrived wearing the
+   invoice's palette — every .lbl cell (Exporter, Invoice No & Items, DATE,
+   Buyer, Terms, Vessel, Payment Terms, the four port cells) painted
+   --light-blue. On the combined sheet that is right: it IS the invoice header.
+   Standing alone it is a packing list, and the packing list is the orange
+   document — its own banner, table head and TOTAL row have always been orange.
+   Scoped to .pl-header, which only ever renders in only-packing mode, so the
+   combined PDF and the invoice-only PDF are untouched. */
+.pl-header .lbl{background:var(--light-orange);}
 </style>
 </head>
 <body>
@@ -41,9 +80,27 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
        footer-bottom. -->
   <div class="box" style="padding:0;">
 
+    <div class="doc-invoice">
     <!-- Header bar -->
     <div style="background:var(--blue);color:var(--light-blue);text-align:center;font-weight:700;font-size:18pt;height:15mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">Commercial Invoice</div>
 
+    <!-- ── INV_HEAD ─────────────────────────────────────────────────────
+         Rows 1-3 are the shipment identity block: who is shipping, to whom,
+         under which invoice number, on which vessel, from which port.
+         The STANDALONE packing list needs exactly this block too (Apsara's
+         own separately-created packing list, 2026-09-09, carries it verbatim
+         — Exporter with FAX, Invoice No & Items, DATE, Other Reference(s),
+         full Buyer address, Terms, Vessel, Payment Terms and all four port
+         cells). Rather than keep a second hand-written copy that would drift
+         the first time this one is edited, helpers/invoicePdf.js lifts the
+         markup BETWEEN THESE TWO MARKERS and drops it into the packing-list
+         header slot below. (The slot's placeholder name is deliberately NOT
+         written out here: substitution is a plain global string replace, so a
+         placeholder mentioned in a comment gets substituted too — that split
+         this comment open and rendered a second header on the combined PDF.)
+         One source of truth, two documents.
+         Do not remove or reword the marker comments. -->
+    <!--INV_HEAD_START-->
     <!-- Row 1: Exporter | Invoice No & Items / DATE / Other Reference(s) -->
     <table class="seam">
       <tr>
@@ -176,6 +233,9 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
       </tr>
     </table>
 
+    <!--INV_HEAD_END-->
+    <!-- ── /INV_HEAD ────────────────────────────────────────────────── -->
+
     <!-- Item table — exactly ONE line between this and Row 3 above it, not
          zero and not a doubled one. Row 3's own border-bottom stays
          suppressed (see its table above) and THIS table's border-top is
@@ -208,9 +268,36 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
 
     <!-- Gap before the Packing List bar — measured ~4.5mm on the real PDF. -->
     <div class="seam" style="height:4.5mm;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);"></div>
+    </div><!-- /doc-invoice -->
 
+    <!-- ── Standalone packing-list header (2026-09-09) ────────────────────
+         Apsara: "What if i want to have separate invoice and packing list" ->
+         "Use seprate flag."
+         Only rendered in separate mode. Combined mode hides it, because the
+         invoice header directly above already says all of this and repeating
+         it mid-document would look like a mistake.
+         A packing list split off on its own inherits NOTHING — without this
+         it arrives as a bare grid of container weights with nothing saying
+         which shipment it belongs to, which is not a document a customs
+         broker or a consignee can use.
+         Deliberately carries NO rates, amounts or totals. A packing list with
+         prices on it is a document you do not want reaching a forwarder. -->
+    <div class="pl-header">
+      <!-- Banner first, so the standalone packing list opens with its own
+           title exactly as the invoice does. In COMBINED mode this whole
+           block is hidden and the original mid-document banner (below, in
+           .doc-packing) is the one that shows — the two documents keep
+           reading as one continuous sheet, unchanged. -->
+      <div style="background:var(--orange);color:var(--light-orange);text-align:center;font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">PACKING LIST</div>
+      <!-- Filled from the INV_HEAD region above by helpers/invoicePdf.js.
+           NOT a second hand-written header: an exact copy, so the standalone
+           packing list can never disagree with the invoice about the buyer,
+           the vessel or the ports. -->
+{{pl_header_rows}}
+    </div>
+    <div class="doc-packing">
     <!-- Packing list -->
-    <div class="seam" style="background:var(--orange);color:var(--light-orange);text-align:center;font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">PACKING LIST</div>
+    <div class="seam pl-banner-inline" style="background:var(--orange);color:var(--light-orange);text-align:center;font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">PACKING LIST</div>
     <table class="seam">
       <thead>
         <tr style="background:var(--light-orange);height:15mm;">
@@ -240,13 +327,22 @@ td{border:1pt solid var(--black);vertical-align:top;padding:0;}
     </table>
 
     <!-- Gap before the footer — measured ~4.5mm on the real PDF. -->
+    </div><!-- /doc-packing -->
     <div class="seam" style="height:4.5mm;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);"></div>
 
     <!-- Footer — measured 22.5mm tall (1.5x the stale script's 15mm). -->
     <table class="seam">
       <tr>
         <td style="width:50%;padding:3mm;font-size:9pt;height:22.5mm;">
-          We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.
+          <!-- Two declarations, one shown at a time. A packing list must NOT
+               declare a price — it is the document that goes to the forwarder
+               and the consignee, and "shows the actual price of the goods" on
+               a page with no prices on it is both wrong and, on a customs
+               document, the kind of wrong that gets questioned. Apsara's own
+               separately-created packing list (2026-09-09) uses the wording
+               below verbatim. Combined and invoice-only modes are unchanged. -->
+          <span class="decl-invoice">We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.</span>
+          <span class="decl-packing">We declare that this packing list is true and correct and corresponds to the commercial invoice.</span>
         </td>
         <td style="width:50%;padding:3mm;text-align:center;height:22.5mm;">
           <div style="font-weight:700;font-size:10.5pt;">Authorised Signatory</div>
