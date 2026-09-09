@@ -4839,7 +4839,7 @@ async function renderLedgerTab(kind) {
         </table>
       </div>
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
-        ${rows.length} row${rows.length === 1 ? '' : 's'} · Edit and Delete stay pinned on the right as the table scrolls · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
+        <span id="ledBuild" title="Which build of the app you are looking at"></span>${rows.length} row${rows.length === 1 ? '' : 's'} · Edit and Delete stay pinned on the right as the table scrolls · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
       </div>
     </div>`;
 
@@ -4858,6 +4858,27 @@ async function renderLedgerTab(kind) {
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   });
   $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
+
+  // ── WHICH BUILD AM I LOOKING AT ──────────────────────────────────────
+  // Apsara, 2026-09-10, twice: "Why edit option not there in bills?" and then
+  // "see no edit option". Both times the button was in the code and both
+  // times she was running an older build — the second time I could only tell
+  // by recognising the ORDER OF THE MARKUP in her screenshot as a fingerprint
+  // of commit 7f16c64, which is a ridiculous way to answer the question.
+  //
+  // /api/health has reported the running commit for weeks. Nothing showed it
+  // anywhere she would look, so "is this the new code?" was unanswerable from
+  // the screen. Now it is one glance.
+  //
+  // Failure here is silent on purpose: not knowing the build must never stop
+  // the table rendering.
+  api('/api/health').then((h) => {
+    const v = h && h.version;
+    const el = $('ledBuild');
+    if (!el || !v) return;
+    el.textContent = `build ${v.short}${v.dirty ? '+local' : ''} · `;
+    el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
+  }).catch(() => {});
 
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────

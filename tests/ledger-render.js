@@ -336,6 +336,50 @@ section('F2 — a bill she just added is editable, and REACHABLE');
     dom.window.close();
 }
 
+section('F3 — the page says which build it is');
+{
+    // Apsara, 2026-09-10, twice: "Why edit option not there in bills?" and
+    // "see no edit option". The button was in the code both times; she was
+    // running an older build both times. The second time the only way I could
+    // tell was by recognising the order of the markup in her screenshot as a
+    // fingerprint of commit 7f16c64 — which is not a diagnostic anyone should
+    // depend on.
+    const { w, dom } = await mount({
+        '/api/bills': billsRoute,
+        '/api/health': { ok: true, version: { short: 'abc1234', subject: 'bill render',
+            committed_at: '2026-09-10T02:52:35+05:30', booted_at: '2026-09-09T21:24:39Z', dirty: false } },
+    });
+    await w.renderLedgerTab('bills');
+    await new Promise((r) => setTimeout(r, 40));
+    const el = w.document.getElementById('ledBuild');
+    ck('the running build is on screen', !!el && /abc1234/.test(el.textContent),
+       el ? el.textContent : '(no element)');
+    ck('  with the commit subject and times behind it',
+       /bill render/.test(el.title) && /booted|running since/i.test(el.title), el.title);
+    dom.window.close();
+
+    // Local edits are flagged — a dirty build is why a fix can be "in" and
+    // still not be what is running.
+    const d = await mount({
+        '/api/bills': billsRoute,
+        '/api/health': { ok: true, version: { short: 'abc1234', dirty: true } },
+    });
+    await d.w.renderLedgerTab('bills');
+    await new Promise((r) => setTimeout(r, 40));
+    ck('  and uncommitted local changes are flagged',
+       /\+local/.test(d.w.document.getElementById('ledBuild').textContent),
+       d.w.document.getElementById('ledBuild').textContent);
+    d.dom.window.close();
+
+    // Not knowing the build must never stop the table drawing.
+    const f = await mount({ '/api/bills': billsRoute });   // no /api/health at all
+    await f.w.renderLedgerTab('bills');
+    await new Promise((r) => setTimeout(r, 40));
+    ck('  and a missing health endpoint does not break the page',
+       f.w.document.querySelectorAll('#viewRoot tbody tr[data-id]').length === 2);
+    f.dom.window.close();
+}
+
 section('G — close, and autosave from the first value');
 {
     // Apsara, 2026-09-10: "at top right close option should be there in
