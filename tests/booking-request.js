@@ -299,6 +299,126 @@ section('E2 — the dates, and the timezone that got one wrong');
        'September has 30 days; new Date(y,8,31) is 1 Oct, which is not the date she said');
     ck('  something with no date in it is refused, not defaulted',
        br.cutoffInAnswer('soon', now) === null && br.cutoffInAnswer('', now) === null);
+
+    // ── A HEDGE IS NOT A DATE ────────────────────────────────────────────
+    // Straight out of her own sentence: "cut off us somewhere next week
+    // someday in next week". chrono returns Wednesday the 16th for that — a
+    // specific, confident date she never said, which would then be written to
+    // a carrier as "with cut off as 16 Sep 2026".
+    for (const t of ['cut off us somewhere next week', 'cutoff sometime next week',
+                     'cutoff around the 20th', 'cutoff early next week',
+                     'cut off maybe friday', 'cutoff mid october']) {
+        ck(`  "${t}" is a range, so it asks rather than picking a day`,
+           br.datesIn(t, now).cutoff === null, f(br.datesIn(t, now).cutoff));
+    }
+    ck('  while a definite one still lands', f(br.datesIn('cut off the 20th', now).cutoff) === '20 Sep 2026');
+}
+
+section('E2b — she named a party, so it is not a search');
+{
+    // Her screenshot, 2026-09-09. The predicate that stops three different
+    // code paths claiming "send email to Wimax asking for booking from
+    // Houston" as a bookings query. Both directions asserted, because the
+    // fix is only worth anything if ordinary searches survive it.
+    for (const t of ['send email to Wimax asking for booking from Houston to Busan',
+                     'send email to Wimax asking for booking from Houston',
+                     'ask yurim for a booking from oakland',
+                     'email zimex asking for space from houston',
+                     'send a mail to zimex, asking for space out of HOUSTON',
+                     'check with MSC about space from LA',
+                     'write to zimex for a booking from houston',
+                     'drop a line to yurim for space out of houston']) {
+        ck(`  "${t}" names someone to ask`, br.isRequestToSomeone(t) === true);
+    }
+    for (const t of ['show me bookings from houston', 'any bookings from houston',
+                     'check bookings from houston', 'check the bookings for houston',
+                     'available bookings from oakland', 'see bookings from LA',
+                     'bookings from houston with cutoff next week',
+                     'how many bookings from houston',
+                     'forward the houston booking to the trucker',
+                     'what is the cutoff on the oakland booking']) {
+        ck(`  "${t}" is a question for Jarvis`, br.isRequestToSomeone(t) === false);
+    }
+    // The two carve-outs, each earning its place.
+    ck('  a booking she already HAS is not a request for new space',
+       br.isRequestToSomeone('ask Zimex about booking MEDUX9988') === false,
+       'chasing an existing booking is a relay, not a fresh request');
+    ck('  and the thing asked FOR is never read as the party asked',
+       br.isRequestToSomeone('check the bookings for houston') === false,
+       'without NOT_A_PARTY, "bookings" becomes the recipient and a real search gets vetoed');
+}
+
+section('E2b2 — a company is not called "Zimex asking"');
+{
+    // ── A RECORDED LIVE INCIDENT ─────────────────────────────────────────
+    // api.js: "'to zimex asking for space' made the recipient 'zimex asking',
+    // with an address invented to match. The draft went to a contact that does
+    // not exist." That was fixed by putting a comma in the sentence JARVIS
+    // writes for itself — which protects exactly that one sentence. Apsara
+    // then said, with no comma anywhere: "send email to Wimax asking for
+    // booking from Houston to Busan".
+    //
+    // TESTED DIRECTLY, and that is the point of this section. There are two
+    // guards against this shape now — the classifier stub stops at "asking",
+    // and actions.js trims it afterwards — and a mutation that removed the
+    // production one SURVIVED, because the stub was quietly covering for it.
+    // Belt and braces are only worth having if each is known to hold alone.
+    const trim = require(path.join(ROOT, 'workflow/actions.js')).trimTrailingConnective;
+    ck('"Wimax asking" is Wimax', trim('Wimax asking') === 'Wimax');
+    ck('  "zimex asking for" is zimex', trim('zimex asking for') === 'zimex',
+       'both connectives go, not just the last one');
+    ck('  "Sher Trucking regarding" keeps the two-word name',
+       trim('Sher Trucking regarding') === 'Sher Trucking');
+    ck('  and a real name is left completely alone',
+       trim('MK Metal Trading') === 'MK Metal Trading' && trim('Bayou Haulage') === 'Bayou Haulage');
+    ck('  a single word is never trimmed away',
+       trim('asking') === 'asking' && trim('for') === 'for',
+       'losing the only word there is guarantees a failure; trimming it only risks one');
+    ck('  and nothing in, nothing out', trim('') === '' && trim(null) === '');
+}
+
+section('E2c — a whole sentence is not a place');
+{
+    // helpers/booking.js:localityMatchesPort was `l.includes(p) || p.includes(l)`,
+    // so her 96-character sentence "matched" the port of Houston — and
+    // workflow/brain.js calls it to decide a phrase is "unambiguously a
+    // location query". The guard was not weak, it was inert.
+    const bk = require(path.join(ROOT, 'helpers/booking.js'));
+    const n = (s) => bk.queryBookingsByLocation(s, undefined).count;
+    ck('a sentence mentioning Houston does not match Houston',
+       n('houston to bhushan with erd as yesterday and cut off us somewhere next week someday in next week') === 0,
+       'this is the sentence from her screenshot');
+    ck('  while the place itself still does', n('houston') === 2);
+    ck('  with her extra words allowed', n('Houston, TX') === 2 && n('port of houston') === 2);
+    ck('  and a multi-word port', n('los angeles') === 1);
+    ck('  and nothing is not somewhere', n('') === 0);
+
+    // ── TESTED ON THE FUNCTION, NOT THROUGH HER DATA ─────────────────────
+    // The whole-word rule cannot be reached through bookings.json: her LOAD
+    // ports are Houston, Los Angeles and Oakland, and none of them contains
+    // another one as a fragment. Asserting `n('san') === 0` therefore proved
+    // nothing — a mutation that put fragment matching back survived it,
+    // because "san" finds no load port either way. BUSAN is her DISCHARGE
+    // port, which this function never sees.
+    //
+    // So the pairs are named directly. localityMatchesPort was exported for
+    // this: a rule that only holds for today's four bookings is not a rule.
+    const L = bk.localityMatchesPort;
+    ck('a fragment is not a match — "san" is not BUSAN',
+       L('BUSAN', 'san') === false,
+       'the substring version matched, so "bookings from San" would answer about Busan');
+    ck('  nor the other way round', L('san', 'BUSAN') === false);
+    ck('  exact still matches', L('HOUSTON', 'houston') === true);
+    ck('  and a word she adds', L('HOUSTON', 'houston tx') === true && L('HOUSTON, TX', 'houston') === true);
+    ck('  multi-word ports match on all their words',
+       L('LOS ANGELES', 'los angeles') === true && L('LOS ANGELES', 'angeles') === true);
+    ck('  but not on just any one of them',
+       L('LOS ANGELES', 'new los santos angeles beach city') === false,
+       'a place is a couple of words longer at most, not a clause');
+    ck('  a sentence is never a place',
+       L('HOUSTON', 'houston to bhushan with erd as yesterday and cut off next week') === false,
+       'this is the exact string from her screenshot');
+    ck('  and neither side may be empty', L('', 'houston') === false && L('HOUSTON', '') === false);
 }
 
 section('E3 — what her own bookings will and will not tell you');

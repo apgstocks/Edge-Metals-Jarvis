@@ -442,6 +442,98 @@ section('changing the subject is not taking something back');
        await r.classify('never mind', openName) === 'cancel');
 }
 
+section('J — "no no..delete that", and it has to actually be gone');
+{
+    // ── HER WORDS, 2026-09-09, with the Iron Man reference ───────────────
+    // "say i have said something wrong... If i say ignore that...lets start
+    // again..No no..delete that..it should delete my previously transcibed
+    // sentence /words na?"
+    //
+    // Measured before touching anything: two of the three phrasings in that
+    // sentence already worked. "ignore that" cancelled, "lets start again"
+    // restarted — and "delete that" returned null, because the patterns had
+    // the DEFINITE form ("delete the last") and not the DEICTIC one.
+    for (const t of ['delete that', 'no no delete that', 'no no..delete that',
+                     'remove that', 'erase that', 'wipe that', 'delete that please',
+                     'delete what i just said', 'delete the last one', 'remove the last line']) {
+        ck(`"${t}" takes back the last thing`, r.patternScope(t) === 'undo', String(r.patternScope(t)));
+    }
+    // The two that already worked, pinned so widening the net cannot move them.
+    ck('  "ignore that" is still a cancel, not an undo', r.patternScope('ignore that') === 'cancel');
+    ck('  "lets start again" is still a restart', r.patternScope('lets start again') === 'restart');
+
+    // ── AND THE POINTER MUST NOT BE POINTING AT SOMETHING ELSE ───────────
+    // "delete that booking from the dashboard" is an instruction ABOUT a
+    // booking. Reading it as a retraction of her own last sentence drops the
+    // wrong thing entirely — the same hazard CANCEL_BARE is anchored against.
+    // My first version of the pattern got this wrong; found by running the
+    // list rather than by reading it back.
+    for (const t of ['delete that booking from the dashboard', 'remove that trucker from the list',
+                     'delete this load', 'kill that container number', 'delete the bill',
+                     'remove the supplier from that booking', 'delete load 5', 'erase the balance']) {
+        ck(`  "${t}" is an instruction, not a retraction`, r.patternScope(t) === null, String(r.patternScope(t)));
+    }
+}
+
+section('J2 — the retracted sentence stops existing');
+{
+    // The half that was missing entirely. repair.js has classified correctly
+    // since 2026-09-07 and api.js READ the retracted sentence to say it back
+    // to her — and then left it in short-term memory. So "that" still
+    // resolved to a sentence she had just taken back, and the model was
+    // handed it as context on the next turn.
+    const mem = require(path.join(ROOT, 'helpers/voiceMemory.js'));
+    const texts = () => mem.history().map((h) => h.text);
+
+    mem.reset();
+    mem.remember('user', 'show me houston bookings');
+    mem.remember('bot', '2 bookings from Houston.');
+    mem.remember('user', 'send email to wimax asking for booking');
+    mem.remember('bot', 'How many containers?');
+    mem.remember('user', 'no no delete that');
+
+    const n = mem.forgetLastExchange();
+    ck('it forgets her retraction, the reply, and the sentence retracted', n === 3, String(n));
+    ck('  and the sentence is genuinely gone',
+       !texts().some((t) => /wimax/i.test(t)),
+       'saying "taken back" while keeping it is worse than not being able to take anything back');
+    ck('  the retraction itself goes too',
+       !texts().some((t) => /delete that/i.test(t)),
+       'otherwise the next "that" points at the word "delete"');
+    ck('  but the turn BEFORE it survives',
+       texts().includes('show me houston bookings'),
+       'one "delete that" must never eat a second sentence she still means');
+
+    // The centre and the frame were about the sentence that no longer exists.
+    mem.reset();
+    mem.setCenter({ booking_number: 'HOU111' });
+    mem.remember('user', 'forward that');
+    mem.remember('bot', 'To which trucker?');
+    mem.remember('user', 'delete that');
+    mem.forgetLastExchange();
+    ck('  and what was being discussed is cleared with it',
+       mem.currentCenter() === null,
+       '"that booking" would otherwise still resolve off a question she just took back');
+
+    // Never throws on an empty or single-turn history — this runs on a path
+    // that is already handling her having said something wrong.
+    mem.reset();
+    ck('  nothing to forget is 0, not a crash', mem.forgetLastExchange() === 0);
+    mem.reset(); mem.remember('user', 'only thing i said');
+    ck('  and a single turn is handled', mem.forgetLastExchange() === 1 && mem.history().length === 0);
+
+    // ── THE LINE THAT DOES NOT MOVE ──────────────────────────────────────
+    // Asked how far "delete" should go, she chose working memory and NOT the
+    // saved day log. Asserted, because the difference is the difference
+    // between a convenience and a voice command that erases records.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/voiceMemory.js'), 'utf8');
+    const fn = src.slice(src.indexOf('function forgetLastExchange'),
+                        src.indexOf('function', src.indexOf('function forgetLastExchange') + 10));
+    ck('  and nothing on disk is touched',
+       !/writeFile|appendFile|unlink|mutateJson|saveJson|yardChatLog/.test(fn),
+       'the day log is what reconstructs an incident afterwards');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -575,6 +575,118 @@ section('C2d2 — both answers in one breath, and one question fewer');
     await j.stop();
 }
 
+section('C2c2 — "send email to X asking for booking from Houston" is NOT a search');
+{
+    // ── HER SCREENSHOT, 2026-09-09 ───────────────────────────────────────
+    // She said "send email to Wimax asking for booking from Houston to Busan
+    // with ERD as yesterday and cut off as somewhere next week" and Jarvis
+    // answered with a BOOKINGS SEARCH whose scope was her entire sentence
+    // read back to her, ending "(1 more from houston to bhushan with erd as
+    // yesterday and cut off us somewhere next week...)".
+    //
+    // THREE separate things claimed that sentence, and fixing any one alone
+    // would have moved the bug rather than removed it:
+    //   1. helpers/booking.js:localityMatchesPort — a substring test, so her
+    //      96-character sentence "matched" the port of Houston.
+    //   2. workflow/brain.js's offline location net — `bookings? from (.+)$`
+    //      matches the TAIL of her sentence perfectly.
+    //   3. api.js's voice query path — which had a guard for the sentence
+    //      JARVIS writes (`rewrittenAsOrder`) and none for the ones she says.
+    //
+    // Driven through the real endpoint, because that is the only way to be
+    // sure all three are shut and not just the one I happened to look at.
+    const HERS = 'send email to Wimax asking for booking from Houston to Bhushan '
+        + 'with ERD as yesterday and cut off us somewhere next week';
+    {
+        const j = await boot({});
+        const r = await j.say(HERS);
+        ck('her sentence starts an email, not a booking search',
+           /how many containers/i.test(A(r)), A(r).slice(0, 250));
+        ck('  and her own words are not read back to her as a search scope',
+           !/bookings from houston to bhushan/i.test(A(r))
+           && !/erd as yesterday/i.test(A(r)),
+           'the scope line was her whole sentence, which is how she spotted it');
+        ck('  addressed to Wimax, not to "Wimax asking"',
+           /for Wimax\b/i.test(A(r)) && !/wimax asking/i.test(A(r)),
+           'a recorded live incident: "zimex asking" got an address INVENTED to match it');
+        await j.stop();
+    }
+
+    // The short form, which is the one api.js already carries a comment
+    // about — and which still misrouted after the locality fix, because the
+    // captured place ("houston") is perfectly valid on its own.
+    {
+        const j = await boot({});
+        const r = await j.say('send email to Wimax asking for booking from Houston');
+        ck('the short form too — a clean place name does not make it a search',
+           /how many containers/i.test(A(r)), A(r).slice(0, 200));
+        await j.stop();
+    }
+    {
+        const j = await boot({});
+        const r = await j.say('ask yurim for a booking from oakland');
+        ck('and with no mail word at all, just a party named',
+           /how many containers for yurim/i.test(A(r)), A(r).slice(0, 200));
+        await j.stop();
+    }
+
+    // ── AND THE SEARCHES MUST ALL STILL WORK ─────────────────────────────
+    // This is the half that makes the fix worth anything. The veto turns on
+    // whether she named a PARTY — "check bookings from Houston" contains a
+    // request verb and booking vocabulary and is still a search, and getting
+    // that wrong would have traded her bug for a worse one.
+    for (const [said, why] of [
+        ['show me bookings from houston', 'the plainest form'],
+        ['check bookings from houston', 'a request VERB, but nobody to ask'],
+        ['any bookings from houston with cutoff next week', 'narrowed by cutoff'],
+    ]) {
+        const j = await boot({});
+        const r = await j.say(said);
+        ck(`"${said}" is still a search — ${why}`,
+           /\b2 bookings|one booking\b/i.test(A(r)) && !/how many containers/i.test(A(r)),
+           A(r).slice(0, 160));
+        await j.stop();
+    }
+}
+
+section('C2c3 — "no no..delete that", through the real endpoint');
+{
+    // Apsara, 2026-09-09, with the Iron Man reference: "say i have said
+    // something wrong... No no..delete that..it should delete my previously
+    // transcibed sentence /words na?"
+    //
+    // helpers/repair.js and helpers/voiceMemory.js are unit-tested in
+    // tests/repair.js. This is here because a mutation that made api.js stop
+    // CALLING forgetLastExchange survived all of it: both halves were correct
+    // and nothing checked they were joined up. Same shape as the trap this
+    // codebase keeps falling into — a guard that is never reached.
+    for (const [retraction, expect] of [
+        ['no no delete that', /took back|dropped|cleared/i],
+        ['ignore that', /dropped|took back|cleared/i],
+        ["lets start again", /starting fresh|cleared/i],
+    ]) {
+        const j = await boot({});
+        await j.say('send email to Wimax asking for booking from Houston');
+        const r = await j.say(retraction);
+        ck(`"${retraction}" is taken as a retraction`, expect.test(A(r)), A(r).slice(0, 140));
+        ck('  and the sentence is actually forgotten, not just answered',
+           (r && r.json && r.json.forgot) >= 2,
+           'saying "taken back" while keeping it in memory is worse than not being able to');
+        await j.stop();
+    }
+
+    // NOT when there was nothing to take back. She is being TOLD there was
+    // nothing; quietly eating a turn while saying so would be its own lie.
+    {
+        const j = await boot({});
+        const r = await j.say('ignore that');
+        ck('with nothing in flight it says so plainly',
+           /nothing to take back|hadn't started/i.test(A(r)), A(r).slice(0, 140));
+        ck('  and forgets nothing', !(r && r.json && r.json.forgot), String(r && r.json && r.json.forgot));
+        await j.stop();
+    }
+}
+
 section('C2d4 — correcting the draft, instead of binning it');
 {
     // The other half of "Both 1 and 3..". Everything inferred goes into the

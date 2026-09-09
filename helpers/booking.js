@@ -173,15 +173,70 @@ function getAvailableBookings() {
     return Object.values(loadBookings()).filter(b => !hasSupplierAssigned(b, workflow[b.booking_number]));
 }
 
-// Loose substring match — mirrors the same rule used in dashboard/index.html
-// and workflow/truckers.js|suppliers.js for locality filtering. Kept as its
-// own copy here deliberately (matches existing pattern in this codebase);
-// flagged in the July 14 review as worth consolidating into one shared helper.
+// ── A PLACE, NOT A SENTENCE THAT MENTIONS ONE ────────────────────────────
+// Apsara, 2026-09-09, reporting it: she said "send email to Wimax asking for
+// booking from Houston to Busan with ERD as yesterday and cut off somewhere
+// next week", and Jarvis answered with a BOOKINGS SEARCH whose scope was her
+// entire sentence read back to her.
+//
+// This function is why. It used to be:
+//
+//     return l.includes(p) || p.includes(l);
+//
+// and `p` is WHAT SHE SAID. Her 96-character sentence contains the word
+// "houston", so `p.includes(l)` was true and the sentence "matched" the port
+// of Houston. workflow/brain.js's offline net calls this to decide whether a
+// captured phrase is a real place, and its comment reads "if yes it is
+// unambiguously a location query" — an inference that is simply not valid
+// against a substring test. ANY sentence naming a port anywhere passed it. The
+// guard was not weak; it was inert.
+//
+// The api.js note about "...asking for a booking from HOUSTON" being claimed
+// by the location rule is the same fault seen from the other side. That was
+// worked around by rewording the sentence JARVIS writes. There is no
+// rewording available for the sentence SHE says, which is why it has to be
+// fixed here.
+//
+// ── WHAT REPLACES IT ─────────────────────────────────────────────────────
+// Two rules, and each is doing work the substring test was not:
+//
+// 1. WHOLE WORDS. "san" no longer matches "BUSAN", and "erd" no longer
+//    matches nothing-in-particular. A port name is a word, not a fragment.
+//
+// 2. PLACE-SIZED. One side may be longer than the other — "HOUSTON, TX"
+//    against "houston", "port of los angeles" against "los angeles" — but by
+//    a couple of words, not by a clause. A locality is a short phrase; 17
+//    words is a sentence, and a sentence is not somewhere a ship loads.
+//
+// Deliberately NOT fixed by asking a model. This is the ENTITY layer, and the
+// rule this codebase follows is that deterministic code decides which entity
+// is meant. What the model decides is what she MEANT — which is the separate
+// fix in brain.js, where an instruction to send mail stops being read as a
+// search at all.
+//
+// THE OTHER THREE COPIES ARE LEFT ALONE, on purpose. workflow/suppliers.js
+// and workflow/truckers.js call this shape as (record.locality, resolvedPort)
+// — the second argument comes off a booking record, never out of her mouth,
+// so a sentence cannot reach them. Changing all four to chase symmetry would
+// be four times the blast radius for one real bug. Noted rather than done.
+const EXTRA_WORDS_ALLOWED = 2;
+
 function localityMatchesPort(loc, port) {
-    const l = String(loc || '').toLowerCase().trim().replace(/\s+/g, ' ');
-    const p = String(port || '').toLowerCase().trim().replace(/\s+/g, ' ');
+    const norm = (s) => String(s || '').toLowerCase().trim()
+        .replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    const l = norm(loc);
+    const p = norm(port);
     if (!l || !p) return false;
-    return l.includes(p) || p.includes(l);
+    if (l === p) return true;
+
+    const lw = l.split(' ');
+    const pw = p.split(' ');
+    // The longer side may only carry a place's worth of extra words.
+    if (Math.abs(lw.length - pw.length) > EXTRA_WORDS_ALLOWED) return false;
+
+    const [shortW, longW] = lw.length <= pw.length ? [lw, pw] : [pw, lw];
+    // Every word of the shorter name appears, whole, in the longer one.
+    return shortW.every((w) => longW.includes(w));
 }
 
 // Deterministic answer for "how many bookings [are] unassigned from LA"-style
@@ -290,5 +345,5 @@ module.exports = {
     getUrgentBookings, getBookingsThisWeek, getAvailableBookings,
     getBookingsByRoute, findBookingInLoadingStage, resolveBookingNumber,
     cutoffWindow, withinCutoffWindow, resolveByPlace,
-    queryBookingsByLocation, hasSupplierAssigned, isBareUrl,
+    queryBookingsByLocation, localityMatchesPort, hasSupplierAssigned, isBareUrl,
 };

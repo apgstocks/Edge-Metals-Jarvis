@@ -64,6 +64,82 @@ function isRequest(text) {
     return ASKING.test(t) && FOR_A_BOOKING.test(t);
 }
 
+// ── IS SHE ASKING A PERSON, OR ASKING JARVIS? ────────────────────────────
+// Apsara, 2026-09-09, with a screenshot: "send email to Wimax asking for
+// booking from Houston to Busan with ERD as yesterday and cut off as
+// somewhere next week" came back as a BOOKINGS SEARCH whose scope was her
+// whole sentence read out to her.
+//
+// Two faults did that together. helpers/booking.js:localityMatchesPort let a
+// 96-character sentence "match" the port of Houston (fixed there). And even
+// with a clean capture, "send email to Wimax asking for booking from Houston"
+// still ends in the exact shape workflow/brain.js's offline location net is
+// looking for — `bookings? from (.+)$` — so the net claims a sentence whose
+// verb is SEND.
+//
+// The api.js comment about "...asking for a booking from HOUSTON" being
+// swallowed by the location rule is this same collision, seen from the side
+// where Jarvis wrote the sentence. That was worked around by rewording
+// Jarvis's own output. Her mouth does not take a patch.
+//
+// ── WHY isRequest() ALONE IS NOT THE TEST ────────────────────────────────
+// The obvious move is to veto the location net whenever isRequest() is true.
+// Measured, that is wrong: isRequest matches ASKING + FOR_A_BOOKING, and
+// "check bookings from Houston" contains both. Vetoing there would break an
+// ordinary search — trading her reported bug for a new one.
+//
+// The thing that actually separates them is a RECIPIENT. "Ask Yurim for a
+// booking" names someone to ask; "check bookings from Houston" asks Jarvis.
+// So the test is whether she named a party, and that is a structural question
+// about the sentence rather than a list of phrasings — which matters, because
+// enumerating phrasings is the thing she has stopped me doing twice: "Why
+// would i need to hard code it? Stupid.. Its an AI."
+//
+// A mail word ("email X", "send a mail to X", "write to X") is the other
+// recipient marker, and the clearer one — you do not email a port.
+const MAIL_WORD = /\b(?:e-?mail(?:s|ed|ing)?|mail(?:s|ed|ing)?|message|write|drop\s+(?:a\s+)?line)\b/i;
+
+// The thing being asked FOR is never the party being asked. Without this,
+// "check the bookings for Houston" reads "bookings" as the recipient and gets
+// vetoed as a request — found by running both shapes rather than by reading.
+const NOT_A_PARTY = /^(?:bookings?|space|allocation|slots?|containers?|boxes|cutoffs?|erds?|rates?|prices?|the|a|an|any|all|my|our|us|me|it|them|this|that|these|those)$/i;
+
+// "ask Yurim for", "check with MSC about", "request Zimex for"
+const ASK_SOMEONE = /\b(?:ask(?:ing)?|request(?:ing)?|check(?:ing)?|chase|enquir\w*|inquir\w*)\s+(?:with\s+)?([A-Za-z][\w&.'-]*)\s+(?:for|about|whether|if|to)\b/i;
+
+// ── AND IT IS DELIBERATELY NOT BUILT ON isRequest() ──────────────────────
+// My first version started `if (!isRequest(t)) return false;` and it dropped
+// "write to zimex for a booking from houston" — because isRequest's ASKING
+// list has no "write", on purpose.
+//
+// That inheritance was a mistake, and the reason is that the two predicates
+// have OPPOSITE failure economics:
+//
+//   isRequest() decides whether to INTERRUPT her with "how many containers?"
+//   on an email she may not have meant as a booking request. A false positive
+//   there is an assistant talking over her, so it is right to be narrow.
+//
+//   THIS decides only whether the offline location net may fast-path the
+//   sentence. A false positive here costs nothing at all: the sentence falls
+//   through to the model, which reads it properly. That IS the better path —
+//   "Why would i need to hard code it? Stupid.. Its an AI." A false NEGATIVE
+//   costs her a wrong answer, which is what she photographed.
+//
+// So this asks its own, looser question: did she name a party, is she talking
+// about booking space, and is it not a question about a booking she already
+// has. Nothing is inherited from the narrow one.
+function isRequestToSomeone(text) {
+    const t = String(text || '');
+    if (!t.trim()) return false;
+    // "ask Zimex about booking MEDUX9988" is chasing one she has, and that IS
+    // a question for Jarvis to route, not a request for new space.
+    if (ABOUT_AN_EXISTING_ONE.test(t)) return false;
+    if (!FOR_A_BOOKING.test(t)) return false;
+    if (MAIL_WORD.test(t)) return true;
+    const m = ASK_SOMEONE.exec(t);
+    return !!(m && !NOT_A_PARTY.test(m[1]));
+}
+
 // ── HOW MANY ─────────────────────────────────────────────────────────────
 // She says "two", "2", "2x40HC", "a couple", "two 40 high cubes". Words as
 // well as digits, because this answer is spoken as often as typed and
@@ -236,8 +312,27 @@ function bareDayOfMonth(phrase, now) {
     return null;
 }
 
+// ── A HEDGE IS NOT A DATE ────────────────────────────────────────────────
+// From her own sentence, 2026-09-09: "cut off us somewhere next week someday
+// in next week". chrono-node reads "somewhere next week" and returns Wednesday
+// the 16th — a real, specific, confident date that SHE NEVER SAID.
+//
+// Writing "with cut off as 16 Sep 2026" to a carrier on the strength of
+// "somewhere next week" is the whole class of error this file keeps refusing:
+// a guess wearing a fact's clothing, in a sentence that commits her. She was
+// telling me she does not know yet, which is a perfectly good thing to say and
+// the correct response to it is to ask, not to pick a Wednesday.
+//
+// So a phrase that hedges is treated as no date at all, and the cutoff
+// question gets asked — where "skip" is waiting if she still does not know.
+const A_HEDGE = /\b(?:somewhere|some\s*day|some\s*time|sometime|around|about|roughly|approx\w*|maybe|perhaps|probably|possibly|ish|or\s+so|early|mid|late|beginning|end)\b/i;
+
 function parseDatePhrase(phrase, now) {
     if (!phrase) return null;
+    if (A_HEDGE.test(phrase)) {
+        console.log(`[BOOKING-REQ] "${phrase}" hedges — not treating it as a cutoff date`);
+        return null;
+    }
     return bareDayOfMonth(phrase, now)
         || require('./time').parseNaturalTime(phrase, now)
         || null;
@@ -585,9 +680,10 @@ function describeCorrection(patch) {
 
 module.exports = {
     correctionIn, describeCorrection, forStore,
-    isRequest, containersIn, countInAnswer, ask, askCutoff, details,
+    isRequest, isRequestToSomeone, containersIn, countInAnswer, ask, askCutoff, details,
+    MAIL_WORD, ASK_SOMEONE, NOT_A_PARTY,
     normalizeSize, SIZE_CORE, datesIn, cutoffInAnswer, forCarrier, line,
-    usualRoute, commonest, bareDayOfMonth, afterLabel,
+    usualRoute, commonest, bareDayOfMonth, afterLabel, A_HEDGE,
     ASKING, FOR_A_BOOKING, ABOUT_AN_EXISTING_ONE, WORD_NUMBERS, SIZE,
     CUTOFF_LABEL, ERD_LABEL, USUAL_SHARE,
 };

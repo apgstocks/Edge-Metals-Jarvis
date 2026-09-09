@@ -2763,6 +2763,43 @@ function deReformatTargetName(targetName, rawText) {
     return cleaned;
 }
 
+// ── A COMPANY IS NOT CALLED "ZIMEX ASKING" ───────────────────────────────
+// REAL BUG, recorded in api.js and never actually fixed: "send a mail to
+// zimex asking for space" produced target_name "zimex asking", and the
+// address lookup INVENTED an address to match it. The draft went to a contact
+// that does not exist.
+//
+// What was done at the time was to put a comma in the sentence JARVIS writes
+// for itself, so the name extraction stopped at it. That protects exactly one
+// sentence. Apsara said this on 2026-09-09, in her own words, with no comma
+// in sight: "send email to Wimax asking for booking from Houston to Busan" —
+// and the same shape is right there again.
+//
+// So it is fixed at the ENTITY layer, which is where this codebase puts
+// "which thing did she mean". The classifier prompt already tells the model
+// "Reproduce faithfully, do not over-copy"; this is the deterministic backstop
+// for the times it does anyway, and over-copying is a documented, observed
+// failure rather than a hypothetical one.
+//
+// The list is CONNECTIVES ONLY — words that join a name to the rest of a
+// sentence. Not a vocabulary of company-name-endings, which would be the
+// hardcoding she has objected to twice; every word here is a word that cannot
+// end a company's name in any language she trades in.
+const TRAILING_CONNECTIVES = /^(?:asking|askin|requesting|enquiring|inquiring|checking|regarding|about|for|from|with|and|to|re|saying|that|please|pls|whether|if|on|in|at)$/i;
+
+function trimTrailingConnective(targetName) {
+    let words = String(targetName || '').trim().split(/\s+/).filter(Boolean);
+    // NEVER down to nothing, and never touch a single word. A one-word name is
+    // whatever she called them, even if it collides with this list — "For" as
+    // a company is unlikely, but losing the only word there is guarantees a
+    // failure while trimming it only risks one.
+    while (words.length > 1 && TRAILING_CONNECTIVES.test(words[words.length - 1])) {
+        const dropped = words.pop();
+        console.warn(`[ACTIONS] target_name ended in "${dropped}" — that joins the name to the rest of her sentence, it is not part of the name. Using "${words.join(' ')}".`);
+    }
+    return words.join(' ');
+}
+
 // REAL BUG (found 2026-08-04, live): "request a delivery appointment for
 // tomorrow" drafted with a literal "[Date]" placeholder instead of an actual
 // date. Gemini has no way to resolve "tomorrow"/"next Monday"/etc. into a
@@ -2928,6 +2965,9 @@ async function draftEmailForConfirm(chatId, targetName, details, bkgNo, rawText,
         targetName = targetName.split('@')[0];
     }
     targetName = deReformatTargetName(targetName, rawText);
+    // ...and then drop any connective the model carried over with it —
+    // "zimex asking", "Wimax asking". See trimTrailingConnective.
+    targetName = trimTrailingConnective(targetName);
     // Same defense for email_details — real incident, 2026-08-03: "send
     // mail to radmetals" (zero content given) got email_details "I miss
     // you" invented by the AI classifier. Discarding it here just means it
@@ -4588,6 +4628,9 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
     // draftEmailForConfirm — see deReformatTargetName's own comment (real
     // incident: "mkmetaltrading" -> "mk metal trading").
     targetName = deReformatTargetName(targetName, rawText);
+    // ...and then drop any connective the model carried over with it —
+    // "zimex asking", "Wimax asking". See trimTrailingConnective.
+    targetName = trimTrailingConnective(targetName);
     // Same defense for email_details as draftEmailForConfirm — see
     // detailsLookGrounded's own comment (real incident: fabricated "I miss
     // you" content for a message that specified nothing).
@@ -7003,7 +7046,7 @@ showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
-    continueBookingRequest, correctBookingDraft,
+    continueBookingRequest, correctBookingDraft, trimTrailingConnective,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
     startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,

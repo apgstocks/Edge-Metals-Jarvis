@@ -221,6 +221,58 @@ function previousUser() {
     return mine.length > 1 ? mine[mine.length - 2].text : null;
 }
 
+// ── TAKING IT BACK MEANS IT IS NOT THERE ANY MORE ────────────────────────
+// Apsara, 2026-09-09, with the Iron Man reference: "say i have said something
+// wrong... No no..delete that..it should delete my previously transcibed
+// sentence /words na?"
+//
+// She is right, and until now nothing did this. helpers/repair.js has been
+// classifying retractions correctly since 2026-09-07 — api.js READS the
+// sentence being retracted (previousUser, the reparandum) to say it back to
+// her — and then the retracted turn stayed in this array. So Jarvis agreed it
+// had forgotten something it had not forgotten: "that" still resolved to it,
+// and it was still handed to the model as context on the next turn.
+//
+// An assistant that says "taken back" and keeps the sentence is worse than
+// one that cannot take anything back, because she stops checking.
+//
+// SCOPE, and it is hers: short-term memory only. Asked how far "delete"
+// should go, she chose the working memory and not the saved day log — which
+// is the right call and the one I would have argued for. The log is what
+// reconstructs an incident afterwards, and a voice command that erases
+// records is a bad thing to own. Nothing here touches disk.
+//
+// The RETRACTION ITSELF goes too. "delete that" is not a thing she wants
+// remembered as a thing she said; leaving it in makes the next "that" point
+// at the word "delete".
+function forgetLastExchange() {
+    // Walk back until TWO of her own turns are gone: the retraction itself,
+    // and the sentence it retracted. Jarvis's replies in between go with them
+    // — they are answers to a sentence that no longer exists.
+    //
+    // TWO is the whole rule, and it is what stops a single "delete that"
+    // eating a third sentence she still means.
+    //
+    // Written this plainly on the second attempt. The first had a `break`
+    // guard AND a look-ahead that popped the reparandum early — two mechanisms
+    // for one job, and a mutation proved the guard was unreachable on every
+    // path the tests exercise. An unreachable guard is not a safe extra; it is
+    // a line that makes the function look more careful than it is.
+    const dropped = [];
+    let mine = 0;
+    while (turns.length && mine < 2) {
+        if (turns[turns.length - 1].role === 'user') mine += 1;
+        dropped.push(turns.pop().text);
+    }
+    // The centre and the frame were about the sentence that is now gone.
+    // Leaving them is the same lie one level down: "that booking" would still
+    // resolve off a question she just took back.
+    center = null;
+    queryFrame = null;
+    if (dropped.length) console.log(`[MEMORY] retracted — forgot ${dropped.length} turn(s): ${dropped.map((d) => JSON.stringify(String(d).slice(0, 40))).join(', ')}`);
+    return dropped.length;
+}
+
 // ── resolving a reference ────────────────────────────────────────────────
 const ORDINALS = {
     first: 1, '1st': 1, one: 1,
@@ -484,7 +536,7 @@ function distinguishers() {
 module.exports = {
     remember, setReferents, currentReferents, setCenter, currentCenter,
     setQueryFrame, lastQueryFrame, setOffer, lastOffer, clearOffer,
-    setRequestPort, takeRequestPort,
+    setRequestPort, takeRequestPort, forgetLastExchange,
     history, previousUser, resolve, resolveSmart,
     pickRow, distinguishers, reset, PICK_RULES, DISTINGUISH_BY,
     TURN_CAP, REFERENT_TTL_MS,

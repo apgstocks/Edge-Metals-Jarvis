@@ -305,8 +305,44 @@ function installGemini(mode, log, o) {
             // whole suggestion path was unreachable — a transcript is very
             // often lowercase, which is precisely the case being tested.
             // Stops at "about", which is her saying what the mail is for.
-            const who = (/\b(?:to|for)\s+((?!the\b)[\w&.'\-]+(?:\s+(?!about\b|regarding\b|re\b)[\w&.'\-]+)?)/i.exec(t) || [])[1] || null;
-            if (/\b(?:e?mail|mail)\b/i.test(t) && /\b(?:send|write|draft|shoot)\b/i.test(t)) {
+            // Stops at every word that JOINS the name to the rest of the
+            // sentence, not just "about". The real classifier is told
+            // "Reproduce faithfully, do not over-copy" in as many words, so a
+            // stub that grabs "Wimax asking" is modelling a classifier we do
+            // not have — and worse, it hides whether the production backstop
+            // (actions.js:trimTrailingConnective) is doing anything. Same
+            // lesson as the composer stub two hundred lines down: a stub whose
+            // contract differs from the real thing measures nothing.
+            const STOP = "about|regarding|re|asking|askin|requesting|enquiring|inquiring|checking|for|from|with|and|saying|whether";
+            // "ask yurim for a booking" has no "to X", and the "for X" branch
+            // grabs "a booking" — the THING, not the party. bookingRequest's
+            // own ASK_SOMEONE capture already knows which word is the party,
+            // so it is asked first rather than approximated a second time
+            // here. The real classifier is told "target_name is WHO, and only
+            // who"; this is the stub's way of honouring the same rule.
+            let who = null;
+            try {
+                const brh = require('../../helpers/bookingRequest');
+                const am = brh.ASK_SOMEONE.exec(t);
+                if (am && !brh.NOT_A_PARTY.test(am[1])) who = am[1];
+            } catch (e) { /* helper not loadable in this fixture */ }
+            if (!who) {
+                who = (new RegExp(
+                    "\\b(?:to|for)\\s+((?!the\\b)[\\w&.'\\-]+(?:\\s+(?!(?:" + STOP + ")\\b)[\\w&.'\\-]+)?)", 'i'
+                ).exec(t) || [])[1] || null;
+            }
+            // "ask yurim for a booking from oakland" has no mail word in it,
+            // so the send-verb test below misses it — and it is precisely the
+            // shape helpers/bookingRequest.js:isRequestToSomeone exists to
+            // recognise. Mirrored here so the path is actually exercised.
+            // The real classifier may route this as ask_contact instead
+            // (relay the question over WhatsApp and bring the answer back);
+            // either is a reasonable reading and both beat the bookings
+            // search it used to get, which is the thing being fixed.
+            let namesAParty = false;
+            try { namesAParty = require('../../helpers/bookingRequest').isRequestToSomeone(t); }
+            catch (e) { /* helper not loadable in this fixture */ }
+            if (namesAParty || (/\b(?:e?mail|mail)\b/i.test(t) && /\b(?:send|write|draft|shoot)\b/i.test(t))) {
                 return { action: 'draft_email', target_name: who, email_details: null,
                          bkg_no: null, confidence: 0.95, reasoning: 'stub' };
             }

@@ -93,6 +93,69 @@ const CANCEL_BARE = /^\s*(?:cancel|never ?mind|forget it|forget that)\s*[.!]?\s*
 const CANCEL = /\b(?:ignore (?:that|this|it|what i said|the last)|forget (?:that|it|this|what i said)|never ?mind|cancel (?:that|this|it)|scratch that|disregard (?:that|this)|drop (?:it|that)|abandon (?:that|this|it)|i made a mistake|that was (?:a )?mistake|wrong,? ignore)\b/i;
 const UNDO = /\b(?:undo(?: that| the last)?|take (?:that|it) back|not that one|no,? not that|remove the last|delete the last|back (?:that|it) out|strike that)\b/i;
 
+// ── "NO NO..DELETE THAT" ─────────────────────────────────────────────────
+// Apsara, 2026-09-09, with the Iron Man reference: "say i have said something
+// wrong... If i say ignore that...lets start again..No no..delete that..it
+// should delete my previously transcibed sentence /words na?"
+//
+// Measured against the patterns above before touching them, because two of
+// the three phrasings in that sentence already worked:
+//
+//     "ignore that"        -> cancel     ✓
+//     "lets start again"   -> restart    ✓
+//     "delete that"        -> null       ✗
+//     "no no delete that"  -> null       ✗
+//     "remove that"        -> null       ✗
+//     "erase that"         -> null       ✗
+//
+// UNDO above has "delete the last" and "remove the last" — the DEFINITE form.
+// What is missing is the DEICTIC one, where she points instead of describing:
+// "delete THAT". CANCEL already carries exactly that shape for its own verbs
+// ("ignore (that|this|it)"), so the gap is one of coverage, not of design.
+//
+// WRITTEN AS A SHAPE, NOT A LIST OF SENTENCES. A removal verb plus a word
+// that points backwards. That is a rule about how English retracts things,
+// which is a fair thing for the OFFLINE NET to encode — this file's header
+// already sets the policy (model first, patterns as the net), and Heeman &
+// Allen's 13.9% is why the net is never expected to be the whole answer.
+// Enumerating her phrasings would be the thing she has stopped me doing:
+// "Why would i need to hard code it? Stupid.. Its an AI."
+//
+// "drop" is deliberately NOT here — CANCEL owns "drop it/that" already, and
+// moving it would silently widen a cancel into an undo.
+// AND THE POINTER HAS TO BE POINTING AT NOTHING ELSE. "delete that booking
+// from the dashboard" is an instruction ABOUT a booking, and reading it as a
+// retraction of her own last sentence drops the wrong thing entirely — the
+// identical hazard CANCEL_BARE above is anchored against ("'cancel' inside
+// 'cancel the Houston booking'"). Caught by running the list, not by reading:
+// my first version undid "delete that booking from the dashboard".
+//
+// So a bare "that/this/it" must END the clause. The longer forms — "the last
+// one", "what I just said" — name themselves and need no such guard.
+// ── AND "and" IS NOT AN ENDING ───────────────────────────────────────────
+// My first version allowed "and" here, and tests/repair.js caught it — with
+// a sharper objection than "you widened the net". "wipe that and let me do it
+// properly" is a CANCEL: she is dropping the task to do it herself. Matching
+// it here returned UNDO, which takes back one step and leaves the task she
+// just abandoned still running and still asking her questions.
+//
+// The three scopes at the top of this file are not shades of the same thing.
+// A pattern that reaches into a longer sentence is not merely eager; it is
+// guessing at scope from a fragment, and the widest-wins ordering in
+// patternScope only protects the cases some other pattern already claims.
+//
+// So the deictic form stops at the end of her clause. "delete that and start
+// over" and "wipe that and let me do it properly" fall through to the model,
+// which reads the whole sentence — which is what the model is for, and what
+// this file's header says the patterns are NOT.
+const ENDS_CLAUSE = "(?=\\s*(?:[.,!?;]|$|\\bplease\\b|\\bpls\\b))";
+const UNDO_DEICTIC = new RegExp(
+    '\\b(?:delete|remove|erase|wipe|scrub|scratch|kill|bin|chuck)\\s+(?:out\\s+)?'
+    + '(?:(?:that|this|it)' + ENDS_CLAUSE
+    + '|the last(?:\\s+(?:one|bit|thing|sentence|line))?\\b'
+    + '|what i (?:just )?said\\b'
+    + '|my last(?:\\s+\\w+)?\\b)', 'i');
+
 function patternScope(t) {
     // Order matters: "scrap that and start over" is a RESTART, and the cancel
     // pattern also matches part of it. The widest scope wins, because doing
@@ -100,7 +163,7 @@ function patternScope(t) {
     // argues with her.
     if (RESTART.test(t)) return 'restart';
     if (CANCEL_BARE.test(t) || CANCEL.test(t)) return 'cancel';
-    if (UNDO.test(t)) return 'undo';
+    if (UNDO.test(t) || UNDO_DEICTIC.test(t)) return 'undo';
     return null;
 }
 
@@ -312,5 +375,5 @@ function nothingToUndo(scope, done) {
 
 module.exports = {
     classify, askModel, prompt, confirm, nothingToUndo,
-    patternScope, RESTART, CANCEL, CANCEL_BARE, UNDO, RULES, TIMEOUT_MS, SCOPES,
+    patternScope, RESTART, CANCEL, CANCEL_BARE, UNDO, UNDO_DEICTIC, RULES, TIMEOUT_MS, SCOPES,
 };

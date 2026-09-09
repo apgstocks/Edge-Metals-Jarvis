@@ -1055,7 +1055,32 @@ function policyDecide(ctx) {
         // irreversible action proceeds. The model decides what she MEANT.
         // Word order is meaning. It was never mine to enumerate.
         const rawLocMatch = t.match(/\b(available|unassigned|assigned)?\s*bookings?\s+(?:from|at|in|for)\s+(.+?)\s*$/i);
+        // ── AN INSTRUCTION TO GO AND ASK SOMEONE IS NOT A SEARCH ─────────
+        // Apsara, 2026-09-09, with a screenshot: "send email to Wimax asking
+        // for booking from Houston to Busan..." came back as a bookings
+        // search whose scope was her whole sentence.
+        //
+        // The tail of that sentence — "booking from Houston" — is exactly the
+        // shape rawLocMatch above is looking for, and the net has no way to
+        // tell it apart from "bookings from Houston" without looking at the
+        // VERB. api.js carries a comment about the identical collision
+        // happening to a sentence Jarvis wrote for itself; that was worked
+        // around by rewording Jarvis's output, which does nothing for hers.
+        //
+        // The predicate is in helpers/bookingRequest.js and turns on whether
+        // she named a PARTY to ask. Vetoing costs nothing when it is wrong —
+        // the sentence simply goes to the model, which reads it properly, and
+        // that is the path she has twice told me to prefer over more patterns
+        // here. Being claimed wrongly by the net costs her a wrong answer.
+        let requestToSomeone = false;
+        try { requestToSomeone = require('../helpers/bookingRequest').isRequestToSomeone(t); }
+        catch (e) { console.warn('[BRAIN] booking-request veto check failed:', e.message); }
+        if (requestToSomeone && rawLocMatch) {
+            console.log(`[BRAIN] "${t.slice(0, 60)}" names someone to ask — not a location query, letting the model read it`);
+        }
+
         const locQueryMatch = (() => {
+            if (requestToSomeone) return null;
             if (!rawLocMatch) return null;
             const place = (rawLocMatch[2] || '').trim();
             if (!place) return null;

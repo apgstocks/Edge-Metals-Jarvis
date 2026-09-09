@@ -2360,8 +2360,36 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     try { pro._clearParked(); } catch (e) {}
                     said = repair.confirm(scope, what);
                 }
-                console.log(`[REPAIR] ${scope}: "${asked}" — ${said}`);
-                return answering({ ok: true, answer: said, agent: 'jarvis', agent_name: 'Jarvis', repaired: scope });
+                // ── AND THE SENTENCE ITSELF STOPS EXISTING ───────────────
+                // Apsara, 2026-09-09, with the Iron Man reference: "No
+                // no..delete that..it should delete my previously transcibed
+                // sentence /words na?"
+                //
+                // She is right, and until now it did not. Everything above
+                // clears the TASK — the pending, the draft, the parked one —
+                // and the retracted sentence stayed in short-term memory. So
+                // Jarvis said "taken back" while "that" still resolved to it
+                // and the model was still handed it as context next turn. An
+                // assistant that reports forgetting something it kept is
+                // worse than one that cannot forget at all, because she stops
+                // checking.
+                //
+                // ONLY when there was genuinely something to retract. On the
+                // nothingToUndo path she is being TOLD there was nothing, and
+                // quietly eating a turn while saying so would be its own
+                // small lie.
+                //
+                // Working memory only — her choice, asked directly, and the
+                // right one. The saved day log is untouched: it is what
+                // reconstructs an incident afterwards, and a voice command
+                // that erases records is not a thing to own.
+                let forgot = 0;
+                if (hadDraft || hadPending) {
+                    try { forgot = mem.forgetLastExchange ? mem.forgetLastExchange() : 0; }
+                    catch (e) { console.error('[REPAIR] could not forget the retracted turn:', e.message); }
+                }
+                console.log(`[REPAIR] ${scope}: "${asked}" — ${said}${forgot ? ` (forgot ${forgot} turn(s))` : ''}`);
+                return answering({ ok: true, answer: said, agent: 'jarvis', agent_name: 'Jarvis', repaired: scope, forgot });
             }
 
             // ── "WAIT. CHANGE THESE AND CREATE" ──────────────────────────
@@ -2855,7 +2883,25 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // wrote itself, which is the same shape as the resolver
                 // rewriting "the booking" into a form its own parser could not
                 // read on 2026-09-08.
-                if (answeringBrain || rewrittenAsOrder) {
+                // ── AND THE SAME GUARD FOR THE SENTENCES SHE SAYS ────────
+                // `rewrittenAsOrder` above protects exactly one sentence: the
+                // one Jarvis composes for itself. Apsara, 2026-09-09, said the
+                // same shape out loud — "send email to Wimax asking for
+                // booking from Houston to Busan..." — and got a bookings
+                // search with her whole sentence as its scope.
+                //
+                // Three separate places claimed that sentence: this one,
+                // brain.js's offline location net, and localityMatchesPort's
+                // substring test underneath both. Fixing one and stopping
+                // would have moved the bug rather than removed it, which is
+                // the "fix the fault, not the report" rule this codebase keeps
+                // relearning. Same predicate in all three.
+                let askingSomeone = false;
+                try { askingSomeone = require('./helpers/bookingRequest').isRequestToSomeone(asked); }
+                catch (e) { console.warn('[VOICE] booking-request veto check failed:', e.message); }
+                if (askingSomeone) console.log(`[VOICE] "${String(asked).slice(0, 60)}" names someone to ask — not a query`);
+
+                if (answeringBrain || rewrittenAsOrder || askingSomeone) {
                     cards = null;
                 } else if (followingUp && !answeringPort) {
                     cards = null;
