@@ -1640,23 +1640,48 @@ section('S — Edge Metals haulage, which is not the yard\'s');
     await mk('HAULU4', 'Sher Trucking', 0, '09/03/2026');
 
     const mine = () => mt.payables().filter((r) => String(r.supplier) === 'Haul Metals');
-    ck('every bill with a trucking amount becomes a haulage line',
-       mine().length === 3, String(mine().length));
-    ck('  one with a company but no amount does not',
-       !mine().some((r) => r.container_no === 'HAULU4'),
-       'a $0 payable is a row she skips past every time');
+    // ── A FORGOTTEN AMOUNT MUST BE LOUD, NOT ABSENT ──────────────────────
+    // Apsara, 2026-09-10: "What if my employee forget to enter..There should
+    // be some provsision to veiw those rows." The first version dropped them
+    // to keep the pay list tidy and thereby made a data-entry mistake
+    // invisible, which is the opposite of what a list like this is for.
+    ck('every bill that names a haulier becomes a line',
+       mine().length === 4, String(mine().length));
+    ck('  including one nobody has priced yet',
+       mine().some((r) => r.container_no === 'HAULU4' && r.status === 'missing'),
+       JSON.stringify(mine().map((r) => [r.container_no, r.status])));
+    ck('    with no amount rather than a zero',
+       mine().find((r) => r.container_no === 'HAULU4').amount === null,
+       'a $0 reads as priced at nothing; blank reads as unfinished');
+    ck('    and it says what to go and do',
+       mine().find((r) => r.container_no === 'HAULU4').missing.join(',') === 'trucking amount',
+       JSON.stringify(mine().find((r) => r.container_no === 'HAULU4').missing));
+    ck('  a bill naming neither trucker nor amount is not invented',
+       !mine().some((r) => !r.trucking_company && !r.amount),
+       'a row for every bill would bury the ones that mean something');
     ck('  and each carries what it came from',
        mine().every((r) => r.container_no && r.booking_no && r.supplier),
        'all the relevant details from bill');
-    ck('  starting unpaid', mine().every((r) => r.status === 'unpaid'));
+    ck('  the priced ones start unpaid',
+       mine().filter((r) => r.priced).every((r) => r.status === 'unpaid'));
 
     // ── HER FOUR FILTERS ─────────────────────────────────────────────────
     const f = (q) => mt.filterPayables(mine(), q);
     ck('filter by trucking company',
-       f({ trucking_company: 'Sher Trucking' }).length === 2,
+       f({ trucking_company: 'Sher Trucking' }).length === 3,
        String(f({ trucking_company: 'Sher Trucking' }).length));
+    ck('  and there is a filter for the unfinished ones',
+       f({ status: 'missing' }).length === 1
+       && f({ status: 'missing' })[0].container_no === 'HAULU4',
+       JSON.stringify(f({ status: 'missing' }).map((r) => r.container_no)));
+    ck('    which unpaid does NOT sweep up',
+       !f({ status: 'unpaid' }).some((r) => r.status === 'missing'),
+       '"chase the trucker" and "finish the bill" are different jobs');
+    ck('    and the count is its own figure on the summary',
+       mt.summary(mine()).missing_count === 1, String(mt.summary(mine()).missing_count));
     ck('  case is typing, not a different company',
-       f({ trucking_company: 'sher trucking' }).length === 2);
+       f({ trucking_company: 'sher trucking' }).length === 3,
+       String(f({ trucking_company: 'sher trucking' }).length));
     // Month was removed on 2026-09-10 — "Remove month in trucking,we have
     // date filter na". A whole month is a from/to like any other range, and
     // two controls answering one question can contradict each other.
@@ -1664,12 +1689,12 @@ section('S — Edge Metals haulage, which is not the yard\'s');
        !Object.prototype.hasOwnProperty.call(mt.facets(mine()), 'month'),
        JSON.stringify(Object.keys(mt.facets(mine()))));
     ck('  and a whole month is just a range',
-       f({ from: '09/01/2026', to: '09/30/2026' }).length === 2,
+       f({ from: '09/01/2026', to: '09/30/2026' }).length === 3,
        JSON.stringify(f({ from: '09/01/2026', to: '09/30/2026' }).map((r) => r.date)));
-    ck('filter by a date range', f({ from: '09/01/2026', to: '09/05/2026' }).length === 1,
+    ck('filter by a date range', f({ from: '09/01/2026', to: '09/05/2026' }).length === 2,
        JSON.stringify(f({ from: '09/01/2026', to: '09/05/2026' }).map((r) => r.date)));
     ck('  and her MM/DD/YYYY is understood, not compared as text',
-       f({ from: '09/01/2026' }).length === 2,
+       f({ from: '09/01/2026' }).length === 3,
        '"09/01/2026" sorts before "08/08/2026" as a string — that is the trap');
 
     const pay = await req('POST', '/api/metals-trucking', { sid: admin, body: {
@@ -1727,6 +1752,18 @@ section('S — Edge Metals haulage, which is not the yard\'s');
         trucking_company: 'Sher Trucking', allocations: [{ bill_id: h1.id, amount: 500 }],
     } });
     ck('paying a settled haul again is refused', over.status === 400, over.raw);
+
+    // An unpriced haul cannot be paid: allowing it would let the payment
+    // invent the amount nobody entered.
+    const unpriced = mine().find((r) => r.status === 'missing');
+    const guess = await req('POST', '/api/metals-trucking', { sid: admin, body: {
+        date: '09/12/2026', amount: 700, mode: 'Wire', bank: 'Chase',
+        trucking_company: 'Sher Trucking',
+        allocations: [{ bill_id: unpriced.bill_id, amount: 700 }],
+    } });
+    ck('a haul nobody priced cannot be paid', guess.status === 400, guess.raw);
+    ck('  saying the amount may have been cleared, not "no such bill"',
+       /amount/.test(guess.json.error || ''), guess.json.error);
 
     // ── ITS OWN LINE IN THE SPEND REPORT ─────────────────────────────────
     const rows = listPayments().filter((p) => p.load_kind === 'metals_trucking');

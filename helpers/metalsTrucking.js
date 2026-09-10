@@ -42,7 +42,16 @@ const round2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100
 const CENT = 0.005;
 
 const TRUCKING_MODES = ['Wire', 'Zelle', 'Cash', 'Cheque'];
-const STATUSES = ['unpaid', 'part', 'paid'];
+// 'missing' is a haul with a trucker and NO amount. Apsara, 2026-09-10:
+// "What if my employee forget to enter..There should be some provsision to
+// veiw those rows."
+//
+// She is right and the first version was wrong in a specific way: it left
+// those rows out to keep the pay list tidy, and in doing so made a
+// data-entry mistake invisible. A haul nobody priced is not "nothing to
+// pay" — it is a bill somebody has not finished, and the only way anyone
+// finds it is by looking at a list that shows it.
+const STATUSES = ['missing', 'unpaid', 'part', 'paid'];
 
 const list = () => {
     const raw = loadJson(cfg.METALS_TRUCKING_FILE, []);
@@ -64,10 +73,13 @@ function paidByBill() {
     return out;
 }
 
-// ── EVERY HAULAGE LINE, WITH WHAT IS LEFT ON IT ─────────────────────────
-// One row per bill that names a trucking amount. A bill with a trucking
-// company and no figure is NOT here: there is nothing to pay yet, and a $0
-// payable in the list is a row she has to skip past every time.
+// ── EVERY HAULAGE LINE, INCLUDING THE UNFINISHED ONES ───────────────────
+// One row per bill that names a haulier OR an amount. A bill with a trucker
+// and no figure is here, flagged 'missing' — see STATUSES above for why the
+// first version dropped it and why that was wrong.
+//
+// A bill with NEITHER is not here at all: nothing about it suggests haulage,
+// and inventing a row for every bill would bury the ones that mean something.
 function payables() {
     const bills = require('./bills');
     const paid = paidByBill();
@@ -75,9 +87,13 @@ function payables() {
 
     for (const b of bills.listWithTotals()) {
         const amount = num(b.trucking_amount);
-        if (amount === null || amount <= 0) continue;
+        const company = String(b.trucking_company || '').trim();
+        const priced = amount !== null && amount > 0;
+        if (!priced && !company) continue;
         const already = paid[b.id] || 0;
-        const balance = round2(amount - already);
+        // Nothing owed on a haul nobody has priced — a balance implies a
+        // figure, and there is not one.
+        const balance = priced ? round2(amount - already) : 0;
         out.push({
             bill_id: b.id,
             date: b.date || null,
@@ -89,11 +105,17 @@ function payables() {
             container_no: b.container_no || null,
             supplier: b.supplier || null,
             route: b.route || null,
-            trucking_company: b.trucking_company || null,
-            amount,
+            trucking_company: company || null,
+            amount: priced ? amount : null,
             paid: already,
             balance,
-            status: balance <= CENT ? 'paid' : (already > CENT ? 'part' : 'unpaid'),
+            priced,
+            // What is actually stopping this row from being finished, in her
+            // words rather than a code — the row is useless as a prompt if it
+            // does not say what to go and do.
+            missing: priced ? [] : ['trucking amount'].concat(company ? [] : ['trucker']),
+            status: !priced ? 'missing'
+                : (balance <= CENT ? 'paid' : (already > CENT ? 'part' : 'unpaid')),
         });
     }
     return out;
@@ -125,10 +147,15 @@ function filterPayables(rows, q = {}) {
         // 'unpaid' means anything still owing — part-paid included. She asked
         // for "paid/unpaid", and a part-paid haul she still owes money on
         // belongs in the list she works from.
-        if (status === 'unpaid' && r.status === 'paid') return false;
+        // 'unpaid' is what she still owes money on — part-paid included, and
+        // 'missing' deliberately EXCLUDED: there is no figure to owe. Those
+        // have their own filter, because "chase the trucker" and "finish the
+        // bill" are different jobs on different days.
+        if (status === 'unpaid' && (r.status === 'paid' || r.status === 'missing')) return false;
         if (status === 'paid' && r.status !== 'paid') return false;
         if (status === 'part' && r.status !== 'part') return false;
-        return false || true;
+        if (status === 'missing' && r.status !== 'missing') return false;
+        return true;
     });
 }
 
@@ -140,7 +167,10 @@ function summary(rows) {
         amount: sum(() => true),
         paid: round2(r.reduce((s, x) => s + (x.paid || 0), 0)) || 0,
         outstanding: round2(r.reduce((s, x) => s + Math.max(0, x.balance || 0), 0)) || 0,
-        unpaid_count: r.filter((x) => x.status !== 'paid').length,
+        unpaid_count: r.filter((x) => x.status === 'unpaid' || x.status === 'part').length,
+        // Surfaced as its own figure so an unfinished bill is a number on
+        // screen rather than something she would have to go looking for.
+        missing_count: r.filter((x) => x.status === 'missing').length,
     };
 }
 
@@ -153,7 +183,9 @@ function facets(rows) {
 }
 
 function cleanAllocations(input, amount, { company = null } = {}) {
-    const open = new Map(payables().map((p) => [p.bill_id, p]));
+    // Only priced hauls can be paid. A 'missing' row has no figure to settle
+    // against, and allowing one would let a payment invent the amount.
+    const open = new Map(payables().filter((p) => p.priced).map((p) => [p.bill_id, p]));
     const out = [];
 
     for (const a of (input || [])) {

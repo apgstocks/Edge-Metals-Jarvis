@@ -5213,12 +5213,18 @@ async function renderMetalsTruckingTab() {
       <div style="font-size:16px; font-weight:700; margin-top:4px; ${tone ? `color:${tone};` : ''}">${value}</div>
     </div>`;
 
-  const pill = (st) => {
+  const pill = (r) => {
     const map = { paid: ['var(--status-good, #4ade80)', 'paid'],
                   part: ['var(--accent)', 'part'],
-                  unpaid: ['var(--status-warn)', 'unpaid'] };
-    const [colour, text] = map[st] || map.unpaid;
-    return `<span style="font-size:10px; padding:2px 8px; border-radius:var(--radius-sm); border:1px solid ${colour}; color:${colour};">${text}</span>`;
+                  unpaid: ['var(--status-warn)', 'unpaid'],
+                  // Filled rather than outlined, because this one is a job to
+                  // do and the others are states to read.
+                  missing: ['var(--status-danger)', 'no amount'] };
+    const [colour, text] = map[r.status] || map.unpaid;
+    const title = r.status === 'missing'
+      ? `This bill still needs: ${(r.missing || []).join(' and ')}`
+      : '';
+    return `<span title="${esc(title)}" style="font-size:10px; padding:2px 8px; border-radius:var(--radius-sm); border:1px solid ${colour}; color:${colour};">${text}</span>`;
   };
 
   const sel = (key, label, opts, width) => `
@@ -5252,6 +5258,7 @@ async function renderMetalsTruckingTab() {
         ${card('Paid', ledMoney(sum.paid))}
         ${card('Outstanding', ledMoney(sum.outstanding), sum.outstanding > 0.005 ? 'var(--status-warn)' : '')}
         ${card('Unpaid hauls', ledNum(sum.unpaid_count))}
+        ${card('No amount yet', ledNum(sum.missing_count), sum.missing_count ? 'var(--status-warn)' : '')}
       </div>
 
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
@@ -5279,12 +5286,12 @@ async function renderMetalsTruckingTab() {
               <td style="padding:7px 9px; white-space:nowrap; font-family:var(--font-mono);">${ledText(r.container_no)}</td>
               <td style="padding:7px 9px; white-space:nowrap;">${ledText(r.supplier)}</td>
               <td style="padding:7px 9px; white-space:nowrap;">${ledText(r.trucking_company)}</td>
-              <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(r.amount)}</td>
+              <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${r.priced ? '' : 'color:var(--status-warn);'}">${r.priced ? ledMoney(r.amount) : 'not entered'}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${r.paid ? ledMoney(r.paid) : '—'}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${r.balance > 0.005 ? ledMoney(r.balance) : '—'}</td>
-              <td style="padding:7px 9px;">${pill(r.status)}</td>
+              <td style="padding:7px 9px;">${pill(r)}</td>
             </tr>`).join('')
-            : `<tr><td colspan="9" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No bill carries a trucking amount yet.'}</td></tr>`}</tbody>
+            : `<tr><td colspan="9" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No bill names a trucker yet.'}</td></tr>`}</tbody>
         </table>
       </div>
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
