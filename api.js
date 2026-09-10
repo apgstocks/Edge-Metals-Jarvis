@@ -3545,6 +3545,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // different set of bills, which is worse than no filter at all.
             const rows = b.filterRows(all, req.query || {});
             res.json({
+                // Same warning the sales table carries. A duplicate here is
+                // worse: margin.js keeps only the LAST bill for a container,
+                // so the container reads as cheaper than it was.
+                duplicates: b.duplicates(all),
                 bills: rows,
                 summary: b.summary(rows),
                 // Built from EVERY row, not the filtered ones, or narrowing by

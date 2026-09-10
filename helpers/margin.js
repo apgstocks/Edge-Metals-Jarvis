@@ -68,6 +68,14 @@ function rows() {
         if (!container) continue;
         const k = keyOf(b.booking_no, container);
         const row = take(k, { key: k, booking_no: b.booking_no || null, container_no: container });
+        // ── TWO BILLS FOR ONE CONTAINER ──────────────────────────────────
+        // Assigning over the top would keep only the LAST one, and the
+        // container would read as cheaper than it was — a margin that looks
+        // better than the deal, which is the direction nobody questions.
+        // Counted and named instead; the caller shows it.
+        if (row.bill_id) {
+            row.duplicate_bill_ids = (row.duplicate_bill_ids || [row.bill_id]).concat(b.id);
+        }
         row.bill_id = b.id;
         row.supplier = b.supplier || null;
         row.bill_date = b.date || null;
@@ -84,6 +92,9 @@ function rows() {
         if (!container) continue;
         const k = keyOf(s.booking_no, container);
         const row = take(k, { key: k, booking_no: s.booking_no || null, container_no: container });
+        if (row.sale_id) {
+            row.duplicate_sale_ids = (row.duplicate_sale_ids || [row.sale_id]).concat(s.id);
+        }
         row.sale_id = s.id;
         row.customer = s.customer || null;
         row.sale_date = s.date || null;
@@ -130,6 +141,11 @@ function rows() {
             charges_out: r.charges_out ?? null,
             commission: r.commission ?? null,
             state, revenue, cost, margin,
+            // Non-empty means this margin is computed from ONE of several
+            // rows that claim the same container, and is not to be trusted
+            // until she says which is real.
+            duplicate_bill_ids: r.duplicate_bill_ids || [],
+            duplicate_sale_ids: r.duplicate_sale_ids || [],
             margin_pct: marginPct,
             weight_gap: weightGap,
             // Per metric ton of what was SOLD, which is the figure a trader
@@ -199,6 +215,10 @@ function summary(list) {
         margin_pct: revenue ? round2((margin / revenue) * 100) : null,
         open_bought: r.filter((x) => x.state === 'bought').length,
         open_sold: r.filter((x) => x.state === 'sold').length,
+        // Surfaced beside the money, because a duplicate makes the margin
+        // beside it wrong and there is no way to tell by looking at it.
+        conflicted: r.filter((x) => (x.duplicate_bill_ids || []).length
+                                 || (x.duplicate_sale_ids || []).length).length,
     };
 }
 

@@ -2201,6 +2201,71 @@ section('W — the Shipment tab: one row per grade, and the header that drifted'
     ck('a header already correct is left alone', same.changed === false, JSON.stringify(same));
 }
 
+section('X — a container claimed twice, on either side');
+{
+    // Found by asking why sales had a duplicate warning and bills did not.
+    // The asymmetry is worse than it looks: helpers/margin.js keys on
+    // booking + container, so two bills for one container do NOT double the
+    // cost — the second overwrites the first and the container reads as
+    // CHEAPER than it was, which is the direction nobody questions. Meanwhile
+    // helpers/metalsTrucking.js keys on the bill id and shows both hauls.
+    // One duplicate, two tabs disagreeing, no warning anywhere.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const margin = require(path.join(ROOT, 'helpers/margin'));
+    const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
+
+    const mk = (price, trucking) => req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/01/2026', supplier: 'Dupe Metals', booking_no: 'DUPBK', container_no: 'DUPCU1',
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0,
+        supplier_price: price, trucking_company: 'Dupe Haulage', trucking_amount: trucking,
+    } });
+    const first = (await mk(0.30, 500)).json.bill;
+    const second = (await mk(0.50, 700)).json.bill;
+
+    ck('bills reports the same container twice under one booking',
+       bills.duplicates(bills.listWithTotals())
+         .some((d) => String(d.container_no).toUpperCase() === 'DUPCU1'),
+       'sales has had this since the rebuild; bills had nothing');
+    ck('  naming both rows so she can pick the real one',
+       bills.duplicates(bills.listWithTotals())
+         .find((d) => String(d.container_no).toUpperCase() === 'DUPCU1').ids.length === 2);
+    const listed = await req('GET', '/api/bills', { sid: admin });
+    ck('  and the client is told', (listed.json.duplicates || [])
+       .some((d) => String(d.container_no).toUpperCase() === 'DUPCU1'),
+       JSON.stringify(listed.json.duplicates));
+    ck('  while BOTH rows are still returned, not silently dropped',
+       listed.json.bills.filter((x) => x.container_no === 'DUPCU1').length === 2);
+
+    // ── AND THE MARGIN SAYS IT CANNOT BE TRUSTED ─────────────────────────
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/12/2026', customer: 'Dupe Customer', booking_no: 'DUPBK',
+        container_no: 'DUPCU1', weight: 12000, invoice_price: 0.60 } });
+    const row = margin.rows().find((r) => r.container_no === 'DUPCU1');
+    ck('the margin row flags that two bills claim this container',
+       (row.duplicate_bill_ids || []).length === 2,
+       JSON.stringify(row.duplicate_bill_ids));
+    ck('  which is what stops the cheaper-looking one passing unnoticed',
+       row.duplicate_bill_ids.includes(first.id) && row.duplicate_bill_ids.includes(second.id),
+       'the join keeps one of them; without this nothing says which or that there were two');
+    ck('  and the summary counts it beside the money',
+       margin.summary(margin.rows().filter((r) => r.container_no === 'DUPCU1')).conflicted === 1,
+       'a duplicate makes the margin next to it wrong and it cannot be seen by looking');
+
+    // Trucking keys on the bill, so it legitimately shows two hauls — that is
+    // the disagreement the warning exists to explain.
+    ck('trucking still lists both hauls, which is why the two tabs disagreed',
+       mt.payables().filter((r) => r.container_no === 'DUPCU1').length === 2,
+       'one keyed on the container, one on the bill — the warning is what reconciles them');
+
+    const clean = margin.rows().find((r) => r.container_no !== 'DUPCU1' && r.state === 'closed');
+    if (clean) {
+        ck('a container claimed once carries no flag',
+           (clean.duplicate_bill_ids || []).length === 0
+           && (clean.duplicate_sale_ids || []).length === 0,
+           JSON.stringify([clean.duplicate_bill_ids, clean.duplicate_sale_ids]));
+    }
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

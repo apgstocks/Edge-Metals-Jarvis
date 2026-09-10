@@ -5713,6 +5713,7 @@ async function renderMargin() {
              (sum.margin || 0) < 0 ? 'var(--status-danger)' : 'var(--status-good, #4ade80)')}
       ${card('Margin %', sum.margin_pct === null || sum.margin_pct === undefined ? '—' : `${sum.margin_pct}%`)}
       ${card('Closed', `${sum.closed || 0} of ${sum.count || 0}`)}
+      ${sum.conflicted ? card('Duplicated', ledNum(sum.conflicted), 'var(--status-danger)') : ''}
     </div>
 
     <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
@@ -5750,7 +5751,9 @@ async function renderMargin() {
             <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(r.commission)}</td>
             <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${r.margin === null ? 'color:var(--text-faint);' : ((r.margin < 0) ? 'color:var(--status-danger);' : 'color:var(--status-good, #4ade80);')}">${r.margin === null ? '—' : ledMoney(r.margin)}${r.margin_pct === null ? '' : `<div style="font-size:10px; color:var(--text-muted);">${r.margin_pct}%</div>`}</td>
             <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${r.margin_per_mt === null ? '—' : ledMoney(r.margin_per_mt)}</td>
-            <td style="padding:7px 9px;">${r.state === 'closed' ? (r.weight_gap ? `<span title="Bought ${ledNum(r.bought_weight_lb)} lbs, sold ${ledNum(r.sold_weight_lb)}" style="font-size:10px; color:var(--status-warn);">${ledNum(r.weight_gap)} lb gap</span>` : '') : state(r)}</td>
+            <td style="padding:7px 9px;">${(r.duplicate_bill_ids || []).length || (r.duplicate_sale_ids || []).length
+              ? `<span title="More than one row claims this container — this margin uses only one of them" style="font-size:10px; color:var(--status-danger);">duplicated</span>`
+              : ''}${r.state === 'closed' ? (r.weight_gap ? `<span title="Bought ${ledNum(r.bought_weight_lb)} lbs, sold ${ledNum(r.sold_weight_lb)}" style="font-size:10px; color:var(--status-warn);">${ledNum(r.weight_gap)} lb gap</span>` : '') : state(r)}</td>
           </tr>`).join('')
           : `<tr><td colspan="12" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No container has both a bill and a sale yet.'}</td></tr>`}</tbody>
       </table>

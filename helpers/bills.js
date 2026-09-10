@@ -714,6 +714,29 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 
 // The columns of one group, in the order the group states — falling back to
 // COLUMNS order for the groups that never needed one.
+// ── THE SAME CONTAINER TWICE UNDER ONE BOOKING ───────────────────────────
+// helpers/sales.js has had this since the container-grain rebuild; bills did
+// not, and the asymmetry is worse here than there. helpers/margin.js keys on
+// booking + container, so two bills for one container do not double-count —
+// the second OVERWRITES the first, and the container reads as cheaper than it
+// was. Meanwhile helpers/metalsTrucking.js keys on the bill id and lists both
+// hauls. One duplicate, two tabs disagreeing, no warning anywhere.
+//
+// Reported, never refused, for the same reason as on the sales side: it is
+// usually a typo and occasionally real, and this file cannot tell which.
+function duplicates(rows) {
+    const seen = new Map();
+    for (const r of (rows || [])) {
+        const bk = String(r.booking_no || '').trim().toUpperCase();
+        const cn = String(r.container_no || '').trim().toUpperCase();
+        if (!bk || !cn) continue;
+        const k = `${bk}|${cn}`;
+        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no, ids: [] });
+        seen.get(k).ids.push(r.id);
+    }
+    return [...seen.values()].filter((d) => d.ids.length > 1);
+}
+
 function groupColumns(groupId) {
     const g = GROUPS.find((x) => x.id === groupId);
     if (g && Array.isArray(g.keys)) {
@@ -886,4 +909,5 @@ module.exports = {
     cleanItems,
     groupColumns,
     cleanTruckingSplit, cleanTruckingOthers, TRUCKING_PARTS, TRUCKING_PART_LABELS,
+    duplicates,
 };
