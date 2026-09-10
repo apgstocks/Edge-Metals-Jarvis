@@ -310,9 +310,28 @@ section('E — the routes, because a helper nothing calls is not a feature');
        'the table is built from the server list, so the two cannot drift');
     // The FORM walks groups, the TABLE walks her order. Both travel, so
     // neither client re-derives one from the other and gets it subtly wrong.
+    // Regrouped 2026-09-10 to her spec: "Date,Route,Carrier,Invoice no in one
+    // group,next booking no,container no,seal no in another group,then
+    // supplier,supplier price,bill amount in one group.Trucker related thing
+    // as another,items and weights in another."
     ck('  plus the grouped fields the form needs',
-       Array.isArray(r.json.fields) && Array.isArray(r.json.groups) && r.json.groups.length === 5,
+       Array.isArray(r.json.fields) && Array.isArray(r.json.groups)
+       && r.json.groups.map((g) => g.id).slice(0, 5).join(',')
+          === 'shipment,container,purchase,trucking,items',
        JSON.stringify((r.json.groups || []).map((g) => g.id)));
+    ck('    each stating its own order, not depending on array position',
+       bills.groupColumns('shipment').map((c) => c.key).join(',')
+         === 'date,route,carrier,invoice_no',
+       bills.groupColumns('shipment').map((c) => c.key).join(','));
+    ck('    the container group is the three numbers that identify the box',
+       bills.groupColumns('container').map((c) => c.key).join(',')
+         === 'booking_no,container_no,seal_no');
+    ck('    and trucking is its own group rather than two boxes in Money',
+       bills.groupColumns('trucking').map((c) => c.key).join(',')
+         === 'trucking_company,trucking_amount');
+    ck('    every column still belongs to a group that exists',
+       bills.COLUMNS.every((c) => bills.GROUPS.some((g) => g.id === c.group)),
+       bills.COLUMNS.filter((c) => !bills.GROUPS.some((g) => g.id === c.group)).map((c) => c.key).join(','));
     // The original complaint was two columns both headed TRUCKING on two
     // identical empty boxes. Naming one of them "Trucker" fixes that at the
     // source, so no two columns share a heading at all any more.
@@ -323,8 +342,14 @@ section('E — the routes, because a helper nothing calls is not a feature');
        (() => { const L = r.json.columns.map((c) => c.key);
                 return L.indexOf('trucking_company') === L.indexOf('trucking_amount') - 1; })(),
        r.json.columns.map((c) => c.key).join(','));
-    ck('    on the form too, in the money section',
-       (r.json.fields.find((c) => c.key === 'trucking_company') || {}).group === 'money');
+    // Was 'money' until 2026-09-10: "Trucker related thing as another".
+    // Its own group now, so the two boxes that once sat under two identical
+    // TRUCKING headings are a named section instead.
+    ck('    on the form too, in a Trucking section of its own',
+       (r.json.fields.find((c) => c.key === 'trucking_company') || {}).group === 'trucking'
+       && (r.json.fields.find((c) => c.key === 'trucking_amount') || {}).group === 'trucking',
+       JSON.stringify([(r.json.fields.find((c) => c.key === 'trucking_company') || {}).group,
+                       (r.json.fields.find((c) => c.key === 'trucking_amount') || {}).group]));
     ck('  and the typeable invoice amount carries the key to post it under',
        (r.json.fields.find((c) => c.key === 'amount') || {}).writeKey === 'supplier_invoice_amount',
        'without writeKey the derived column gets no input and her figure cannot be entered');

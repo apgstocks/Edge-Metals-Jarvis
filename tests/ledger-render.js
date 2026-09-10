@@ -517,10 +517,24 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
        form.querySelector('[name="supplier"]').tagName === 'INPUT',
        'a datalist suggests; a select would refuse a supplier she has not used before');
 
-    // And her last instruction: "Swap places of route and supplier".
+    // ── SUPERSEDED, DELIBERATELY ─────────────────────────────────────────
+    // This asserted supplier-before-route, from "Swap places of route and
+    // supplier" earlier on 2026-09-10 when both lived in one group. Her
+    // regrouping later the same day put Route in Shipment and Supplier in
+    // Purchase — "Date,Route,Carrier,Invoice no in one group... then
+    // supplier,supplier price,bill amount in one group" — so route now comes
+    // first because it is in an earlier SECTION, not because the swap was
+    // undone. Rewritten rather than deleted so the reason is on the record.
     const order = [...form.querySelectorAll('[name]')].map((i) => i.name);
-    ck('route and supplier are swapped',
-       order.indexOf('supplier') < order.indexOf('route'),
+    ck('route sits in Shipment, supplier in Purchase',
+       order.indexOf('route') < order.indexOf('supplier'),
+       order.join(','));
+    ck('  with the container numbers between them',
+       order.indexOf('container_no') > order.indexOf('route')
+       && order.indexOf('container_no') < order.indexOf('supplier'),
+       order.join(','));
+    ck('  and trucking after the purchase, not mixed into it',
+       order.indexOf('trucking_company') > order.indexOf('supplier_price'),
        order.join(','));
     dom.window.close();
 }
@@ -1549,6 +1563,70 @@ section('G9 — the Trucking tab');
         ck('  summing to what was sent',
            posted[0].allocations.reduce((t, a) => t + a.amount, 0) === 2000);
     }
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
+section('G10 — labels beside their fields, and her five groups');
+{
+    // Apsara, 2026-09-10, after three rounds of "the design looks not good":
+    // the difference between the form and the invoice screen she called neat
+    // was that its labels sit BESIDE the field, not above it.
+    const { w, dom } = await mount({ '/api/bills': billsRoute,
+        '/api/bills/preview': () => bills.compute({}) });
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills');
+    const form = doc.getElementById('ledgerForm');
+
+    const headings = [...form.querySelectorAll('div')]
+        .map((d) => d.firstChild && d.firstChild.nodeType === 3 ? d.textContent.trim() : '')
+        .filter((t) => /^(SHIPMENT|CONTAINER|PURCHASE|TRUCKING|ITEMS AND WEIGHTS)/i.test(t));
+    ck('her five groups are the sections',
+       ['Shipment', 'Container', 'Purchase', 'Trucking', 'Items and weights']
+         .every((g) => form.textContent.toLowerCase().includes(g.toLowerCase())),
+       form.textContent.replace(/\s+/g, ' ').slice(0, 200));
+
+    // The label is a sibling of the input, on one line — not stacked above.
+    const supplier = form.querySelector('[name="supplier"]');
+    const row = supplier.closest('.field');
+    ck('a field sits on one line with its label',
+       row && /display:flex/.test(row.getAttribute('style') || ''),
+       row ? row.getAttribute('style') : 'no .field wrapper');
+    ck('  and the label reads to its left',
+       row && row.querySelector('span') && /Supplier/.test(row.querySelector('span').textContent),
+       row ? row.textContent.trim().slice(0, 40) : '');
+    ck('  with no stacked <label> above it any more',
+       !row.querySelector('label'),
+       'a label above doubles the vertical noise, which is what read as dense');
+
+    // Everything inputFor gives a field must survive being re-wrapped: this
+    // is a regex over generated markup, so the things it could quietly drop
+    // are asserted one by one.
+    ck('the type-ahead survives the rewrap',
+       supplier.getAttribute('list') === 'ledlist-supplier',
+       supplier.getAttribute('list'));
+    ck('  and its options came with it',
+       !!form.querySelector('#ledlist-supplier option'));
+    ck('  numeric fields keep their number pad',
+       form.querySelector('[name="gross"]').getAttribute('inputmode') === 'decimal');
+    ck('  and no spinners came back',
+       ![...form.querySelectorAll('input')].some((i) => i.type === 'number'));
+    ck('  the date box still gets its picker',
+       form.querySelector('[name="date"]').dataset.dpWired === '1');
+    ck('  and the money adornment is still there',
+       !!form.querySelector('[name="supplier_price"]')
+       && !!doc.getElementById('ledPriceUnit'),
+       'the /lb or /MT beside the price is how a wrong unit stays visible');
+
+    // Weights stay a grid: five short numbers read better in a row than as
+    // five label-and-field lines.
+    const gross = form.querySelector('[name="gross"]').closest('.field');
+    ck('the weights row is still a grid, not five stacked lines',
+       gross && !/display:flex/.test(gross.getAttribute('style') || ''),
+       gross ? gross.getAttribute('style') : '');
+
+    doc.getElementById('ledClose').click();
     await new Promise((r) => setTimeout(r, 40));
     dom.window.close();
 }

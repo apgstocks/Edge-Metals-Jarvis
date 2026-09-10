@@ -6551,13 +6551,49 @@ function openLedgerForm(kind, existing, seed) {
       </div>`;
   };
 
+  // ── LABEL BESIDE THE FIELD, NOT ABOVE IT ─────────────────────────────
+  // Apsara, 2026-09-10, three times: "still it looks ugly and clumsy", "Still
+  // the design looks not good", and finally, shown the reference she liked —
+  // her own invoice screen — the difference was that its labels sit to the
+  // LEFT of each input on one line. Stacked labels double the vertical noise
+  // and make a record read as a dense form.
+  //
+  // `keys` on the group states the order inside it, so this walks
+  // ledgerState.groupKeys rather than filtering by group and hoping the
+  // COLUMNS array happens to be in her order.
+  const inGroup = (g) => (Array.isArray(g.keys)
+      ? g.keys.map((k) => all.find((c) => c.key === k)).filter(Boolean)
+      : all.filter((c) => c.group === g.id))
+    .filter((c) => !c.derived || c.writeKey);
+
+  // Wraps inputFor rather than duplicating it: the input carries the
+  // datalist, the date wiring, the $ adornment and the numeric mode, and a
+  // second copy of all that to move a label would drift within the week.
+  const inlineField = (c) => {
+    const built = inputFor(c);
+    // inputFor emits <div class="field"><label…>…</label><rest…></div>.
+    const m = /^([\s\S]*?)<label[^>]*>([\s\S]*?)<\/label>([\s\S]*)$/.exec(built);
+    if (!m) return built;                       // textarea and anything else
+    const [, head, labelText, rest] = m;
+    const openTag = /^\s*<div([^>]*)>/.exec(head);
+    return `<div${openTag ? openTag[1] : ' class="field"'} style="display:flex; align-items:center; gap:12px;">
+      <span style="font-size:12px; color:${LEDGER_LIGHT.inkMuted}; width:104px; flex-shrink:0; white-space:nowrap;">${labelText}</span>
+      <div style="flex:1; min-width:0; position:relative;">${rest.replace(/<\/div>\s*$/, '')}</div>
+    </div>`;
+  };
+
   const sections = groups.map((g) => {
-    const mine = all.filter((c) => c.group === g.id && (!c.derived || c.writeKey));
+    const mine = inGroup(g);
     if (!mine.length) return '';
+    // The weights group is a row of five short numbers and reads better in a
+    // grid; everything else is label-then-field down a column.
+    const grid = g.cols
+      ? `display:grid; grid-template-columns:repeat(${g.cols}, minmax(0, 1fr)); gap:10px;`
+      : 'display:flex; flex-direction:column; gap:9px;';
     return `
-      <div style="margin-bottom:16px;${g.full ? ' grid-column:1/-1;' : ''}">
-        <div style="font-size:12px; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:9px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="opacity:.7;">· lbs</span>' : ''}</div>
-        <div style="display:grid; grid-template-columns:${g.cols ? `repeat(${g.cols}, minmax(0, 1fr))` : 'repeat(2, minmax(0, 1fr))'}; gap:10px;">${mine.map(inputFor).join('')}</div>
+      <div style="margin-bottom:20px;${g.full ? ' grid-column:1/-1;' : ''}">
+        <div style="font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:11px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="letter-spacing:0; text-transform:none;">· lbs</span>' : ''}</div>
+        <div style="${grid}">${mine.map((c) => (g.cols ? inputFor(c) : inlineField(c))).join('')}</div>
       </div>`;
   }).join('');
 

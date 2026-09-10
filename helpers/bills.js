@@ -374,25 +374,25 @@ function newId() {
 // all: the store defines what a bill is, and a second list in the dashboard
 // is a copy that drifts.
 const COLUMNS = [
-    { key: 'supplier',         label: 'Supplier',           group: 'shipment', suggest: true },
+    { key: 'supplier',         label: 'Supplier',           group: 'purchase', suggest: true },
     { key: 'carrier',          label: 'Carrier',            group: 'shipment', placeholder: 'MSC, Maersk…' },
-    { key: 'booking_no',       label: 'Booking no',         group: 'shipment' },
-    { key: 'container_no',     label: 'Container no',       group: 'shipment', placeholder: 'MSKU1234567' },
-    { key: 'seal_no',          label: 'Seal no',            group: 'shipment' },
+    { key: 'booking_no',       label: 'Booking no',         group: 'container' },
+    { key: 'container_no',     label: 'Container no',       group: 'container', placeholder: 'MSKU1234567' },
+    { key: 'seal_no',          label: 'Seal no',            group: 'container' },
 
     // Apsara, 2026-09-10: "In bill,i want photos field where url can be
     // pasted." One per line — a container gets photographed several times and
     // one box for one link would have her keeping the rest somewhere else.
 
 
-    { key: 'date',             label: 'Date',               group: 'purchase', date: true },
+    { key: 'date',             label: 'Date',               group: 'shipment', date: true },
     // Apsara, 2026-09-10: "Swap places of route and supplier". Route sits
     // where Supplier was and Supplier where Route was — her reading order,
     // not mine. The group each belongs to went with it.
-    { key: 'route',            label: 'Source/Destination', group: 'purchase',
+    { key: 'route',            label: 'Source/Destination', group: 'shipment',
       formLabel: 'Route', placeholder: 'HOUSTON / BUSAN' },
-    { key: 'invoice_no',       label: 'Invoice no',         group: 'purchase' },
-    { key: 'description',      label: 'Item description',   group: 'purchase', suggest: true,
+    { key: 'invoice_no',       label: 'Invoice no',         group: 'shipment' },
+    { key: 'description',      label: 'Item description',   group: 'items', suggest: true,
       placeholder: 'Auto cast, shredded…' },
 
     { key: 'gross',            label: 'Gross',              group: 'weights', unit: 'lbs', num: true },
@@ -413,13 +413,13 @@ const COLUMNS = [
     { key: 'net_lb',           label: 'Net weight (lbs)',   group: 'weights', unit: 'lbs', derived: true },
     { key: 'net_mt',           label: 'Net weight (MT)',    group: 'weights', unit: 'MT',  derived: true },
 
-    { key: 'supplier_price',   label: 'Supplier price',     group: 'money', unit: '$', num: true,
+    { key: 'supplier_price',   label: 'Supplier price',     group: 'purchase', unit: '$', num: true,
       formLabel: 'Supplier price', hint: 'under $10 is read as per lb, $10+ as per MT' },
     // Stored under `amount`, but the field she TYPES is
     // supplier_invoice_amount — compute() prefers hers over the computed one.
     // `writeKey` is what the form must post; without it this column had no
     // input at all and the stated-amount branch was unreachable.
-    { key: 'amount',           label: 'Supplier invoice amount', group: 'money', unit: '$', derived: true,
+    { key: 'amount',           label: 'Supplier invoice amount', group: 'purchase', unit: '$', derived: true,
       writeKey: 'supplier_invoice_amount', num: true, formLabel: 'Invoice amount',
       hint: 'leave blank to use the computed figure' },
     // ── THE TRUCKER SITS WITH WHAT THE TRUCKING COST ─────────────────────
@@ -432,9 +432,9 @@ const COLUMNS = [
     // underneath the original complaint: two different columns were both
     // headed "Trucking", so the form needed a separate formLabel to tell them
     // apart. One of them having its own name fixes that at the source instead.
-    { key: 'trucking_company', label: 'Trucker',            group: 'money',
+    { key: 'trucking_company', label: 'Trucker',            group: 'trucking',
       placeholder: 'who hauled it' },
-    { key: 'trucking_amount',  label: 'Trucking',           group: 'money', unit: '$', num: true,
+    { key: 'trucking_amount',  label: 'Trucking',           group: 'trucking', unit: '$', num: true,
       formLabel: 'Trucking cost' },
     // ── ADVANCE REMOVED ──────────────────────────────────────────────────
     // Apsara, 2026-09-10: "Remove advance on this". It was in her original
@@ -571,21 +571,54 @@ function facets(rows) {
     return out;
 }
 
+// ── HER GROUPING, 2026-09-10 ─────────────────────────────────────────────
+// "I want Date,Route,Carrier,Invoice no in one group,next booking no,
+// container no,seal no in another group,then supplier,supplier price,bill
+// amount in one group.Trucker related thing as another,items and weights in
+// another."
+//
+// Five groups, in that order. It reads as the questions actually get answered:
+// what shipment is this, which box, who sold it and for how much, who hauled
+// it, and what was in it.
+// `keys` states the order INSIDE a group, so it is her order rather than an
+// accident of where a line sits in the COLUMNS array — which is the kind of
+// thing that silently reshuffles the day someone adds a column in the middle.
 const GROUPS = [
-    { id: 'shipment', label: 'Shipment' },
-    { id: 'purchase', label: 'Purchase' },
+    { id: 'shipment', label: 'Shipment',
+      keys: ['date', 'route', 'carrier', 'invoice_no'] },
+    { id: 'container', label: 'Container',
+      keys: ['booking_no', 'container_no', 'seal_no'] },
+    { id: 'purchase', label: 'Purchase',
+      keys: ['supplier', 'supplier_price', 'amount'] },
+    { id: 'trucking', label: 'Trucking',
+      keys: ['trucking_company', 'trucking_amount'] },
+    { id: 'items',    label: 'Items and weights', full: true, keys: ['description'] },
     // ── ALL FIVE WEIGHTS ON ONE LINE ─────────────────────────────────────
     // Apsara, 2026-09-10: "weights should be in single line". The auto-fit
     // grid wrapped them 4 + 1, which puts Boxes on a row of its own and makes
     // it read like a different kind of thing. They are one measurement taken
     // five ways and they belong on one line.
-    { id: 'weights',  label: 'Weights', cols: 5 },
+    { id: 'weights',  label: 'Container weighing', cols: 5,
+      // Only when the LINES do not carry their own tickets. With a weighbridge
+      // ticket per grade these are sums, not questions, and a form that asks
+      // for a figure it is about to overwrite is a form that lies.
+      hint: 'one weighing for the whole container' },
     { id: 'money',    label: 'Money' },
     { id: 'links',    label: 'Photos', full: true },
 ];
 
 // Her 23, in her order, for the table.
 const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
+
+// The columns of one group, in the order the group states — falling back to
+// COLUMNS order for the groups that never needed one.
+function groupColumns(groupId) {
+    const g = GROUPS.find((x) => x.id === groupId);
+    if (g && Array.isArray(g.keys)) {
+        return g.keys.map((k) => COLUMNS.find((c) => c.key === k)).filter(Boolean);
+    }
+    return COLUMNS.filter((c) => c.group === groupId);
+}
 
 // Fields a client may write. Everything else on a stored bill is derived or
 // housekeeping, and accepting it from a request would let a client post a
@@ -746,4 +779,5 @@ module.exports = {
     FILTERABLE, filterRows, facets, sortableDate, cleanPhotos,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
     cleanItems,
+    groupColumns,
 };
