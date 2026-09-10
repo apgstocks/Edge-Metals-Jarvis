@@ -469,6 +469,38 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
        inputs.filter((i) => i.name && !/20,\s*24,\s*27|#14181B/i.test(i.style.color || ''))
              .map((i) => `${i.name}=${i.style.color}`).join(',') || 'invisible form');
 
+    // ── NOTHING IN THE FORM IS PAINTED IN A LITERAL HEX ──────────────────
+    // Apsara, 2026-09-11, of the totals bar: "why tare,net weights aew empty
+    // at the end." They were never empty. compute() returns all five and
+    // always has — they were drawn in a hard-coded #14181B, which is the DARK
+    // palette's own sunken tone. Black figures on a black surface. Only
+    // Balance was legible, because it takes L.ok and comes out green.
+    //
+    // It survived every existing assertion because this suite renders the
+    // PAPER theme, where #14181B is near-black on white and reads perfectly.
+    // A colour written as a hex is a colour that is right in one theme and
+    // invisible in the other, which is the same fault as the '${L.danger}'
+    // quoting slip. So: no literal hex anywhere in the ledger form or its
+    // totals bar. Tokens only.
+    {
+        // Comments stripped as BLOCKS, not line by line. The first version of
+        // this filtered lines starting with // or <!--, and then failed on the
+        // multi-line HTML comment that explains the very bug — a lint tripping
+        // over its own documentation, for the second time today.
+        const whole = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+        const src = whole.split('\n');
+        const from = src.findIndex((l) => /const paintPreview/.test(l));
+        const to = src.findIndex((l, i) => i > from && /const ledPaintSplit|function paintItems/.test(l));
+        ck('  (the totals bar was located in the source)', from > 0, String(from));
+        const hexes = src.slice(from, to > from ? to : from + 60)
+            .join('\n').match(/#[0-9A-Fa-f]{6}\b/g) || [];
+        ck('the totals bar uses theme tokens, never a literal hex',
+           hexes.length === 0,
+           `${hexes.join(',')} — a hex is right in one palette and invisible in the other`);
+    }
+
     // ── THE CONTAINER WEIGHING GROUP IS GONE ─────────────────────────────
     // ASSERTIONS CHANGED, NOT JUST CODE, and worth saying so. Two checks used
     // to live here — that none of the five weight labels could wrap, because

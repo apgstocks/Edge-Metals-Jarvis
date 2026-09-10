@@ -1314,6 +1314,11 @@ const MUTATIONS = [
       file: 'helpers/outboundLoads.js', suites: ['delivery-enquiry'],
       find: "        patch.delivery_status = prior.delivery_status || 'in_transit';",
       to:   "        patch.delivery_status = 'in_transit';" },
+    { name: 'totals: the figures go back to a literal hex, invisible in dark',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: "color:${v === null || v === undefined ? L.inkFaint : (key === 'balance' ? L.ok : L.ink)};",
+      to:   "color:${v === null || v === undefined ? '#8B949B' : (key === 'balance' ? L.ok : '#14181B')};" },
+
     // ── the bill form stripped back to its lines (2026-09-11) ──────────
     { name: 'bill: a weighing column sneaks back onto the form',
       file: 'helpers/bills.js', suites: ['bills-sales'],

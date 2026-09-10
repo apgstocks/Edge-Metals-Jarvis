@@ -6954,7 +6954,10 @@ function openLedgerForm(kind, existing, seed) {
             <button id="ledSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${LEDGER_LIGHT.accent}; border-color:${LEDGER_LIGHT.accent}; color:${LEDGER_LIGHT.accentInk};">${editing ? 'Save changes' : 'Save'}</button>
           </div>
         </div>
-        <div id="ledWarn" style="font-size:11px; color:#8A5A00; margin-top:9px;"></div>
+        <!-- L.warn, not a hex: #8A5A00 is a dark amber that all but vanishes on
+             the dark palette's #1B2126, and this is the line that tells her a
+             tare is missing or her typed amount disagrees with the weight. -->
+        <div id="ledWarn" style="font-size:11px; color:${LEDGER_LIGHT.warn}; margin-top:9px;"></div>
         <div id="ledErr" style="color:var(--status-danger); font-family:var(--font-mono); font-size:11px; margin-top:6px;"></div>
       </div>
     </div>`;
@@ -7253,7 +7256,18 @@ function openLedgerForm(kind, existing, seed) {
         const shown = how === 'money' ? ledMoney(v) : ledNum(v);
         return `<div>
           <div style="font-size:11px; color:${LEDGER_LIGHT.inkFaint};">${label}</div>
-          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? '#8B949B' : (key === 'balance' ? L.ok : '#14181B')};">${shown}</div>
+          <!-- ── BLACK ON BLACK ────────────────────────────────────────
+               Apsara, 2026-09-11: "why tare,net weights aew empty at the
+               end." They were never empty. compute() returns all five and
+               always did; they were being drawn in HARD-CODED #14181B, which
+               is this theme's own sunken tone — the exact colour of the surface
+               behind them. Only Balance was legible, because it takes L.ok
+               and is green.
+               In the paper palette #14181B is near-black on white and reads
+               perfectly, which is why it survived: the bug only exists in the
+               theme she actually uses. Same reason the L.danger quoting
+               slip got through in September. Tokens, never hexes. -->
+          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? L.inkFaint : (key === 'balance' ? L.ok : L.ink)};">${shown}</div>
         </div>`;
       });
       $('ledPreview').innerHTML = cells.join('');
