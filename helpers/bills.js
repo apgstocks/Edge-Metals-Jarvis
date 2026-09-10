@@ -70,6 +70,54 @@ function num(v) {
 // Pure, exported, and tested on its own. Takes the raw fields she typed and
 // returns everything derived from them, plus what is missing — because a bill
 // that cannot be computed has to say why rather than show a confident zero.
+// ── SEVERAL GRADES IN ONE CONTAINER ──────────────────────────────────────
+// Apsara, 2026-09-10: "Also in bill what if i have multiple items in same
+// container." Asked how the weights work, she chose: "Each item has its own
+// weight and price."
+//
+// So a bill can carry a list. Al combo 12,000 lb at $0.32 and Auto cast
+// 17,000 lb at $0.28 are two lines, two prices, and the bill amount is their
+// sum — not one blended price, which is the shortcut that makes a container
+// look profitable while one grade inside it loses money.
+//
+// The item weights SHOULD add up to the container net (gross − tares). When
+// they do not it is REPORTED, never refused: the packing list and the
+// weighbridge disagree by a few pounds as a matter of course, and a form that
+// refuses a real bill is a form she works around. `weight_gap` is that
+// difference, and the table shows it.
+//
+// The single-item shape still works untouched: `description` + `supplier_price`
+// with no items is one grade, which is most bills, and nothing about them
+// changes.
+function cleanItems(input) {
+    const out = [];
+    for (const it of (Array.isArray(input) ? input : [])) {
+        if (!it) continue;
+        const description = String(it.description || '').trim();
+        const weight = num(it.weight);
+        const price = num(it.price);
+        if (!description && weight === null && price === null) continue;   // a blank row
+        if (!description) throw new Error('an item needs a description — what grade is it?');
+        const id = String(it.id || '').trim()
+            || `ITM_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+        // Same magnitude rule as the bill's own price, and overridable the
+        // same way: under $10 is per lb, $10+ is per MT.
+        const unit = it.price_unit === 'lb' || it.price_unit === 'mt'
+            ? it.price_unit
+            : (price === null ? null : (price < PER_LB_CEILING ? 'lb' : 'mt'));
+        const mt = weight === null ? null : round3(weight / LB_PER_MT);
+        let amount = null;
+        if (price !== null && unit) {
+            amount = unit === 'lb'
+                ? (weight === null ? null : round2(weight * price))
+                : (mt === null ? null : round2(mt * price));
+        }
+        out.push({ id, description, weight, price, price_unit: unit,
+                   weight_mt: mt, amount });
+    }
+    return out;
+}
+
 function compute(input) {
     const b = input || {};
     const gross = num(b.gross);
@@ -101,6 +149,21 @@ function compute(input) {
         if (unit === 'lb') amount = netLb === null ? null : round2(netLb * price);
         else amount = netMt === null ? null : round2(netMt * price);
     }
+
+    // ── ITEMS WIN OVER THE SINGLE PRICE ──────────────────────────────────
+    // If she has broken the container into grades, the sum of the lines IS
+    // the amount. Falling back to net x one price when items exist would
+    // quietly ignore everything she typed into them.
+    let items = [];
+    try { items = cleanItems(b.items); } catch (e) { items = []; }
+    const itemsWeight = items.length
+        ? round3(items.reduce((s, i) => s + (i.weight || 0), 0)) : null;
+    const itemsAmount = items.length && items.every((i) => i.amount !== null)
+        ? round2(items.reduce((s, i) => s + i.amount, 0)) : null;
+    if (itemsAmount !== null) amount = itemsAmount;
+    // Reported, not refused — see cleanItems.
+    const weightGap = (items.length && netLb !== null && itemsWeight !== null)
+        ? round3(netLb - itemsWeight) : null;
     // A supplier invoice amount she typed herself WINS over the computed one.
     // The supplier's invoice is the document of record; if it disagrees with
     // our arithmetic that is a conversation to have, not a number to overwrite.
@@ -128,6 +191,12 @@ function compute(input) {
         : round2(amountUsed - (trucking || 0) - paid);
 
     return {
+        items,
+        items_weight: itemsWeight,
+        items_amount: itemsAmount,
+        // Non-zero means the grades do not add up to the container. A few
+        // pounds is ordinary; a few hundred is a typo.
+        weight_gap: weightGap,
         total: gross === null && !Object.keys(tare).some((k) => tare[k] !== null) ? null : round3(total),
         net_lb: netLb,
         net_mt: netMt,
@@ -414,7 +483,7 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 // or computed. The arithmetic had been right the whole time and one of her
 // columns simply could not be filled in.
 const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
-    .concat(['supplier_invoice_amount', 'price_unit', 'note']);
+    .concat(['supplier_invoice_amount', 'price_unit', 'note', 'items']);
 
 // ── A PASTED LINK IS RENDERED, SO IT IS CHECKED ──────────────────────────
 // These come back out into the table as clickable links. A "javascript:..."
@@ -452,6 +521,10 @@ function clean(input) {
         if (k in out) out[k] = num(out[k]);
     }
     if ('photos' in out) out.photos = cleanPhotos(out.photos);
+    // Validated on the way IN, so an item with no description fails while she
+    // still remembers what she meant to type — not silently dropped from a
+    // total she reads a week later.
+    if ('items' in out) out.items = cleanItems(out.items);
     return out;
 }
 
@@ -554,4 +627,5 @@ module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING,
     FILTERABLE, filterRows, facets, sortableDate, cleanPhotos,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
+    cleanItems,
 };

@@ -1421,6 +1421,93 @@ section('Q — the customer box, and the figures that move as she types');
        'computing this in the browser is free to disagree with the file that decides it');
 }
 
+section('R — several grades in one container');
+{
+    // Apsara, 2026-09-10: "Also in bill what if i have multiple items in same
+    // container." Asked how the weights work: "Each item has its own weight
+    // and price."
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+
+    const mixed = bills.compute({
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        items: [
+            { description: 'Al combo', weight: 8000, price: 0.32 },
+            { description: 'Auto cast', weight: 6500, price: 0.28 },
+        ],
+    });
+    ck('each grade is priced on its own weight',
+       mixed.items.map((i) => i.amount).join(',') === '2560,1820',
+       JSON.stringify(mixed.items.map((i) => i.amount)));
+    ck('  and the bill is their sum, not a blended price',
+       mixed.amount === 4380, String(mixed.amount));
+    ck('    which is NOT what one price over the net would give',
+       mixed.amount !== bills.compute({ gross: 44000, truck: 15000, container: 8000,
+                                        chassis: 6000, boxes: 500, supplier_price: 0.32 }).amount,
+       'a blended price makes a container look fine while one grade inside it loses money');
+    ck('  the item weights are totalled', mixed.items_weight === 14500, String(mixed.items_weight));
+    ck('  and reconcile to the container net', mixed.weight_gap === 0, String(mixed.weight_gap));
+
+    // The $10 rule applies per line, so a per-MT grade can sit beside a
+    // per-lb one on the same container.
+    const perMt = bills.compute({ gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        items: [{ description: 'Zorba', weight: 14500, price: 700 }] });
+    ck('a price of 700 on a line is read as per MT',
+       perMt.items[0].price_unit === 'mt', perMt.items[0].price_unit);
+    ck('  so the line is weight in MT times the rate',
+       perMt.items[0].amount === round2(round3(14500 / bills.LB_PER_MT) * 700),
+       String(perMt.items[0].amount));
+
+    // ── A GAP IS REPORTED, NEVER REFUSED ─────────────────────────────────
+    const short = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier: 'Mixed Metals', container_no: 'MIXU1',
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        items: [{ description: 'Al combo', weight: 8000, price: 0.32 },
+                { description: 'Auto cast', weight: 6000, price: 0.28 }],
+    } });
+    ck('a bill whose grades do not add up still saves', short.status === 200, short.raw);
+    ck('  and says by how much', short.json.bill.weight_gap === 500,
+       String(short.json.bill.weight_gap));
+    ck('  because the packing list and the weighbridge disagree as a matter of course',
+       short.json.bill.amount === round2(8000 * 0.32 + round3(6000) * 0.28),
+       String(short.json.bill.amount));
+
+    const noDesc = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier: 'Mixed Metals',
+        items: [{ weight: 100, price: 0.3 }],
+    } });
+    ck('an item with no description is refused', noDesc.status === 400, noDesc.raw);
+    ck('  asking what grade it is', /grade/.test(noDesc.json.error || ''), noDesc.json.error);
+    ck('a blank line is not an error',
+       bills.cleanItems([{ description: '', weight: null, price: null }]).length === 0);
+
+    // ── ONE ITEM IS STILL ONE ITEM ───────────────────────────────────────
+    const single = bills.compute({ gross: 44000, truck: 15000, container: 8000,
+                                   chassis: 6000, boxes: 500, supplier_price: 0.32 });
+    ck('a bill with no items works exactly as before',
+       single.amount === 4640 && single.items.length === 0, String(single.amount));
+    ck('  and has no weight gap to report', single.weight_gap === null,
+       'a gap on a bill with no grades would be a warning about nothing');
+    ck('  her stated invoice amount still wins over the lines',
+       bills.compute({ gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+                       supplier_invoice_amount: 5000,
+                       items: [{ description: 'Al combo', weight: 8000, price: 0.32 }] }).amount === 5000,
+       'the supplier invoice is the document of record');
+
+    // Ids survive an edit, so anything referencing a line keeps referencing it.
+    const withIds = bills.cleanItems([{ description: 'Al combo', weight: 8000, price: 0.32 }]);
+    ck('every item gets an id', !!withIds[0].id);
+    ck('  kept when the bill is saved again',
+       bills.cleanItems(withIds)[0].id === withIds[0].id,
+       'by array index, deleting a middle line would move everything below it');
+
+    const saved = await req('GET', `/api/bills`, { sid: admin });
+    const row = saved.json.bills.find((x) => x.container_no === 'MIXU1');
+    ck('the route returns the items with the row', (row.items || []).length === 2,
+       JSON.stringify((row.items || []).map((i) => i.description)));
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
