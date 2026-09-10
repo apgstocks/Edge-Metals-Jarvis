@@ -3935,6 +3935,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // The rows are DERIVED from the bills — nothing is copied into a store of
     // its own — and the filters run here so the summary always describes the
     // rows on screen.
+    // ── WHAT A CONTAINER MADE ────────────────────────────────────────────
+    // The join the container-grain rebuild was for. Bills and Sales are keyed
+    // on the same booking + container, so what a box cost and what it sold
+    // for can finally be subtracted.
+    app.get('/api/margin', (req, res) => {
+        try {
+            const m = require('./helpers/margin');
+            const all = m.rows();
+            const rows = m.filterRows(all, req.query || {});
+            res.json({
+                rows,
+                summary: m.summary(rows),
+                total_unfiltered: all.length,
+                facets: m.facets(all),
+                states: m.STATES,
+                // Rows with no container number can never join. Reported so
+                // an unmatched bill is something she can fix rather than a
+                // margin that quietly never appears.
+                unjoinable: m.unjoinable(),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/metals-trucking', (req, res) => {
         try {
             const mt = require('./helpers/metalsTrucking');

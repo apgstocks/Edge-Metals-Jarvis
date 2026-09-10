@@ -4857,7 +4857,9 @@ const metalsTab = { bills: 'bills', sales: 'outgoing' };
 const METALS_TABS = {
   bills: [['bills', 'Bills'], ['trucking', 'Trucking']],
   sales: [['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
-          ['freight', 'Freight'], ['commission', 'Commission']],
+          ['freight', 'Freight'], ['commission', 'Commission'],
+          // The join, and the reason the two sides were keyed the same way.
+          ['margin', 'Margin']],
 };
 
 function metalsTabBar(section) {
@@ -4888,6 +4890,7 @@ function wireMetalsTabs() {
 
 const SALES_TAB_TITLES = {
   incoming: ['Sales', 'Incoming'],
+  margin: ['Edge Metals', 'Margin per container'],
   freight: ['Sales', 'Freight'],
   commission: ['Sales', 'Commission'],
 };
@@ -5570,6 +5573,7 @@ async function renderSalesSubTab(which) {
   wireMetalsTabs();
   try {
     if (which === 'incoming') await renderIncoming();
+    else if (which === 'margin') await renderMargin();
     else await renderPayables(which);
   } catch (e) {
     $('subBody').innerHTML = `<div style="color:var(--status-warn); font-size:13px;">${esc(e.message || 'could not load')}</div>`;
@@ -5578,6 +5582,105 @@ async function renderSalesSubTab(which) {
 
 const salesMoney = (n) => (n === null || n === undefined || isNaN(Number(n)))
   ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── WHAT EACH CONTAINER MADE ─────────────────────────────────────────────
+// Every figure comes from the server, which gets each one from the single
+// place that decides it. Nothing here does arithmetic except reading the
+// answer — a second opinion about her formulas would be free to drift from
+// the first.
+let marginFilters = {};
+
+async function renderMargin() {
+  const qs = Object.entries(marginFilters).filter(([, v]) => String(v || '').trim() !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  const data = await api('/api/margin' + (qs ? `?${qs}` : ''));
+  const rows = data.rows || [];
+  const sum = data.summary || {};
+  const facets = data.facets || {};
+  const un = data.unjoinable || { bills: [], sales: [] };
+  const active = Object.values(marginFilters).filter((v) => String(v || '').trim() !== '').length;
+
+  const card = (label, value, tone) => `
+    <div class="card" style="padding:12px;">
+      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${label}</div>
+      <div style="font-size:16px; font-weight:700; margin-top:4px; ${tone ? `color:${tone};` : ''}">${value}</div>
+    </div>`;
+
+  const sel = (key, label, opts, width) => `
+    <div>
+      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">${label}</div>
+      <select data-mg-filter="${key}" style="width:${width}px; padding:7px 9px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-size:12px;">
+        <option value="">All</option>
+        ${(opts || []).map((o) => `<option value="${esc(o)}" ${marginFilters[key] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+      </select></div>`;
+
+  const state = (r) => {
+    const map = { closed: ['var(--text-muted)', 'closed'],
+                  bought: ['var(--status-warn)', 'not sold yet'],
+                  sold: ['var(--status-warn)', 'no bill'] };
+    const [c, t] = map[r.state] || map.closed;
+    return `<span style="font-size:10px; padding:2px 8px; border-radius:var(--radius-sm); border:1px solid ${c}; color:${c};">${t}</span>`;
+  };
+
+  $('subBody').innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:12px;">
+      ${card('Revenue', ledMoney(sum.revenue))}
+      ${card('Cost', ledMoney(sum.cost))}
+      ${card('Margin', ledMoney(sum.margin),
+             (sum.margin || 0) < 0 ? 'var(--status-danger)' : 'var(--status-good, #4ade80)')}
+      ${card('Margin %', sum.margin_pct === null || sum.margin_pct === undefined ? '—' : `${sum.margin_pct}%`)}
+      ${card('Closed', `${sum.closed || 0} of ${sum.count || 0}`)}
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+      ${sel('state', 'State', data.states, 120)}
+      ${sel('customer', 'Customer', facets.customer, 150)}
+      ${sel('supplier', 'Supplier', facets.supplier, 150)}
+      <button id="mgClear" class="btn btn-secondary" style="font-size:11px; padding:8px 14px;">Clear</button>
+      <div style="flex:1;"></div>
+      <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); padding-bottom:9px;">
+        ${active ? `${active} filter${active === 1 ? '' : 's'} · ` : ''}${rows.length} of ${data.total_unfiltered ?? rows.length}
+      </div>
+    </div>
+
+    ${(un.bills.length || un.sales.length) ? `
+      <div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
+        ${un.bills.length ? `${un.bills.length} bill${un.bills.length === 1 ? '' : 's'}` : ''}${un.bills.length && un.sales.length ? ' and ' : ''}${un.sales.length ? `${un.sales.length} sale${un.sales.length === 1 ? '' : 's'}` : ''} carry no container number, so ${un.bills.length + un.sales.length === 1 ? 'it can' : 'they can'} never be matched. Add one and ${un.bills.length + un.sales.length === 1 ? 'it appears' : 'they appear'} here.
+      </div>` : ''}
+
+    <div class="card" style="padding:0; overflow-x:auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:12px;">
+        <thead><tr style="background:var(--bg-sunken);">
+          ${['Booking', 'Container', 'Supplier', 'Customer', 'Bought', 'Trucking', 'Sold', 'Charges', 'Commission', 'Margin', '/MT', '']
+            .map((h, i) => `<th style="padding:8px 9px; text-align:${i >= 4 && i <= 10 ? 'right' : 'left'}; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>${rows.length ? rows.map((r) => `
+          <tr data-key="${esc(r.key)}" style="border-top:1px solid var(--line);">
+            <td style="padding:7px 9px; font-family:var(--font-mono); color:var(--text-muted);">${ledText(r.booking_no)}</td>
+            <td style="padding:7px 9px; font-family:var(--font-mono);">${ledText(r.container_no)}</td>
+            <td style="padding:7px 9px; white-space:nowrap;">${ledText(r.supplier)}</td>
+            <td style="padding:7px 9px; white-space:nowrap;">${ledText(r.customer)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(r.bill_amount)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(r.trucking)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(r.invoice_amount)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);" title="${esc((r.charges_in || 0) ? `${ledMoney(r.charges_in)} billed to the customer` : 'nothing billed on')}">${ledMoney(r.charges_out)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(r.commission)}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${r.margin === null ? 'color:var(--text-faint);' : ((r.margin < 0) ? 'color:var(--status-danger);' : 'color:var(--status-good, #4ade80);')}">${r.margin === null ? '—' : ledMoney(r.margin)}${r.margin_pct === null ? '' : `<div style="font-size:10px; color:var(--text-muted);">${r.margin_pct}%</div>`}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${r.margin_per_mt === null ? '—' : ledMoney(r.margin_per_mt)}</td>
+            <td style="padding:7px 9px;">${r.state === 'closed' ? (r.weight_gap ? `<span title="Bought ${ledNum(r.bought_weight_lb)} lbs, sold ${ledNum(r.sold_weight_lb)}" style="font-size:10px; color:var(--status-warn);">${ledNum(r.weight_gap)} lb gap</span>` : '') : state(r)}</td>
+          </tr>`).join('')
+          : `<tr><td colspan="12" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No container has both a bill and a sale yet.'}</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
+      Margin is invoice + charges billed on, less supplier, trucking, charges paid and commission · only a container with both sides carries a figure · totals cover closed containers only
+    </div>`;
+
+  document.querySelectorAll('[data-mg-filter]').forEach((el) => {
+    el.onchange = () => { marginFilters[el.dataset.mgFilter] = el.value; renderMargin(); };
+  });
+  $('mgClear').onclick = () => { marginFilters = {}; renderMargin(); };
+}
 
 async function renderIncoming() {
   const data = await api('/api/sales-receipts');

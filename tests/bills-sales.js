@@ -1998,6 +1998,126 @@ section('U — what the haulage is made of');
     ck('the ROUTE refuses an unexplained Other too', badOther.status === 400, badOther.raw);
 }
 
+section('V — what a container actually made');
+{
+    // The point of the whole container-grain rebuild: bills and sales keyed
+    // on the same booking + container, so what a box cost and what it sold
+    // for can be subtracted. The app could not answer this before today.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const margin = require(path.join(ROOT, 'helpers/margin'));
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    const bill = (await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/01/2026', supplier: 'Marg Supplier', booking_no: 'MGBK', container_no: 'MGCU1',
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        supplier_price: 0.30, trucking_company: 'Marg Haulage', trucking_amount: 1200,
+    } })).json.bill;
+    ck('the bill computes what the metal cost', bill.amount === 4350, String(bill.amount));
+
+    const sale = (await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/12/2026', customer: 'Marg Customer', booking_no: 'MGBK', container_no: 'MGCU1',
+        weight: 14500, invoice_price: 0.45, commission_per_mt: 6,
+        charges: [
+            { what: 'Ocean freight', amount: 2100, direction: 'out', why: 'LAX to Busan' },
+            { what: 'Detention', amount: 300, direction: 'in', why: 'their delay, rebilled' },
+        ],
+    } })).json.sale;
+
+    const row = () => margin.rows().find((r) => r.container_no === 'MGCU1');
+    ck('the two sides join on booking and container', !!row() && row().state === 'closed',
+       JSON.stringify(row() && [row().bill_id, row().sale_id, row().state]));
+
+    // revenue 6525 + 300 = 6825; cost 4350 + 1200 + 2100 + commission
+    const comm = sale.commission_amount;
+    ck('revenue is the invoice plus what was billed on',
+       row().revenue === round2(sale.amount + 300), JSON.stringify([row().revenue, sale.amount]));
+    ck('cost is supplier, trucking, charges she pays and commission',
+       row().cost === round2(4350 + 1200 + 2100 + comm), String(row().cost));
+    ck('  and margin is the one subtraction this file does',
+       row().margin === round2(row().revenue - row().cost), String(row().margin));
+    ck('  with a percentage of revenue',
+       row().margin_pct === round2((row().margin / row().revenue) * 100), String(row().margin_pct));
+    ck('  and per MT of what was sold, which is what compares between deals',
+       row().margin_per_mt === round2(row().margin / (14500 / bills.LB_PER_MT)),
+       String(row().margin_per_mt));
+
+    // THE DOUBLE-SUBTRACTION TRAP. Trucking is deducted from what the
+    // supplier is owed (net_payable) AND is a cost of the container. Counting
+    // it in both places here would take it off twice.
+    ck('trucking is counted once, not once here and once in Payable',
+       row().cost === round2(4350 + 1200 + 2100 + comm)
+       && bill.net_payable === round2(4350 - 1200),
+       JSON.stringify({ cost: row().cost, payable: bill.net_payable }));
+
+    // ── ONE SIDE ONLY IS NOT A RESULT ────────────────────────────────────
+    await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/03/2026', supplier: 'Marg Supplier', booking_no: 'MGBK', container_no: 'MGCU2',
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0, supplier_price: 0.30 } });
+    const unsold = () => margin.rows().find((r) => r.container_no === 'MGCU2');
+    ck('a container bought and not yet sold is not a loss',
+       unsold().margin === null && unsold().state === 'bought',
+       JSON.stringify([unsold().state, unsold().margin]));
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/12/2026', customer: 'Marg Customer', booking_no: 'MGBK', container_no: 'MGCU3',
+        weight: 14000, invoice_price: 0.45 } });
+    const nobill = () => margin.rows().find((r) => r.container_no === 'MGCU3');
+    ck('  and a sale with no bill is not pure profit',
+       nobill().margin === null && nobill().state === 'sold',
+       JSON.stringify([nobill().state, nobill().margin]));
+
+    const mine = margin.rows().filter((r) => String(r.container_no || '').startsWith('MGCU'));
+    // Asserted on REVENUE and the closed count, not on margin: an open
+    // container's margin is null and contributes zero either way, so a
+    // summary that wrongly included it looked identical. Both mutations for
+    // this survived until the assertion moved to a figure that actually
+    // changes.
+    ck('the totals cover CLOSED containers only',
+       margin.summary(mine).closed === 1 && margin.summary(mine).count === 3,
+       JSON.stringify(margin.summary(mine)));
+    ck('  so an unsold container\'s revenue is not counted as earned',
+       margin.summary(mine).revenue === row().revenue,
+       JSON.stringify([margin.summary(mine).revenue, row().revenue]));
+    ck('  nor an unsold one\'s cost',
+       margin.summary(mine).cost === row().cost,
+       'averaging in a container that is bought and not sold drags the figure toward nothing');
+    ck('  while still saying how many are open',
+       margin.summary(mine).open_bought === 1 && margin.summary(mine).open_sold === 1,
+       JSON.stringify(margin.summary(mine)));
+
+    // The same container under a DIFFERENT booking is a different container.
+    await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/04/2026', supplier: 'Marg Supplier', booking_no: 'MGBK2', container_no: 'MGCU1',
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0, supplier_price: 0.30 } });
+    ck('the same box under another booking does not merge into the first',
+       margin.rows().filter((r) => r.container_no === 'MGCU1').length === 2,
+       'MSKU1111111 sails again next year with different metal in it');
+
+    // ── AND WHAT CAN NEVER JOIN IS SAID SO ───────────────────────────────
+    await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/05/2026', supplier: 'No Container Co', supplier_price: 0.3 } });
+    const u = margin.unjoinable();
+    ck('a bill with no container number is reported as unjoinable',
+       u.bills.some((b) => b.supplier === 'No Container Co'),
+       'otherwise its margin quietly never appears');
+
+    const listed = await req('GET', '/api/margin?state=closed', { sid: admin });
+    ck('the route filters', listed.status === 200
+       && listed.json.rows.every((r) => r.state === 'closed'),
+       JSON.stringify(listed.json.rows.map((r) => r.state)));
+    ck('  and totals the rows it returned, not every row',
+       listed.json.summary.count === listed.json.rows.length
+       && listed.json.summary.revenue
+          === round2(listed.json.rows.reduce((t, r) => t + (r.revenue || 0), 0)),
+       JSON.stringify({ card: listed.json.summary.revenue, shown: listed.json.rows.length,
+                        all: listed.json.total_unfiltered }));
+    ck('    while still saying how many there are altogether',
+       listed.json.total_unfiltered > listed.json.rows.length,
+       JSON.stringify([listed.json.total_unfiltered, listed.json.rows.length]));
+
+    const staff = (await login('staff-pw-ccccccccccc')).json.sid;
+    ck('staff cannot see margins', (await req('GET', '/api/margin', { sid: staff })).status === 403);
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

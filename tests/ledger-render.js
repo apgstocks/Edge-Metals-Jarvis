@@ -1231,9 +1231,9 @@ section('G6 — four tabs, two stores');
        nav.filter((t) => t === 'bills' || t === 'sales').length === 2
        && !nav.some((t) => /^sales-|^metals-/.test(t)),
        nav.filter((t) => /sales|bill|truck/.test(t)).join(','));
-    ck('  and the four live in a strip inside Sales',
+    ck('  and the views live in a strip inside Sales',
        [...doc.querySelectorAll('.metals-tab[data-section="sales"]')].map((b) => b.dataset.tab).join(',')
-         === 'outgoing,incoming,freight,commission',
+         === 'outgoing,incoming,freight,commission,margin',
        [...doc.querySelectorAll('.metals-tab[data-section="sales"]')].map((b) => b.dataset.tab).join(','));
     ck('  and the duplicate container is called out where she will see it',
        /appears 2 times under B1/.test(doc.getElementById('viewRoot').textContent),
