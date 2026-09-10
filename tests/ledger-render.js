@@ -1677,6 +1677,115 @@ section('G10 — labels beside their fields, and her five groups');
     dom.window.close();
 }
 
+section('G11 — typing the item lines and the haulage split');
+{
+    // The backend has taken multi-grade bills and a trucking split since
+    // 2026-09-10; until now the FORM offered neither, so they could only be
+    // posted through the API. "the backend takes both, and the API accepts
+    // them, but the form has one description box" — that is what this closes.
+    const saves = [];
+    const { w, dom } = await mount({
+        '/api/bills': billsRoute,
+        '/api/bills/preview': () => bills.compute({}),
+    });
+    const doc = w.document;
+    const realApi = w.api;
+    w.api = async (p, opts) => {
+        if (opts && opts.method) { saves.push({ path: p, method: opts.method, body: JSON.parse(opts.body || '{}') });
+                                   return { ok: true, bill: bills.withTotals({ id: 'NEW1', ...JSON.parse(opts.body) }) }; }
+        return realApi(p, opts);
+    };
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills');
+    const fire = (el) => el.dispatchEvent(new w.Event('input', { bubbles: true }));
+
+    // ── ITEM LINES ───────────────────────────────────────────────────────
+    ck('the form has an item editor at all', !!doc.getElementById('ledItemsBox'));
+    ck('  starting empty, saying one grade needs no lines',
+       /One grade\?/.test(doc.getElementById('ledItemsBox').textContent),
+       doc.getElementById('ledItemsBox').textContent.replace(/\s+/g, ' ').slice(0, 90));
+    doc.getElementById('ledItemAdd').click();
+    doc.getElementById('ledItemAdd').click();
+    ck('Add item makes lines', doc.querySelectorAll('#ledItemsBox [data-item]').length === 2);
+
+    const setIt = (i, f, v) => {
+        const el = doc.querySelector(`#ledItemsBox input[data-i="${i}"][data-f="${f}"]`);
+        el.value = v; fire(el);
+    };
+    setIt(0, 'description', 'Al combo'); setIt(0, 'weight', '15800'); setIt(0, 'price', '0.41');
+    ck('a line works out its own amount as she types',
+       /6,478\.00/.test(doc.querySelector('#ledItemsBox [data-item="0"]').textContent),
+       doc.querySelector('#ledItemsBox [data-item="0"]').textContent.replace(/\s+/g, ' ').trim());
+
+    // The weighbridge ticket is folded away until asked for.
+    const ticket = doc.querySelector('.ledTicket[data-i="1"]');
+    ck('each line hides its weighbridge ticket', ticket.style.display === 'none',
+       'ten input columns is what made the first attempt unreadable');
+    doc.querySelector('.ledItemTicket[data-i="1"]').click();
+    ck('  until the ticket button is pressed', ticket.style.display === 'flex');
+    setIt(1, 'description', 'Auto cast');
+    setIt(1, 'gross', '26000'); setIt(1, 'truck', '14000'); setIt(1, 'boxes', '100');
+    setIt(1, 'price', '0.38');
+    ck('  and then the line nets out its own gross',
+       /11,900/.test(doc.querySelector('#ledItemsBox [data-item="1"]').textContent),
+       doc.querySelector('#ledItemsBox [data-item="1"]').textContent.replace(/\s+/g, ' ').trim());
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const lastBill = saves.filter((c) => /\/api\/bills/.test(c.path)).pop();
+    ck('the lines reach the server', (lastBill.body.items || []).length === 2,
+       JSON.stringify(lastBill.body.items));
+    ck('  carrying the ticket, not just a weight',
+       lastBill.body.items[1].gross === '26000' && lastBill.body.items[1].truck === '14000',
+       JSON.stringify(lastBill.body.items[1]));
+
+    doc.querySelector('.ledItemDel[data-i="0"]').click();
+    ck('removing a line removes it', doc.querySelectorAll('#ledItemsBox [data-item]').length === 1);
+    await new Promise((r) => setTimeout(r, 1500));
+    ck('  and that reaches the server too, though no key was pressed',
+       (saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.items || []).length === 1,
+       'a click fires no input event — the delete has to ask for the save itself');
+
+    // ── THE HAULAGE SPLIT ────────────────────────────────────────────────
+    ck('the bill form has a split editor', !!doc.getElementById('ledSplitBox'));
+    const setSp = (k, v) => { const el = doc.querySelector(`[data-split="${k}"]`); el.value = v; fire(el); };
+    setSp('line_haul', '650'); setSp('port_fees', '55'); setSp('chassis_rent', '0');
+    ck('the parts are her spreadsheet\'s',
+       ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale']
+         .every((k) => !!doc.querySelector(`[data-split="${k}"]`)));
+    ck('  and it totals as she types',
+       /705\.00/.test(doc.getElementById('ledSplitBox').textContent),
+       doc.getElementById('ledSplitBox').textContent.replace(/\s+/g, ' ').slice(-120));
+
+    doc.getElementById('ledOtherAdd').click();
+    const oWhat = doc.querySelector('[data-other="0"][data-f="what"]');
+    oWhat.value = 'Prepull'; fire(oWhat);
+    const oAmt = doc.querySelector('[data-other="0"][data-f="amount"]');
+    oAmt.value = '100'; fire(oAmt);
+    ck('an Other with no note is marked as unfinished before she saves',
+       rgbEq(doc.querySelector('[data-other="0"][data-f="note"]').style.borderColor,
+             w.ledgerTheme().danger),
+       'the server refuses it; the form should say so first');
+    const oNote = doc.querySelector('[data-other="0"][data-f="note"]');
+    oNote.value = 'held overnight at the terminal'; fire(oNote);
+    ck('  and stops being marked once explained',
+       !rgbEq(doc.querySelector('[data-other="0"][data-f="note"]').style.borderColor,
+              w.ledgerTheme().danger));
+
+    setSp('invoice_no', '8727');
+    await new Promise((r) => setTimeout(r, 1500));
+    const withSplit = saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.trucking_split;
+    ck('the split reaches the server', !!withSplit, JSON.stringify(withSplit));
+    ck('  with her parts', withSplit.line_haul === '650' && withSplit.port_fees === '55');
+    ck('  the Other and its note',
+       withSplit.others.length === 1 && withSplit.others[0].note === 'held overnight at the terminal',
+       JSON.stringify(withSplit.others));
+    ck('  and the trucker\'s own invoice number', withSplit.invoice_no === '8727');
+
+    doc.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

@@ -6633,9 +6633,21 @@ function openLedgerForm(kind, existing, seed) {
     </div>`;
   };
 
+  // ── THE LINES, AND THE HAULAGE SPLIT ─────────────────────────────────
+  // Held as arrays rather than as named inputs, because the number of rows is
+  // not known when the form is built and FormData cannot express a list. They
+  // are read straight into the body by readForm below, so autosave carries
+  // them exactly as any typed field.
+  let ledItems = Array.isArray(existing && existing.items)
+    ? JSON.parse(JSON.stringify(existing.items)) : [];
+  let ledSplit = (existing && existing.trucking_split && existing.trucking_split.present)
+    ? JSON.parse(JSON.stringify(existing.trucking_split))
+    : { invoice_no: '', verified_on: '', others: [] };
+  if (!Array.isArray(ledSplit.others)) ledSplit.others = [];
+
   const sections = groups.map((g) => {
     const mine = inGroup(g);
-    if (!mine.length) return '';
+    if (!mine.length && g.id !== 'items' && g.id !== 'trucking') return '';
     // The weights group is a row of five short numbers and reads better in a
     // grid; everything else is label-then-field down a column.
     const grid = g.cols
@@ -6645,6 +6657,8 @@ function openLedgerForm(kind, existing, seed) {
       <div style="margin-bottom:20px;${g.full ? ' grid-column:1/-1;' : ''}">
         <div style="font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:11px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="letter-spacing:0; text-transform:none;">· lbs</span>' : ''}</div>
         <div style="${grid}">${mine.map((c) => (g.cols ? inputFor(c) : inlineField(c))).join('')}</div>
+        ${g.id === 'items' ? '<div id="ledItemsBox"></div>' : ''}
+        ${g.id === 'trucking' && kind === 'bills' ? '<div id="ledSplitBox" style="margin-top:12px;"></div>' : ''}
       </div>`;
   }).join('');
 
@@ -6709,6 +6723,218 @@ function openLedgerForm(kind, existing, seed) {
   // here rather than in the markup, which is the whole point of
   // wireUsDateField — a call site cannot forget one it does not write.
   document.querySelectorAll('#ledgerForm [data-ledger-date]').forEach((el) => wireUsDateField(el));
+
+  // ── THE ITEM LINES ───────────────────────────────────────────────────
+  // Apsara, 2026-09-10: "what if i have multiple items in same container",
+  // then "Each grade is its own weighbridge ticket."
+  //
+  // Four columns on the surface — description, net, price, amount — with the
+  // weighing folded underneath and opened per line. Ten input columns is what
+  // made the first attempt at this unreadable, and most of the time the
+  // question is what a grade came to, not what it weighed on the way in.
+  const L = LEDGER_LIGHT;
+  const money0 = (n) => (n === null || n === undefined || isNaN(Number(n))) ? '—'
+    : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const numOf = (v) => { const n = parseFloat(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : null; };
+  const cell = (val, ph, w) => `style="width:${w}; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;" value="${esc(val ?? '')}" placeholder="${esc(ph || '')}" autocomplete="off"`;
+
+  // The same arithmetic helpers/bills.js does, for the row she is typing into.
+  // The SERVER still decides what is saved — this only keeps the line from
+  // being blank until the next preview lands.
+  const lineOf = (it) => {
+    const tare = ['truck', 'container', 'chassis', 'boxes'].reduce((t, k) => t + (numOf(it[k]) || 0), 0);
+    const hasTicket = numOf(it.gross) !== null
+      || ['truck', 'container', 'chassis', 'boxes'].some((k) => numOf(it[k]) !== null);
+    const wt = hasTicket
+      ? (numOf(it.gross) === null ? null : Math.round((numOf(it.gross) - tare) * 1000) / 1000)
+      : numOf(it.weight);
+    const price = numOf(it.price);
+    const perLb = price === null ? null : price < 10;
+    const amt = (price === null || wt === null) ? null
+      : Math.round((perLb ? wt * price : (wt / 2204.62) * price) * 100) / 100;
+    return { wt, amt, hasTicket, tare };
+  };
+
+  function paintItems() {
+    const box = $('ledItemsBox');
+    if (!box) return;
+    const rows = ledItems.map((it, i) => {
+      const { wt, amt, hasTicket } = lineOf(it);
+      return `
+      <div data-item="${i}" style="border-top:1px solid ${L.lineSoft}; padding:7px 0;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <input data-i="${i}" data-f="description" list="ledlist-description" ${cell(it.description, 'grade', '100%')} style="flex:1; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
+          ${hasTicket
+            // Derived from this line's own ticket, so it is read-only — the
+            // arithmetic is below and typing over it would make the two
+            // disagree.
+            ? `<span class="ledItemNet" data-i="${i}" style="width:86px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.inkMuted};">${wt === null ? '—' : money0(wt)}</span>`
+            // No ticket means one weighing split on paper, and then the
+            // weight is hers to type. The first version made this a span in
+            // BOTH cases, which left no way to enter a plain-weight line at
+            // all — caught by its own test.
+            : `<input data-i="${i}" data-f="weight" ${cell(it.weight, 'net lbs', '86px')} style="width:86px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">`}
+          <input data-i="${i}" data-f="price" ${cell(it.price, 'price', '72px')}>
+          <span class="ledItemAmt" style="width:88px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.ink};">${money0(amt)}</span>
+          <button type="button" class="ledItemTicket" data-i="${i}" title="Weighbridge ticket"
+            style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${hasTicket ? L.accent : L.inkFaint}; font-size:11px; padding:3px 7px; cursor:pointer;">ticket</button>
+          <button type="button" class="ledItemDel" data-i="${i}" aria-label="Remove line"
+            style="background:none; border:none; color:${L.inkFaint}; font-size:15px; cursor:pointer;">&times;</button>
+        </div>
+        <div class="ledTicket" data-i="${i}" style="display:${hasTicket ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:7px; padding:8px 10px; background:${L.sunken}; border-radius:var(--radius-sm); font-size:11px; color:${L.inkMuted};">
+          <span>Gross</span><input data-i="${i}" data-f="gross" ${cell(it.gross, '', '76px')}>
+          <span>−</span>
+          <input data-i="${i}" data-f="truck" ${cell(it.truck, 'truck', '66px')}>
+          <input data-i="${i}" data-f="container" ${cell(it.container, 'container', '72px')}>
+          <input data-i="${i}" data-f="chassis" ${cell(it.chassis, 'chassis', '66px')}>
+          <input data-i="${i}" data-f="boxes" ${cell(it.boxes, 'boxes', '60px')}>
+          <span>=</span>
+          <span class="ledTicketNet" style="font-family:var(--font-mono); color:${L.ink};">${wt === null ? '—' : money0(wt)}</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    const totalWt = ledItems.reduce((t, it) => t + (lineOf(it).wt || 0), 0);
+    const totalAmt = ledItems.reduce((t, it) => t + (lineOf(it).amt || 0), 0);
+
+    box.innerHTML = `
+      <div style="margin-top:10px;">
+        <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:${L.inkFaint}; padding-bottom:4px;">
+          <span style="flex:1;">Description</span>
+          <span style="width:86px; text-align:right;">Net lbs</span>
+          <span style="width:72px;">Price</span>
+          <span style="width:88px; text-align:right;">Amount</span>
+          <span style="width:78px;"></span>
+        </div>
+        ${rows || `<div style="border-top:1px solid ${L.lineSoft}; padding:12px 0; font-size:12px; color:${L.inkFaint};">One grade? Leave this empty and use the description and price above.</div>`}
+        <div style="border-top:1px solid ${L.line}; padding-top:8px; margin-top:4px; display:flex; align-items:center; gap:8px; font-size:12px;">
+          <button type="button" id="ledItemAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0;">+ Add item</button>
+          <span style="flex:1;"></span>
+          ${ledItems.length ? `<span style="width:86px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalWt)}</span>
+          <span style="width:72px;"></span>
+          <span style="width:88px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalAmt)}</span>
+          <span style="width:78px;"></span>` : ''}
+        </div>
+      </div>`;
+
+    box.querySelectorAll('input[data-i]').forEach((el) => {
+      el.oninput = () => {
+        ledItems[+el.dataset.i][el.dataset.f] = el.value;
+        // Repaint only the derived figures, never the whole list: rebuilding
+        // the DOM under her cursor loses the caret mid-number.
+        const i = +el.dataset.i;
+        const line = box.querySelector(`[data-item="${i}"]`);
+        const { wt, amt, hasTicket } = lineOf(ledItems[i]);
+        const net = line.querySelector(`.ledItemNet[data-i="${i}"]`);
+        if (net) net.textContent = wt === null ? '—' : money0(wt);
+        const amtCell = line.querySelector('.ledItemAmt');
+        if (amtCell) amtCell.textContent = money0(amt);
+        const foot = line.querySelector('.ledTicketNet');
+        if (foot) foot.textContent = wt === null ? '—' : money0(wt);
+        // Typing the first ticket figure turns the net cell from an input
+        // into a derived one, which is a structural change rather than a
+        // text one — repaint, and put the caret back where she left it.
+        if (hasTicket && !net) { const at = el.dataset.f; paintItems();
+          const again = box.querySelector(`input[data-i="${i}"][data-f="${at}"]`);
+          if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); } }
+        queueSave();
+      };
+    });
+    box.querySelectorAll('.ledItemTicket').forEach((b) => {
+      b.onclick = () => {
+        const t = box.querySelector(`.ledTicket[data-i="${b.dataset.i}"]`);
+        t.style.display = t.style.display === 'none' ? 'flex' : 'none';
+      };
+    });
+    box.querySelectorAll('.ledItemDel').forEach((b) => {
+      b.onclick = () => { ledItems.splice(+b.dataset.i, 1); paintItems(); queueSave(); };
+    });
+    const add = $('ledItemAdd');
+    if (add) add.onclick = () => { ledItems.push({}); paintItems(); };
+  }
+  paintItems();
+
+  // ── THE HAULAGE SPLIT ────────────────────────────────────────────────
+  // Her spreadsheet's columns. Others is a list and each one needs a note —
+  // see helpers/bills.cleanTruckingOthers for why that is a refusal and not
+  // a nag.
+  function paintSplit() {
+    const box = $('ledSplitBox');
+    if (!box) return;
+    const parts = [['line_haul', 'Line Haul'], ['port_fees', 'Port Fees'],
+                   ['chassis_rent', 'Chassis Rent'], ['dry_run', 'Dry Run'],
+                   ['extra_scale', 'Extra Scale']];
+    const othersTotal = (ledSplit.others || []).reduce((t, o) => t + (numOf(o.amount) || 0), 0);
+    const total = parts.reduce((t, [k]) => t + (numOf(ledSplit[k]) || 0), 0) + othersTotal;
+    const anything = parts.some(([k]) => numOf(ledSplit[k]) !== null) || (ledSplit.others || []).length;
+
+    box.innerHTML = `
+      <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:7px;">What it is made of</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:7px;">
+        ${parts.map(([k, label]) => `
+          <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">${label}</div>
+            <input data-split="${k}" ${cell(ledSplit[k], '', '100%')} style="width:100%; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;"></div>`).join('')}
+      </div>
+      <div style="margin-top:9px;">
+        ${(ledSplit.others || []).map((o, i) => `
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:5px;">
+            <input data-other="${i}" data-f="what" ${cell(o.what, 'what', '140px')}>
+            <input data-other="${i}" data-f="amount" ${cell(o.amount, 'amount', '86px')}>
+            <input data-other="${i}" data-f="note" ${cell(o.note, 'why — required', '100%')} style="flex:1; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${(String(o.what || '').trim() && !String(o.note || '').trim()) ? L.danger : L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
+            <button type="button" class="ledOtherDel" data-i="${i}" aria-label="Remove"
+              style="background:none; border:none; color:${L.inkFaint}; font-size:15px; cursor:pointer;">&times;</button>
+          </div>`).join('')}
+        <button type="button" id="ledOtherAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0;">+ Add other charge</button>
+      </div>
+      <div style="display:flex; gap:10px; align-items:flex-end; margin-top:10px;">
+        <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">Trucker invoice no</div>
+          <input data-split="invoice_no" ${cell(ledSplit.invoice_no, '', '120px')}></div>
+        <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">Last verified</div>
+          <input data-split="verified_on" ${cell(ledSplit.verified_on, 'YYYY-MM-DD', '120px')}></div>
+        <span style="flex:1;"></span>
+        <div style="text-align:right;">
+          <div style="font-size:11px; color:${L.inkFaint};">Trucking total</div>
+          <div id="ledSplitTotal" style="font-size:15px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">${anything ? money0(total) : '—'}</div>
+        </div>
+      </div>
+      <div style="font-size:11px; color:${L.inkFaint}; margin-top:6px;">The split decides the trucking amount above; it stops being typed.</div>`;
+
+    box.querySelectorAll('input[data-split]').forEach((el) => {
+      el.oninput = () => { ledSplit[el.dataset.split] = el.value; refreshSplitTotal(); queueSave(); };
+    });
+    box.querySelectorAll('input[data-other]').forEach((el) => {
+      el.oninput = () => {
+        const i = +el.dataset.other;
+        ledSplit.others[i][el.dataset.f] = el.value;
+        // The missing-note flag was worked out at paint time, so typing a
+        // name never lit it — she would only find out the line was
+        // unfinished when the server refused the save.
+        const note = box.querySelector(`[data-other="${i}"][data-f="note"]`);
+        if (note) {
+          const wants = String(ledSplit.others[i].what || '').trim()
+            && !String(ledSplit.others[i].note || '').trim();
+          note.style.borderColor = wants ? L.danger : L.line;
+        }
+        refreshSplitTotal(); queueSave();
+      };
+    });
+    box.querySelectorAll('.ledOtherDel').forEach((b) => {
+      b.onclick = () => { ledSplit.others.splice(+b.dataset.i, 1); paintSplit(); queueSave(); };
+    });
+    const addO = $('ledOtherAdd');
+    if (addO) addO.onclick = () => { ledSplit.others.push({}); paintSplit(); };
+  }
+  // Only the total, for the same caret reason as the item lines.
+  function refreshSplitTotal() {
+    const box = $('ledSplitBox');
+    if (!box) return;
+    const parts = ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale'];
+    const t = parts.reduce((a, k) => a + (numOf(ledSplit[k]) || 0), 0)
+      + (ledSplit.others || []).reduce((a, o) => a + (numOf(o.amount) || 0), 0);
+    const el = $('ledSplitTotal');
+    if (el) el.textContent = money0(t);
+  }
+  paintSplit();
   const close = () => {
     const m = $('ledgerModal');
     if (m) m.remove();
@@ -6727,6 +6953,25 @@ function openLedgerForm(kind, existing, seed) {
   const readForm = () => {
     const body = {};
     new FormData($('ledgerForm')).forEach((v, k) => { if (String(v).trim() !== '') body[k] = v; });
+    // A list cannot travel in FormData, so the two that are lists are added
+    // here. Sent even when EMPTY, deliberately: clearing the last line has to
+    // reach the server, and an omitted key is "leave it alone" everywhere else
+    // in this form.
+    const items = ledItems.filter((i) => String(i.description || '').trim()
+      || i.weight || i.price || i.gross);
+    if (items.length || (existing && (existing.items || []).length)) body.items = items;
+    if (kind === 'bills') {
+      const hasSplit = ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale']
+        .some((k) => String(ledSplit[k] || '').trim() !== '')
+        || (ledSplit.others || []).some((o) => String(o.what || '').trim())
+        || String(ledSplit.invoice_no || '').trim() || String(ledSplit.verified_on || '').trim();
+      if (hasSplit || (existing && existing.trucking_split && existing.trucking_split.present)) {
+        body.trucking_split = {
+          ...ledSplit,
+          others: (ledSplit.others || []).filter((o) => String(o.what || '').trim()),
+        };
+      }
+    }
     return body;
   };
 
@@ -6814,12 +7059,17 @@ function openLedgerForm(kind, existing, seed) {
       if (wEl) wEl.textContent = warn.join(' ');
     } catch (e) { /* a preview that fails must never block the form */ }
   };
-  $('ledgerForm').addEventListener('input', () => {
+  // Typing anywhere in the form bubbles to here. REMOVING a line does not —
+  // a click fires no input event — so the item and split editors call this
+  // directly. A declaration rather than a const so it is in scope for the
+  // handlers those editors wired earlier in this function.
+  function queueSave() {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(paintPreview, 220);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(autosave, AUTOSAVE_MS);
-  });
+  }
+  $('ledgerForm').addEventListener('input', queueSave);
   paintPreview();
 
   if (kind === 'bills' && !editing) {
