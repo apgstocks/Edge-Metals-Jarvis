@@ -85,7 +85,6 @@ function payables() {
             // Kept alongside so filtering by month is a string compare rather
             // than a date parse per row per request.
             sortable_date: bills.sortableDate(b.date) || null,
-            month: (bills.sortableDate(b.date) || '').slice(0, 7) || null,
             booking_no: b.booking_no || null,
             container_no: b.container_no || null,
             supplier: b.supplier || null,
@@ -100,15 +99,18 @@ function payables() {
     return out;
 }
 
-// ── HER FOUR FILTERS ────────────────────────────────────────────────────
-// "filter by date,month,trucking company,status (paid/unpaid)". Applied
-// server-side, like the bills and sales tables, so the totals shown always
-// describe the rows shown — a summary computed over everything while the
-// table shows a subset is the bug that makes a filter untrustworthy.
+// ── HER FILTERS ─────────────────────────────────────────────────────────
+// "filter by date,month,trucking company,status (paid/unpaid)", then, having
+// seen it: "Remove month in trucking,we have date filter na". Right — a month
+// picker beside a date range is two controls for one question, and two
+// controls that can contradict each other is worse than one that cannot.
+//
+// Applied server-side, like the bills and sales tables, so the totals shown
+// always describe the rows shown — a summary computed over everything while
+// the table shows a subset is the bug that makes a filter untrustworthy.
 function filterPayables(rows, q = {}) {
     const from = String(q.from || '').trim();
     const to = String(q.to || '').trim();
-    const month = String(q.month || '').trim();
     const company = String(q.trucking_company || '').trim();
     const status = String(q.status || '').trim().toLowerCase();
     const bills = require('./bills');
@@ -117,7 +119,6 @@ function filterPayables(rows, q = {}) {
     const toIso = to ? (bills.sortableDate(to) || to) : '';
 
     return (rows || []).filter((r) => {
-        if (month && r.month !== month) return false;
         if (fromIso && (!r.sortable_date || r.sortable_date < fromIso)) return false;
         if (toIso && (!r.sortable_date || r.sortable_date > toIso)) return false;
         if (company && !sameCompany(r.trucking_company, company)) return false;
@@ -147,9 +148,6 @@ function facets(rows) {
     const of = (f) => [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
     return {
         trucking_company: of('trucking_company'),
-        // Newest month first — she is nearly always looking at this one or
-        // the one before.
-        month: of('month').reverse(),
         status: STATUSES,
     };
 }

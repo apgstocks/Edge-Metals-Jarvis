@@ -1466,7 +1466,7 @@ section('G9 — the Trucking tab');
                                 unpaid_count: rows.filter((r) => r.status !== 'paid').length },
                      total_unfiltered: ROWS.length,
                      facets: { trucking_company: ['Bayou Haulage', 'Sher Trucking'],
-                               month: ['2026-09'], status: ['unpaid', 'part', 'paid'] },
+                               status: ['unpaid', 'part', 'paid'] },
                      payments: [], modes: ['Wire', 'Cash'], banks: ['Chase'] };
         },
     });
@@ -1491,11 +1491,13 @@ section('G9 — the Trucking tab');
 
     // ── HER FOUR FILTERS REACH THE SERVER ────────────────────────────────
     const co = doc.querySelector('[data-trk-filter="trucking_company"]');
-    ck('there is a filter for each of the four she asked for',
-       !!co && !!doc.querySelector('[data-trk-filter="month"]')
-       && !!doc.querySelector('[data-trk-filter="status"]')
+    ck('there is a filter for each of the ones she kept',
+       !!co && !!doc.querySelector('[data-trk-filter="status"]')
        && !!doc.querySelector('[data-trk-filter="from"]')
        && !!doc.querySelector('[data-trk-filter="to"]'));
+    ck('  and no month picker beside the date range',
+       !doc.querySelector('[data-trk-filter="month"]'),
+       'two controls for one question can contradict each other');
     co.value = 'Sher Trucking';
     co.dispatchEvent(new w.Event('change', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 50));

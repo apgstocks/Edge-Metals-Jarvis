@@ -82,6 +82,35 @@ function compute(input) {
             : (mt === null ? null : round2(mt * price));
     }
 
+    // ── SEVERAL GRADES ON ONE INVOICE ────────────────────────────────────
+    // Apsara, 2026-09-10: "Once bill thing are fixed,i want outgoing sales to
+    // be fixed to support multi item in a container."
+    //
+    // The SAME cleanItems as the purchase side, imported rather than written
+    // again. Two implementations of "a container holding several grades"
+    // would drift, and the two sides are joined on booking + container for
+    // margin — the moment they disagree about how a line is priced, that
+    // margin is comparing two different things.
+    //
+    // So a sale line takes the same shapes a bill line does: a plain weight,
+    // or a full weighbridge ticket with its own gross and tares.
+    let items = [];
+    try { items = bills.cleanItems(s.items); } catch (e) { items = []; }
+    const itemsWeightLb = items.length
+        ? round3(items.reduce((t, i) => t + (i.weight || 0), 0)) : null;
+    const itemsAmount = items.length && items.every((i) => i.amount !== null)
+        ? round2(items.reduce((t, i) => t + i.amount, 0)) : null;
+
+    // The lines decide the weight and the money when there are lines. Her own
+    // typed figures are KEPT and reported as a conflict — same rule as the
+    // invoice amount, because a number she entered is a statement.
+    const typedLb = lb;
+    const lbUsed = items.length && itemsWeightLb !== null ? itemsWeightLb : lb;
+    const mtUsed = lbUsed === null ? null : round3(lbUsed / bills.LB_PER_MT);
+    const weightConflict = (items.length && typedLb !== null && lbUsed !== null
+        && Math.abs(typedLb - lbUsed) >= 0.001) ? round3(typedLb - lbUsed) : null;
+    if (itemsAmount !== null) amount = itemsAmount;
+
     // An invoice amount she typed WINS. The invoice is the document of
     // record; if our arithmetic disagrees that is a conversation to have, not
     // a number to overwrite. Identical rule to bills.js, and the difference is
@@ -123,7 +152,10 @@ function compute(input) {
     // invoice is revised — deliberately NOT the bill's net weight, which can
     // differ after reweighing at destination.
     const perMt = num(s.commission_per_mt);
-    const commissionComputed = (perMt === null || mt === null) ? null : round2(mt * perMt);
+    // Off the INVOICED weight, which is the lines' total once there are
+    // lines — otherwise an agent would be paid on a figure the invoice does
+    // not show.
+    const commissionComputed = (perMt === null || mtUsed === null) ? null : round2(mtUsed * perMt);
     const commissionStated = num(s.commission_amount);
     const commission = commissionStated !== null ? round2(commissionStated) : commissionComputed;
 
@@ -132,8 +164,13 @@ function compute(input) {
 
     return {
         weight_unit: wUnit,
-        weight_lb: lb,
-        weight_mt: mt,
+        weight_lb: lbUsed,
+        weight_mt: mtUsed,
+        items,
+        items_weight: itemsWeightLb,
+        items_amount: itemsAmount,
+        weights_from_items: items.length > 0,
+        weight_conflict: weightConflict,
         price_unit: unit,
         computed_amount: amount,
         amount: amountUsed,
@@ -322,7 +359,7 @@ function facets(rows) {
 // is listed here explicitly instead of being taken from !derived.
 const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
     .concat(['invoice_amount', 'commission_amount', 'price_unit', 'weight_unit',
-             'charges', 'note'])
+             'charges', 'items', 'note'])
     .concat(LEGACY_WRITABLE);
 
 const list = () => {
@@ -349,6 +386,8 @@ function clean(input) {
     // no note must fail at the point she saves it, where she still remembers
     // why she typed it, rather than being quietly dropped from a total later.
     if ('charges' in out) out.charges = cleanCharges(out.charges);
+    // Validated on the way in, by the purchase side's own function.
+    if ('items' in out) out.items = bills.cleanItems(out.items);
     // Uppercased, not refused: "cfr" and "CFR" are the same term, and a list
     // this file only suggests is not a list it may reject.
     if ('shipment_terms' in out && out.shipment_terms) {

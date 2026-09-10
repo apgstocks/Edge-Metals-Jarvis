@@ -1632,8 +1632,15 @@ section('S — Edge Metals haulage, which is not the yard\'s');
        String(f({ trucking_company: 'Sher Trucking' }).length));
     ck('  case is typing, not a different company',
        f({ trucking_company: 'sher trucking' }).length === 2);
-    ck('filter by month', f({ month: '2026-09' }).length === 2,
-       JSON.stringify(f({ month: '2026-09' }).map((r) => r.month)));
+    // Month was removed on 2026-09-10 — "Remove month in trucking,we have
+    // date filter na". A whole month is a from/to like any other range, and
+    // two controls answering one question can contradict each other.
+    ck('there is no month filter to contradict the date range',
+       !Object.prototype.hasOwnProperty.call(mt.facets(mine()), 'month'),
+       JSON.stringify(Object.keys(mt.facets(mine()))));
+    ck('  and a whole month is just a range',
+       f({ from: '09/01/2026', to: '09/30/2026' }).length === 2,
+       JSON.stringify(f({ from: '09/01/2026', to: '09/30/2026' }).map((r) => r.date)));
     ck('filter by a date range', f({ from: '09/01/2026', to: '09/05/2026' }).length === 1,
        JSON.stringify(f({ from: '09/01/2026', to: '09/05/2026' }).map((r) => r.date)));
     ck('  and her MM/DD/YYYY is understood, not compared as text',
@@ -1744,6 +1751,90 @@ section('S — Edge Metals haulage, which is not the yard\'s');
     ck('staff cannot reach Metals haulage',
        (await req('GET', '/api/metals-trucking', { sid: staff })).status === 403,
        'the YARD trucker tab is theirs; this one is not');
+}
+
+section('T — several grades on one invoice');
+{
+    // Apsara, 2026-09-10: "Once bill thing are fixed,i want outgoing sales to
+    // be fixed to support multi item in a container."
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+
+    const multi = sales.compute({ commission_per_mt: 6, items: [
+        { description: 'Al combo',  weight: 15800, price: 0.41 },
+        { description: 'Auto cast', weight: 11900, price: 0.38 },
+    ] });
+    ck('each grade is invoiced on its own weight and price',
+       multi.items.map((i) => i.amount).join(',') === '6478,4522',
+       JSON.stringify(multi.items.map((i) => i.amount)));
+    ck('  and the invoice is their sum', multi.amount === 11000, String(multi.amount));
+    ck('  the weight is the lines\' total, not something typed beside them',
+       multi.weight_lb === 27700, String(multi.weight_lb));
+    ck('  and the row says the weight came from the lines',
+       multi.weights_from_items === true);
+
+    // THE ONE THAT MATTERS. Commission is weight x rate, and the weight it
+    // uses has to be the one on the invoice — the lines' total once there are
+    // lines, or an agent is paid on a figure the document does not show.
+    ck('commission runs off the LINES\' weight',
+       multi.commission_amount === round2(round3(27700 / bills.LB_PER_MT) * 6),
+       String(multi.commission_amount));
+
+    // The purchase side's own function, imported rather than written twice —
+    // the two are joined on booking + container for margin, and two
+    // implementations of "a grade line" would eventually disagree about how
+    // one is priced.
+    ck('a sale line takes a weighbridge ticket, exactly as a bill line does',
+       sales.compute({ items: [{ description: 'A', gross: 30000, truck: 14000,
+                                 boxes: 200, price: 0.41 }] }).weight_lb === 15800,
+       'one cleanItems, not two');
+    ck('  and the $10 rule applies per line here too',
+       sales.compute({ items: [{ description: 'Z', weight: 27700, price: 700 }] })
+            .items[0].price_unit === 'mt');
+
+    const conflict = sales.compute({ weight: 29000, items: [
+        { description: 'Al combo', weight: 15800, price: 0.41 } ] });
+    ck('a weight she typed is reported, not overwritten in silence',
+       conflict.weight_conflict === round3(29000 - 15800), String(conflict.weight_conflict));
+    ck('  while the lines still decide', conflict.weight_lb === 15800);
+
+    const single = sales.compute({ weight: 29000, invoice_price: 0.41, commission_per_mt: 6 });
+    ck('a sale with no lines works exactly as before',
+       single.amount === 11890 && single.items.length === 0, String(single.amount));
+    ck('  and reports no conflict about lines it does not have',
+       single.weight_conflict === null);
+    ck('  her stated invoice amount still wins',
+       sales.compute({ invoice_amount: 12000, items: [
+           { description: 'A', weight: 15800, price: 0.41 } ] }).amount === 12000,
+       'the invoice is the document of record');
+
+    const saved = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Multi Co', booking_no: 'MULTIBK', container_no: 'MULTU1',
+        terms: 'TT', commission_per_mt: 6,
+        items: [{ description: 'Al combo', weight: 15800, price: 0.41 },
+                { description: 'Auto cast', weight: 11900, price: 0.38 }],
+    } });
+    ck('a multi-grade sale saves through the route', saved.status === 200, saved.raw);
+    ck('  with both lines', (saved.json.sale.items || []).length === 2);
+    ck('  the invoice summed from them', saved.json.sale.amount === 11000,
+       String(saved.json.sale.amount));
+    ck('  and its commission off their weight',
+       saved.json.sale.commission_amount === round2(round3(27700 / bills.LB_PER_MT) * 6),
+       String(saved.json.sale.commission_amount));
+
+    const noDesc = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Multi Co', items: [{ weight: 100, price: 0.4 }] } });
+    ck('a line with no description is refused here too', noDesc.status === 400, noDesc.raw);
+
+    // Every line keeps its id across saves, so anything pointing at one keeps
+    // pointing at the same one.
+    const ids = (saved.json.sale.items || []).map((i) => i.id);
+    const edited = await req('PUT', `/api/sales/${saved.json.sale.id}`, { sid: admin, body: {
+        items: saved.json.sale.items } });
+    ck('line ids survive an edit',
+       (edited.json.sale.items || []).map((i) => i.id).join(',') === ids.join(','),
+       'by array index, deleting a middle line moves everything below it');
 }
 
 if (server) server.close();
