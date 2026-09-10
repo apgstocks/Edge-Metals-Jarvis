@@ -268,8 +268,31 @@ function compute(input) {
     // other way would be a require cycle. listWithTotals resolves it once for
     // the whole table instead of once per row.
     const paid = num(b.paid) || 0;
-    const balance = amountUsed === null ? null
-        : round2(amountUsed - (trucking || 0) - paid);
+
+    // ── WHAT THE SUPPLIER IS ACTUALLY OWED ───────────────────────────────
+    // Apsara, 2026-09-10: "So bill amount shoud be one thing after deducting
+    // trucking,it should get auto adjusted na".
+    //
+    // It already was — Balance has been amount − trucking − paid since this
+    // morning. What was missing is the STEP IN BETWEEN. Reading "Bill amount
+    // 8,388" beside "Balance 7,188" with no third figure, the only way to see
+    // where the 1,200 went is to do the subtraction yourself, and a number you
+    // have to reconstruct is one you eventually stop checking.
+    //
+    // So the chain is named at every link:
+    //   amount        what the metal came to
+    //   − trucking    haulage she pays on the supplier's behalf
+    //   = net_payable what the supplier is owed
+    //   − paid
+    //   = balance     what is still outstanding
+    //
+    // amount deliberately stays the SUPPLIER'S INVOICE FIGURE and is not
+    // reduced in place. It is the number on their document; netting trucking
+    // into it would mean her Bills tab and their invoice never agree again,
+    // and reconciling that later is impossible rather than merely tedious.
+    const netPayable = amountUsed === null ? null
+        : round2(amountUsed - (trucking || 0));
+    const balance = netPayable === null ? null : round2(netPayable - paid);
 
     return {
         items,
@@ -295,6 +318,7 @@ function compute(input) {
         // visible instead of lost.
         computed_amount: amount,
         amount: amountUsed,
+        net_payable: netPayable,
         amount_is_stated: stated !== null,
         amount_differs: (stated !== null && amount !== null && Math.abs(stated - amount) >= 0.01)
             ? round2(stated - amount) : null,
@@ -422,6 +446,10 @@ const COLUMNS = [
     // is no stored advance to strand. If there had been, this would need a
     // migration instead — a column dropped from a form is still a number
     // sitting in a record affecting a balance.
+    // The middle link in the chain, so the trucking deduction is visible
+    // rather than something she reconstructs between two other columns.
+    { key: 'net_payable',      label: 'Payable',            group: 'money', unit: '$', derived: true,
+      hint: 'bill amount less trucking — what the supplier is owed' },
     { key: 'balance',          label: 'Balance',            group: 'money', unit: '$', derived: true },
 
     // Its own row at the end, full width. Sitting in the middle of the
@@ -450,7 +478,8 @@ const COLUMNS = [
 const TABLE_ORDER = ['route', 'date', 'supplier', 'invoice_no',
     'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck',
     'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt',
-    'supplier_price', 'amount', 'trucking_company', 'trucking_amount', 'balance',
+    'supplier_price', 'amount', 'trucking_company', 'trucking_amount',
+    'net_payable', 'balance',
     'photos'];
 
 // ── FILTERS, AND SEVERAL AT ONCE ─────────────────────────────────────────

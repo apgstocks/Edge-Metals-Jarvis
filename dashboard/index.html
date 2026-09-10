@@ -4701,12 +4701,17 @@ const LEDGER_KINDS = {
   bills: {
     eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill', editLabel: 'Edit bill',
     path: '/api/bills', listKey: 'bills', itemKey: 'bill',
-    money: ['supplier_price', 'amount', 'trucking_amount', 'balance'],
+    money: ['supplier_price', 'amount', 'trucking_amount', 'net_payable', 'balance'],
     filters: ['supplier', 'carrier', 'trucking_company'],
     weights: ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt'],
     cards: [['Total tare', 'total', 'num'], ['Net weight (lbs)', 'net_lb', 'num'],
             ['Net weight (MT)', 'net_mt', 'num'],
-            ['Supplier invoice amount', 'amount', 'money'], ['Balance', 'balance', 'money']],
+            ['Supplier invoice amount', 'amount', 'money'],
+            // Apsara, 2026-09-10: "bill amount shoud be one thing after
+            // deducting trucking,it should get auto adjusted na". It always
+            // was — this is the step in between, so the deduction is a figure
+            // she reads rather than one she reconstructs.
+            ['Payable', 'net_payable', 'money'], ['Balance', 'balance', 'money']],
   },
   sales: {
     eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale', editLabel: 'Edit sale',

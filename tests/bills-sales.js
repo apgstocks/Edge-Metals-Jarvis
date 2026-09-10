@@ -202,10 +202,14 @@ section('D — her columns, in her order');
     const wanted = ['Source/Destination', 'Date', 'Supplier', 'Invoice no',
         'Booking no', 'Container no', 'Seal no', 'Item description', 'Gross', 'Truck',
         'Container', 'Chassis', 'Boxes', 'Total', 'Net weight (lbs)', 'Net weight (MT)',
-        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Balance',
-        'Photos'];
+    // Payable added 2026-09-10: "bill amount shoud be one thing after
+    // deducting trucking,it should get auto adjusted na". It always did — this
+    // is the middle link named, so the deduction is read rather than
+    // reconstructed between two other columns.
+        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking',
+        'Payable', 'Balance', 'Photos'];
     ck('the bill has her columns, less Advance and Carrier, plus Photos',
-       bills.tableColumns().length === 22, String(bills.tableColumns().length));
+       bills.tableColumns().length === wanted.length, String(bills.tableColumns().length));
     ck('  Carrier is off the table but still on the form',
        !bills.tableColumns().some((c) => c.key === 'carrier')
        && bills.COLUMNS.some((c) => c.key === 'carrier')
@@ -226,9 +230,13 @@ section('D — her columns, in her order');
     ck('    fed by facets, so a new one joins the list when the bill saves',
        Object.keys(bills.facets([{ supplier: 'X', description: 'Y' }])).includes('description'),
        JSON.stringify(Object.keys(bills.facets([]))));
-    ck('  with the six computed ones marked',
+    ck('  with every computed one marked',
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(',')
-       === 'total,net_lb,net_mt,amount,balance', bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
+       === 'total,net_lb,net_mt,amount,net_payable,balance',
+       bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
+    ck('    including Payable, so no client can post its own',
+       !bills.WRITABLE.includes('net_payable'),
+       'a client that can write the deduction can disagree with the server about it');
 
     // ── HER SECOND LIST, 2026-09-10 ──────────────────────────────────────
     // "Date,HBL No.(House BL),Invoice number,booking no,container no,Customer
@@ -264,6 +272,24 @@ section('D — her columns, in her order');
 
     // A client that could post a balance not following from its own weights
     // is a client that can disagree with the server about money.
+    // ── THE CHAIN, NAMED AT EVERY LINK ───────────────────────────────────
+    const chain = bills.compute({ gross: 44000, truck: 15000, container: 8000,
+        chassis: 6000, boxes: 500, supplier_price: 0.32,
+        trucking_amount: 1200, paid: 500 });
+    ck('trucking comes off the bill amount automatically',
+       chain.net_payable === 3440, String(chain.net_payable));
+    ck('  and the balance takes payments off THAT, not off the invoice again',
+       chain.balance === 2940, String(chain.balance));
+    ck('  while the bill amount stays the supplier\'s own figure',
+       chain.amount === 4640,
+       'netting trucking into it would mean her tab and their invoice never agree again');
+    ck('  no trucking means payable equals the amount',
+       bills.compute({ gross: 44000, truck: 15000, container: 8000, chassis: 6000,
+                       boxes: 500, supplier_price: 0.32 }).net_payable === 4640);
+    ck('  and nothing to price means nothing to pay, not zero',
+       bills.compute({ trucking_amount: 1200 }).net_payable === null,
+       'a payable of -1200 on an empty bill would be worse than a blank');
+
     ck('a client may not write the derived columns',
        !bills.WRITABLE.includes('balance') && !bills.WRITABLE.includes('net_lb')
        && !bills.WRITABLE.includes('total'), bills.WRITABLE.join(','));
@@ -280,7 +306,7 @@ section('E — the routes, because a helper nothing calls is not a feature');
     let r = await req('GET', '/api/bills', { sid: admin });
     ck('GET /api/bills answers', r.status === 200, String(r.status));
     ck('  and ships the columns with the data',
-       Array.isArray(r.json.columns) && r.json.columns.length === 22,
+       Array.isArray(r.json.columns) && r.json.columns.length === bills.tableColumns().length,
        'the table is built from the server list, so the two cannot drift');
     // The FORM walks groups, the TABLE walks her order. Both travel, so
     // neither client re-derives one from the other and gets it subtly wrong.
