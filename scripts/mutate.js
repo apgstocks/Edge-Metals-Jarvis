@@ -1124,6 +1124,11 @@ const MUTATIONS = [
       file: 'api.js', suites: ['bills-sales'],
       find: "                        f.customer = [...new Set([...(f.customer || []), ...names])];",
       to:   '                        f.customer = [...new Set([...names, ...(f.customer || [])])];' },
+    { name: 'the sales form loses its item editor again',
+      file: 'helpers/sales.js', suites: ['ledger-render'],
+      find: "    { id: 'items',     label: 'Items and weights', full: true, keys: ['item'] },",
+      to:   '' },
+
     // ── THE 7f16c64 REGRESSIONS, REPAIRED 2026-09-10 ─────────────────────
     { name: 'the invoice line amount goes back to unrounded floating point',
       file: 'helpers/invoicePdf.js', suites: ['yard-payments'],
