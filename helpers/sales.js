@@ -99,6 +99,36 @@ function compute(input) {
     // the row precisely because it comes off the top.
     const net = amountUsed === null ? null : round2(amountUsed - (freight || 0));
 
+    // ── CHARGES ──────────────────────────────────────────────────────────
+    // freight_charges predates the charge list and is still written by rows
+    // entered before 2026-09-10. Rather than leave that money uncounted, a
+    // legacy value with no charge list becomes one — so nothing disappears
+    // and nothing is counted twice. net_of_freight keeps its old meaning
+    // exactly, because three tests and the totals strip read it.
+    let charges = [];
+    try { charges = cleanCharges(s.charges); } catch (e) { charges = []; }
+    if (!charges.length && freight) {
+        charges = [{ what: 'Freight', amount: round2(freight), direction: 'out',
+                     why: 'Entered as the Freight charges column before charges had notes.' }];
+    }
+    const sumWhere = (d) => round2(charges.filter((c) => c.direction === d)
+        .reduce((t, c) => t + c.amount, 0)) || 0;
+    const chargesIn = sumWhere('in');    // the customer pays these on top
+    const chargesOut = sumWhere('out');  // Edge Metals pays these
+
+    // ── COMMISSION ───────────────────────────────────────────────────────
+    // Apsara, 2026-09-10, asked which weight it runs on: "The invoiced weight
+    // (sale)". So it follows the document the customer holds and moves if the
+    // invoice is revised — deliberately NOT the bill's net weight, which can
+    // differ after reweighing at destination.
+    const perMt = num(s.commission_per_mt);
+    const commissionComputed = (perMt === null || mt === null) ? null : round2(mt * perMt);
+    const commissionStated = num(s.commission_amount);
+    const commission = commissionStated !== null ? round2(commissionStated) : commissionComputed;
+
+    // What the customer owes: the invoice plus anything rebilled to them.
+    const receivable = amountUsed === null ? null : round2(amountUsed + chargesIn);
+
     return {
         weight_unit: wUnit,
         weight_lb: lb,
@@ -110,13 +140,83 @@ function compute(input) {
         amount_differs: (stated !== null && amount !== null && Math.abs(stated - amount) >= 0.01)
             ? round2(stated - amount) : null,
         net_of_freight: net,
+
+        charges,
+        charges_in_total: chargesIn,
+        charges_out_total: chargesOut,
+        receivable,
+        commission_computed: commissionComputed,
+        commission_amount: commission,
+        commission_is_stated: commissionStated !== null,
+        // Everything this container costs Edge Metals on the sale side. The
+        // purchase side (supplier + trucking) lives on the matching Bill, and
+        // the two join on booking + container.
+        sale_side_cost: round2(chargesOut + (commission || 0)),
     };
+}
+
+// ── OTHER CHARGES, EACH WITH A REASON ────────────────────────────────────
+// Apsara, 2026-09-10, asked which direction freight money flows: "i want to
+// have other charges,with a note symbol,so that it will have detailed
+// description of what charged and sample why?"
+//
+// A better answer than the question. A fixed Freight column can state that
+// $450 exists and can never state that it is three days' detention at Busan
+// caused by the customer's late clearance — which is the only form in which
+// that number can be defended when they query the invoice three months on.
+// So: a list, and the note is REQUIRED. A charge nobody can explain is a
+// charge that gets written off.
+//
+// DIRECTION IS PER CHARGE, NOT PER COMPANY. Ocean freight paid to the carrier
+// and detention rebilled to the customer sit on the same container and move
+// opposite ways. One flag on the store could not have said that, and the
+// money would have been added where it should have been subtracted.
+const CHARGE_DIRECTIONS = ['in', 'out'];   // in = customer pays me, out = I pay
+
+function cleanCharges(input) {
+    const out = [];
+    for (const c of (Array.isArray(input) ? input : [])) {
+        if (!c) continue;
+        const what = String(c.what || '').trim();
+        const amount = round2(num(c.amount));
+        const why = String(c.why || c.note || '').trim();
+        // A blank line in the form is not an error, it is a blank line.
+        if (!what && amount === null && !why) continue;
+        if (!what) throw new Error('a charge needs a name — what is it for?');
+        if (amount === null || amount <= 0) throw new Error(`"${what}" needs an amount greater than zero`);
+        if (!why) throw new Error(`"${what}" needs a note saying why — that is the whole point of it being a charge and not a column`);
+        const direction = CHARGE_DIRECTIONS.includes(String(c.direction || '').trim())
+            ? String(c.direction).trim()
+            : null;
+        if (!direction) {
+            throw new Error(`"${what}" needs to say whether you pay it or the customer does`);
+        }
+        out.push({ what, amount, direction, why });
+    }
+    return out;
 }
 
 // Her ten columns, in her order. `derived: true` marks the two this file
 // computes, so the client renders them read-only and cannot post a total that
 // does not follow from its own weight and price.
+const TERMS = ['LC', 'TT'];
+
 const COLUMNS = [
+    // ── BOOKING FIRST, THEN CONTAINER ────────────────────────────────────
+    // Apsara, 2026-09-10: "bookng first then container no", correcting the
+    // mockup. It is also the correct order for a reason worth writing down:
+    // a container number is NOT unique — MSKU1111111 sails again next year
+    // with different metal in it. The booking is what makes it unique, so the
+    // booking is the key and the container is the label under it. Reading
+    // booking-first groups the containers under their shipment, which is how
+    // the business thinks about them, and it matches helpers/bills.js so the
+    // two tables join on the same pair.
+    { key: 'booking_no',     label: 'Booking no',     group: 'shipment' },
+    { key: 'container_no',   label: 'Container no',   group: 'shipment' },
+    { key: 'terms',          label: 'Terms',          group: 'shipment', choices: TERMS,
+      hint: 'LC or TT' },
+    { key: 'item',           label: 'Item',           group: 'shipment', suggest: true },
+
     { key: 'customer',       label: 'Customer name',  group: 'customer', suggest: true },
     { key: 'date',           label: 'Date',           group: 'customer', date: true },
     { key: 'reference',      label: 'Reference',      group: 'customer' },
@@ -133,14 +233,29 @@ const COLUMNS = [
     // and hers wins over the computed figure.
     { key: 'amount',         label: 'Invoice amount', group: 'money', derived: true, unit: '$',
       writeKey: 'invoice_amount', num: true, hint: 'leave blank to use the computed figure' },
-    { key: 'freight_charges', label: 'Freight charges', group: 'money', num: true, unit: '$' },
+    // Commission runs off the INVOICED weight — her answer when asked, over
+    // the purchased weight on the bill. commission_amount is derived and also
+    // writable, same rule as the invoice amount: an agent's own figure wins.
+    { key: 'commission_per_mt', label: 'Commission / MT', group: 'money', num: true, unit: '$',
+      hint: 'per metric ton of the invoiced weight' },
+    { key: 'commission_amount', label: 'Commission amount', group: 'money', derived: true,
+      unit: '$', writeKey: 'commission_amount', num: true,
+      hint: 'leave blank to use weight x rate' },
 ];
 
+// `freight_charges` is GONE from the columns and deliberately still writable:
+// rows entered before 2026-09-10 carry it, compute() folds it into the charge
+// list so the money is not lost, and the totals strip still reads
+// net_of_freight. New charges go in `charges`, where they can carry a note.
+const LEGACY_WRITABLE = ['freight_charges'];
+
 // Her ten, in the order she listed them, for the table. The form uses GROUPS.
-const TABLE_ORDER = ['customer', 'date', 'invoice_no', 'hbl_no', 'proforma_date',
-    'reference', 'weight', 'invoice_price', 'amount', 'freight_charges'];
+const TABLE_ORDER = ['booking_no', 'container_no', 'date', 'hbl_no', 'invoice_no',
+    'customer', 'terms', 'proforma_date', 'reference', 'item',
+    'weight', 'invoice_price', 'amount'];
 
 const GROUPS = [
+    { id: 'shipment',  label: 'Shipment' },
     { id: 'customer',  label: 'Customer' },
     { id: 'documents', label: 'Documents' },
     { id: 'money',     label: 'Weight & money' },
@@ -151,20 +266,25 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 // A sale's own filterable columns. NOT bills' — a sale has a customer and an
 // HBL number where a bill has a supplier and a container number, and reusing
 // the wrong list would leave the search box quietly matching nothing.
-const FILTERABLE = ['customer', 'invoice_no', 'hbl_no', 'reference'];
+const FILTERABLE = ['customer', 'invoice_no', 'hbl_no', 'reference',
+    'booking_no', 'container_no', 'item', 'terms'];
 const filterRows = (rows, q) => bills.filterRows(rows, q, FILTERABLE);
 // Same self-learning list as bills — the customers she has invoiced are the
 // customers offered. See helpers/bills.js:facets.
 function facets(rows) {
     const of = (f) => [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
-    return { customer: of('customer'), reference: of('reference') };
+    return { customer: of('customer'), reference: of('reference'),
+             item: of('item'), terms: of('terms'),
+             booking_no: of('booking_no'), container_no: of('container_no') };
 }
 
 // `amount` is derived but ALSO writable — she can type the figure off the
 // customer's invoice, and compute() prefers it when she does. That is why it
 // is listed here explicitly instead of being taken from !derived.
 const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
-    .concat(['invoice_amount', 'price_unit', 'weight_unit', 'booking_no', 'note']);
+    .concat(['invoice_amount', 'commission_amount', 'price_unit', 'weight_unit',
+             'charges', 'note'])
+    .concat(LEGACY_WRITABLE);
 
 const list = () => {
     const raw = loadJson(cfg.SALES_FILE, []);
@@ -182,8 +302,18 @@ function clean(input) {
         const v = input[k];
         out[k] = typeof v === 'string' ? v.trim() : v;
     }
-    for (const k of ['weight', 'invoice_price', 'invoice_amount', 'freight_charges']) {
+    for (const k of ['weight', 'invoice_price', 'invoice_amount', 'freight_charges',
+                     'commission_per_mt', 'commission_amount']) {
         if (k in out) out[k] = num(out[k]);
+    }
+    // Charges are validated on the way IN, not on the way out: a charge with
+    // no note must fail at the point she saves it, where she still remembers
+    // why she typed it, rather than being quietly dropped from a total later.
+    if ('charges' in out) out.charges = cleanCharges(out.charges);
+    if ('terms' in out && out.terms) {
+        const t = TERMS.find((x) => x.toLowerCase() === String(out.terms).toLowerCase());
+        if (!t) throw new Error(`terms must be ${TERMS.join(' or ')}`);
+        out.terms = t;
     }
     return out;
 }
@@ -191,7 +321,44 @@ function clean(input) {
 // A stored row plus its arithmetic. One function, so no caller can render a
 // sale without it.
 function withTotals(s) { return { ...s, ...compute(s) }; }
-function listWithTotals() { return list().map(withTotals); }
+
+// ── BOOKING, THEN CONTAINER WITHIN IT ────────────────────────────────────
+// The order she asked for, applied where the table is built rather than in
+// the client, so the website, the phone and anything reading the route all
+// agree. Blank bookings sort last: a row with no booking is unfinished, not
+// first in the alphabet.
+function sortRows(rows) {
+    const key = (r) => [String(r.booking_no || '').trim().toUpperCase(),
+                        String(r.container_no || '').trim().toUpperCase()];
+    return [...(rows || [])].sort((a, b) => {
+        const [ab, ac] = key(a); const [bb, bc] = key(b);
+        if (!ab !== !bb) return ab ? -1 : 1;
+        if (ab !== bb) return ab < bb ? -1 : 1;
+        if (ac !== bc) return ac < bc ? -1 : 1;
+        return 0;
+    });
+}
+
+// ── THE SAME CONTAINER TWICE UNDER ONE BOOKING ───────────────────────────
+// Reported, never refused. A duplicate is usually a typo and occasionally
+// real (a container split across two invoices), and this file is not in a
+// position to tell the difference — but silence would let the margin join
+// against helpers/bills.js double-count, which is the failure nobody finds
+// until a month is closed.
+function duplicates(rows) {
+    const seen = new Map();
+    for (const r of (rows || [])) {
+        const bk = String(r.booking_no || '').trim().toUpperCase();
+        const cn = String(r.container_no || '').trim().toUpperCase();
+        if (!bk || !cn) continue;
+        const k = `${bk}|${cn}`;
+        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no, ids: [] });
+        seen.get(k).ids.push(r.id);
+    }
+    return [...seen.values()].filter((d) => d.ids.length > 1);
+}
+
+function listWithTotals() { return sortRows(list()).map(withTotals); }
 
 function getSale(id) { return list().find((s) => s.id === id) || null; }
 
@@ -270,6 +437,14 @@ function summary(rows) {
         amount: sum('amount'),
         freight_charges: sum('freight_charges'),
         net_of_freight: sum('net_of_freight'),
+        // The four figures the four tabs are about. Kept here rather than
+        // computed per tab in the client, so Outgoing and Freight cannot
+        // disagree about the same containers.
+        charges_in_total: sum('charges_in_total'),
+        charges_out_total: sum('charges_out_total'),
+        commission_amount: sum('commission_amount'),
+        receivable: sum('receivable'),
+        sale_side_cost: sum('sale_side_cost'),
     };
 }
 
@@ -277,4 +452,5 @@ module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, FILTERABLE, filterRows, facets,
     compute, withTotals, list, listWithTotals, getSale,
     addSale, editSale, deleteSale, summary,
+    sortRows, duplicates, cleanCharges, CHARGE_DIRECTIONS, TERMS,
 };

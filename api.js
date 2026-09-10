@@ -3813,6 +3813,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 fields: s.COLUMNS,
                 groups: s.GROUPS,
                 writable: s.WRITABLE,
+                // Reported, never refused — see helpers/sales.duplicates. The
+                // same container twice under one booking would double-count
+                // when Bills and Sales are joined for margin per container.
+                duplicates: s.duplicates(all),
+                terms: s.TERMS,
+                charge_directions: s.CHARGE_DIRECTIONS,
                 per_lb_ceiling: require('./helpers/bills').PER_LB_CEILING,
                 lb_per_mt: require('./helpers/bills').LB_PER_MT,
             });

@@ -230,11 +230,25 @@ section('D — her columns, in her order');
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(',')
        === 'total,net_lb,net_mt,amount,balance', bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
 
-    const sw = ['Customer name', 'Date', 'Invoice number', 'HBL number', 'Proforma date',
-        'Reference', 'Weight', 'Invoice price', 'Invoice amount', 'Freight charges'];
-    ck('the sale has all 10 she listed', sales.tableColumns().length === 10, String(sales.tableColumns().length));
-    ck('  in her order', sales.tableColumns().map((c) => c.label).join('|') === sw.join('|'),
+    // ── HER SECOND LIST, 2026-09-10 ──────────────────────────────────────
+    // "Date,HBL No.(House BL),Invoice number,booking no,container no,Customer
+    // name,Terms(LC/TT),Proforma Date,Reference,Item,Weight(in mt/lbs),invoice
+    // price,Invoice amount", then: "bookng first then container no".
+    //
+    // Freight charges is off the table on purpose — it became a charge with a
+    // note. compute() still folds the stored value in, so nothing entered
+    // before today is lost; section N covers that.
+    const sw = ['Booking no', 'Container no', 'Date', 'HBL number', 'Invoice number',
+        'Customer name', 'Terms', 'Proforma date', 'Reference', 'Item',
+        'Weight', 'Invoice price', 'Invoice amount'];
+    ck('the sale has the columns she listed', sales.tableColumns().length === sw.length,
+       String(sales.tableColumns().length));
+    ck('  in her order, booking before container',
+       sales.tableColumns().map((c) => c.label).join('|') === sw.join('|'),
        sales.tableColumns().map((c) => c.label).join('|'));
+    ck('  which is the same pair bills is keyed on, so the two can join',
+       bills.COLUMNS.some((c) => c.key === 'booking_no') && bills.COLUMNS.some((c) => c.key === 'container_no'),
+       'margin per container needs both sides keyed the same way');
 
     // A client that could post a balance not following from its own weights
     // is a client that can disagree with the server about money.
@@ -444,7 +458,12 @@ section('E — the routes, because a helper nothing calls is not a feature');
     const saleId = r.json.sale.id;
 
     r = await req('GET', '/api/sales', { sid: admin });
-    ck('  and GET ships its 10 columns', r.json.columns.length === 10, String(r.json.columns.length));
+    ck('  and GET ships the same columns the helper defines',
+       r.json.columns.length === sales.tableColumns().length,
+       `${r.json.columns.length} over the wire, ${sales.tableColumns().length} in the helper`);
+    ck('    booking first, container second, over the wire too',
+       r.json.columns[0].key === 'booking_no' && r.json.columns[1].key === 'container_no',
+       r.json.columns.slice(0, 2).map((c) => c.key).join(','));
 
     // ── AND THEY ARE SEPARATE STORES ─────────────────────────────────────
     // "This is for edge metals not for edge yard." A sale here must not turn
@@ -874,6 +893,152 @@ section('M — one payment, one supplier, enforced where it is not displayed');
        JSON.stringify(mine[0]));
     ck('  listing only containers with something still owing',
        mine.every((b) => b.balance > 0), JSON.stringify(mine.map((b) => b.balance)));
+}
+
+section('N — sales at container grain: charges, commission, and the join');
+{
+    // Apsara, 2026-09-10, on rebuilding the sales tab: container as the grain,
+    // "bookng first then container no", other charges each with a note, and
+    // commission per MT off "The invoiced weight (sale)".
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+
+    // ── THE CHARGE LIST ──────────────────────────────────────────────────
+    const good = sales.compute({ weight: 29000, invoice_price: 0.41, charges: [
+        { what: 'Ocean freight', amount: 2850, direction: 'out', why: 'LAX to Busan on DALA2399' },
+        { what: 'Detention', amount: 450, direction: 'in', why: '3 days at Busan, their clearance was late' },
+    ] });
+    ck('charges split by direction, not lumped into one number',
+       good.charges_out_total === 2850 && good.charges_in_total === 450,
+       JSON.stringify({ out: good.charges_out_total, in: good.charges_in_total }));
+    ck('  what the customer owes includes what was rebilled to them',
+       good.receivable === 12340, String(good.receivable));
+    ck('  and what she pays does NOT inflate the receivable',
+       good.receivable === round2(good.amount + good.charges_in_total),
+       'adding an outgoing charge to the invoice would bill the customer for her own freight');
+
+    const noNote = () => { try { sales.cleanCharges([{ what: 'Detention', amount: 450, direction: 'in' }]); return null; }
+                           catch (e) { return e.message; } };
+    ck('a charge with no note is refused', !!noNote(), 'the note is the whole reason this is a list');
+    ck('  and says so in words she can act on', /why/i.test(noNote() || ''), noNote());
+    const noDir = () => { try { sales.cleanCharges([{ what: 'X', amount: 1, why: 'y' }]); return null; }
+                          catch (e) { return e.message; } };
+    ck('a charge that does not say who pays is refused', !!noDir(), noDir());
+    ck('  because the direction decides add or subtract',
+       /you pay it or the customer/.test(noDir() || ''), noDir());
+    ck('a blank row is not an error, it is a blank row',
+       sales.cleanCharges([{ what: '', amount: null, why: '' }]).length === 0);
+
+    // ── THE MONEY ALREADY ENTERED MUST NOT VANISH ────────────────────────
+    // freight_charges predates the list. Rows carrying it are folded in.
+    const legacy = sales.compute({ weight: 29000, invoice_price: 0.41, freight_charges: 1500 });
+    ck('an old freight figure becomes a charge rather than disappearing',
+       legacy.charges.length === 1 && legacy.charges[0].amount === 1500
+       && legacy.charges[0].direction === 'out',
+       JSON.stringify(legacy.charges));
+    ck('  and net of freight still means what it always did',
+       legacy.net_of_freight === 10390, String(legacy.net_of_freight));
+    ck('  but a row with real charges ignores the legacy field, not doubling it',
+       sales.compute({ weight: 29000, invoice_price: 0.41, freight_charges: 1500,
+                       charges: [{ what: 'Ocean freight', amount: 2850, direction: 'out', why: 'x' }] })
+            .charges_out_total === 2850,
+       'counting both would overstate her cost by the old figure');
+
+    // ── COMMISSION ───────────────────────────────────────────────────────
+    const comm = sales.compute({ weight: 29000, invoice_price: 0.41, commission_per_mt: 6 });
+    ck('commission runs off the INVOICED weight in MT',
+       comm.commission_amount === round2(comm.weight_mt * 6), String(comm.commission_amount));
+    ck('  which is her answer, not the purchased weight on the bill',
+       comm.weight_mt === round3(29000 / bills.LB_PER_MT), String(comm.weight_mt));
+    ck('  an agent\'s own figure wins over the arithmetic',
+       sales.compute({ weight: 29000, invoice_price: 0.41, commission_per_mt: 6,
+                       commission_amount: 80 }).commission_amount === 80);
+    ck('    and says it was stated',
+       sales.compute({ weight: 29000, commission_per_mt: 6, commission_amount: 80 }).commission_is_stated === true);
+    ck('  no rate means no commission, not zero',
+       sales.compute({ weight: 29000, invoice_price: 0.41 }).commission_amount === null,
+       'zero is a decision; blank is a question');
+    ck('what the sale costs Edge Metals is charges out plus commission',
+       sales.compute({ weight: 29000, invoice_price: 0.41, commission_per_mt: 6, charges: [
+           { what: 'Ocean freight', amount: 2850, direction: 'out', why: 'x' }] }).sale_side_cost
+       === round2(2850 + comm.commission_amount));
+
+    // ── BOOKING, THEN CONTAINER ──────────────────────────────────────────
+    const order = sales.sortRows([
+        { booking_no: 'DALA9', container_no: 'AAA1' },
+        { container_no: 'ZZZ9' },
+        { booking_no: 'DALA1', container_no: 'BBB2' },
+        { booking_no: 'DALA1', container_no: 'AAA2' },
+    ]).map((r) => `${r.booking_no || '-'}/${r.container_no}`);
+    ck('rows come back booking first, container within it',
+       order.join(' ') === 'DALA1/AAA2 DALA1/BBB2 DALA9/AAA1 -/ZZZ9', order.join(' '));
+    ck('  and a row with no booking sorts last, not first',
+       order[order.length - 1] === '-/ZZZ9',
+       'an unfinished row at the top of the table is not a helpful default');
+
+    // A container number is not unique over time; the pair is.
+    ck('the same container under one booking is reported',
+       sales.duplicates([{ id: 'a', booking_no: 'D1', container_no: 'C1' },
+                         { id: 'b', booking_no: 'D1', container_no: ' c1 ' },
+                         { id: 'c', booking_no: 'D2', container_no: 'C1' }]).length === 1,
+       'a duplicate would double-count when bills and sales are joined');
+    ck('  the SAME container under a DIFFERENT booking is not a duplicate',
+       sales.duplicates([{ id: 'a', booking_no: 'D1', container_no: 'C1' },
+                         { id: 'c', booking_no: 'D2', container_no: 'C1' }]).length === 0,
+       'MSKU1111111 sails again next year with different metal in it');
+
+    // ── TERMS ────────────────────────────────────────────────────────────
+    const bad = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang', terms: 'DP' } });
+    ck('terms outside LC and TT are refused', bad.status === 400, bad.raw);
+    const okTerms = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang', terms: 'tt',
+        booking_no: 'DALA2399', container_no: 'MSKU1111111', item: 'Auto cast',
+        weight: 29000, invoice_price: 0.41, commission_per_mt: 6,
+        charges: [{ what: 'Detention', amount: 450, direction: 'in', why: 'their delay at Busan' }] } });
+    ck('  and lowercase is tidied rather than rejected',
+       okTerms.status === 200 && okTerms.json.sale.terms === 'TT',
+       okTerms.raw);
+    ck('  the row comes back with its charges intact',
+       (okTerms.json.sale.charges || []).length === 1
+       && okTerms.json.sale.charges[0].why === 'their delay at Busan',
+       JSON.stringify(okTerms.json.sale.charges));
+    ck('  and its commission computed', okTerms.json.sale.commission_amount === 78.92,
+       String(okTerms.json.sale.commission_amount));
+
+    const viaRoute = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang',
+        charges: [{ what: 'Detention', amount: 450, direction: 'in' }] } });
+    ck('the ROUTE refuses a charge with no note too', viaRoute.status === 400, viaRoute.raw);
+
+    const listed = await req('GET', '/api/sales', { sid: admin });
+    ck('the sales list can be searched by container',
+       (listed.json.filterable || []).includes('container_no'),
+       JSON.stringify(listed.json.filterable));
+    ck('  and by booking', (listed.json.filterable || []).includes('booking_no'));
+
+    // The duplicate warning has to reach the client or it is a function
+    // nobody calls — the exact failure this suite's header was written about.
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang', booking_no: 'DUPB', container_no: 'DUPC1' } });
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/11/2026', customer: 'Daekwang', booking_no: 'DUPB', container_no: 'dupc1' } });
+    const withDupes = await req('GET', '/api/sales', { sid: admin });
+    ck('a duplicated container is reported to the client',
+       (withDupes.json.duplicates || []).some((d) => String(d.container_no).toUpperCase() === 'DUPC1'),
+       JSON.stringify(withDupes.json.duplicates));
+    ck('  but both rows are still returned, not silently dropped',
+       withDupes.json.sales.filter((x) => String(x.container_no || '').toUpperCase() === 'DUPC1').length === 2,
+       'refusing would be wrong: a container really can be split across two invoices');
+    ck('  and the rows arrive in booking-then-container order',
+       (() => { const b = withDupes.json.sales.map((x) => String(x.booking_no || '').toUpperCase())
+                          .filter(Boolean);
+                return b.every((v, i) => i === 0 || b[i - 1] <= v); })(),
+       withDupes.json.sales.map((x) => x.booking_no || '-').join(','));
+    ck('  the client is told which terms are allowed',
+       JSON.stringify(withDupes.json.terms) === JSON.stringify(['LC', 'TT']),
+       JSON.stringify(withDupes.json.terms));
 }
 
 if (server) server.close();
