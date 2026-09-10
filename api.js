@@ -3795,6 +3795,72 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── MONEY IN FROM CUSTOMERS ──────────────────────────────────────────
+    // Apsara, 2026-09-10: "In outgoing-give the option as mark as paid..
+    // sometimes there might be a deduction in received amount because of wire
+    // deduction by bank".
+    //
+    // Mark-as-paid is a POST here with the balance allocated and the shortfall
+    // classified — NOT a flag on the container. See the header of
+    // helpers/salesReceipts.js for why a boolean would have been wrong.
+    app.get('/api/sales-receipts', (req, res) => {
+        try {
+            const r = require('./helpers/salesReceipts');
+            const s = require('./helpers/sales');
+            const outstanding = s.listWithTotals()
+                .filter((x) => (x.balance === null ? false : x.balance > 0.005))
+                .map((x) => ({ id: x.id, date: x.date, customer: x.customer,
+                               booking_no: x.booking_no, container_no: x.container_no,
+                               invoice_no: x.invoice_no, amount: x.amount,
+                               receivable: x.receivable, received: x.received,
+                               deducted: x.deducted, balance: x.balance }));
+            res.json({
+                receipts: r.list(),
+                summary: r.summary(),
+                open_invoices: outstanding,
+                modes: r.RECEIPT_MODES,
+                deduction_reasons: r.DEDUCTION_REASONS,
+                banks: require('./helpers/banks').options(),
+                other: require('./helpers/banks').OTHER,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/sales-receipts', async (req, res) => {
+        try {
+            const r = require('./helpers/salesReceipts');
+            const rec = await r.addReceipt({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, receipt: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Audited, for the same reason the purchase side is: money coming off the
+    // record is the most consequential thing these routes do.
+    app.delete('/api/sales-receipts/:id', async (req, res) => {
+        try {
+            const r = require('./helpers/salesReceipts');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const doomed = r.list().find((x) => x.id === id);
+            if (!doomed) return res.status(404).json({ error: `no receipt ${id}` });
+
+            const entry = await audit.record({
+                action: 'delete-sales-receipt', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: {
+                    company: 'edge-metals', date: doomed.date, mode: doomed.mode,
+                    bank: doomed.bank, ref: doomed.ref, customer: doomed.customer,
+                    amount: doomed.amount, allocations: doomed.allocations || [],
+                },
+            });
+            await r.deleteReceipt(id);
+            await audit.complete(entry, 'done',
+                { containers_reopened: (doomed.allocations || []).length });
+            res.json({ ok: true, removed: true,
+                       containers_reopened: (doomed.allocations || []).map((a) => a.sale_id) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.get('/api/sales', (req, res) => {
         try {
             const s = require('./helpers/sales');

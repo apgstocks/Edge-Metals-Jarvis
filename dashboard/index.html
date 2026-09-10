@@ -4816,6 +4816,10 @@ async function renderLedgerTab(kind) {
     <tr data-id="${esc(r.id)}" style="border-top:1px solid var(--line);">
       ${columns.map((c) => `<td style="padding:7px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
       <td style="padding:7px 9px; white-space:nowrap; position:sticky; right:0; background:var(--surface-card); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:2;">
+        ${kind === 'sales' && r.balance !== null && r.balance > 0.005
+          ? `<button class="btn btn-secondary ledger-paid" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Mark paid</button>` : ''}
+        ${kind === 'sales' && r.balance !== null && Math.abs(r.balance) <= 0.005
+          ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:#2F7D22; font-size:10px; font-family:var(--font-mono); margin-right:6px;">paid${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
         <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
         <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
         ${(r.missing_tares && r.missing_tares.length)
@@ -4916,6 +4920,12 @@ async function renderLedgerTab(kind) {
   // The row is taken from what is already on screen rather than re-fetched:
   // it is the row she clicked, and a second GET could hand back a different
   // one if something changed underneath.
+  document.querySelectorAll('.ledger-paid').forEach((b) => {
+    b.onclick = () => {
+      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
+      if (row) openMarkPaid(row);
+    };
+  });
   document.querySelectorAll('.ledger-edit').forEach((b) => {
     b.onclick = () => {
       const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
@@ -4944,6 +4954,147 @@ const LEDGER_LIGHT = {
   paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
   ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
 };
+
+// ── MARK AS PAID, AND THE MONEY THE BANK KEPT ────────────────────────────
+// Apsara, 2026-09-10: "In outgoing-give the option as mark as paid..sometimes
+// there might be a deduction in received amount because of wire deduction by
+// bank".
+//
+// The tempting build is a tick box. It is wrong, and the second half of her
+// sentence is why: the customer wires 12,340 and 12,315 lands. A tick says
+// settled; the statement says 12,315; nothing says where the 25 went. So this
+// records a RECEIPT, and the shortfall has to be named before it will save.
+//
+// The amount box is pre-filled with the full balance, because that is the
+// ordinary case and she should not have to type it. The moment she changes it
+// to something smaller, the shortfall panel appears — it is not a question
+// asked up front, it is a question asked when it becomes one.
+async function openMarkPaid(row) {
+  const L = LEDGER_LIGHT;
+  const data = await api('/api/sales-receipts');
+  const banks = data.banks || [];
+  const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const owed = Number(row.balance || 0);
+  const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
+  const lab = `display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:5px; white-space:nowrap;`;
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="mpModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(600px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Mark paid — ${esc(row.container_no || row.invoice_no || 'container')}</h3>
+          <button id="mpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">
+          ${esc(row.customer || 'This customer')} owes <b style="color:${L.ink};">${money(owed)}</b>${row.booking_no ? ` on ${esc(row.booking_no)}` : ''}
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;">
+          <div><label style="${lab}">How much arrived</label>
+            <input id="mpAmount" inputmode="decimal" autocomplete="off" value="${owed.toFixed(2)}"
+              style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+          <div><label style="${lab}">Received on</label>
+            <input id="mpDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
+          <div><label style="${lab}">How</label>
+            <select id="mpMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+          <div id="mpBankField"><label style="${lab}">Into</label>
+            <select id="mpBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div><label style="${lab}">Reference</label>
+            <input id="mpRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
+        </div>
+
+        <div id="mpShort" style="display:none; margin-top:14px; padding:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm);">
+          <div style="font-size:12px; color:${L.ink}; margin-bottom:8px;">
+            <b id="mpShortAmt" style="font-family:var(--font-mono);"></b> less than the balance. What happened to it?
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:${L.ink}; cursor:pointer;">
+              <input type="radio" name="mpWhy" value="bank_charge" checked style="margin-top:2px;">
+              <span>The bank took it in transit<br><span style="font-size:11px; color:${L.inkFaint};">A cost to Edge Metals. The invoice stays at its full value — they did pay it.</span></span>
+            </label>
+            <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:${L.ink}; cursor:pointer;">
+              <input type="radio" name="mpWhy" value="discount" style="margin-top:2px;">
+              <span>I agreed to take less<br><span style="font-size:11px; color:${L.inkFaint};">A discount. Less was earned — not a cost, and counted apart from bank charges.</span></span>
+            </label>
+            <label style="display:flex; align-items:flex-start; gap:8px; font-size:12px; color:${L.ink}; cursor:pointer;">
+              <input type="radio" name="mpWhy" value="" style="margin-top:2px;">
+              <span>They still owe it<br><span style="font-size:11px; color:${L.inkFaint};">Records what arrived and leaves the rest outstanding.</span></span>
+            </label>
+          </div>
+          <input id="mpWhyNote" autocomplete="off" placeholder="note (optional)"
+            style="${fieldCss} margin-top:8px; font-size:12px;">
+        </div>
+
+        <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:center; gap:12px;">
+          <span id="mpAfter" style="font-size:12px; color:${L.inkMuted};"></span>
+          <span style="flex:1;"></span>
+          <button id="mpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
+          <button id="mpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record it</button>
+        </div>
+        <div id="mpErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+
+  $('mpDate').value = toUsDate(todayYardDateStr());
+  wireUsDateField('mpDate');
+
+  const close = () => { const m = $('mpModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('mpClose').onclick = close;
+  $('mpCancel').onclick = close;
+
+  const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
+  const chosen = () => {
+    const r = document.querySelector('input[name="mpWhy"]:checked');
+    return r ? r.value : 'bank_charge';
+  };
+
+  const refresh = () => {
+    const got = num($('mpAmount').value);
+    const short = Math.round((owed - got) * 100) / 100;
+    // Only a SHORTFALL raises the question. Over-payment is a different
+    // conversation and the server refuses it, so there is nothing to ask.
+    $('mpShort').style.display = short > 0.005 ? 'block' : 'none';
+    if (short > 0.005) $('mpShortAmt').textContent = money(short);
+    const closes = short <= 0.005 || !!chosen();
+    $('mpAfter').textContent = short <= 0.005
+      ? 'Settles the container.'
+      : (closes ? `Settles it — ${money(short)} recorded as ${chosen() === 'discount' ? 'a discount' : 'a bank charge'}.`
+                : `${money(short)} stays outstanding.`);
+    if ($('mpBankField')) {
+      const m = $('mpMode').value;
+      $('mpBankField').style.display = (m === 'Wire' || m === 'Zelle') ? '' : 'none';
+    }
+  };
+  $('mpAmount').oninput = refresh;
+  $('mpMode').onchange = refresh;
+  document.querySelectorAll('input[name="mpWhy"]').forEach((r) => { r.onchange = refresh; });
+  refresh();
+
+  $('mpSave').onclick = async () => {
+    $('mpErr').textContent = '';
+    try {
+      const got = num($('mpAmount').value);
+      const short = Math.round((owed - got) * 100) / 100;
+      const why = short > 0.005 ? chosen() : '';
+      const alloc = { sale_id: row.id, amount: got };
+      if (why) {
+        alloc.deduction_amount = short;
+        alloc.deduction_reason = why;
+        alloc.deduction_note = $('mpWhyNote').value || null;
+      }
+      const mode = $('mpMode').value;
+      await api('/api/sales-receipts', { method: 'POST', body: JSON.stringify({
+        date: $('mpDate').value, amount: got, mode,
+        bank: (mode === 'Wire' || mode === 'Zelle') ? $('mpBank').value : '',
+        ref: $('mpRef').value, customer: row.customer, allocations: [alloc],
+      }) });
+      close();
+      await renderLedgerTab('sales');
+    } catch (e) { $('mpErr').textContent = e.message || 'Could not record it'; }
+  };
+}
 
 // ── STEP ONE: WHO IS BEING PAID ──────────────────────────────────────────
 // Apsara, 2026-09-10: "On record a payment -> It must ask to select the

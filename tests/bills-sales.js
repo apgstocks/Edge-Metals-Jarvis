@@ -240,7 +240,7 @@ section('D — her columns, in her order');
     // before today is lost; section N covers that.
     const sw = ['Booking no', 'Container no', 'Date', 'HBL number', 'Invoice number',
         'Customer name', 'Terms', 'Proforma date', 'Reference', 'Item',
-        'Weight', 'Invoice price', 'Invoice amount'];
+        'Weight', 'Invoice price', 'Invoice amount', 'Received', 'Balance'];
     ck('the sale has the columns she listed', sales.tableColumns().length === sw.length,
        String(sales.tableColumns().length));
     ck('  in her order, booking before container',
@@ -1039,6 +1039,155 @@ section('N — sales at container grain: charges, commission, and the join');
     ck('  the client is told which terms are allowed',
        JSON.stringify(withDupes.json.terms) === JSON.stringify(['LC', 'TT']),
        JSON.stringify(withDupes.json.terms));
+}
+
+section('O — mark as paid, and the $25 the bank took on the way');
+{
+    // Apsara, 2026-09-10: "In outgoing-give the option as mark as paid..
+    // sometimes there might be a deduction in received amount because of wire
+    // deduction by bank".
+    //
+    // The whole point of these is that the shortfall CANNOT vanish. A boolean
+    // `paid` column would say settled while the bank says $12,315 against a
+    // $12,340 invoice, and nothing would say where the difference went.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const receipts = require(path.join(ROOT, 'helpers/salesReceipts'));
+    const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
+
+    const mk = async (customer, container, extra = {}) => (await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer, booking_no: 'RCPT1', container_no: container,
+        weight: 29000, invoice_price: 0.41, ...extra,
+    } })).json.sale;
+    const inv = await mk('Wireco', 'WIRE1');
+    ck('the invoice is what it always was', inv.amount === 11890, String(inv.amount));
+
+    const owed = () => {
+        const row = sales.listWithTotals().find((x) => x.id === inv.id);
+        return { balance: row.balance, received: row.received, charge: row.bank_charge };
+    };
+    ck('  and it starts owing all of it', owed().balance === 11890, JSON.stringify(owed()));
+
+    // ── THE CASE SHE DESCRIBED ───────────────────────────────────────────
+    const paid = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 11865, mode: 'Wire', bank: 'Chase', customer: 'Wireco',
+        allocations: [{ sale_id: inv.id, amount: 11865, deduction_amount: 25,
+                        deduction_reason: 'bank_charge',
+                        deduction_note: 'Intermediary bank fee on the TT' }],
+    } });
+    ck('a short wire can still settle the invoice', paid.status === 200, paid.raw);
+    ck('  the container is square', owed().balance === 0, JSON.stringify(owed()));
+    ck('  what actually arrived is what actually arrived',
+       owed().received === 11865, String(owed().received));
+    ck('  and the missing 25 is named, not absorbed',
+       owed().charge === 25, JSON.stringify(owed()));
+    ck('  the receipt total matches the bank, not the invoice',
+       paid.json.receipt.amount === 11865,
+       'typing 11890 here would make the receipt disagree with the statement');
+
+    // ── AN UNCLASSIFIED SHORTFALL IS THE BUG THIS PREVENTS ───────────────
+    const inv2 = await mk('Wireco', 'WIRE2');
+    const vague = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 11865, mode: 'Wire', bank: 'Chase', customer: 'Wireco',
+        allocations: [{ sale_id: inv2.id, amount: 11865, deduction_amount: 25 }],
+    } });
+    ck('a shortfall with no reason is refused', vague.status === 400, vague.raw);
+    ck('  and the message offers the third option: leave it outstanding',
+       /outstanding/.test(vague.json.error || ''), vague.json.error);
+
+    // Underpaid with NO deduction is simply a balance, and must stay one.
+    const partial = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 5000, mode: 'Wire', bank: 'Chase', customer: 'Wireco',
+        allocations: [{ sale_id: inv2.id, amount: 5000 }],
+    } });
+    ck('part payment with no deduction is fine', partial.status === 200, partial.raw);
+    const row2 = () => sales.listWithTotals().find((x) => x.id === inv2.id);
+    ck('  and the rest stays owed', row2().balance === 6890, String(row2().balance));
+
+    // ── A DISCOUNT IS NOT A BANK CHARGE ──────────────────────────────────
+    const inv3 = await mk('Wireco', 'WIRE3');
+    await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 11390, mode: 'Wire', bank: 'Chase', customer: 'Wireco',
+        allocations: [{ sale_id: inv3.id, amount: 11390, deduction_amount: 500,
+                        deduction_reason: 'discount', deduction_note: 'agreed on the moisture claim' }],
+    } });
+    const row3 = () => sales.listWithTotals().find((x) => x.id === inv3.id);
+    ck('a discount closes the balance too', row3().balance === 0, String(row3().balance));
+    ck('  but is counted as a discount, not a bank charge',
+       row3().discount === 500 && row3().bank_charge === 0,
+       JSON.stringify({ d: row3().discount, b: row3().bank_charge }));
+    ck('  which the summary keeps apart',
+       receipts.summary().bank_charges === 25 && receipts.summary().discounts === 500,
+       JSON.stringify(receipts.summary()));
+
+    // ── ONE RECEIPT, SEVERAL CONTAINERS ──────────────────────────────────
+    const a = await mk('Multico', 'MULT1');
+    const b = await mk('Multico', 'MULT2');
+    const one = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 23780, mode: 'Wire', bank: 'Chase', customer: 'Multico',
+        allocations: [{ sale_id: a.id, amount: 11890 }, { sale_id: b.id, amount: 11890 }],
+    } });
+    ck('one TT settles two containers', one.status === 200, one.raw);
+    ck('  as ONE receipt, not two', receipts.list().filter((r) => r.customer === 'Multico').length === 1);
+
+    const crossed = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 100, mode: 'Wire', bank: 'Chase', customer: 'Multico',
+        allocations: [{ sale_id: inv.id, amount: 100 }],
+    } });
+    ck('a receipt cannot settle another customer\'s container', crossed.status === 400, crossed.raw);
+    ck('  naming who it was actually invoiced to',
+       /Wireco/.test(crossed.json.error || ''), crossed.json.error);
+
+    const over = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 100, mode: 'Wire', bank: 'Chase', customer: 'Multico',
+        allocations: [{ sale_id: a.id, amount: 500 }],
+    } });
+    ck('allocating more than arrived is refused', over.status === 400, over.raw);
+    const under = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 500, mode: 'Wire', bank: 'Chase', customer: 'Multico',
+        allocations: [{ sale_id: a.id, amount: 100 }],
+    } });
+    ck('  and so is money not put against anything', under.status === 400, under.raw);
+
+    const noBank = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 100, mode: 'Wire', customer: 'Multico',
+        allocations: [{ sale_id: a.id, amount: 100 }],
+    } });
+    ck('a wire has to say which account it landed in', noBank.status === 400, noBank.raw);
+    const cash = await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 100, mode: 'Cash', customer: 'Multico',
+        allocations: [{ sale_id: a.id, amount: 100 }],
+    } });
+    ck('  but cash does not, because it has not been banked yet', cash.status === 200, cash.raw);
+
+    // ── AN INFLOW IS NOT A PAYMENT ───────────────────────────────────────
+    ck('a receipt writes NO row to the spend ledger',
+       listPayments().every((p) => !String(p.load_id || '').startsWith('RCPT_')),
+       'a customer payment subtracted from her spend would be worse than not recording it');
+    const petty = require(path.join(ROOT, 'helpers/pettyCash'));
+    const before = petty.balance();
+    await req('POST', '/api/sales-receipts', { sid: admin, body: {
+        date: '09/12/2026', amount: 50, mode: 'Cash', customer: 'Multico',
+        allocations: [{ sale_id: b.id, amount: 50 }],
+    } });
+    ck('  and cash in does not move the EDGE YARD cash box',
+       petty.balance() === before, `${before} -> ${petty.balance()}`);
+
+    // ── DELETING ONE REOPENS WHAT IT CLOSED ──────────────────────────────
+    const audit = require(path.join(ROOT, 'helpers/audit'));
+    const rid = paid.json.receipt.id;
+    const gone = await req('DELETE', `/api/sales-receipts/${rid}`, { sid: admin });
+    ck('deleting a receipt succeeds', gone.status === 200, gone.raw);
+    ck('  the container owes again, bank charge and all',
+       owed().balance === 11890 && owed().charge === 0, JSON.stringify(owed()));
+    ck('  and it is audited under its own action',
+       audit.listEntries().some((e) => e.subject === rid && e.action === 'delete-sales-receipt'),
+       JSON.stringify(audit.listEntries().filter((e) => e.subject === rid).map((e) => e.action)));
+    ck('  deleting it twice is a clean 404',
+       (await req('DELETE', `/api/sales-receipts/${rid}`, { sid: admin })).status === 404);
+
+    const staff = (await login('staff-pw-ccccccccccc')).json.sid;
+    ck('staff cannot touch receipts at all',
+       (await req('GET', '/api/sales-receipts', { sid: staff })).status === 403);
 }
 
 if (server) server.close();

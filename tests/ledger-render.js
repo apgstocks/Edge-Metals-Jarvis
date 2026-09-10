@@ -1038,6 +1038,112 @@ section('G4 — deleting a payment, and saying what that undoes');
     dom.window.close();
 }
 
+section('G5 — mark as paid, and the shortfall it will not let vanish');
+{
+    // Apsara, 2026-09-10: "In outgoing-give the option as mark as paid..
+    // sometimes there might be a deduction in received amount because of wire
+    // deduction by bank".
+    const posted = [];
+    const ROWS = [
+        { id: 'S1', booking_no: 'RCPT1', container_no: 'WIRE1', customer: 'Wireco',
+          date: '09/10/2026', invoice_no: 'INV-1', weight: 29000, invoice_price: 0.41,
+          receivable: 11890, received: 0, deducted: 0, bank_charge: 0, discount: 0, balance: 11890 },
+        { id: 'S2', booking_no: 'RCPT1', container_no: 'WIRE2', customer: 'Wireco',
+          date: '09/10/2026', invoice_no: 'INV-2', weight: 29000, invoice_price: 0.41,
+          receivable: 11890, received: 11865, deducted: 25, bank_charge: 25, discount: 0, balance: 0 },
+    ].map((r) => ({ ...sales.withTotals(r), ...r }));
+
+    const { w, dom } = await mount({
+        '/api/sales': () => ({ sales: ROWS, summary: sales.summary(ROWS),
+            columns: sales.tableColumns(), fields: sales.COLUMNS, groups: sales.GROUPS,
+            facets: sales.facets(ROWS), filterable: sales.FILTERABLE,
+            total_unfiltered: ROWS.length, terms: sales.TERMS }),
+        '/api/sales-receipts': (q, opts) => {
+            if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true }; }
+            return { receipts: [], summary: {}, open_invoices: [],
+                     modes: ['Wire', 'Zelle', 'Cash', 'Cheque'],
+                     deduction_reasons: ['bank_charge', 'discount'], banks: ['Chase', 'BofA'] };
+        },
+    });
+    const doc = w.document;
+    await w.renderLedgerTab('sales');
+
+    ck('an unpaid container offers Mark paid',
+       !!doc.querySelector('.ledger-paid[data-id="S1"]'));
+    ck('  a settled one does not', !doc.querySelector('.ledger-paid[data-id="S2"]'),
+       'offering to settle something already settled is how it gets paid twice');
+    ck('  and says so, with a mark that it was not the full amount',
+       /paid \*/.test(doc.querySelector('tr[data-id="S2"]').textContent),
+       doc.querySelector('tr[data-id="S2"]').textContent.replace(/\s+/g, ' ').trim());
+
+    doc.querySelector('.ledger-paid[data-id="S1"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('the form opens', !!doc.getElementById('mpModal'));
+    ck('  saying who owes what',
+       /Wireco owes/.test(doc.getElementById('mpModal').textContent),
+       doc.getElementById('mpModal').textContent.replace(/\s+/g, ' ').slice(0, 90));
+    ck('  pre-filled with the whole balance, because that is the ordinary case',
+       doc.getElementById('mpAmount').value === '11890.00',
+       doc.getElementById('mpAmount').value);
+    ck('  dated today in LA', /^\d\d\/\d\d\/\d{4}$/.test(doc.getElementById('mpDate').value));
+    ck('  and no shortfall question is asked yet',
+       doc.getElementById('mpShort').style.display === 'none',
+       'it is a question asked when it becomes one');
+
+    const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+    const amt = doc.getElementById('mpAmount');
+    amt.value = '11865'; fire(amt, 'input');
+    ck('typing a smaller figure raises the question',
+       doc.getElementById('mpShort').style.display === 'block');
+    ck('  naming the exact gap',
+       /\$25\.00/.test(doc.getElementById('mpShortAmt').textContent),
+       doc.getElementById('mpShortAmt').textContent);
+    ck('  defaulting to the bank taking it, which is what she described',
+       doc.querySelector('input[name="mpWhy"]:checked').value === 'bank_charge');
+    ck('  and saying what that will do',
+       /bank charge/.test(doc.getElementById('mpAfter').textContent),
+       doc.getElementById('mpAfter').textContent);
+
+    // The third option matters: sometimes they just have not paid it.
+    const stillOwed = [...doc.querySelectorAll('input[name="mpWhy"]')].find((r) => r.value === '');
+    stillOwed.checked = true; fire(stillOwed, 'change');
+    ck('leaving it outstanding is offered as an equal choice', !!stillOwed);
+    ck('  and says the rest stays owed',
+       /stays outstanding/.test(doc.getElementById('mpAfter').textContent),
+       doc.getElementById('mpAfter').textContent);
+
+    const bankCharge = [...doc.querySelectorAll('input[name="mpWhy"]')].find((r) => r.value === 'bank_charge');
+    bankCharge.checked = true; fire(bankCharge, 'change');
+
+    // Cash has not been banked, so it has no account.
+    const mode = doc.getElementById('mpMode');
+    ck('a wire asks which account it landed in',
+       doc.getElementById('mpBankField').style.display !== 'none');
+    mode.value = 'Cash'; fire(mode, 'change');
+    ck('  cash does not', doc.getElementById('mpBankField').style.display === 'none');
+    mode.value = 'Wire'; fire(mode, 'change');
+    doc.getElementById('mpBank').value = 'Chase';
+
+    doc.getElementById('mpSave').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('recording posts a receipt, not a flag on the row', posted.length === 1, JSON.stringify(posted));
+    if (posted.length) {
+        const b = posted[0];
+        ck('  for what actually arrived', b.amount === 11865, String(b.amount));
+        ck('    which is what the bank statement will say, not the invoice',
+           b.amount !== 11890, 'a receipt that disagrees with the statement cannot be reconciled');
+        ck('  against that container', b.allocations[0].sale_id === 'S1');
+        ck('  with the shortfall carried and classified',
+           b.allocations[0].deduction_amount === 25
+           && b.allocations[0].deduction_reason === 'bank_charge',
+           JSON.stringify(b.allocations[0]));
+        ck('  and the customer it was invoiced to', b.customer === 'Wireco');
+    }
+    ck('the form closes on success', !doc.getElementById('mpModal'));
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

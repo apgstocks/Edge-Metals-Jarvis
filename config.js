@@ -172,6 +172,10 @@ const FILES = {
     // helpers/billPayments.js. Every row here ALSO writes one row to
     // PAYMENTS_FILE so the spend report still sees the money.
     BILL_PAYMENTS_FILE: path.join(DATA_DIR, 'bill_payments.json'),
+    // Money IN from customers. A separate store from BILL_PAYMENTS_FILE and
+    // from PAYMENTS_FILE because it flows the other way — see the header of
+    // helpers/salesReceipts.js for why it writes no row to the spend ledger.
+    SALES_RECEIPTS_FILE: path.join(DATA_DIR, 'sales_receipts.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

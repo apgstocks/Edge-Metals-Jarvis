@@ -241,6 +241,12 @@ const COLUMNS = [
     { key: 'commission_amount', label: 'Commission amount', group: 'money', derived: true,
       unit: '$', writeKey: 'commission_amount', num: true,
       hint: 'leave blank to use weight x rate' },
+
+    // Filled from helpers/salesReceipts.js in listWithTotals, never typed.
+    // "Payment received amount" from her list — as a figure that follows from
+    // the receipts, so it cannot say settled while the bank says otherwise.
+    { key: 'received',       label: 'Received',       group: 'money', derived: true, unit: '$' },
+    { key: 'balance',        label: 'Balance',        group: 'money', derived: true, unit: '$' },
 ];
 
 // `freight_charges` is GONE from the columns and deliberately still writable:
@@ -252,7 +258,7 @@ const LEGACY_WRITABLE = ['freight_charges'];
 // Her ten, in the order she listed them, for the table. The form uses GROUPS.
 const TABLE_ORDER = ['booking_no', 'container_no', 'date', 'hbl_no', 'invoice_no',
     'customer', 'terms', 'proforma_date', 'reference', 'item',
-    'weight', 'invoice_price', 'amount'];
+    'weight', 'invoice_price', 'amount', 'received', 'balance'];
 
 const GROUPS = [
     { id: 'shipment',  label: 'Shipment' },
@@ -358,7 +364,41 @@ function duplicates(rows) {
     return [...seen.values()].filter((d) => d.ids.length > 1);
 }
 
-function listWithTotals() { return sortRows(list()).map(withTotals); }
+// ── WHAT IS STILL OWED ───────────────────────────────────────────────────
+// Read from helpers/salesReceipts.js in ONE pass, the same way bills reads
+// its payments. A container is settled when what arrived plus what was
+// deducted (bank charge or discount) covers the receivable — so a $12,340
+// invoice closed by $12,315 landing and $25 of wire charge shows a zero
+// balance AND still says where the $25 went.
+//
+// Non-fatal if the receipts file cannot be read: a sales table that refuses
+// to render because the money store is unavailable is worse than one that
+// renders without balances and says so in the log.
+function listWithTotals() {
+    let received = {}; let deducted = {};
+    try {
+        const r = require('./salesReceipts');
+        received = r.receivedBySale();
+        deducted = r.deductedBySale();
+    } catch (e) { console.warn('[SALES] could not read receipts:', e.message); }
+
+    return sortRows(list()).map((row) => {
+        const t = withTotals(row);
+        const got = received[row.id] || 0;
+        const ded = deducted[row.id] || { total: 0, bank_charge: 0, discount: 0 };
+        return {
+            ...t,
+            received: got,
+            deducted: ded.total || 0,
+            bank_charge: ded.bank_charge || 0,
+            discount: ded.discount || 0,
+            // Null, not zero, when there is nothing to measure against: an
+            // invoice with no amount yet is not a paid one.
+            balance: t.receivable === null ? null
+                : round2(t.receivable - got - (ded.total || 0)),
+        };
+    });
+}
 
 function getSale(id) { return list().find((s) => s.id === id) || null; }
 
