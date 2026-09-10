@@ -89,14 +89,48 @@ function num(v) {
 // The single-item shape still works untouched: `description` + `supplier_price`
 // with no items is one grade, which is most bills, and nothing about them
 // changes.
+// ── AND EACH GRADE HAS ITS OWN WEIGHBRIDGE TICKET ────────────────────────
+// Apsara, 2026-09-10: "What if i have different weights like gross ,tare etc..
+// for diff item in same container", and, asked how they are weighed: "Each
+// grade is its own weighbridge ticket."
+//
+// So the weighing moves DOWN to the line. Each item may carry its own gross
+// and its own tares, and its net is that ticket's arithmetic — gross minus
+// what was under it. The container's gross, tares and net then become the SUM
+// of its tickets rather than something typed, because a total that is both
+// typed and derived is a total that will disagree with itself.
+//
+// THE TRAP THIS AVOIDS, stated because it is invisible once it happens: truck,
+// container and chassis tares belong to a WEIGHING, not to a grade. Recording
+// one gross for the container and then a chassis tare against each of three
+// grades subtracts that chassis three times, and the net comes out hundreds of
+// pounds light with every individual figure looking reasonable. Keying the
+// tares to the ticket is what makes that impossible rather than merely
+// unlikely.
+//
+// A line may still carry a plain `weight` and no ticket — that is this
+// morning's shape, one weighing for the container split on paper, and it
+// still works. A line that has BOTH is using the ticket: the arithmetic wins
+// over the assertion.
+const ITEM_TARES = ['truck', 'container', 'chassis', 'boxes'];
+
 function cleanItems(input) {
     const out = [];
     for (const it of (Array.isArray(input) ? input : [])) {
         if (!it) continue;
         const description = String(it.description || '').trim();
-        const weight = num(it.weight);
         const price = num(it.price);
-        if (!description && weight === null && price === null) continue;   // a blank row
+        const gross = num(it.gross);
+        const tare = {};
+        for (const k of ITEM_TARES) tare[k] = num(it[k]);
+        const hasTicket = gross !== null || ITEM_TARES.some((k) => tare[k] !== null);
+        const tareTotal = ITEM_TARES.reduce((sum, k) => sum + (tare[k] || 0), 0);
+        // Its own net when it has its own ticket; otherwise the figure she
+        // typed against the line.
+        const weight = hasTicket
+            ? (gross === null ? null : round3(gross - tareTotal))
+            : num(it.weight);
+        if (!description && weight === null && price === null && !hasTicket) continue;   // a blank row
         if (!description) throw new Error('an item needs a description — what grade is it?');
         const id = String(it.id || '').trim()
             || `ITM_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -112,8 +146,19 @@ function cleanItems(input) {
                 ? (weight === null ? null : round2(weight * price))
                 : (mt === null ? null : round2(mt * price));
         }
-        out.push({ id, description, weight, price, price_unit: unit,
-                   weight_mt: mt, amount });
+        out.push({
+            id, description, weight, price, price_unit: unit, weight_mt: mt, amount,
+            // The ticket, kept on the line so the container's totals can be
+            // rebuilt from the lines and never stored twice.
+            gross: hasTicket ? gross : null,
+            truck: tare.truck, container: tare.container,
+            chassis: tare.chassis, boxes: tare.boxes,
+            tare_total: hasTicket ? round3(tareTotal) : null,
+            weighed: hasTicket,
+            // Which of ITS tares are blank. Same rule as the container's:
+            // reported, never treated as zero.
+            missing_tares: hasTicket ? ITEM_TARES.filter((k) => tare[k] === null) : [],
+        });
     }
     return out;
 }
@@ -134,8 +179,8 @@ function compute(input) {
     const missing = Object.keys(tare).filter((k) => tare[k] === null);
     const total = Object.keys(tare).reduce((s, k) => s + (tare[k] || 0), 0);
 
-    const netLb = gross === null ? null : round3(gross - total);
-    const netMt = netLb === null ? null : round3(netLb / LB_PER_MT);
+    let netLb = gross === null ? null : round3(gross - total);
+    let netMt = netLb === null ? null : round3(netLb / LB_PER_MT);
 
     const price = num(b.supplier_price);
     // Explicit beats inferred, always. `price_unit` is how she overrides the
@@ -158,12 +203,48 @@ function compute(input) {
     try { items = cleanItems(b.items); } catch (e) { items = []; }
     const itemsWeight = items.length
         ? round3(items.reduce((s, i) => s + (i.weight || 0), 0)) : null;
+
+    // ── WHEN THE LINES CARRY THE TICKETS, THE CONTAINER IS THEIR SUM ─────
+    // Her answer, 2026-09-10: "Each grade is its own weighbridge ticket." So
+    // the container's gross, tares and net stop being typed and start being
+    // added up. Both would otherwise be editable and the pair would drift —
+    // and the one she reads is the container total, which is the one that
+    // would be wrong.
+    //
+    // Anything she typed at container level is KEPT and reported as a
+    // conflict rather than overwritten. The same rule as the supplier invoice
+    // amount: a figure she entered herself is a statement, and a disagreement
+    // with it is a conversation, not something to silently correct.
+    const weighed = items.filter((i) => i.weighed);
+    const fromTickets = weighed.length > 0;
+    const sumOf = (k) => round3(weighed.reduce((s, i) => s + (i[k] || 0), 0));
     const itemsAmount = items.length && items.every((i) => i.amount !== null)
         ? round2(items.reduce((s, i) => s + i.amount, 0)) : null;
     if (itemsAmount !== null) amount = itemsAmount;
-    // Reported, not refused — see cleanItems.
-    const weightGap = (items.length && netLb !== null && itemsWeight !== null)
+    // The ticket totals take over here, AFTER the single-weighing figures
+    // above have been worked out, so the typed ones survive for the conflict
+    // report below.
+    const typedGross = gross;
+    const typedNet = netLb;
+    let grossUsed = gross;
+    let tareUsed = total;
+    if (fromTickets) {
+        grossUsed = sumOf('gross');
+        tareUsed = round3(weighed.reduce((s, i) => s + (i.tare_total || 0), 0));
+        netLb = round3(weighed.reduce((s, i) => s + (i.weight || 0), 0));
+        netMt = round3(netLb / LB_PER_MT);
+    }
+
+    // Reported, not refused — see cleanItems. Meaningless once the lines ARE
+    // the weighing, because the container is their sum by construction: null
+    // rather than a permanent 0, so a zero in this field always means she
+    // split a weighing and it balanced.
+    const weightGap = (!fromTickets && items.length && netLb !== null && itemsWeight !== null)
         ? round3(netLb - itemsWeight) : null;
+    // She typed a container gross AND the lines carry tickets. One of the two
+    // is wrong and this file is not in a position to say which.
+    const weightConflict = (fromTickets && typedGross !== null && typedNet !== null
+        && Math.abs(typedNet - netLb) >= 0.001) ? round3(typedNet - netLb) : null;
     // A supplier invoice amount she typed herself WINS over the computed one.
     // The supplier's invoice is the document of record; if it disagrees with
     // our arithmetic that is a conversation to have, not a number to overwrite.
@@ -194,10 +275,18 @@ function compute(input) {
         items,
         items_weight: itemsWeight,
         items_amount: itemsAmount,
+        // True when the lines carry their own weighbridge tickets, so the
+        // container figures below are sums and the form shows them read-only.
+        weights_from_items: fromTickets,
+        weight_conflict: weightConflict,
         // Non-zero means the grades do not add up to the container. A few
         // pounds is ordinary; a few hundred is a typo.
         weight_gap: weightGap,
-        total: gross === null && !Object.keys(tare).some((k) => tare[k] !== null) ? null : round3(total),
+        // The container's own figures: typed when there is one weighing,
+        // summed from the lines when each grade has its own ticket.
+        gross_used: grossUsed,
+        total: fromTickets ? tareUsed
+            : (gross === null && !Object.keys(tare).some((k) => tare[k] !== null) ? null : round3(total)),
         net_lb: netLb,
         net_mt: netMt,
         price_unit: unit,

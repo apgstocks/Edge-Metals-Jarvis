@@ -1506,6 +1506,66 @@ section('R — several grades in one container');
     const row = saved.json.bills.find((x) => x.container_no === 'MIXU1');
     ck('the route returns the items with the row', (row.items || []).length === 2,
        JSON.stringify((row.items || []).map((i) => i.description)));
+
+    // ── A TICKET PER GRADE ───────────────────────────────────────────────
+    // Apsara, 2026-09-10: "What if i have different weights like gross ,tare
+    // etc.. for diff item in same container", answered "Each grade is its own
+    // weighbridge ticket."
+    const tickets = bills.compute({ items: [
+        { description: 'Al combo',  gross: 30000, truck: 14000, boxes: 200, price: 0.32 },
+        { description: 'Auto cast', gross: 26000, truck: 14000, boxes: 100, price: 0.28 },
+    ] });
+    ck('each grade nets out its own ticket',
+       tickets.items.map((i) => i.weight).join(',') === '15800,11900',
+       JSON.stringify(tickets.items.map((i) => i.weight)));
+    ck('  and is priced on that net', tickets.items[0].amount === 5056, String(tickets.items[0].amount));
+    ck('the container gross becomes the sum of the tickets',
+       tickets.gross_used === 56000, String(tickets.gross_used));
+    ck('  the tares too', tickets.total === 28300, String(tickets.total));
+    ck('  and the net is the sum of the lines, not a second subtraction',
+       tickets.net_lb === 27700, String(tickets.net_lb));
+    ck('  the row says the weights came from the lines',
+       tickets.weights_from_items === true);
+    ck('  so there is no weight gap to warn about',
+       tickets.weight_gap === null,
+       'a permanent zero in that field would train her to stop reading it');
+
+    // THE TRAP. One chassis under two grades, counted twice, is what keying
+    // the tares to the TICKET prevents. Asserted as arithmetic so a later
+    // refactor that folds container tares back up gets caught.
+    const twoTickets = bills.compute({ items: [
+        { description: 'A', gross: 30000, truck: 14000, chassis: 6000 },
+        { description: 'B', gross: 26000, truck: 14000, chassis: 6000 },
+    ] });
+    ck('two tickets subtract their OWN chassis, not one shared one',
+       twoTickets.net_lb === 10000 + 6000, String(twoTickets.net_lb));
+
+    const conflict = bills.compute({
+        gross: 44000, truck: 15000, container: 8000, chassis: 6000, boxes: 500,
+        items: [{ description: 'Al combo', gross: 30000, truck: 14000, boxes: 200, price: 0.32 }],
+    });
+    ck('a container weight she typed is not overwritten in silence',
+       conflict.weight_conflict === -1300, String(conflict.weight_conflict));
+    ck('  the tickets still decide the net',
+       conflict.net_lb === 15800, String(conflict.net_lb));
+    ck('  and no conflict is reported when there is none',
+       tickets.weight_conflict === null);
+
+    // Blank tares on a ticket are reported, never treated as zero — the same
+    // rule the container has had since the file was written.
+    ck('a ticket says which of its own tares are missing',
+       tickets.items[0].missing_tares.join(',') === 'container,chassis',
+       JSON.stringify(tickets.items[0].missing_tares));
+    ck('  and a line with no ticket claims none',
+       bills.cleanItems([{ description: 'X', weight: 100, price: 0.3 }])[0].weighed === false);
+
+    const perTicket = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier: 'Ticket Metals', container_no: 'TIKU1',
+        items: [{ description: 'Al combo', gross: 30000, truck: 14000, boxes: 200, price: 0.32 }],
+    } });
+    ck('a per-ticket bill saves through the route', perTicket.status === 200, perTicket.raw);
+    ck('  with the container net derived from it',
+       perTicket.json.bill.net_lb === 15800, String(perTicket.json.bill.net_lb));
 }
 
 if (server) server.close();
