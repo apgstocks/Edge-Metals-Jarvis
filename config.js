@@ -184,6 +184,17 @@ const FILES = {
     // helpers/metalsTrucking.js for why the two are separate stores and
     // separate lines in the spend report.
     METALS_TRUCKING_FILE: path.join(DATA_DIR, 'metals_trucking.json'),
+    // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────
+    // Apsara, 2026-09-11: "sometimes,we get packing list when we deliver the
+    // load. that packing list contains items that needs to stored in
+    // inventory,so mimic add load form but we will have only seller in form."
+    //
+    // NOT loads.json. That is the YARD's inventory — material bought over the
+    // scale at Edge Yard, with a weighbridge ticket, a signature and a printed
+    // load ticket. This is Edge Metals: what a supplier delivered against a
+    // packing list, itemised, before it is stuffed into a container. Two
+    // companies, and the standing rule is that they never share a store.
+    EDGE_INVENTORY_FILE: path.join(DATA_DIR, 'edge_inventory.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

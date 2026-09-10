@@ -4487,6 +4487,80 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── EDGE INVENTORY — one supplier's material and their account ───────
+    // Apsara, 2026-09-11: "WANT TO HAVE a separate tab called Edge inventory.
+    // there i want to maintain per supplier basis. inventory items and
+    // accounts for that supplier."
+    //
+    // Two halves, and only one of them is a store. The RECEIPTS are new
+    // (helpers/edgeInventory.js — what a supplier delivered, itemised from a
+    // packing list). The ACCOUNT is derived from bills and bill payments,
+    // which already hold every figure in it (helpers/supplierAccount.js).
+    //
+    // Edge METALS. The yard's own inventory is helpers/loads.js and is not
+    // reachable from here.
+    app.get('/api/edge-inventory/suppliers', (req, res) => {
+        try {
+            const sa = require('./helpers/supplierAccount');
+            res.json({ ok: true, suppliers: sa.overview(), unassigned: sa.unassigned() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Registered before /:supplier so a supplier literally named "suppliers"
+    // could not shadow the route above — the same ordering hazard the
+    // outbound-loads report route documents.
+    app.get('/api/edge-inventory/:supplier', (req, res) => {
+        try {
+            const who = decodeURIComponent(req.params.supplier);
+            const sa = require('./helpers/supplierAccount');
+            const inv = require('./helpers/edgeInventory');
+            res.json({
+                ok: true,
+                supplier: who,
+                account: sa.statement(who, { from: req.query.from, to: req.query.to }),
+                receipts: inv.forSupplier(who, { from: req.query.from, to: req.query.to }),
+                by_grade: inv.byGrade(who),
+                received: inv.summary(who),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/edge-inventory', async (req, res) => {
+        try {
+            const inv = require('./helpers/edgeInventory');
+            const rec = await inv.addReceipt({ ...(req.body || {}), created_by: req.role || null });
+            res.json({ ok: true, receipt: rec });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] create inventory receipt failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+
+    app.put('/api/edge-inventory/receipt/:id', async (req, res) => {
+        try {
+            const inv = require('./helpers/edgeInventory');
+            const rec = await inv.editReceipt(req.params.id, req.body || {});
+            if (!rec) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true, receipt: rec });
+        } catch (err) {
+            const isValidation = /^Validation:/.test(err.message || '');
+            if (!isValidation) console.error('[API] edit inventory receipt failed:', err.message);
+            res.status(isValidation ? 400 : 500).json({ error: err.message });
+        }
+    });
+
+    app.delete('/api/edge-inventory/receipt/:id', async (req, res) => {
+        try {
+            const inv = require('./helpers/edgeInventory');
+            const found = await inv.deleteReceipt(req.params.id);
+            if (!found) return res.status(404).json({ error: 'not found' });
+            // Nothing to cascade: a receipt is a physical record and writes no
+            // money row anywhere. See the header of helpers/edgeInventory.js.
+            res.json({ ok: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── "It arrived" ─────────────────────────────────────────────────────
     // Registered AFTER /api/outbound-loads/:id (a GET) but that is a
     // different verb, so no route-ordering hazard here. POST rather than PUT
