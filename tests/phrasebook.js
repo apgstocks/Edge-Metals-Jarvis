@@ -785,19 +785,27 @@ section('C2d4 — correcting the draft, instead of binning it');
        !/changing it to/i.test(A(notACorrection))
        && !/to QINGDAO|to ZIMEX 2x|Need bookings from HOUSTON to ZIMEX/i.test(A(notACorrection)),
        A(notACorrection).slice(0, 300));
-    ck('  and the draft it already showed her is untouched',
-       /Need bookings from HOUSTON to BUSAN 2x40HC/.test(A(notACorrection)),
-       'a sentence that is not a correction must leave the request exactly as it was');
-    // KNOWN GAP, stated rather than hidden. helpers/draftIntent.js's own rules
-    // say "send it to Daekwang" during a confirm is her YES, not a change —
-    // but that judgement lives in the proforma flow, and an email confirm
-    // still drops this to "I couldn't pin that down". Nothing is lost (the
-    // pending survives, as the reminder tail below proves, so "yes" still
-    // works) and fixing it touches every email path in the app, so it is
-    // carried as its own piece of work rather than bolted on here.
-    ck('  and the pending survives, so nothing she said is lost',
-       /Still waiting/i.test(A(notACorrection)),
-       'the email must still be there to say yes to');
+    // ── THE GAP THIS RECORDED IS NOW CLOSED ──────────────────────────────
+    // These two assertions used to check that NOTHING happened: the draft
+    // untouched and the pending still open. That was the old behaviour, and
+    // the comment sitting between them said plainly it was wrong — "here it
+    // is her YES" — but nothing implemented it, so an email confirm answered
+    // "I couldn't pin that down".
+    //
+    // It is implemented now (workflow/brain.js, Section A). The draft in this
+    // scenario IS addressed to Zimex — she answered "zimex" when asked who to
+    // — so "send it to Zimex" names the addressee and sends. The other case,
+    // naming somebody the draft is NOT addressed to, asks rather than
+    // redirecting; tests/send-it-is-yes.js covers both.
+    ck('  and it SENDS, because Zimex is who the draft is to',
+       (j2.mails || []).length === 1,
+       'her own words at a confirm were being thrown away as unparseable');
+    ck('    the one that was already drafted, not a new one',
+       /HOUSTON to BUSAN/i.test(String((j2.mails || [])[0]?.body || '')),
+       JSON.stringify(j2.mails));
+    ck('    and nothing is left waiting afterwards',
+       !/Still waiting/i.test(A(notACorrection)),
+       'a pending she has just answered must not still be open');
     await j2.stop();
 }
 

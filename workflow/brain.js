@@ -851,6 +851,52 @@ function policyDecide(ctx) {
         if (p.type === 'await_verify_apply' && /^\s*(apply|fix|fix them|correct|correct them|update|update them)\s*$/i.test(ctx.text)) {
             return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
         }
+        // ── "SEND IT" IS HER YES ─────────────────────────────────────────
+        // Apsara reported this: at "send this email to Yurim? yes/no", she
+        // says "send it" and gets "I couldn't pin that down".
+        //
+        // YES above is an EXACT-MATCH list, so "send it" falls past it, past
+        // every rule below, and is reclassified as a brand-new email request —
+        // the same failure shape as the Schedule bug documented further down.
+        // helpers/draftIntent.js already states the rule ("send it to X" is
+        // her yes, not a change); nothing implemented it at the confirm.
+        //
+        // NOT added to the global YES list, for the reason the `apply` case
+        // above gives: "send mail to Yurim" is a brand-new request everywhere
+        // else in this app, and a global send-means-yes would answer whatever
+        // question happened to be open with it.
+        if (p.type === 'await_email_confirm') {
+            const bare = /^\s*(?:ok(?:ay)?[,\s]+)?(?:pls\s+|please\s+|just\s+|go\s+ahead\s+and\s+)?send(?:\s+(?:it|that|this|the\s+mail|the\s+email))?(?:\s+now)?\s*[.!]?\s*$/i;
+            if (bare.test(ctx.text)) {
+                return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
+            }
+            // ── "SEND IT TO DAEKWANG" — ONLY IF THAT IS WHO IT IS TO ─────
+            // draftIntent.js reads this as a yes, and at a PROFORMA confirm
+            // it plainly is: there is no recipient in play, so the name is
+            // the consignee she is confirming. An EMAIL confirm is different
+            // — the draft already HAS a recipient, so a different name is
+            // genuinely ambiguous between "yes, send" and "no, send it to
+            // her instead".
+            //
+            // Matching the draft's own recipient: yes. Not matching: ASK.
+            // Silently redirecting would put the mail in front of the wrong
+            // company, which is the precise failure draftIntent.js was
+            // written about.
+            const named = /^\s*(?:ok(?:ay)?[,\s]+)?(?:pls\s+|please\s+|just\s+)?send\s+(?:it|that|this)?\s*to\s+(.+?)\s*[.!]?\s*$/i.exec(ctx.text);
+            if (named) {
+                const who = named[1].trim().toLowerCase();
+                const target = String(p.target_name || '').trim().toLowerCase();
+                const addr = String(p.to || '').trim().toLowerCase();
+                const isSame = !!who && (
+                    (target && (target.includes(who) || who.includes(target)))
+                    || (addr && (addr === who || addr.split('@')[0] === who)));
+                if (isSame) {
+                    return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
+                }
+                return { intent: 'reply', resolvedBy: 'policy', data: { reply:
+                    `That draft is addressed to ${p.target_name || p.to}. Reply "yes" to send it to them, or "no" and tell me to draft a new one to ${named[1].trim()}.` } };
+            }
+        }
         if (YES.includes(t)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
         if (NO.includes(t))  return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
         // REAL BUG (found 2026-08-04, live): with an already-drafted
