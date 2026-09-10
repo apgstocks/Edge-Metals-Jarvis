@@ -6867,6 +6867,17 @@ function openLedgerForm(kind, existing, seed) {
   // them exactly as any typed field.
   let ledItems = Array.isArray(existing && existing.items)
     ? JSON.parse(JSON.stringify(existing.items)) : [];
+  // ── THERE IS ALWAYS AT LEAST ONE LINE ──────────────────────────────────
+  // Apsara, 2026-09-11, chose this when told what removing "Item description"
+  // and "Container weighing" would cost: those two fields were the ONLY way a
+  // bill with no item lines could carry a description or a weight. Rather than
+  // keep them for a case nobody wants, the case is removed — one grade is just
+  // one line.
+  //
+  // A blank line costs nothing: bills.cleanItems drops any row with no
+  // description, no weight, no price and no ticket, so an untouched line never
+  // reaches the store.
+  if (!ledItems.length) ledItems.push({});
 
   const sections = groups.map((g) => {
     const mine = inGroup(g);
@@ -6878,7 +6889,7 @@ function openLedgerForm(kind, existing, seed) {
       : 'display:flex; flex-direction:column; gap:9px;';
     return `
       <div style="margin-bottom:20px;${g.full ? ' grid-column:1/-1;' : ''}">
-        <div style="font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:11px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="letter-spacing:0; text-transform:none;">· lbs</span>' : ''}</div>
+        <div style="font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:11px;">${esc(g.label)}</div>
         <div style="${grid}">${mine.map((c) => (g.cols ? inputFor(c) : inlineField(c))).join('')}</div>
         ${g.id === 'items' ? '<div id="ledItemsBox"></div>' : ''}
         ${g.id === 'trucking' && kind === 'bills'
@@ -7067,8 +7078,22 @@ function openLedgerForm(kind, existing, seed) {
     const totalAmt = ledItems.reduce((t, it) => t + (lineOf(it).amt || 0), 0);
     const totalCell = (v) => `<span style="text-align:right; font-family:var(--font-mono); color:${L.ink};">${v}</span>`;
 
+    // ── THE GRADE TYPE-AHEAD LIVES HERE NOW ──────────────────────────────
+    // Every line's description box carries list="ledlist-description", and
+    // that datalist used to be emitted by inputFor() as a side effect of the
+    // bill-level "Item description" field. Removing that field on 2026-09-11
+    // therefore silently killed the suggestions on every item line — caught by
+    // tests/ledger-render.js, which had an assertion on it.
+    //
+    // Emitted here instead: beside the only thing that uses it, so it cannot
+    // be carried off by a change to some other field again.
+    const gradeOpts = ((ledgerState.facets || {}).description || []);
+    const gradeList = gradeOpts.length
+      ? `<datalist id="ledlist-description">${gradeOpts.map((o) => `<option value="${esc(o)}"></option>`).join('')}</datalist>`
+      : '';
+
     box.innerHTML = `
-      <div style="margin-top:10px;">
+      <div style="margin-top:10px;">${gradeList}
         <div class="ledItemsHead" style="${ITEM_GRID} font-size:11px; color:${L.inkFaint}; padding-bottom:4px;">
           <span>Description</span>
           <span style="text-align:right;">Net lbs</span>
@@ -7077,7 +7102,7 @@ function openLedgerForm(kind, existing, seed) {
           <span style="text-align:right;">Amount</span>
           <span></span>
         </div>
-        ${rows || `<div style="border-top:1px solid ${L.lineSoft}; padding:12px 0; font-size:12px; color:${L.inkFaint};">One grade? Leave this empty and use the description and price above.</div>`}
+        ${rows}
         <div class="ledItemsFoot" style="${ITEM_GRID} border-top:1px solid ${L.line}; padding-top:8px; margin-top:4px; font-size:12px;">
           <button type="button" id="ledItemAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0; text-align:left; justify-self:start;">+ Add item</button>
           ${ledItems.length ? `${totalCell(money0(totalWt))}
@@ -7121,7 +7146,15 @@ function openLedgerForm(kind, existing, seed) {
       };
     });
     box.querySelectorAll('.ledItemDel').forEach((b) => {
-      b.onclick = () => { ledItems.splice(+b.dataset.i, 1); paintItems(); queueSave(); };
+      b.onclick = () => {
+        // The last line is CLEARED, not removed. With "Item description" and
+        // "Container weighing" gone from the bill form, a bill with no lines
+        // has nowhere left to hold a description or a weight — so the × on the
+        // final row empties it rather than leaving the form with nothing in it.
+        if (ledItems.length === 1) ledItems[0] = {};
+        else ledItems.splice(+b.dataset.i, 1);
+        paintItems(); queueSave();
+      };
     });
     const add = $('ledItemAdd');
     if (add) add.onclick = () => { ledItems.push({}); paintItems(); };

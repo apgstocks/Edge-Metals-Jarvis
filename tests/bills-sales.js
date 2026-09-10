@@ -215,9 +215,15 @@ section('D — her columns, in her order');
        && bills.COLUMNS.some((c) => c.key === 'carrier')
        && bills.WRITABLE.includes('carrier'),
        '"on bill after saving,i dont want carrier to be displayed.on edit it can be there"');
-    ck('  and all five weights sit on one line',
-       (bills.GROUPS.find((g) => g.id === 'weights') || {}).cols === 5,
-       '"weights should be in single line" — the auto-fit grid wrapped them 4 + 1');
+    // ASSERTION REPLACED, 2026-09-11. It used to require the weights group to
+    // be five columns wide — "weights should be in single line", because the
+    // auto-fit grid wrapped them 4 + 1. There is no weights group any more:
+    // "CONTAINER WEIGHING · lbs REMOVE". The complaint it came from cannot
+    // recur, so what stands in its place is the reason it cannot.
+    ck('  and the container weighing is off the form entirely',
+       !bills.GROUPS.some((g) => g.id === 'weights')
+       && bills.GROUPS.every((g) => !bills.groupColumns(g.id).some((c) => c.key === 'gross')),
+       bills.GROUPS.map((g) => g.id).join(','));
     ck('  in her order', bills.tableColumns().map((c) => c.label).join('|') === wanted.join('|'),
        bills.tableColumns().map((c) => c.label).join('|'));
     ck('  with Photos last', bills.tableColumns().slice(-1)[0].key === 'photos',
@@ -329,9 +335,39 @@ section('E — the routes, because a helper nothing calls is not a feature');
     ck('    and trucking is its own group rather than two boxes in Money',
        bills.groupColumns('trucking').map((c) => c.key).join(',')
          === 'trucking_company,trucking_amount');
-    ck('    every column still belongs to a group that exists',
-       bills.COLUMNS.every((c) => bills.GROUPS.some((g) => g.id === c.group)),
-       bills.COLUMNS.filter((c) => !bills.GROUPS.some((g) => g.id === c.group)).map((c) => c.key).join(','));
+    // ASSERTION WIDENED, 2026-09-11, and this one earned its keep: removing
+    // the Container weighing group left eight columns claiming `group:
+    // 'weights'` with no such group, and this is what said so. They are not
+    // ungrouped by accident — they are TABLE-ONLY now (bills already saved
+    // carry container weights and she still reads them across the row), which
+    // is the mirror of `carrier` being form-only. So the rule is: a column is
+    // in a real group, or it says out loud that it is not on the form.
+    // A column that is merely silent about it is still an orphan.
+    ck('    every column is in a group that exists, or is declared table-only',
+       bills.COLUMNS.every((c) => c.tableOnly || bills.GROUPS.some((g) => g.id === c.group)),
+       bills.COLUMNS.filter((c) => !c.tableOnly && !bills.GROUPS.some((g) => g.id === c.group)).map((c) => c.key).join(','));
+    ck('    and nothing table-only reaches the form',
+       bills.GROUPS.every((g) => bills.groupColumns(g.id).every((c) => !c.tableOnly)),
+       bills.GROUPS.map((g) => `${g.id}:${bills.groupColumns(g.id).filter((c) => c.tableOnly).map((c) => c.key)}`).join(' '));
+    // ── NAMED, NOT INFERRED ──────────────────────────────────────────────
+    // A mutation SURVIVED the two checks above: it gave `gross` back a group
+    // and dropped its tableOnly. Both passed — because every group today
+    // carries an explicit `keys` list that happens not to mention it, so the
+    // column did not render. The invariant was holding by luck, not by rule,
+    // and the first group added without `keys` would have surfaced a
+    // container weighing box on the form again.
+    //
+    // So the eight are named. These specific columns are read from the table
+    // and never typed on the form, and a group on any of them is a mistake.
+    for (const k of ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt']) {
+        const c = bills.COLUMNS.find((x) => x.key === k);
+        ck(`    ${k} is table-only and claims no group`,
+           !!c && c.tableOnly === true && !c.group,
+           JSON.stringify({ tableOnly: c && c.tableOnly, group: c && c.group }));
+    }
+    ck('    but they are still in the table she reads',
+       ['gross', 'net_lb', 'net_mt'].every((k) => bills.tableColumns().some((c) => c && c.key === k)),
+       'old bills carry these; removing them from the row would hide real data');
     // The original complaint was two columns both headed TRUCKING on two
     // identical empty boxes. Naming one of them "Trucker" fixes that at the
     // source, so no two columns share a heading at all any more.

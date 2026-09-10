@@ -469,16 +469,41 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
        inputs.filter((i) => i.name && !/20,\s*24,\s*27|#14181B/i.test(i.style.color || ''))
              .map((i) => `${i.name}=${i.style.color}`).join(',') || 'invisible form');
 
-    // The alignment complaint itself: two of five weight labels wrapped to a
-    // second line, so those inputs sat a line lower than the other three.
-    const wLabels = ['gross', 'truck', 'container', 'chassis', 'boxes']
-        .map((n) => form.querySelector(`[name="${n}"]`).closest('.field').querySelector('label'));
-    ck('no weight label can wrap',
-       wLabels.every((l) => /white-space:\s*nowrap/.test(l.getAttribute('style') || '')),
-       'a label that wraps pushes its input a line below its neighbours');
-    ck('  and none is long enough to need to',
-       wLabels.every((l) => l.textContent.trim().length <= 9),
-       wLabels.map((l) => l.textContent.trim()).join(','));
+    // ── THE CONTAINER WEIGHING GROUP IS GONE ─────────────────────────────
+    // ASSERTIONS CHANGED, NOT JUST CODE, and worth saying so. Two checks used
+    // to live here — that none of the five weight labels could wrap, because
+    // two of them wrapping had pushed their inputs a line below the other
+    // three. They were guarding the layout of a group that no longer exists:
+    // Apsara, 2026-09-11, "CONTAINER WEIGHING · lbs REMOVE". Every grade
+    // carries its own weighbridge ticket now, so the container's gross and
+    // tares are SUMS, and a form asking for a figure it is about to overwrite
+    // is a form that lies.
+    //
+    // Deleting them outright would leave nothing saying the group must stay
+    // gone, so they are replaced by that.
+    for (const n of ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt']) {
+        ck(`the bill form no longer asks for the container's ${n}`,
+           !form.querySelector(`[name="${n}"]`),
+           'each grade has its own ticket — this figure is a sum, not a question');
+    }
+    ck('  nor for a bill-level item description',
+       !form.querySelector('[name="description"]'),
+       'every line has its own description; a second one is a second answer');
+    // The model keeps both, because bills already saved carry them and the
+    // table still shows them. What went is the way to TYPE them.
+    {
+        const bills = require(path.join(ROOT, 'helpers/bills'));
+        ck('  but the columns survive, so old bills still read back',
+           ['description', 'gross', 'truck', 'chassis', 'boxes', 'net_lb']
+               .every((k) => bills.COLUMNS.some((c) => c.key === k)));
+        // groupColumns falls back to COLUMNS.filter(c => c.group === id) when
+        // a group carries no keys, so an empty `keys: []` is the only thing
+        // keeping `description` off the form. Deleting it would put the field
+        // straight back, silently.
+        ck('  and the items group holds NO scalar field, by an empty keys list',
+           bills.GROUPS.find((g) => g.id === 'items').keys.length === 0,
+           'if keys is removed rather than emptied, description comes back');
+    }
 
     // "$ 0.14 /lb" rendered as "0/.14" — right-aligned text running under an
     // absolutely-positioned suffix, in a field she reads a price from.
@@ -499,16 +524,38 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
     // first time,when we type,it needs to added to the list,next time when i
     // tye,it should start showing matching case." Then: "so as Item
     // description."
-    for (const f of ['supplier', 'description']) {
-        const el = form.querySelector(`[name="${f}"]`);
-        ck(`  ${f} offers what has been typed before`,
-           !!el && el.getAttribute('list') === `ledlist-${f}`,
+    {
+        const el = form.querySelector('[name="supplier"]');
+        ck('  supplier offers what has been typed before',
+           !!el && el.getAttribute('list') === 'ledlist-supplier',
            el ? String(el.getAttribute('list')) : '(no field)');
-        const dl = form.querySelector(`#ledlist-${f}`);
-        ck(`    from a real list, not an empty one`,
+        const dl = form.querySelector('#ledlist-supplier');
+        ck('    from a real list, not an empty one',
            !!dl && dl.querySelectorAll('option').length > 0,
            dl ? String(dl.querySelectorAll('option').length) : '(no datalist)');
     }
+    // ── "so as Item description" — ON THE LINE NOW ───────────────────────
+    // That half of her request used to be satisfied by a bill-level field,
+    // removed 2026-09-11. The suggestions must not go with it: every grade is
+    // typed on an item line, and the line's box is where the learned list has
+    // to appear. THIS ASSERTION CAUGHT A REAL REGRESSION — the datalist was
+    // emitted as a side effect of the field being rendered, so deleting the
+    // field silently left every line's list="ledlist-description" pointing at
+    // nothing. paintItems emits it now, beside the only thing that uses it.
+    {
+        const line = form.querySelector('#ledItemsBox input[data-f="description"]');
+        ck('  every item line offers the grades typed before',
+           !!line && line.getAttribute('list') === 'ledlist-description',
+           line ? String(line.getAttribute('list')) : '(no item line)');
+        const dl = form.querySelector('#ledItemsBox #ledlist-description');
+        ck('    from a real list, and one that outlives the field it came from',
+           !!dl && dl.querySelectorAll('option').length > 0,
+           dl ? String(dl.querySelectorAll('option').length) : '(no datalist)');
+    }
+    // The other half of the answer to "leave this empty": there is no empty.
+    ck('  and a fresh bill opens with a line ready to type in',
+       form.querySelectorAll('#ledItemsBox [data-item]').length === 1,
+       'with the bill-level description and weights gone, a bill with no lines holds nothing');
     ck('  the options are the values already on her bills',
        [...form.querySelectorAll('#ledlist-supplier option')].map((o) => o.value).sort().join(',')
          === 'Eccomelt,Oakland Metals',
@@ -1683,7 +1730,10 @@ section('G10 — labels beside their fields, and her five groups');
     ck('  and its options came with it',
        !!form.querySelector('#ledlist-supplier option'));
     ck('  numeric fields keep their number pad',
-       form.querySelector('[name="gross"]').getAttribute('inputmode') === 'decimal');
+       // Was [name="gross"], which the Container weighing group carried away
+       // on 2026-09-11. Repointed at a money field that is still on the form —
+       // the property under test is inputFor's, not that column's.
+       form.querySelector('[name="supplier_price"]').getAttribute('inputmode') === 'decimal');
     ck('  and no spinners came back',
        ![...form.querySelectorAll('input')].some((i) => i.type === 'number'));
     ck('  the date box still gets its picker',
@@ -1693,12 +1743,15 @@ section('G10 — labels beside their fields, and her five groups');
        && !!doc.getElementById('ledPriceUnit'),
        'the /lb or /MT beside the price is how a wrong unit stays visible');
 
-    // Weights stay a grid: five short numbers read better in a row than as
-    // five label-and-field lines.
-    const gross = form.querySelector('[name="gross"]').closest('.field');
-    ck('the weights row is still a grid, not five stacked lines',
-       gross && !/display:flex/.test(gross.getAttribute('style') || ''),
-       gross ? gross.getAttribute('style') : '');
+    // ASSERTION REPLACED, 2026-09-11. This used to check that the five
+    // container weights stayed laid out as a grid rather than five stacked
+    // label-and-field lines. There are no container weights on the form any
+    // more — "CONTAINER WEIGHING · lbs REMOVE" — so the question it asked has
+    // no subject. The weighing it was really about now happens per grade,
+    // behind each line's ticket button, and G11 covers that.
+    ck('the weighing is on the line, not on the form',
+       !form.querySelector('[name="gross"]') && !!form.querySelector('#ledItemsBox'),
+       'gross belongs to a weighbridge ticket now, and each grade has its own');
 
     doc.getElementById('ledClose').click();
     await new Promise((r) => setTimeout(r, 40));
@@ -1729,10 +1782,17 @@ section('G11 — typing the item lines and the haulage split');
 
     // ── ITEM LINES ───────────────────────────────────────────────────────
     ck('the form has an item editor at all', !!doc.getElementById('ledItemsBox'));
-    ck('  starting empty, saying one grade needs no lines',
-       /One grade\?/.test(doc.getElementById('ledItemsBox').textContent),
+    // ASSERTION CHANGED, 2026-09-11, not just code. It used to check the
+    // editor started EMPTY with "One grade? Leave this empty and use the
+    // description and price above." Those two fields above are gone —
+    // "CONTAINER WEIGHING · lbs REMOVE, Item description IN BILL" — so an
+    // empty editor is a bill that can hold neither a description nor a
+    // weight. Apsara chose the other way out: there is always a line.
+    ck('  opening with one line ready, because there is no longer an "above"',
+       doc.querySelectorAll('#ledItemsBox [data-item]').length === 1,
        doc.getElementById('ledItemsBox').textContent.replace(/\s+/g, ' ').slice(0, 90));
-    doc.getElementById('ledItemAdd').click();
+    ck('  and no invitation to leave it empty',
+       !/One grade\?/.test(doc.getElementById('ledItemsBox').textContent));
     doc.getElementById('ledItemAdd').click();
     ck('Add item makes lines', doc.querySelectorAll('#ledItemsBox [data-item]').length === 2);
 
@@ -1838,6 +1898,23 @@ section('G11 — typing the item lines and the haulage split');
        (saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.items || []).length === 1,
        'a click fires no input event — the delete has to ask for the save itself');
 
+    // ── BUT THE LAST ONE IS CLEARED, NOT REMOVED ─────────────────────────
+    // Down to one line, × has to empty it rather than leave the bill with
+    // nowhere at all to put a description or a weight. Checked AFTER the save
+    // assertion above, not before it — the first draft of this put it first
+    // and quietly changed what that assertion was measuring.
+    doc.querySelector('.ledItemDel[data-i="0"]').click();
+    ck('  removing the LAST line clears it instead',
+       doc.querySelectorAll('#ledItemsBox [data-item]').length === 1,
+       'a bill with no lines can hold neither a grade nor a weight');
+    ck('  and it comes back blank',
+       !doc.querySelector('#ledItemsBox input[data-f="description"]').value,
+       doc.querySelector('#ledItemsBox input[data-f="description"]').value);
+    await new Promise((r) => setTimeout(r, 1500));
+    ck('  and the now-blank line is dropped on the way to the server',
+       ((saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.items) || []).length === 0,
+       'cleanItems drops a row with no description, weight, price or ticket');
+
     // ── THE HAULAGE SPLIT IS NOT ON THE BILL FORM ────────────────────────
     // "in bill,i dont want detailed like this .I want detailed in trucking on
     // clicking the row". Checking a haulier's invoice against its parts is a
@@ -1884,7 +1961,8 @@ section('G12 — several grades on a sale, typed on the form');
     ck('the sale form has an item editor too',
        !!doc.getElementById('ledItemsBox'),
        'the backend took lines all day and the form had nowhere to type them');
-    doc.getElementById('ledItemAdd').click();
+    // One line is already there; one more makes two. (Was two clicks, before
+    // the form started with a line of its own.)
     doc.getElementById('ledItemAdd').click();
     ck('  two grades on one container', doc.querySelectorAll('#ledItemsBox [data-item]').length === 2);
 

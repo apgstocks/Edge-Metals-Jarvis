@@ -497,7 +497,18 @@ const COLUMNS = [
     { key: 'description',      label: 'Item description',   group: 'items', suggest: true,
       placeholder: 'Auto cast, shredded…' },
 
-    { key: 'gross',            label: 'Gross',              group: 'weights', unit: 'lbs', num: true },
+    // ── THE CONTAINER WEIGHING COLUMNS ARE TABLE-ONLY NOW ────────────────
+    // Apsara, 2026-09-11: "CONTAINER WEIGHING · lbs REMOVE". The group that
+    // held them on the FORM is gone — each grade carries its own weighbridge
+    // ticket and the container's figures are the sum of those.
+    //
+    // They stay in COLUMNS and in TABLE_ORDER because bills already saved
+    // carry them and she still reads them across the row. So they are marked
+    // tableOnly and their `group` is dropped: a column claiming membership of
+    // a group that does not exist is an orphan, and a bills-sales assertion
+    // caught exactly that. This is the mirror of `carrier`, which is on the
+    // form and NOT in the table (see the note above TABLE_ORDER).
+    { key: 'gross',            label: 'Gross',              tableOnly: true, unit: 'lbs', num: true },
     // ── SHORT ENOUGH NOT TO WRAP ─────────────────────────────────────────
     // Apsara, 2026-09-10: "alignmnet not proper". "Container tare" and
     // "Chassis tare" wrapped onto two lines while Gross, Truck and Boxes did
@@ -507,13 +518,13 @@ const COLUMNS = [
     // Fixed by naming, not by CSS: the section header already says "Weights ·
     // lbs" and Gross is listed separately, so "tare" was doing no work on
     // four of the five labels. A label that cannot wrap cannot misalign.
-    { key: 'truck',            label: 'Truck',              group: 'weights', unit: 'lbs', num: true },
-    { key: 'container',        label: 'Container',          group: 'weights', unit: 'lbs', num: true },
-    { key: 'chassis',          label: 'Chassis',            group: 'weights', unit: 'lbs', num: true },
-    { key: 'boxes',            label: 'Boxes',              group: 'weights', unit: 'lbs', num: true },
-    { key: 'total',            label: 'Total',              group: 'weights', unit: 'lbs', derived: true, formLabel: 'Total tare' },
-    { key: 'net_lb',           label: 'Net weight (lbs)',   group: 'weights', unit: 'lbs', derived: true },
-    { key: 'net_mt',           label: 'Net weight (MT)',    group: 'weights', unit: 'MT',  derived: true },
+    { key: 'truck',            label: 'Truck',              tableOnly: true, unit: 'lbs', num: true },
+    { key: 'container',        label: 'Container',          tableOnly: true, unit: 'lbs', num: true },
+    { key: 'chassis',          label: 'Chassis',            tableOnly: true, unit: 'lbs', num: true },
+    { key: 'boxes',            label: 'Boxes',              tableOnly: true, unit: 'lbs', num: true },
+    { key: 'total',            label: 'Total',              tableOnly: true, unit: 'lbs', derived: true, formLabel: 'Total tare' },
+    { key: 'net_lb',           label: 'Net weight (lbs)',   tableOnly: true, unit: 'lbs', derived: true },
+    { key: 'net_mt',           label: 'Net weight (MT)',    tableOnly: true, unit: 'MT',  derived: true },
 
     { key: 'supplier_price',   label: 'Supplier price',     group: 'purchase', unit: '$', num: true,
       formLabel: 'Supplier price', hint: 'under $10 is read as per lb, $10+ as per MT' },
@@ -694,17 +705,27 @@ const GROUPS = [
       keys: ['supplier', 'supplier_price', 'amount'] },
     { id: 'trucking', label: 'Trucking',
       keys: ['trucking_company', 'trucking_amount'] },
-    { id: 'items',    label: 'Items and weights', full: true, keys: ['description'] },
-    // ── ALL FIVE WEIGHTS ON ONE LINE ─────────────────────────────────────
-    // Apsara, 2026-09-10: "weights should be in single line". The auto-fit
-    // grid wrapped them 4 + 1, which puts Boxes on a row of its own and makes
-    // it read like a different kind of thing. They are one measurement taken
-    // five ways and they belong on one line.
-    { id: 'weights',  label: 'Container weighing', cols: 5,
-      // Only when the LINES do not carry their own tickets. With a weighbridge
-      // ticket per grade these are sums, not questions, and a form that asks
-      // for a figure it is about to overwrite is a form that lies.
-      hint: 'one weighing for the whole container' },
+    // ── NOTHING BUT THE LINE EDITOR ──────────────────────────────────────
+    // Apsara, 2026-09-11: "CONTAINER WEIGHING · lbs REMOVE, Item description
+    // IN BILL" — take both off the bill form.
+    //
+    // `keys: []` IS LOAD-BEARING AND MUST NOT BE DELETED. groupColumns falls
+    // back to `COLUMNS.filter(c => c.group === groupId)` when a group has no
+    // keys, and `description` still carries `group: 'items'`, so dropping the
+    // empty array would quietly put the field straight back on the form.
+    // Empty list, not absent list.
+    { id: 'items',    label: 'Items and weights', full: true, keys: [] },
+    // ── THE CONTAINER WEIGHING GROUP IS GONE ─────────────────────────────
+    // It asked for gross and four tares for the container as a whole. Every
+    // grade now carries its own weighbridge ticket, and the container's
+    // figures are the SUM of those (weights_from_items) — so the group was
+    // asking for numbers it was about to overwrite.
+    //
+    // The COLUMNS and the arithmetic in compute() are deliberately UNTOUCHED:
+    // bills already saved carry container-level weights, and the table still
+    // shows them. What is removed is the way to type them, not the way to
+    // read them. The form now guarantees at least one item line so there is
+    // never a bill with no line to hold the weight — see paintItems.
     { id: 'money',    label: 'Money' },
     { id: 'links',    label: 'Photos', full: true },
 ];

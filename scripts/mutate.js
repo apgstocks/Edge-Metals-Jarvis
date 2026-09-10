@@ -1314,6 +1314,42 @@ const MUTATIONS = [
       file: 'helpers/outboundLoads.js', suites: ['delivery-enquiry'],
       find: "        patch.delivery_status = prior.delivery_status || 'in_transit';",
       to:   "        patch.delivery_status = 'in_transit';" },
+    // ── the bill form stripped back to its lines (2026-09-11) ──────────
+    { name: 'bill: a weighing column sneaks back onto the form',
+      file: 'helpers/bills.js', suites: ['bills-sales'],
+      find: "{ key: 'gross',            label: 'Gross',              tableOnly: true,",
+      to:   "{ key: 'gross',            label: 'Gross',              group: 'purchase'," },
+    { name: 'bill: a form-less column stops declaring itself table-only',
+      file: 'helpers/bills.js', suites: ['bills-sales'],
+      find: "{ key: 'net_lb',           label: 'Net weight (lbs)',   tableOnly: true,",
+      to:   "{ key: 'net_lb',           label: 'Net weight (lbs)',   " },
+    // NOTE: re-adding the group ALONE is now an equivalent mutant and is
+    // deliberately not the mutation here. Since the eight weighing columns
+    // were made tableOnly with no `group`, an empty weights group pulls in no
+    // fields and renders nothing — which is the point of having made them
+    // groupless. The defect that can still happen is the group coming back
+    // WITH an explicit key list, so that is what this mutates.
+    { name: 'bill: the Container weighing group comes back, with its fields',
+      file: 'helpers/bills.js', suites: ['ledger-render'],
+      find: "    { id: 'money',    label: 'Money' },",
+      to:   "    { id: 'weights',  label: 'Container weighing', cols: 5, keys: ['gross', 'truck', 'container', 'chassis', 'boxes'] },\n    { id: 'money',    label: 'Money' }," },
+    { name: 'bill: keys is DELETED rather than emptied, so description returns',
+      file: 'helpers/bills.js', suites: ['ledger-render'],
+      find: "{ id: 'items',    label: 'Items and weights', full: true, keys: [] },",
+      to:   "{ id: 'items',    label: 'Items and weights', full: true }," },
+    { name: 'bill: the form opens with no item line at all',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '  if (!ledItems.length) ledItems.push({});',
+      to:   '' },
+    { name: 'bill: deleting the last line leaves the bill with nothing',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '        if (ledItems.length === 1) ledItems[0] = {};\n        else ledItems.splice(+b.dataset.i, 1);',
+      to:   '        ledItems.splice(+b.dataset.i, 1);' },
+    { name: 'bill: the grade type-ahead loses its list with the field it came from',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '    const gradeOpts = ((ledgerState.facets || {}).description || []);',
+      to:   '    const gradeOpts = [];' },
+
     // ── the item editor's header lining up with its boxes (2026-09-11) ──
     // "header and box alignment not proper". Every one of these puts the
     // columns back out of step, and none of them looks wrong in the source.
