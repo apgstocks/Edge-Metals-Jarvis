@@ -363,6 +363,86 @@ section('K — Edge Metals and the yard keep separate books');
        require(path.join(ROOT, 'helpers/json')).loadJson(cfg.LOADS_FILE, []).length === 0);
 }
 
+section('L — the page actually renders her columns, in her order');
+{
+    // The distinction this codebase keeps needing: "the helper returns a
+    // price" is not "there is a Price column on screen between Net weight and
+    // Debit". jsdom renders the real page against the real helper output.
+    const { JSDOM } = require('jsdom');
+    const html = fs.readFileSync(path.join(ROOT, 'dashboard/edge-inventory.html'), 'utf8');
+    // ROUTE EVERY SUPPLIER, not just MZ. The page selects whoever is owed
+    // MOST, which by this point in the file is the probe supplier — routing
+    // only MZ left that fetch unmatched, the page rendered an error div, and
+    // four assertions failed for a reason that had nothing to do with them.
+    const routes = { '/api/edge-inventory/suppliers': { ok: true, suppliers: sa.overview(), unassigned: sa.unassigned() } };
+    for (const s2 of sa.suppliers()) {
+        routes[`/api/edge-inventory/${encodeURIComponent(s2)}`] = {
+            ok: true, supplier: s2, account: sa.statement(s2),
+            receipts: inv.forSupplier(s2), by_grade: inv.byGrade(s2), received: inv.summary(s2),
+        };
+    }
+    // beforeParse, NOT after construction. jsdom runs the page's scripts while
+    // it parses, so a fetch assigned to dom.window afterwards arrives too late
+    // — loadSuppliers() has already run against the real (absent) fetch and
+    // thrown, and the page renders empty. Cost four failing assertions to
+    // notice, because an empty table fails every check about its contents.
+    const dom = new JSDOM(html, {
+        runScripts: 'dangerously', url: 'http://localhost/edge-inventory',
+        beforeParse(w) {
+            w.fetch = (u) => {
+                const body = routes[String(u).split('?')[0]] || { ok: true };
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+            };
+            w.confirm = () => true;
+        },
+    });
+
+    await new Promise((r) => setTimeout(r, 300));
+    const doc = dom.window.document;
+    // Drive the picker to the supplier these assertions are about.
+    doc.getElementById('supPick').value = MZ;
+    doc.getElementById('supPick').dispatchEvent(new dom.window.Event('change'));
+    await new Promise((r) => setTimeout(r, 200));
+
+    const heads = [...doc.querySelectorAll('#acctBox thead th')].map((th) => th.textContent.trim());
+    ck('the account table has her columns',
+       heads.join('|') === 'Date|Description|Net weight|Price|Debit|Credit|Balance', heads.join('|'));
+    ck('  with net weight and price BEFORE debit and credit',
+       heads.indexOf('Net weight') < heads.indexOf('Debit')
+       && heads.indexOf('Price') < heads.indexOf('Credit'), heads.join('|'));
+
+    const cells = [...doc.querySelectorAll('#acctBox tbody tr')].map((tr) =>
+        [...tr.querySelectorAll('td')].map((td) => td.textContent.trim()));
+    ck('  a bill row shows weight, price and a debit',
+       cells.some((c) => /51,000 lb/.test(c[2]) && /0.43\/lb/.test(c[3]) && /21,930/.test(c[4])),
+       JSON.stringify(cells));
+    // Matched on the ROW SHAPE, not on the word "advance". The first version
+    // looked for /advance/i in the description and found nothing, because
+    // section C applied that advance and its row now names the container it
+    // went against — the assertion was stale relative to its own fixture. The
+    // rule she stated is about the CELLS: money in, nothing in debit.
+    const credits = cells.filter((c) => c[5] !== '');
+    ck('  the credit rows are there', credits.length >= 2, JSON.stringify(cells.map((c) => c[5])));
+    ck('  and every one of them leaves the debit cell blank',
+       credits.every((c) => c[4] === ''), JSON.stringify(credits));
+    ck('  with no weight or price on them either — money is not metal',
+       credits.every((c) => c[2] === '' && c[3] === ''), JSON.stringify(credits));
+    ck('  while every debit row does carry a weight',
+       cells.filter((c) => c[4] !== '').every((c) => c[2] !== ''),
+       JSON.stringify(cells.filter((c) => c[4] !== '')));
+    ck('  every row carries a running balance',
+       cells.every((c) => c[6] && /\$/.test(c[6])), JSON.stringify(cells.map((c) => c[6])));
+
+    ck('the delivery form asks for a supplier and no buyer',
+       !!doc.getElementById('rm_supplier') && !doc.querySelector('[id*="buyer" i]'));
+    ck('  and opens with one packing-list line ready',
+       (() => { doc.getElementById('btnAddReceipt').click();
+                return doc.querySelectorAll('#rm_items input[data-f="description"]').length === 1; })(),
+       String(doc.querySelectorAll('#rm_items > div').length));
+
+    dom.window.close();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}

@@ -5918,6 +5918,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'documents.html'));
     });
 
+    // Edge Inventory — per-supplier deliveries and their running account.
+    // Same standalone-page pattern as outbound-loads/documents above. Edge
+    // METALS; the yard's inventory is the Loads tab. See the headers of
+    // helpers/edgeInventory.js and helpers/supplierAccount.js.
+    app.get('/edge-inventory', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'edge-inventory.html'));
+    });
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

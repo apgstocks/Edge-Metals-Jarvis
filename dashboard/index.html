@@ -786,6 +786,23 @@ const NAV_ITEMS = [
   // would put it one subject away from the thing it is made of. Say the word
   // and it moves; the strip is one array.
   { id: 'sales', label: 'Sales', group: 'Operations' },
+  // ── EDGE INVENTORY ───────────────────────────────────────────────────
+  // Apsara, 2026-09-11: "WANT TO HAVE a separate tab called Edge inventory.
+  // there i want to maintain per supplier basis. inventory items and accounts
+  // for that supplier."
+  //
+  // A standalone page (dashboard/edge-inventory.html via /edge-inventory),
+  // the same pattern as outbound-loads and documents — it is a per-supplier
+  // drill-down, not a table, and it would not sit inside the Bills strip
+  // without becoming the thing she has twice said she does not want: more
+  // chrome under a name that mentions none of it.
+  //
+  // Under OPERATIONS, with Bills and Sales, because it is Edge Metals. The
+  // yard's own inventory is Loads, in the Yard group, and they are different
+  // companies. adminOnly: it shows supplier prices and a running account, so
+  // the same call as Spend Report — and the server agrees by leaving
+  // /api/edge-inventory out of STAFF_ALLOWED_PATH_PREFIXES.
+  { id: 'edge-inventory', label: 'Edge Inventory', group: 'Operations', adminOnly: true },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -913,6 +930,7 @@ function renderNav() {
     if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
+    if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }

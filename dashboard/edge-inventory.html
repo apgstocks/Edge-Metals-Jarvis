@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge Inventory — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Same design tokens as dashboard/quote-requests.html / index.html — kept
+   in sync by hand since this is a standalone page. */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7; --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; min-height:100vh; }
+h1,h2 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+button { font:inherit; }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn-danger { background:transparent; color:var(--status-danger); border-color:var(--status-danger); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.hidden { display:none !important; }
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
+td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+.subtab-btn { padding:9px 16px; font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; background:none; border:none; border-bottom:2px solid transparent; color:var(--text-faint); cursor:pointer; }
+.subtab-btn.active { color:var(--text-strong); border-bottom-color:var(--accent); }
+.field label { font-size:11px; font-family:var(--font-mono); color:var(--text-faint); display:block; margin-bottom:4px; }
+.field input, .field select { width:100%; padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px; }
+</style>
+</head>
+<body>
+<!-- ── dashboard/edge-inventory.html ────────────────────────────────────
+     Apsara, 2026-09-11: "WANT TO HAVE a separate tab called Edge inventory.
+     there i want to maintain per supplier basis. inventory items and accounts
+     for that supplier."
+
+     Two halves for one supplier, on one page: what they DELIVERED (packing
+     lists, helpers/edgeInventory.js) and what is OWED to them (a running
+     account derived from bills and bill payments, helpers/supplierAccount.js).
+
+     EDGE METALS. The yard's own inventory is the Loads tab and is a different
+     company's book — the standing rule, hers, many times over.
+
+     The tokens and CSS above are copied verbatim from
+     dashboard/outbound-loads.html, which is how every standalone page in this
+     app is kept looking like the others. -->
+<section style="max-width:1150px; margin:0 auto; padding:38px 40px 80px;">
+  <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
+  <div class="eyebrow">// Edge Metals</div>
+  <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Edge Inventory</h2>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">What each supplier has delivered, and the running account with them. The yard's own stock is under Loads &mdash; a different company.</div>
+
+  <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:18px;">
+    <div class="field" style="margin-bottom:0; min-width:220px;">
+      <label>Supplier</label>
+      <select id="supPick"></select>
+    </div>
+    <div class="field" style="margin-bottom:0;"><label>From</label><input id="fFrom" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+    <div class="field" style="margin-bottom:0;"><label>To</label><input id="fTo" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+    <button id="btnApply" class="btn btn-secondary">Apply</button>
+    <button id="btnClear" class="btn btn-secondary">Clear</button>
+    <span style="flex:1;"></span>
+    <button id="btnAddReceipt" class="btn btn-primary">+ Record a delivery</button>
+  </div>
+
+  <div id="unassignedWarn" class="hidden" style="margin-bottom:14px; padding:10px 14px; border:1px solid var(--status-warning); border-radius:var(--radius-xs); font-size:12px; color:var(--status-warning);"></div>
+
+  <div id="cards" style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-bottom:18px;"></div>
+
+  <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:18px;">
+    <button class="subtab-btn" data-subtab="account">Account</button>
+    <button class="subtab-btn" data-subtab="deliveries">Deliveries</button>
+    <button class="subtab-btn" data-subtab="grades">By grade</button>
+  </div>
+
+  <div id="panelAccount"><div id="acctBox"></div></div>
+  <div id="panelDeliveries" class="hidden"><div id="delivBox" style="display:flex; flex-direction:column; gap:10px;"></div></div>
+  <div id="panelGrades" class="hidden"><div id="gradeBox"></div></div>
+
+  <div id="recModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
+    <div class="card" style="width:100%; max-width:720px; padding:22px 24px; max-height:90vh; overflow-y:auto;">
+      <div id="recTitle" style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:14px;">Record a delivery</div>
+      <!-- "mimic add load form but we will have only seller in form" — so the
+           party is the supplier and there is no buyer/seller toggle. -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div class="field"><label>Supplier *</label><input id="rm_supplier" placeholder="who delivered it" autocomplete="off"><datalist id="suplist"></datalist></div>
+        <div class="field"><label>Date</label><input id="rm_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+        <div class="field"><label>Packing list no</label><input id="rm_pl" placeholder="their document number"></div>
+        <div class="field"><label>Container no (if known)</label><input id="rm_container" placeholder="left blank until it is stuffed"></div>
+      </div>
+      <div class="field" style="margin-top:10px;"><label>Note</label><input id="rm_note"></div>
+
+      <div style="margin-top:16px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Packing list</div>
+      <div id="rm_items" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
+      <button id="btnAddItem" type="button" class="btn btn-secondary" style="margin-top:8px; padding:6px 12px; font-size:10px;">+ Add item</button>
+
+      <div id="recError" class="hidden" style="margin-top:12px; font-size:12px; color:var(--status-danger);"></div>
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:18px;">
+        <button id="recCancel" class="btn btn-secondary">Cancel</button>
+        <button id="recSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+// ── MONEY AND WEIGHT ARE FORMATTED DIFFERENTLY, ON PURPOSE ─────────────
+// A blank cell means "this row has no such figure" — a payment has no weight,
+// a bill has no credit. An em dash would read as zero at a glance, and in a
+// balance column that is the one misreading that matters.
+const money = (n) => (n === null || n === undefined || n === '') ? ''
+  : `$${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const wt = (n, u) => (n === null || n === undefined) ? ''
+  : `${Number(n).toLocaleString(undefined, { maximumFractionDigits: u === 'mt' ? 3 : 2 })} ${u === 'mt' ? 'MT' : 'lb'}`;
+const price = (r) => r.price_mixed ? '<span style="color:var(--text-faint); font-style:italic;">mixed</span>'
+  : (r.price === null || r.price === undefined) ? ''
+  : `${Number(r.price).toLocaleString(undefined, { maximumFractionDigits: 4 })}${r.weight_unit === 'mt' ? '/MT' : '/lb'}`;
+const fmtDate = (iso, fb) => { if (!iso) return fb || ''; const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m ? `${m[2]}/${m[3]}/${m[1]}` : iso; };
+const toIso = (v) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim()); return m ? `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}` : ''; };
+
+let SUPPLIER = '';
+let DATA = null;
+let subtab = 'account';
+
+function setSubtab(name) {
+  subtab = name;
+  document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.subtab === name));
+  $('panelAccount').classList.toggle('hidden', name !== 'account');
+  $('panelDeliveries').classList.toggle('hidden', name !== 'deliveries');
+  $('panelGrades').classList.toggle('hidden', name !== 'grades');
+}
+document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+
+// ── THE ACCOUNT ────────────────────────────────────────────────────────
+// Her columns, in her order: description, then NET WEIGHT and PRICE, then
+// debit, credit, balance. "before credit/debit, there should be a field called
+// net weight and price."
+function accountTable(acct) {
+  if (!acct.rows.length) {
+    return `<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No bills or payments for this supplier yet.</div>`;
+  }
+  // An opening balance is shown as its own row rather than folded silently
+  // into the first figure — a statement that starts mid-story has to say what
+  // it is carrying in.
+  const opening = acct.opening
+    ? `<tr><td colspan="6" style="color:var(--text-faint); font-style:italic;">Brought forward</td>
+         <td style="text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${money(acct.opening)}</td></tr>` : '';
+  return `
+    <table>
+      <thead><tr>
+        <th>Date</th><th>Description</th>
+        <th style="text-align:right;">Net weight</th><th style="text-align:right;">Price</th>
+        <th style="text-align:right;">Debit</th><th style="text-align:right;">Credit</th>
+        <th style="text-align:right;">Balance</th>
+      </tr></thead>
+      <tbody>
+        ${opening}
+        ${acct.rows.map((r) => `
+          <tr>
+            <td style="white-space:nowrap; font-family:var(--font-mono); font-size:12px;">${esc(fmtDate(toIso(r.date) ? r.date : r.date, ''))}</td>
+            <td>${esc(r.what)}</td>
+            <td style="text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${esc(wt(r.weight, r.weight_unit))}</td>
+            <td style="text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${price(r)}</td>
+            <td style="text-align:right; font-family:var(--font-mono);">${money(r.debit)}</td>
+            <td style="text-align:right; font-family:var(--font-mono); color:var(--green-500);">${money(r.credit)}</td>
+            <td style="text-align:right; font-family:var(--font-mono); font-weight:600; color:${r.balance > 0 ? 'var(--text-strong)' : 'var(--green-500)'};">${money(r.balance)}</td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot><tr style="border-top:2px solid var(--border-default);">
+        <td colspan="4" style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint);">Totals</td>
+        <td style="text-align:right; font-family:var(--font-mono); font-weight:600;">${money(acct.debit_total)}</td>
+        <td style="text-align:right; font-family:var(--font-mono); font-weight:600; color:var(--green-500);">${money(acct.credit_total)}</td>
+        <td style="text-align:right; font-family:var(--font-mono); font-weight:700; color:${acct.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'};">${money(acct.closing)}</td>
+      </tr></tfoot>
+    </table>`;
+}
+
+function deliveryCard(r) {
+  return `
+    <div class="card" style="padding:14px 18px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+        <div>
+          <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(r.packing_list_no || 'Delivery')}</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">${esc(r.date || '(no date)')}${r.container_no ? ' · ' + esc(r.container_no) : ''} · ${esc(r.id)}</div>
+        </div>
+        <div style="text-align:right; font-family:var(--font-mono); font-size:12px;">
+          <div style="color:var(--text-strong);">${esc(wt(r.weight_lb, 'lb'))}</div>
+          <div style="color:var(--text-faint);">${esc(wt(r.weight_mt, 'mt'))}</div>
+        </div>
+      </div>
+      <table style="margin-top:10px;">
+        <thead><tr><th>Grade</th><th style="text-align:right;">Net</th><th style="text-align:right;">Price</th><th style="text-align:right;">Amount</th></tr></thead>
+        <tbody>${(r.items || []).map((it) => `<tr>
+          <td>${esc(it.description)}</td>
+          <td style="text-align:right; font-family:var(--font-mono);">${esc(wt(it.weight, 'lb'))}</td>
+          <td style="text-align:right; font-family:var(--font-mono);">${it.price ?? ''}</td>
+          <td style="text-align:right; font-family:var(--font-mono);">${money(it.amount)}</td></tr>`).join('')}</tbody>
+      </table>
+      ${r.note ? `<div style="margin-top:8px; font-size:11px; color:var(--text-faint);">${esc(r.note)}</div>` : ''}
+      <div style="margin-top:10px; text-align:right;">
+        <button class="btn btn-danger btn-del-rec" data-id="${esc(r.id)}" style="padding:5px 10px; font-size:10px;">Delete</button>
+      </div>
+    </div>`;
+}
+
+function gradeTable(rows) {
+  if (!rows.length) return `<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing received from this supplier yet.</div>`;
+  return `<table>
+    <thead><tr><th>Grade</th><th style="text-align:right;">Deliveries</th><th style="text-align:right;">Net lbs</th><th style="text-align:right;">Net MT</th><th style="text-align:right;">Value</th></tr></thead>
+    <tbody>${rows.map((g) => `<tr>
+      <td>${esc(g.description)}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${g.receipts}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${esc(wt(g.weight_lb, 'lb'))}</td>
+      <td style="text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${esc(wt(g.weight_mt, 'mt'))}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${money(g.amount)}</td></tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function card(label, value, tone) {
+  return `<div class="card" style="padding:12px 14px;">
+    <div style="font-size:11px; color:var(--text-faint);">${esc(label)}</div>
+    <div style="font-size:17px; font-weight:600; margin-top:3px; font-family:var(--font-mono); color:${tone || 'var(--text-strong)'};">${value}</div>
+  </div>`;
+}
+
+async function loadSuppliers() {
+  const { suppliers, unassigned } = await api('/api/edge-inventory/suppliers');
+  $('supPick').innerHTML = suppliers.length
+    ? suppliers.map((s) => `<option value="${esc(s.supplier)}">${esc(s.supplier)} — ${money(s.closing)} owed</option>`).join('')
+    : '<option value="">(no suppliers yet)</option>';
+  $('suplist').innerHTML = suppliers.map((s) => `<option value="${esc(s.supplier)}"></option>`).join('');
+  // A bill with no supplier is on no account at all. Surfaced rather than
+  // left to be discovered by a total that does not add up.
+  const w = $('unassignedWarn');
+  if (unassigned && unassigned.length) {
+    w.textContent = `${unassigned.length} bill${unassigned.length === 1 ? '' : 's'} have no supplier, so they appear on nobody's account: ${unassigned.map((u) => u.container_no || u.id).join(', ')}`;
+    w.classList.remove('hidden');
+  } else { w.classList.add('hidden'); }
+  if (suppliers.length) { SUPPLIER = suppliers[0].supplier; $('supPick').value = SUPPLIER; }
+  return suppliers;
+}
+
+async function loadSupplier() {
+  if (!SUPPLIER) { $('acctBox').innerHTML = ''; $('delivBox').innerHTML = ''; $('gradeBox').innerHTML = ''; $('cards').innerHTML = ''; return; }
+  const qs = new URLSearchParams();
+  if (toIso($('fFrom').value)) qs.set('from', toIso($('fFrom').value));
+  if (toIso($('fTo').value)) qs.set('to', toIso($('fTo').value));
+  DATA = await api(`/api/edge-inventory/${encodeURIComponent(SUPPLIER)}?${qs}`);
+
+  $('cards').innerHTML = [
+    card('Owed to them', money(DATA.account.closing), DATA.account.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'),
+    card('Billed', money(DATA.account.debit_total)),
+    card('Paid', money(DATA.account.credit_total), 'var(--green-500)'),
+    card('Received', wt(DATA.received.weight_lb, 'lb')),
+  ].join('');
+
+  $('acctBox').innerHTML = accountTable(DATA.account);
+  $('delivBox').innerHTML = DATA.receipts.length
+    ? DATA.receipts.map(deliveryCard).join('')
+    : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No deliveries recorded for this supplier.</div>';
+  $('gradeBox').innerHTML = gradeTable(DATA.by_grade);
+
+  $('delivBox').querySelectorAll('.btn-del-rec').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Delete this delivery? It does not affect the account.')) return;
+    await api(`/api/edge-inventory/receipt/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' });
+    loadSupplier();
+  }));
+}
+
+$('supPick').addEventListener('change', () => { SUPPLIER = $('supPick').value; loadSupplier(); });
+$('btnApply').addEventListener('click', loadSupplier);
+$('btnClear').addEventListener('click', () => { $('fFrom').value = ''; $('fTo').value = ''; loadSupplier(); });
+
+// ── THE DELIVERY FORM ──────────────────────────────────────────────────
+// "mimic add load form but we will have only seller in form" — a party, a
+// date and the packing list's lines.
+let recItems = [];
+function paintRecItems() {
+  $('rm_items').innerHTML = recItems.map((it, i) => `
+    <div style="display:grid; grid-template-columns:minmax(0,1fr) 110px 90px 110px 28px; gap:8px; align-items:center;">
+      <input data-i="${i}" data-f="description" value="${esc(it.description || '')}" placeholder="grade">
+      <input data-i="${i}" data-f="weight" value="${esc(it.weight || '')}" placeholder="net lbs" style="text-align:right;">
+      <input data-i="${i}" data-f="price" value="${esc(it.price || '')}" placeholder="price" style="text-align:right;">
+      <div style="text-align:right; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);">${money((Number(it.weight) || 0) * (Number(it.price) || 0)) || ''}</div>
+      <button type="button" class="rm-del" data-i="${i}" style="background:none; border:none; color:var(--text-faint); font-size:15px; cursor:pointer;">&times;</button>
+    </div>`).join('');
+  $('rm_items').querySelectorAll('input[data-i]').forEach((el) => {
+    el.style.cssText += 'padding:8px 10px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); color:var(--text-strong); font-size:13px;';
+    el.oninput = () => { recItems[+el.dataset.i][el.dataset.f] = el.value; paintRecItems(); el.focus(); };
+  });
+  $('rm_items').querySelectorAll('.rm-del').forEach((b) => {
+    // Same rule as the bill form: the last line is cleared, not removed, so
+    // there is always somewhere to type.
+    b.onclick = () => { if (recItems.length === 1) recItems[0] = {}; else recItems.splice(+b.dataset.i, 1); paintRecItems(); };
+  });
+}
+$('btnAddItem').addEventListener('click', () => { recItems.push({}); paintRecItems(); });
+
+function openRec() {
+  $('rm_supplier').value = SUPPLIER || '';
+  const now = new Date();
+  // LA, like every other date in this app — a delivery is a US yard date.
+  $('rm_date').value = now.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: '2-digit', day: '2-digit', year: 'numeric' });
+  $('rm_pl').value = ''; $('rm_container').value = ''; $('rm_note').value = '';
+  recItems = [{}]; paintRecItems();
+  $('recError').classList.add('hidden');
+  $('recModalOverlay').classList.remove('hidden');
+}
+const closeRec = () => $('recModalOverlay').classList.add('hidden');
+$('btnAddReceipt').addEventListener('click', openRec);
+$('recCancel').addEventListener('click', closeRec);
+$('recModalOverlay').addEventListener('click', (e) => { if (e.target.id === 'recModalOverlay') closeRec(); });
+
+$('recSave').addEventListener('click', async () => {
+  const body = {
+    supplier: $('rm_supplier').value.trim(),
+    date: $('rm_date').value.trim(),
+    packing_list_no: $('rm_pl').value.trim(),
+    container_no: $('rm_container').value.trim(),
+    note: $('rm_note').value.trim(),
+    items: recItems.filter((it) => it.description || it.weight || it.price),
+  };
+  try {
+    await api('/api/edge-inventory', { method: 'POST', body: JSON.stringify(body) });
+    closeRec();
+    // A delivery for a supplier who had none reshapes the picker.
+    const had = SUPPLIER;
+    await loadSuppliers();
+    SUPPLIER = body.supplier || had; $('supPick').value = SUPPLIER;
+    setSubtab('deliveries');
+    loadSupplier();
+  } catch (e) { $('recError').textContent = e.message; $('recError').classList.remove('hidden'); }
+});
+
+setSubtab('account');
+loadSuppliers().then(loadSupplier).catch((e) => {
+  $('acctBox').innerHTML = `<div style="padding:30px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">${esc(e.message)}</div>`;
+});
+</script>
+</body>
+</html>
