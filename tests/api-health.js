@@ -36,6 +36,7 @@ process.env.DATA_DIR = process.env.DATA_DIR || _fs.mkdtempSync(_p.join(os.tmpdir
 
 
 const path = require('path');
+const ROOT = path.join(__dirname, '..');
 const R = (p) => path.join(__dirname, '..', p);
 const http = require('http');
 
@@ -135,9 +136,27 @@ function get(port, headers) {
     ckTrue('healthz names the commit it is running',
            h.json && typeof h.json.version === 'string' && /^[0-9a-f]{7}$/.test(h.json.version),
            JSON.stringify(h.json && h.json.version));
+    // ── AND A CLEAN TREE SAYS SO ─────────────────────────────────────────
+    // This was green for a fortnight while reporting null on a clean
+    // checkout, because a working copy under active editing is never clean —
+    // it only failed on 2026-09-10 when a commit left the tree tidy mid-run.
+    // The two states it has to tell apart are "clean" and "no git here", and
+    // `git status --porcelain` prints nothing for the first.
     ckTrue('  and says whether the box has uncommitted edits on top of it',
            h.json && (h.json.version_dirty === true || h.json.version_dirty === false),
            JSON.stringify(h.json && h.json.version_dirty));
+    // Exercised through the helper with a command whose output is ALWAYS
+    // empty — `git diff HEAD HEAD` — rather than through whatever state this
+    // checkout happens to be in. The first version of this assertion compared
+    // against live `git status`, which passes either way on a dirty tree, and
+    // the mutation for it survived. Deterministic now.
+    const ver = require(path.join(ROOT, 'helpers/version'));
+    ckTrue('    empty output is an answer, not a failure',
+           ver.git(['diff', '--name-only', 'HEAD', 'HEAD'], { allowEmpty: true }) === '',
+           JSON.stringify(ver.git(['diff', '--name-only', 'HEAD', 'HEAD'], { allowEmpty: true })));
+    ckTrue('      so a clean tree reads false rather than "no idea"',
+           ver.git(['diff', '--name-only', 'HEAD', 'HEAD']) === null,
+           'null on a clean checkout is the same answer as git being missing');
     ckTrue('  and when this process started, so a restart is visible',
            h.json && !isNaN(Date.parse(h.json.booted_at || '')),
            JSON.stringify(h.json && h.json.booted_at));

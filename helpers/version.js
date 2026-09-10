@@ -38,11 +38,24 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 
-function git(args) {
+// ── EMPTY OUTPUT IS NOT A FAILURE ────────────────────────────────────────
+// `|| null` collapsed the two apart cases into one. `git status --porcelain`
+// prints NOTHING when the tree is clean, so a clean checkout came back null
+// and `dirty` became null — the same answer as "there is no git here".
+//
+// That is exactly backwards for the moment this endpoint is read: on the VM
+// straight after a pull, when the tree IS clean and the question is whether
+// it is. Found 2026-09-10 when a commit left the tree clean for the first
+// time in the run and tests/api-health went red.
+//
+// So: allowEmpty says whether '' is a real answer for that command. It is for
+// status; it is not for rev-parse, where empty can only mean failure.
+function git(args, { allowEmpty = false } = {}) {
     try {
-        return execFileSync('git', args, {
+        const out = execFileSync('git', args, {
             cwd: ROOT, encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim() || null;
+        }).trim();
+        return allowEmpty ? out : (out || null);
     } catch (e) {
         // No git, no .git, a shallow copy, a timeout — all the same answer.
         return null;
@@ -56,7 +69,7 @@ const committedAt = process.env.JARVIS_COMMIT ? null : git(['log', '-1', '--form
 const subject = process.env.JARVIS_COMMIT ? null : git(['log', '-1', '--format=%s']);
 // Uncommitted edits on the box are worth knowing about: it means the running
 // code is not any commit at all, and "git pull" may refuse or merge oddly.
-const status = process.env.JARVIS_COMMIT ? null : git(['status', '--porcelain']);
+const status = process.env.JARVIS_COMMIT ? null : git(['status', '--porcelain'], { allowEmpty: true });
 const dirty = status === null ? null : status.length > 0;
 
 const info = {
@@ -78,4 +91,10 @@ function bootLine() {
          + `${info.committed_at || ''} ${info.subject ? '— ' + info.subject.slice(0, 60) : ''}`;
 }
 
-module.exports = { running, bootLine };
+module.exports = {
+    running, bootLine,
+    // Exported ONLY so the empty-output path can be tested without depending
+    // on whether the checkout happens to be clean at that moment — which is
+    // what let the null-on-clean bug sit green for a fortnight.
+    git,
+};

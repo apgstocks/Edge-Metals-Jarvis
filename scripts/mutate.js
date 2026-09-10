@@ -1124,6 +1124,11 @@ const MUTATIONS = [
       file: 'api.js', suites: ['bills-sales'],
       find: "                        f.customer = [...new Set([...(f.customer || []), ...names])];",
       to:   '                        f.customer = [...new Set([...names, ...(f.customer || [])])];' },
+    { name: 'a clean working tree reports "no idea" instead of clean',
+      file: 'helpers/version.js', suites: ['api-health'],
+      find: "        return allowEmpty ? out : (out || null);",
+      to:   '        return out || null;' },
+
     // ── MARGIN PER CONTAINER, 2026-09-10 ─────────────────────────────────
     { name: 'trucking is left out of what a container cost',
       file: 'helpers/margin.js', suites: ['bills-sales'],
