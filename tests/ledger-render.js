@@ -1454,11 +1454,18 @@ section('G9 — the Trucking tab');
           container_no: 'HAULU1', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
           amount: 805, paid: 0, balance: 805, status: 'unpaid', priced: true,
           trucker_invoice_no: '8727', verified_on: '2026-08-21', conflict: null,
-          split: { parts: [{ key: 'line_haul', label: 'Line Haul', amount: 650 },
+          // The shape helpers/bills.cleanTruckingSplit really returns: the raw
+          // keys the editor binds to AND the derived `parts` the read-only
+          // view used. The fixture carried only the derived half, so the
+          // editor assertions failed against a row the API never sends.
+          split: { line_haul: 650, port_fees: 55, chassis_rent: 0,
+                   dry_run: null, extra_scale: null,
+                   invoice_no: '8727', verified_on: '2026-08-21', present: true,
+                   parts: [{ key: 'line_haul', label: 'Line Haul', amount: 650 },
                            { key: 'port_fees', label: 'Port Fees', amount: 55 },
                            { key: 'chassis_rent', label: 'Chassis Rent', amount: 0 }],
-                   others: [{ what: 'Prepull', amount: 100, note: 'held overnight at the terminal' }],
-                   others_total: 100 } },
+                   others: [{ id: 'TRK1', what: 'Prepull', amount: 100, note: 'held overnight at the terminal' }],
+                   others_total: 100, total: 805 } },
         { bill_id: 'B4', date: '09/09/2026', booking_no: 'HB1',
           container_no: 'HAULU4', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
           amount: null, paid: 0, balance: 0, status: 'missing', priced: false,
@@ -1530,20 +1537,44 @@ section('G9 — the Trucking tab');
     await new Promise((r) => setTimeout(r, 20));
     ck('clicking the row opens it', detail.style.display === 'table-row', detail.style.display);
     const dt = detail.textContent;
+    // ── AND IT IS AN EDITOR, NOT A READOUT ───────────────────────────────
+    // Apsara, 2026-09-10: "i want detailed in trucking on clicking the row,it
+    // should show all these and i should be able to edit and delete."
     ck('  showing the parts her sheet names',
        /Line Haul/.test(dt) && /Port Fees/.test(dt) && /Chassis Rent/.test(dt), dt.slice(0, 160));
-    ck('  with their figures', /\$650\.00/.test(dt) && /\$55\.00/.test(dt));
-    ck('  Others totalled', /Others/.test(dt) && /\$100\.00/.test(dt));
+    const val = (sel) => { const el = detail.querySelector(sel); return el ? el.value : null; };
+    ck('  with their figures, in boxes she can change',
+       val('input[data-sp="line_haul"]') === '650' && val('input[data-sp="port_fees"]') === '55',
+       JSON.stringify([val('input[data-sp="line_haul"]'), val('input[data-sp="port_fees"]')]));
+    ck('  Others as editable lines', !!detail.querySelector('input[data-oth="0"][data-f="what"]'));
     ck('  and each Other explained, which is the whole point of it',
-       /held overnight at the terminal/.test(dt), dt.slice(0, 220));
-    ck('  the trucker\'s own invoice number', /8727/.test(dt));
-    ck('  and when it was last verified', /2026-08-21/.test(dt));
+       val('input[data-oth="0"][data-f="note"]') === 'held overnight at the terminal',
+       val('input[data-oth="0"][data-f="note"]'));
+    ck('  the trucker\'s own invoice number', val('input[data-sp="invoice_no"]') === '8727');
+    ck('  and when it was last verified', val('input[data-sp="verified_on"]') === '2026-08-21');
+    ck('  a total that adds up as she types', /\$805\.00/.test(dt), dt.slice(-120));
+    ck('  a way to add another charge', !!detail.querySelector('.trkOthAdd'));
+    ck('  to delete one', !!detail.querySelector('.trkOthDel'));
+    ck('  to save', !!detail.querySelector('.trkSplitSave'));
+    ck('  and to clear the whole split', !!detail.querySelector('.trkSplitDel'));
+
+    // Saving PUTs the split to the BILL — the split has always lived there;
+    // only the place it is edited moved.
+    const lh = detail.querySelector('input[data-sp="line_haul"]');
+    lh.value = '700'; lh.dispatchEvent(new w.Event('input', { bubbles: true }));
+    ck('  changing a part retotals without a round trip',
+       /\$855\.00/.test(detail.textContent), detail.textContent.slice(-120));
     doc.querySelector('tr[data-bill="B1"]').click();
     await new Promise((r) => setTimeout(r, 20));
     ck('clicking again folds it back', detail.style.display === 'none');
-    ck('a haul with no split has nothing to open',
-       !doc.querySelector('.trkDetail[data-for="B2"]'),
-       'an empty drawer is a click that does nothing');
+    // Every haul opens now, split or not — a haul with no split is exactly
+    // the one she opens to TYPE one, and an empty row with no way in was the
+    // read-only version's flaw.
+    doc.querySelector('tr[data-bill="B2"]').click();
+    await new Promise((r) => setTimeout(r, 20));
+    ck('a haul with no split yet still opens, so one can be entered',
+       !!doc.querySelector('.trkDetail[data-for="B2"] input[data-sp="line_haul"]'),
+       'nowhere to type is the same as not having the feature');
     ck('  and a settled one says paid', /paid/.test(text));
 
     // ── HER FOUR FILTERS REACH THE SERVER ────────────────────────────────
@@ -1710,6 +1741,13 @@ section('G11 — typing the item lines and the haulage split');
         el.value = v; fire(el);
     };
     setIt(0, 'description', 'Al combo'); setIt(0, 'weight', '15800'); setIt(0, 'price', '0.41');
+    // Apsara, 2026-09-10: "in bill,only net lbs is there i want net mt as
+    // well". 15,800 lb is 7.167 MT.
+    ck('a line shows its weight in MT beside the pounds',
+       /7\.167/.test(doc.querySelector('#ledItemsBox [data-item="0"]').textContent),
+       doc.querySelector('#ledItemsBox [data-item="0"]').textContent.replace(/\s+/g, ' ').trim());
+    ck('  and the column is labelled',
+       /Net MT/.test(doc.getElementById('ledItemsBox').textContent));
     ck('a line works out its own amount as she types',
        /6,478\.00/.test(doc.querySelector('#ledItemsBox [data-item="0"]').textContent),
        doc.querySelector('#ledItemsBox [data-item="0"]').textContent.replace(/\s+/g, ' ').trim());
@@ -1742,41 +1780,18 @@ section('G11 — typing the item lines and the haulage split');
        (saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.items || []).length === 1,
        'a click fires no input event — the delete has to ask for the save itself');
 
-    // ── THE HAULAGE SPLIT ────────────────────────────────────────────────
-    ck('the bill form has a split editor', !!doc.getElementById('ledSplitBox'));
-    const setSp = (k, v) => { const el = doc.querySelector(`[data-split="${k}"]`); el.value = v; fire(el); };
-    setSp('line_haul', '650'); setSp('port_fees', '55'); setSp('chassis_rent', '0');
-    ck('the parts are her spreadsheet\'s',
-       ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale']
-         .every((k) => !!doc.querySelector(`[data-split="${k}"]`)));
-    ck('  and it totals as she types',
-       /705\.00/.test(doc.getElementById('ledSplitBox').textContent),
-       doc.getElementById('ledSplitBox').textContent.replace(/\s+/g, ' ').slice(-120));
-
-    doc.getElementById('ledOtherAdd').click();
-    const oWhat = doc.querySelector('[data-other="0"][data-f="what"]');
-    oWhat.value = 'Prepull'; fire(oWhat);
-    const oAmt = doc.querySelector('[data-other="0"][data-f="amount"]');
-    oAmt.value = '100'; fire(oAmt);
-    ck('an Other with no note is marked as unfinished before she saves',
-       rgbEq(doc.querySelector('[data-other="0"][data-f="note"]').style.borderColor,
-             w.ledgerTheme().danger),
-       'the server refuses it; the form should say so first');
-    const oNote = doc.querySelector('[data-other="0"][data-f="note"]');
-    oNote.value = 'held overnight at the terminal'; fire(oNote);
-    ck('  and stops being marked once explained',
-       !rgbEq(doc.querySelector('[data-other="0"][data-f="note"]').style.borderColor,
-              w.ledgerTheme().danger));
-
-    setSp('invoice_no', '8727');
-    await new Promise((r) => setTimeout(r, 1500));
-    const withSplit = saves.filter((c) => /\/api\/bills/.test(c.path)).pop().body.trucking_split;
-    ck('the split reaches the server', !!withSplit, JSON.stringify(withSplit));
-    ck('  with her parts', withSplit.line_haul === '650' && withSplit.port_fees === '55');
-    ck('  the Other and its note',
-       withSplit.others.length === 1 && withSplit.others[0].note === 'held overnight at the terminal',
-       JSON.stringify(withSplit.others));
-    ck('  and the trucker\'s own invoice number', withSplit.invoice_no === '8727');
+    // ── THE HAULAGE SPLIT IS NOT ON THE BILL FORM ────────────────────────
+    // "in bill,i dont want detailed like this .I want detailed in trucking on
+    // clicking the row". Checking a haulier's invoice against its parts is a
+    // different job from entering a bill, and it is asserted as an EDITOR in
+    // section G9 rather than here.
+    ck('the bill form has NO split editor', !doc.getElementById('ledSplitBox'));
+    ck('  nor any of its boxes', !doc.querySelector('[data-split]'));
+    ck('  and says where it went',
+       /edited under Trucking/.test(doc.getElementById('ledgerForm').textContent),
+       'a thing that moved with no sign is a thing she reports as missing');
+    ck('  while the bill form keeps its own item lines',
+       !!doc.getElementById('ledItemsBox'));
 
     doc.getElementById('ledClose').click();
     await new Promise((r) => setTimeout(r, 60));

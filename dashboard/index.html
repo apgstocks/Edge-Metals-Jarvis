@@ -5328,32 +5328,9 @@ async function renderMetalsTruckingTab() {
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${r.balance > 0.005 ? ledMoney(r.balance) : '—'}</td>
               <td style="padding:7px 9px;">${pill(r)}</td>
             </tr>
-            ${r.split && (r.split.parts || []).length ? `
             <tr class="trkDetail" data-for="${esc(r.bill_id)}" style="display:none; background:var(--surface-sunken);">
-              <td colspan="9" style="padding:10px 14px;">
-                <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start;">
-                  ${(r.split.parts || []).map((p) => `
-                    <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(p.label)}</div>
-                      <div style="font-family:var(--font-mono); font-size:13px; margin-top:2px;">${ledMoney(p.amount)}</div></div>`).join('')}
-                  ${(r.split.others || []).length ? `
-                    <div style="min-width:220px;">
-                      <div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Others · ${ledMoney(r.split.others_total)}</div>
-                      ${(r.split.others || []).map((o) => `
-                        <div style="margin-top:4px;">
-                          <span style="font-size:12px;">${esc(o.what)}</span>
-                          <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"> ${ledMoney(o.amount)}</span>
-                          <div style="font-size:11px; color:var(--text-muted); line-height:1.4;">${esc(o.note)}</div>
-                        </div>`).join('')}
-                    </div>` : ''}
-                  <div style="flex:1;"></div>
-                  <div style="text-align:right;">
-                    ${r.trucker_invoice_no ? `<div style="font-size:11px; color:var(--text-muted);">Trucker invoice ${esc(r.trucker_invoice_no)}</div>` : ''}
-                    ${r.verified_on ? `<div style="font-size:11px; color:var(--text-muted);">Verified ${esc(r.verified_on)}</div>` : ''}
-                    ${r.conflict ? `<div style="font-size:11px; color:var(--status-warn);">Typed total differs by ${ledMoney(r.conflict)}</div>` : ''}
-                  </div>
-                </div>
-              </td>
-            </tr>` : ''}`).join('')
+              <td colspan="9" style="padding:12px 14px;"></td>
+            </tr>`).join('')
             : `<tr><td colspan="9" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No bill names a trucker yet.'}</td></tr>`}</tbody>
         </table>
       </div>
@@ -5386,6 +5363,110 @@ async function renderMetalsTruckingTab() {
   // because five more columns is the thing that made the first bill form
   // unreadable — and most of the time the question is "what do I owe", not
   // "what is it made of".
+  // ── THE SPLIT IS EDITED HERE, NOT ON THE BILL ────────────────────────
+  // Apsara, 2026-09-10: "in bill,i dont want detailed like this .I want
+  // detailed in trucking on clicking the row,it should show all these and i
+  // should be able to edit and delete."
+  //
+  // It belongs here: checking a haulier's invoice against its parts is a
+  // different job from entering a bill, done at a different time, and five
+  // more boxes on the bill form is what made that form clumsy three times
+  // over. Painted per row, only when opened.
+  const rowByBill = new Map((data.payables || []).map((r) => [r.bill_id, r]));
+
+  function paintSplitEditor(billId) {
+    const detail = document.querySelector(`.trkDetail[data-for="${billId}"]`);
+    const r = rowByBill.get(billId);
+    if (!detail || !r) return;
+    const cellS = (v, ph, w) => `value="${esc(v ?? '')}" placeholder="${esc(ph || '')}" autocomplete="off"`
+      + ` style="width:${w}; height:28px; padding:0 8px; font-size:12px; background:var(--surface-card);`
+      + ` border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none;"`;
+    const sp = r.split || { others: [] };
+    const others = Array.isArray(sp.others) ? sp.others : [];
+    const parts = [['line_haul', 'Line Haul'], ['port_fees', 'Port Fees'],
+                   ['chassis_rent', 'Chassis Rent'], ['dry_run', 'Dry Run'],
+                   ['extra_scale', 'Extra Scale']];
+    const n = (v) => { const x = parseFloat(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(x) ? x : 0; };
+    const total = parts.reduce((t, [k]) => t + n(sp[k]), 0)
+      + others.reduce((t, o) => t + n(o.amount), 0);
+
+    detail.querySelector('td').innerHTML = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:8px; margin-bottom:10px;">
+        ${parts.map(([k, label]) => `
+          <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:3px;">${label}</div>
+            <input data-sp="${k}" data-bill="${esc(billId)}" ${cellS(sp[k], '', '100%')}></div>`).join('')}
+      </div>
+      <div id="trkOthers-${esc(billId)}">
+        ${others.map((o, i) => `
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:5px;">
+            <input data-oth="${i}" data-f="what" data-bill="${esc(billId)}" ${cellS(o.what, 'what', '150px')}>
+            <input data-oth="${i}" data-f="amount" data-bill="${esc(billId)}" ${cellS(o.amount, 'amount', '90px')}>
+            <input data-oth="${i}" data-f="note" data-bill="${esc(billId)}" ${cellS(o.note, 'why — required', '100%')} style="flex:1; height:28px; padding:0 8px; font-size:12px; background:var(--surface-card); border:1px solid ${(String(o.what || '').trim() && !String(o.note || '').trim()) ? 'var(--status-danger)' : 'var(--border-default)'}; border-radius:var(--radius-sm); color:var(--text-strong); outline:none;">
+            <button type="button" class="trkOthDel" data-i="${i}" data-bill="${esc(billId)}" aria-label="Remove" style="background:none; border:none; color:var(--text-muted); font-size:15px; cursor:pointer;">&times;</button>
+          </div>`).join('')}
+        <button type="button" class="trkOthAdd" data-bill="${esc(billId)}" style="background:none; border:none; color:var(--accent); font-size:12px; cursor:pointer; padding:0;">+ Add other charge</button>
+      </div>
+      <div style="display:flex; align-items:flex-end; gap:10px; margin-top:12px; flex-wrap:wrap;">
+        <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:3px;">Trucker invoice no</div>
+          <input data-sp="invoice_no" data-bill="${esc(billId)}" ${cellS(sp.invoice_no, '', '130px')}></div>
+        <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:3px;">Last verified</div>
+          <input data-sp="verified_on" data-bill="${esc(billId)}" ${cellS(sp.verified_on, 'YYYY-MM-DD', '130px')}></div>
+        <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Total</div>
+          <div class="trkSplitTotal" data-bill="${esc(billId)}" style="font-size:15px; font-weight:500; font-family:var(--font-mono);">${ledMoney(total)}</div></div>
+        <span style="flex:1;"></span>
+        <button type="button" class="trkSplitDel" data-bill="${esc(billId)}" class="btn btn-ghost" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:6px 12px; font-size:11px; color:var(--status-warn); cursor:pointer;">Clear split</button>
+        <button type="button" class="trkSplitSave" data-bill="${esc(billId)}" class="btn btn-primary" style="border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:var(--radius-sm); padding:6px 16px; font-size:11px; cursor:pointer;">Save</button>
+      </div>
+      <div class="trkSplitErr" data-bill="${esc(billId)}" style="color:var(--status-danger); font-size:11px; margin-top:7px;"></div>`;
+
+    const draft = () => {
+      const d = { others: [] };
+      detail.querySelectorAll('input[data-sp]').forEach((el) => { d[el.dataset.sp] = el.value; });
+      detail.querySelectorAll('input[data-oth]').forEach((el) => {
+        const i = +el.dataset.oth;
+        d.others[i] = d.others[i] || {};
+        d.others[i][el.dataset.f] = el.value;
+      });
+      // Preserve the ids so a line keeps its identity across saves.
+      (sp.others || []).forEach((o, i) => { if (d.others[i] && o.id) d.others[i].id = o.id; });
+      return d;
+    };
+    const retotal = () => {
+      const d = draft();
+      const t = parts.reduce((a, [k]) => a + n(d[k]), 0)
+        + (d.others || []).reduce((a, o) => a + n(o && o.amount), 0);
+      const el = detail.querySelector(`.trkSplitTotal[data-bill="${billId}"]`);
+      if (el) el.textContent = ledMoney(t);
+      (d.others || []).forEach((o, i) => {
+        const note = detail.querySelector(`input[data-oth="${i}"][data-f="note"]`);
+        if (note) note.style.borderColor = (String(o.what || '').trim() && !String(o.note || '').trim())
+          ? 'var(--status-danger)' : 'var(--border-default)';
+      });
+    };
+    detail.querySelectorAll('input').forEach((el) => { el.oninput = retotal; });
+    detail.querySelectorAll('.trkOthDel').forEach((b) => {
+      b.onclick = () => { const d = draft(); d.others.splice(+b.dataset.i, 1);
+                          rowByBill.set(billId, { ...r, split: d }); paintSplitEditor(billId); };
+    });
+    const add = detail.querySelector('.trkOthAdd');
+    if (add) add.onclick = () => { const d = draft(); d.others.push({});
+                                   rowByBill.set(billId, { ...r, split: d }); paintSplitEditor(billId); };
+
+    const save = async (payload) => {
+      const err = detail.querySelector(`.trkSplitErr[data-bill="${billId}"]`);
+      err.textContent = '';
+      try {
+        await api(`/api/bills/${encodeURIComponent(billId)}`,
+                  { method: 'PUT', body: JSON.stringify({ trucking_split: payload }) });
+        renderMetalsTruckingTab();
+      } catch (e) { err.textContent = e.message || 'Could not save it'; }
+    };
+    detail.querySelector('.trkSplitSave').onclick = () => save(draft());
+    // Clearing sends an EMPTY split rather than deleting the bill's trucking
+    // figure: the amount she typed on the bill stands on its own again.
+    detail.querySelector('.trkSplitDel').onclick = () => save({ others: [] });
+  }
+
   document.querySelectorAll('tr[data-bill]').forEach((tr) => {
     const detail = document.querySelector(`.trkDetail[data-for="${tr.dataset.bill}"]`);
     if (!detail) return;
@@ -5394,7 +5475,9 @@ async function renderMetalsTruckingTab() {
       // Not when she is clicking something inside the row that does its own
       // thing — a status pill today, a button tomorrow.
       if (e.target.closest('button, a, input')) return;
-      detail.style.display = detail.style.display === 'none' ? 'table-row' : 'none';
+      const opening = detail.style.display === 'none';
+      detail.style.display = opening ? 'table-row' : 'none';
+      if (opening) paintSplitEditor(tr.dataset.bill);
     };
   });
 
@@ -6781,10 +6864,6 @@ function openLedgerForm(kind, existing, seed) {
   // them exactly as any typed field.
   let ledItems = Array.isArray(existing && existing.items)
     ? JSON.parse(JSON.stringify(existing.items)) : [];
-  let ledSplit = (existing && existing.trucking_split && existing.trucking_split.present)
-    ? JSON.parse(JSON.stringify(existing.trucking_split))
-    : { invoice_no: '', verified_on: '', others: [] };
-  if (!Array.isArray(ledSplit.others)) ledSplit.others = [];
 
   const sections = groups.map((g) => {
     const mine = inGroup(g);
@@ -6799,7 +6878,15 @@ function openLedgerForm(kind, existing, seed) {
         <div style="font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:${LEDGER_LIGHT.inkFaint}; margin-bottom:11px;">${esc(g.label)}${g.id === 'weights' ? ' <span style="letter-spacing:0; text-transform:none;">· lbs</span>' : ''}</div>
         <div style="${grid}">${mine.map((c) => (g.cols ? inputFor(c) : inlineField(c))).join('')}</div>
         ${g.id === 'items' ? '<div id="ledItemsBox"></div>' : ''}
-        ${g.id === 'trucking' && kind === 'bills' ? '<div id="ledSplitBox" style="margin-top:12px;"></div>' : ''}
+        ${g.id === 'trucking' && kind === 'bills'
+          // Apsara, 2026-09-10: "in bill,i dont want detailed like this .I
+          // want detailed in trucking on clicking the row". The split is a
+          // haulier's invoice being checked, not part of entering a bill —
+          // and it was five more boxes on a form that has already been
+          // through three rounds of "this looks clumsy". It lives in the
+          // Trucking tab now, behind the row.
+          ? `<div style="font-size:11px; color:${LEDGER_LIGHT.inkFaint}; margin-top:8px;">Line Haul, Port Fees and the rest are edited under Trucking — click the haul there.</div>`
+          : ''}
       </div>`;
   }).join('');
 
@@ -6915,6 +7002,7 @@ function openLedgerForm(kind, existing, seed) {
             // BOTH cases, which left no way to enter a plain-weight line at
             // all — caught by its own test.
             : `<input data-i="${i}" data-f="weight" ${cell(it.weight, 'net lbs', '86px')} style="width:86px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">`}
+          <span class="ledItemMt" data-i="${i}" style="width:66px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.inkMuted};">${wt === null ? '—' : (Math.round((wt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })}</span>
           <input data-i="${i}" data-f="price" ${cell(it.price, 'price', '72px')}>
           <span class="ledItemAmt" style="width:88px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.ink};">${money0(amt)}</span>
           <button type="button" class="ledItemTicket" data-i="${i}" title="Weighbridge ticket"
@@ -6943,6 +7031,7 @@ function openLedgerForm(kind, existing, seed) {
         <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:${L.inkFaint}; padding-bottom:4px;">
           <span style="flex:1;">Description</span>
           <span style="width:86px; text-align:right;">Net lbs</span>
+          <span style="width:66px; text-align:right;">Net MT</span>
           <span style="width:72px;">Price</span>
           <span style="width:88px; text-align:right;">Amount</span>
           <span style="width:78px;"></span>
@@ -6952,6 +7041,7 @@ function openLedgerForm(kind, existing, seed) {
           <button type="button" id="ledItemAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0;">+ Add item</button>
           <span style="flex:1;"></span>
           ${ledItems.length ? `<span style="width:86px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalWt)}</span>
+          <span style="width:66px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${(Math.round((totalWt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })}</span>
           <span style="width:72px;"></span>
           <span style="width:88px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalAmt)}</span>
           <span style="width:78px;"></span>` : ''}
@@ -6968,6 +7058,9 @@ function openLedgerForm(kind, existing, seed) {
         const { wt, amt, hasTicket } = lineOf(ledItems[i]);
         const net = line.querySelector(`.ledItemNet[data-i="${i}"]`);
         if (net) net.textContent = wt === null ? '—' : money0(wt);
+        const mt = line.querySelector(`.ledItemMt[data-i="${i}"]`);
+        if (mt) mt.textContent = wt === null ? '—'
+            : (Math.round((wt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 });
         const amtCell = line.querySelector('.ledItemAmt');
         if (amtCell) amtCell.textContent = money0(amt);
         const foot = line.querySelector('.ledTicketNet');
@@ -6995,87 +7088,6 @@ function openLedgerForm(kind, existing, seed) {
   }
   paintItems();
 
-  // ── THE HAULAGE SPLIT ────────────────────────────────────────────────
-  // Her spreadsheet's columns. Others is a list and each one needs a note —
-  // see helpers/bills.cleanTruckingOthers for why that is a refusal and not
-  // a nag.
-  function paintSplit() {
-    const box = $('ledSplitBox');
-    if (!box) return;
-    const parts = [['line_haul', 'Line Haul'], ['port_fees', 'Port Fees'],
-                   ['chassis_rent', 'Chassis Rent'], ['dry_run', 'Dry Run'],
-                   ['extra_scale', 'Extra Scale']];
-    const othersTotal = (ledSplit.others || []).reduce((t, o) => t + (numOf(o.amount) || 0), 0);
-    const total = parts.reduce((t, [k]) => t + (numOf(ledSplit[k]) || 0), 0) + othersTotal;
-    const anything = parts.some(([k]) => numOf(ledSplit[k]) !== null) || (ledSplit.others || []).length;
-
-    box.innerHTML = `
-      <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:7px;">What it is made of</div>
-      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:7px;">
-        ${parts.map(([k, label]) => `
-          <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">${label}</div>
-            <input data-split="${k}" ${cell(ledSplit[k], '', '100%')} style="width:100%; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;"></div>`).join('')}
-      </div>
-      <div style="margin-top:9px;">
-        ${(ledSplit.others || []).map((o, i) => `
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:5px;">
-            <input data-other="${i}" data-f="what" ${cell(o.what, 'what', '140px')}>
-            <input data-other="${i}" data-f="amount" ${cell(o.amount, 'amount', '86px')}>
-            <input data-other="${i}" data-f="note" ${cell(o.note, 'why — required', '100%')} style="flex:1; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${(String(o.what || '').trim() && !String(o.note || '').trim()) ? L.danger : L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
-            <button type="button" class="ledOtherDel" data-i="${i}" aria-label="Remove"
-              style="background:none; border:none; color:${L.inkFaint}; font-size:15px; cursor:pointer;">&times;</button>
-          </div>`).join('')}
-        <button type="button" id="ledOtherAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0;">+ Add other charge</button>
-      </div>
-      <div style="display:flex; gap:10px; align-items:flex-end; margin-top:10px;">
-        <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">Trucker invoice no</div>
-          <input data-split="invoice_no" ${cell(ledSplit.invoice_no, '', '120px')}></div>
-        <div><div style="font-size:11px; color:${L.inkMuted}; margin-bottom:3px;">Last verified</div>
-          <input data-split="verified_on" ${cell(ledSplit.verified_on, 'YYYY-MM-DD', '120px')}></div>
-        <span style="flex:1;"></span>
-        <div style="text-align:right;">
-          <div style="font-size:11px; color:${L.inkFaint};">Trucking total</div>
-          <div id="ledSplitTotal" style="font-size:15px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">${anything ? money0(total) : '—'}</div>
-        </div>
-      </div>
-      <div style="font-size:11px; color:${L.inkFaint}; margin-top:6px;">The split decides the trucking amount above; it stops being typed.</div>`;
-
-    box.querySelectorAll('input[data-split]').forEach((el) => {
-      el.oninput = () => { ledSplit[el.dataset.split] = el.value; refreshSplitTotal(); queueSave(); };
-    });
-    box.querySelectorAll('input[data-other]').forEach((el) => {
-      el.oninput = () => {
-        const i = +el.dataset.other;
-        ledSplit.others[i][el.dataset.f] = el.value;
-        // The missing-note flag was worked out at paint time, so typing a
-        // name never lit it — she would only find out the line was
-        // unfinished when the server refused the save.
-        const note = box.querySelector(`[data-other="${i}"][data-f="note"]`);
-        if (note) {
-          const wants = String(ledSplit.others[i].what || '').trim()
-            && !String(ledSplit.others[i].note || '').trim();
-          note.style.borderColor = wants ? L.danger : L.line;
-        }
-        refreshSplitTotal(); queueSave();
-      };
-    });
-    box.querySelectorAll('.ledOtherDel').forEach((b) => {
-      b.onclick = () => { ledSplit.others.splice(+b.dataset.i, 1); paintSplit(); queueSave(); };
-    });
-    const addO = $('ledOtherAdd');
-    if (addO) addO.onclick = () => { ledSplit.others.push({}); paintSplit(); };
-  }
-  // Only the total, for the same caret reason as the item lines.
-  function refreshSplitTotal() {
-    const box = $('ledSplitBox');
-    if (!box) return;
-    const parts = ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale'];
-    const t = parts.reduce((a, k) => a + (numOf(ledSplit[k]) || 0), 0)
-      + (ledSplit.others || []).reduce((a, o) => a + (numOf(o.amount) || 0), 0);
-    const el = $('ledSplitTotal');
-    if (el) el.textContent = money0(t);
-  }
-  paintSplit();
   const close = () => {
     const m = $('ledgerModal');
     if (m) m.remove();
@@ -7101,18 +7113,9 @@ function openLedgerForm(kind, existing, seed) {
     const items = ledItems.filter((i) => String(i.description || '').trim()
       || i.weight || i.price || i.gross);
     if (items.length || (existing && (existing.items || []).length)) body.items = items;
-    if (kind === 'bills') {
-      const hasSplit = ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale']
-        .some((k) => String(ledSplit[k] || '').trim() !== '')
-        || (ledSplit.others || []).some((o) => String(o.what || '').trim())
-        || String(ledSplit.invoice_no || '').trim() || String(ledSplit.verified_on || '').trim();
-      if (hasSplit || (existing && existing.trucking_split && existing.trucking_split.present)) {
-        body.trucking_split = {
-          ...ledSplit,
-          others: (ledSplit.others || []).filter((o) => String(o.what || '').trim()),
-        };
-      }
-    }
+    // trucking_split is NOT sent from here any more. It is edited under
+    // Trucking, and a form that resends its own stale copy on every autosave
+    // would quietly overwrite an edit made there thirty seconds earlier.
     return body;
   };
 

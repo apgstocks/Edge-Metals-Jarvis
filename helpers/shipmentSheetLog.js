@@ -45,21 +45,37 @@ const TAB_NAME = 'Shipment';
 // Built from bills.tableColumns() rather than typed out again — the table and
 // this cannot drift into disagreeing about what a bill has, and a column she
 // adds later arrives here without an edit.
+const KEY_LABEL = 'Bill ID (do not edit)';
+
 function headerRow() {
     return [
         ...bills.tableColumns().map((c) => c.label),
         'Carrier',
         'Priced per',
-        // Last, and named so nobody wonders what it is or sorts by it.
-        'Bill ID (do not edit)',
+        // Last, and named so nobody wonders what it is or sorts by it. Found
+        // BY THIS LABEL in the live sheet rather than by counting our own
+        // columns — see keyColumnFrom below.
+        KEY_LABEL,
     ];
 }
 
-// One bill -> one row, in headerRow() order.
-function rowFor(bill) {
+// ── ONE ROW PER GRADE, NOT PER BILL ──────────────────────────────────────
+// Apsara, 2026-09-10: "only if same container -different item,it should be
+// inserted-else update only".
+//
+// A bill can now carry several grades, each with its own weighbridge ticket.
+// One row per bill would collapse them into a single line whose Item
+// description says one thing and whose weights say another. So the row grain
+// follows the data: one row per ITEM, keyed on the bill AND the item, which
+// is precisely her rule — same container with a different item inserts,
+// anything else updates in place.
+//
+// A bill with no items is still one row, keyed on the bill alone, so nothing
+// entered before today changes shape.
+function rowsFor(bill) {
     const b = bills.withTotals(bill || {});
-    const cell = (c) => {
-        const v = b[c.key];
+    const cellOf = (src) => (c) => {
+        const v = src[c.key];
         if (v === null || v === undefined) return '';
         // Photos are an array on the record; a sheet cell is text. One per
         // line so the cell stays clickable rather than becoming one run-on
@@ -67,12 +83,111 @@ function rowFor(bill) {
         if (Array.isArray(v)) return v.join('\n');
         return v;
     };
-    return [
-        ...bills.tableColumns().map(cell),
-        b.carrier || '',
-        b.price_unit === 'lb' ? 'per lb' : b.price_unit === 'mt' ? 'per MT' : '',
-        b.id || '',
+    const tail = (src) => [
+        src.carrier || '',
+        src.price_unit === 'lb' ? 'per lb' : src.price_unit === 'mt' ? 'per MT' : '',
+        '',   // filled with the key below
     ];
+
+    const items = Array.isArray(b.items) ? b.items : [];
+    if (!items.length) {
+        const row = [...bills.tableColumns().map(cellOf(b)), ...tail(b)];
+        row[row.length - 1] = b.id || '';
+        return [{ key: b.id, row }];
+    }
+
+    return items.map((it) => {
+        // The bill's own fields, with THIS grade's description, weights and
+        // money laid over them — so the row reads as that grade's line rather
+        // than as the container's total with one grade's name on it.
+        const view = {
+            ...b,
+            description: it.description || b.description || '',
+            gross: it.weighed ? it.gross : b.gross,
+            truck: it.weighed ? it.truck : b.truck,
+            container: it.weighed ? it.container : b.container,
+            chassis: it.weighed ? it.chassis : b.chassis,
+            boxes: it.weighed ? it.boxes : b.boxes,
+            total: it.weighed ? it.tare_total : b.total,
+            net_lb: it.weight,
+            net_mt: it.weight_mt,
+            supplier_price: it.price,
+            amount: it.amount,
+            price_unit: it.price_unit || b.price_unit,
+            // Trucking, payable and balance belong to the CONTAINER, not to a
+            // grade inside it. Repeating them on every line would make a
+            // three-grade container look like three lots of haulage to
+            // anyone summing the column.
+            trucking_amount: '', net_payable: '', balance: '',
+        };
+        const row = [...bills.tableColumns().map(cellOf(view)), ...tail(view)];
+        const key = `${b.id}:${it.id}`;
+        row[row.length - 1] = key;
+        return { key, row };
+    });
+}
+
+// Kept for callers and tests that want the single-row shape.
+function rowFor(bill) { return rowsFor(bill)[0].row; }
+
+// ── THE HEADER IN THE SHEET IS THE ONE THAT MATTERS ──────────────────────
+// Apsara, 2026-09-10: "what the hell.headers in shipment of edge metals and
+// data are not match..why this duplicate".
+//
+// One cause, both symptoms. proformaSheetLog.ensureTab only backfills MISSING
+// TRAILING header cells and deliberately never reorders — correct when a
+// column is appended, and exactly wrong when the order CHANGES. A column went
+// in before Balance today, so:
+//
+//   · every value in every new row landed one column left of its heading
+//   · keyColumnLetter(), counted from OUR header, pointed one past where the
+//     id actually sat, so the upsert matched nothing, appended, and produced
+//     the duplicate pair she is looking at
+//
+// So the header is reconciled properly: when the sheet's differs from ours,
+// the EXISTING ROWS ARE REMAPPED BY LABEL first and then the header is
+// rewritten. Remapping is the whole point — rewriting the header alone would
+// leave every historical row silently misaligned under correct-looking
+// headings, which is worse than the visible mess it replaces.
+async function reconcileHeader(sheets, spreadsheetId, tabName, wanted) {
+    const got = await sheets.spreadsheets.values.get({
+        spreadsheetId, range: `${tabName}!A1:ZZ`,
+    });
+    const values = got.data.values || [];
+    const existing = values[0] || [];
+    if (!existing.length) return { changed: false, reason: 'empty tab' };
+    const same = existing.length === wanted.length
+        && existing.every((h, i) => String(h).trim() === String(wanted[i]).trim());
+    if (same) return { changed: false };
+
+    // old label -> its column index, so a value follows its HEADING rather
+    // than its position.
+    const oldIndex = new Map();
+    existing.forEach((h, i) => {
+        const k = String(h).trim();
+        if (k && !oldIndex.has(k)) oldIndex.set(k, i);
+    });
+
+    const remapped = values.slice(1).map((row) => wanted.map((label) => {
+        const i = oldIndex.get(String(label).trim());
+        return i === undefined ? '' : (row[i] === undefined ? '' : row[i]);
+    }));
+
+    const body = [wanted, ...remapped];
+    await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${tabName}!A1:${columnLetterOf(wanted.length)}${body.length}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: body },
+    });
+    return { changed: true, rows_remapped: remapped.length };
+}
+
+// Local rather than imported: proformaSheetLog does not export its own.
+function columnLetterOf(n) {
+    let s = ''; let i = n;
+    while (i > 0) { const rem = (i - 1) % 26; s = String.fromCharCode(65 + rem) + s; i = Math.floor((i - 1) / 26); }
+    return s;
 }
 
 // The column letter the id lands in — computed, not counted by hand, because
@@ -117,12 +232,16 @@ async function logBillToSheet(bill) {
     // Creates "Shipment" the first time and backfills the header if a column
     // was added since — ensureTab already does both.
     await proforma.ensureTab(sheets, spreadsheetId, TAB_NAME, headerRow());
+    // ensureTab handles a NEW tab and an APPENDED column; this handles the
+    // case it explicitly refuses — a header whose order changed. Must run
+    // before the upsert, or the key column is read from the old layout.
+    const fixed = await reconcileHeader(sheets, spreadsheetId, TAB_NAME, headerRow());
 
     const res = await proforma.upsertRowsByKey(
         sheets, spreadsheetId, TAB_NAME, keyColumnLetter(),
-        [{ key: bill.id, row: rowFor(bill) }],
+        rowsFor(bill),
     );
-    return { ok: true, spreadsheetId, ...res };
+    return { ok: true, spreadsheetId, header_fixed: fixed.changed || false, ...res };
 }
 
 // ── COALESCED, BECAUSE AUTOSAVE TYPES ────────────────────────────────────
@@ -180,5 +299,6 @@ function writeNow(bill, why) {
         });
 }
 
-module.exports = { TAB_NAME, headerRow, rowFor, keyColumnLetter, logBillToSheet, logBillSafely,
+module.exports = { TAB_NAME, headerRow, rowFor, rowsFor, keyColumnLetter, reconcileHeader,
+    KEY_LABEL, logBillToSheet, logBillSafely,
     flushPending, COALESCE_MS };

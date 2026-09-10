@@ -2118,6 +2118,89 @@ section('V — what a container actually made');
     ck('staff cannot see margins', (await req('GET', '/api/margin', { sid: staff })).status === 403);
 }
 
+section('W — the Shipment tab: one row per grade, and the header that drifted');
+{
+    // Apsara, 2026-09-10, looking at her live sheet: "what the hell.headers
+    // in shipment of edge metals and data are not match..why this duplicate,
+    // only if same container -different item,it should be inserted-else
+    // update only".
+    const sh = require(path.join(ROOT, 'helpers/shipmentSheetLog'));
+
+    // ── ONE ROW PER GRADE ────────────────────────────────────────────────
+    const two = sh.rowsFor({ id: 'B1', booking_no: 'BK1', container_no: 'C1', supplier: 'S',
+        date: '09/09/2026', trucking_amount: 1200,
+        items: [{ id: 'I1', description: 'Al combo', weight: 15800, price: 0.41 },
+                { id: 'I2', description: 'Auto cast', weight: 11900, price: 0.38 }] });
+    ck('a two-grade container is two rows', two.length === 2, String(two.length));
+    ck('  keyed on the bill AND the grade, which is exactly her rule',
+       two.map((r) => r.key).join(',') === 'B1:I1,B1:I2',
+       'same container, different item inserts; anything else updates');
+    const head = sh.headerRow();
+    const at = (row, label) => row[head.indexOf(label)];
+    ck('  each row carries its OWN grade, not the container total with one name on it',
+       at(two[0].row, 'Item description') === 'Al combo'
+       && at(two[1].row, 'Item description') === 'Auto cast',
+       JSON.stringify([at(two[0].row, 'Item description'), at(two[1].row, 'Item description')]));
+    ck('  and its own weight', at(two[0].row, 'Net weight (lbs)') === 15800);
+    ck('  trucking is NOT repeated on every grade',
+       at(two[0].row, 'Trucking') === '' && at(two[1].row, 'Trucking') === '',
+       'three grades would otherwise look like three lots of haulage to anyone summing it');
+    ck('a bill with no grades is still one row, keyed on the bill alone',
+       sh.rowsFor({ id: 'B2', container_no: 'C2' }).map((r) => r.key).join('') === 'B2');
+
+    // ── THE HEADER AND THE ROW CANNOT DISAGREE ───────────────────────────
+    ck('the row is exactly as long as the header',
+       two[0].row.length === head.length, `${two[0].row.length} vs ${head.length}`);
+    ck('  and the key lands in the column the upsert reads',
+       (() => {
+           // keyColumnLetter is A..Z here; turn it back into an index.
+           const L = sh.keyColumnLetter();
+           let idx = 0;
+           for (const ch of L) idx = idx * 26 + (ch.charCodeAt(0) - 64);
+           return two[0].row[idx - 1] === 'B1:I1' && head[idx - 1] === sh.KEY_LABEL;
+       })(),
+       `key column ${sh.keyColumnLetter()} must hold the id, or every save appends`);
+
+    // ── AND A HEADER THAT DRIFTED IS REPAIRED, NOT LEFT ──────────────────
+    // ensureTab only backfills MISSING TRAILING cells and deliberately never
+    // reorders — right for an appended column, exactly wrong when the order
+    // changes, which is what put her data under the wrong headings.
+    const calls = [];
+    const fakeSheets = {
+        spreadsheets: {
+            values: {
+                get: async () => ({ data: { values: [
+                    ['Source/Destination', 'Date', 'Supplier', 'Bill ID (do not edit)'],
+                    ['LA / Busan', '09/09/2026', 'Inesh', 'B9'],
+                ] } }),
+                update: async (args) => { calls.push(args); return { data: {} }; },
+            },
+        },
+    };
+    const res = await sh.reconcileHeader(fakeSheets, 'SS', 'Shipment', head);
+    ck('a header in the wrong order is rewritten', res.changed === true, JSON.stringify(res));
+    ck('  and the rows under it are REMAPPED, not left misaligned',
+       res.rows_remapped === 1, JSON.stringify(res));
+    const written = calls[0].requestBody.values;
+    ck('    the new header goes in first', written[0].join('|') === head.join('|'));
+    ck('    every old value follows its own HEADING to its new column',
+       written[1][head.indexOf('Supplier')] === 'Inesh'
+       && written[1][head.indexOf('Date')] === '09/09/2026'
+       && written[1][head.indexOf(sh.KEY_LABEL)] === 'B9',
+       JSON.stringify(written[1]));
+    ck('    and a column the old sheet never had comes through blank',
+       written[1][head.indexOf('Payable')] === '',
+       'blank is honest; a shifted neighbour is not');
+
+    const same = await sh.reconcileHeader({
+        spreadsheets: { values: {
+            get: async () => ({ data: { values: [head, ['x']] } }),
+            update: async () => { throw new Error('must not rewrite a correct header'); },
+        } },
+    }, 'SS', 'Shipment', head);
+    ck('a header already correct is left alone', same.changed === false, JSON.stringify(same));
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
