@@ -1899,6 +1899,100 @@ section('T — several grades on one invoice');
        'by array index, deleting a middle line moves everything below it');
 }
 
+section('U — what the haulage is made of');
+{
+    // Apsara, 2026-09-10: "There should be a provision to view the detailed
+    // split on amount on clicking that row..Rate Line Haul Others Dry Run
+    // Extra Scale ..Here there should be note on others so that we can expand
+    // and view it more detail" — then she sent the spreadsheet she actually
+    // keeps, whose columns are Line Haul, Port Fees, Chassis Rent, Others,
+    // Net Amount.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
+
+    // Her own first row, reproduced: 650 + 55 + 0 + 100 = 805.
+    const hers = bills.compute({ trucking_split: {
+        invoice_no: '8727', line_haul: 650, port_fees: 55, chassis_rent: 0,
+        others: [{ what: 'Prepull', amount: 100, note: 'held overnight at the terminal' }],
+        verified_on: '2026-08-21',
+    } });
+    ck('her sheet\'s row adds up to her sheet\'s Net Amount',
+       hers.trucking_split.total === 805, String(hers.trucking_split.total));
+    ck('  with the parts named the way her sheet names them',
+       hers.trucking_split.parts.map((p) => p.label).join(',') === 'Line Haul,Port Fees,Chassis Rent',
+       JSON.stringify(hers.trucking_split.parts.map((p) => p.label)));
+    ck('  a zero part is kept, not dropped',
+       hers.trucking_split.parts.some((p) => p.key === 'chassis_rent' && p.amount === 0),
+       '0 on the sheet means checked and nil; missing means nobody looked');
+    ck('  and the trucker\'s own invoice number is not the supplier\'s',
+       hers.trucking_split.invoice_no === '8727',
+       'two documents, two numbers — one field for both is unreconcilable');
+    ck('her second row too',
+       bills.compute({ trucking_split: { line_haul: 650, port_fees: 55, chassis_rent: 45 } })
+            .trucking_split.total === 750);
+
+    // Dry Run and Extra Scale survive because she named them, even though the
+    // sheet folds them into Others today.
+    ck('the two she named are still parts',
+       bills.TRUCKING_PARTS.includes('dry_run') && bills.TRUCKING_PARTS.includes('extra_scale'),
+       bills.TRUCKING_PARTS.join(','));
+
+    // ── OTHERS MUST BE EXPLAINED ─────────────────────────────────────────
+    const noNote = () => { try { bills.cleanTruckingOthers([{ what: 'Permit', amount: 60 }]); return null; }
+                           catch (e) { return e.message; } };
+    ck('an Other with no note is refused', !!noNote(), noNote());
+    ck('  and says why that is the point of it',
+       /note/i.test(noNote() || ''), noNote());
+    ck('a blank Other row is not an error',
+       bills.cleanTruckingOthers([{ what: '', amount: null, note: '' }]).length === 0);
+    ck('every Other gets an id kept across saves',
+       (() => { const a = bills.cleanTruckingOthers([{ what: 'Permit', amount: 60, note: 'x' }]);
+                return bills.cleanTruckingOthers(a)[0].id === a[0].id; })());
+
+    // ── THE SPLIT DECIDES THE TOTAL ──────────────────────────────────────
+    const conflict = bills.compute({ supplier_invoice_amount: 5000,
+        trucking_amount: 1400, trucking_split: { line_haul: 900, port_fees: 200 } });
+    ck('the split is what the haulage costs', conflict.trucking_amount_used === 1100,
+       String(conflict.trucking_amount_used));
+    ck('  a typed total she also entered is kept and reported',
+       conflict.trucking_conflict === 300, String(conflict.trucking_conflict));
+    ck('  and Payable follows the split, not the stale figure',
+       conflict.net_payable === 3900, String(conflict.net_payable));
+    ck('a bill with no split works exactly as before',
+       bills.compute({ supplier_invoice_amount: 5000, trucking_amount: 1200 }).net_payable === 3800);
+
+    // An invoice number logged before the figures are known is not $0.
+    const early = bills.compute({ trucking_split: { invoice_no: '8899' } });
+    ck('an invoice logged before the figures is unpriced, not zero',
+       early.trucking_split.total === null, String(early.trucking_split.total));
+
+    // ── AND IT REACHES THE HAULAGE LIST ──────────────────────────────────
+    const saved = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '08/04/2026', supplier: 'Split Metals', container_no: 'KOCU4594653',
+        trucking_company: 'Mazariegos',
+        trucking_split: { invoice_no: '8727', line_haul: 650, port_fees: 55, chassis_rent: 0,
+                          others: [{ what: 'Prepull', amount: 100, note: 'held overnight' }],
+                          verified_on: '2026-08-21' },
+    } });
+    ck('a bill saves with its split', saved.status === 200, saved.raw);
+    ck('  and the haulage figure is the split\'s sum',
+       saved.json.bill.trucking_amount_used === 805, String(saved.json.bill.trucking_amount_used));
+    const row = mt.payables().find((r) => r.container_no === 'KOCU4594653');
+    ck('the haulage row carries the detail for the click-through',
+       !!row && (row.split.parts || []).length === 3, JSON.stringify(row && row.split && row.split.parts));
+    ck('  the others with their notes',
+       row.split.others[0].note === 'held overnight', JSON.stringify(row.split.others));
+    ck('  the trucker invoice number', row.trucker_invoice_no === '8727');
+    ck('  when it was last verified', row.verified_on === '2026-08-21');
+    ck('  and the row is payable for the split\'s total, not a typed one',
+       row.amount === 805 && row.status === 'unpaid', JSON.stringify([row.amount, row.status]));
+
+    const badOther = await req('POST', '/api/bills', { sid: admin, body: {
+        date: '08/04/2026', supplier: 'Split Metals',
+        trucking_split: { line_haul: 650, others: [{ what: 'Permit', amount: 60 }] } } });
+    ck('the ROUTE refuses an unexplained Other too', badOther.status === 400, badOther.raw);
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

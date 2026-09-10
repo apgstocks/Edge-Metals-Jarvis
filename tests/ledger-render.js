@@ -1457,15 +1457,25 @@ section('G9 — the Trucking tab');
     const posted = [];
     const seen = [];
     const ROWS = [
-        { bill_id: 'B1', date: '09/10/2026', month: '2026-09', booking_no: 'HB1',
+        { bill_id: 'B1', date: '09/10/2026', booking_no: 'HB1',
           container_no: 'HAULU1', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
-          amount: 1200, paid: 0, balance: 1200, status: 'unpaid' },
-        { bill_id: 'B2', date: '09/08/2026', month: '2026-09', booking_no: 'HB1',
+          amount: 805, paid: 0, balance: 805, status: 'unpaid', priced: true,
+          trucker_invoice_no: '8727', verified_on: '2026-08-21', conflict: null,
+          split: { parts: [{ key: 'line_haul', label: 'Line Haul', amount: 650 },
+                           { key: 'port_fees', label: 'Port Fees', amount: 55 },
+                           { key: 'chassis_rent', label: 'Chassis Rent', amount: 0 }],
+                   others: [{ what: 'Prepull', amount: 100, note: 'held overnight at the terminal' }],
+                   others_total: 100 } },
+        { bill_id: 'B4', date: '09/09/2026', booking_no: 'HB1',
+          container_no: 'HAULU4', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
+          amount: null, paid: 0, balance: 0, status: 'missing', priced: false,
+          missing: ['trucking amount'], split: null },
+        { bill_id: 'B2', date: '09/08/2026', booking_no: 'HB1',
           container_no: 'HAULU2', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
-          amount: 1200, paid: 400, balance: 800, status: 'part' },
-        { bill_id: 'B3', date: '09/02/2026', month: '2026-09', booking_no: 'HB2',
+          amount: 1200, paid: 400, balance: 800, status: 'part', priced: true, split: null },
+        { bill_id: 'B3', date: '09/02/2026', booking_no: 'HB2',
           container_no: 'HAULU3', supplier: 'Haul Metals', trucking_company: 'Bayou Haulage',
-          amount: 900, paid: 900, balance: 0, status: 'paid' },
+          amount: 900, paid: 900, balance: 0, status: 'paid', priced: true, split: null },
     ];
     const { w, dom } = await mount({
         '/api/metals-trucking': (q, opts) => {
@@ -1477,7 +1487,8 @@ section('G9 — the Trucking tab');
                      summary: { amount: rows.reduce((t, r) => t + r.amount, 0),
                                 paid: rows.reduce((t, r) => t + r.paid, 0),
                                 outstanding: rows.reduce((t, r) => t + r.balance, 0),
-                                unpaid_count: rows.filter((r) => r.status !== 'paid').length },
+                                unpaid_count: rows.filter((r) => r.status === 'unpaid' || r.status === 'part').length,
+                                missing_count: rows.filter((r) => r.status === 'missing').length },
                      total_unfiltered: ROWS.length,
                      facets: { trucking_company: ['Bayou Haulage', 'Sher Trucking'],
                                status: ['unpaid', 'part', 'paid'] },
@@ -1495,12 +1506,47 @@ section('G9 — the Trucking tab');
 
     let text = doc.getElementById('viewRoot').textContent;
     ck('every haul from the bills is listed',
-       doc.querySelectorAll('tr[data-bill]').length === 3,
+       doc.querySelectorAll('tr[data-bill]').length === 4,
        String(doc.querySelectorAll('tr[data-bill]').length));
     ck('  with what it came from', /HAULU1/.test(text) && /Haul Metals/.test(text) && /HB1/.test(text));
     ck('  its trucker', /Sher Trucking/.test(text));
-    ck('  and what is outstanding', /\$2,000\.00/.test(text), text.slice(0, 200));
+    ck('  and what is outstanding', /\$1,605\.00/.test(text), text.slice(0, 200));
     ck('a part-paid haul says so', /part/.test(text));
+    // ── THE FORGOTTEN ONE IS VISIBLE ─────────────────────────────────────
+    ck('a haul nobody priced is on the list, not hidden',
+       !!doc.querySelector('tr[data-bill="B4"]'),
+       'the first version left these out and made the mistake invisible');
+    ck('  reading "not entered" rather than a dash or a zero',
+       /not entered/.test(doc.querySelector('tr[data-bill="B4"]').textContent),
+       doc.querySelector('tr[data-bill="B4"]').textContent.replace(/\s+/g, ' ').trim());
+    ck('  flagged as needing an amount',
+       /no amount/.test(doc.querySelector('tr[data-bill="B4"]').textContent));
+    ck('  and counted on its own card',
+       /No amount yet/i.test(doc.getElementById('viewRoot').textContent));
+
+    // ── CLICK FOR THE SPLIT ──────────────────────────────────────────────
+    const detail = doc.querySelector('.trkDetail[data-for="B1"]');
+    ck('a haul with a split has one folded away', !!detail);
+    ck('  hidden until she asks', detail.style.display === 'none',
+       'five more columns is what made the first bill form unreadable');
+    doc.querySelector('tr[data-bill="B1"]').click();
+    await new Promise((r) => setTimeout(r, 20));
+    ck('clicking the row opens it', detail.style.display === 'table-row', detail.style.display);
+    const dt = detail.textContent;
+    ck('  showing the parts her sheet names',
+       /Line Haul/.test(dt) && /Port Fees/.test(dt) && /Chassis Rent/.test(dt), dt.slice(0, 160));
+    ck('  with their figures', /\$650\.00/.test(dt) && /\$55\.00/.test(dt));
+    ck('  Others totalled', /Others/.test(dt) && /\$100\.00/.test(dt));
+    ck('  and each Other explained, which is the whole point of it',
+       /held overnight at the terminal/.test(dt), dt.slice(0, 220));
+    ck('  the trucker\'s own invoice number', /8727/.test(dt));
+    ck('  and when it was last verified', /2026-08-21/.test(dt));
+    doc.querySelector('tr[data-bill="B1"]').click();
+    await new Promise((r) => setTimeout(r, 20));
+    ck('clicking again folds it back', detail.style.display === 'none');
+    ck('a haul with no split has nothing to open',
+       !doc.querySelector('.trkDetail[data-for="B2"]'),
+       'an empty drawer is a click that does nothing');
     ck('  and a settled one says paid', /paid/.test(text));
 
     // ── HER FOUR FILTERS REACH THE SERVER ────────────────────────────────
@@ -1518,14 +1564,14 @@ section('G9 — the Trucking tab');
     ck('choosing one asks the SERVER, not the browser',
        seen.some((q) => q.trucking_company === 'Sher Trucking'),
        JSON.stringify(seen));
-    ck('  and the table narrows', doc.querySelectorAll('tr[data-bill]').length === 2);
+    ck('  and the table narrows', doc.querySelectorAll('tr[data-bill]').length === 3);
     ck('  the cards narrow with it, so they describe what is on screen',
-       /\$2,400\.00/.test(doc.getElementById('viewRoot').textContent),
+       /\$2,005\.00/.test(doc.getElementById('viewRoot').textContent),
        'a summary over everything while the table shows a subset is what breaks a filter');
 
     doc.getElementById('trkClear').click();
     await new Promise((r) => setTimeout(r, 50));
-    ck('Clear puts everything back', doc.querySelectorAll('tr[data-bill]').length === 3);
+    ck('Clear puts everything back', doc.querySelectorAll('tr[data-bill]').length === 4);
 
     // ── PAY ──────────────────────────────────────────────────────────────
     doc.getElementById('btnPayTrucking').click();
@@ -1534,7 +1580,7 @@ section('G9 — the Trucking tab');
     const picks = [...doc.querySelectorAll('.trkWhoPick')];
     ck('  offering only those still owed money', picks.length === 1,
        picks.map((b) => b.dataset.company).join(','));
-    ck('  with what they are owed', /\$2,000\.00 owing/.test(picks[0].textContent),
+    ck('  with what they are owed', /\$1,605\.00 owing/.test(picks[0].textContent),
        picks[0].textContent.replace(/\s+/g, ' ').trim());
     picks[0].click();
     await new Promise((r) => setTimeout(r, 50));
@@ -1546,7 +1592,7 @@ section('G9 — the Trucking tab');
        /400\.00 paid of/.test(doc.querySelector('#trkRows tr[data-bill="B2"]').textContent));
 
     const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
-    doc.getElementById('trkAmount').value = '2000'; fire(doc.getElementById('trkAmount'), 'input');
+    doc.getElementById('trkAmount').value = '1605'; fire(doc.getElementById('trkAmount'), 'input');
     ck('  and refuses to save until it is allocated',
        doc.getElementById('trkSave').disabled === true);
     doc.querySelectorAll('.trkPick').forEach((cb) => { cb.checked = true; fire(cb, 'change'); });
@@ -1561,7 +1607,7 @@ section('G9 — the Trucking tab');
         ck('  naming the trucker', posted[0].trucking_company === 'Sher Trucking');
         ck('  and both containers', posted[0].allocations.length === 2);
         ck('  summing to what was sent',
-           posted[0].allocations.reduce((t, a) => t + a.amount, 0) === 2000);
+           posted[0].allocations.reduce((t, a) => t + a.amount, 0) === 1605);
     }
     await new Promise((r) => setTimeout(r, 40));
     dom.window.close();

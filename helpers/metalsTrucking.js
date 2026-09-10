@@ -86,7 +86,11 @@ function payables() {
     const out = [];
 
     for (const b of bills.listWithTotals()) {
-        const amount = num(b.trucking_amount);
+        // The USED figure — the split's sum when there is one, her typed
+        // total otherwise. Reading trucking_amount directly here would show
+        // the stale typed number beside a split that disagrees with it.
+        const amount = num(b.trucking_amount_used !== undefined
+            ? b.trucking_amount_used : b.trucking_amount);
         const company = String(b.trucking_company || '').trim();
         const priced = amount !== null && amount > 0;
         if (!priced && !company) continue;
@@ -106,6 +110,12 @@ function payables() {
             supplier: b.supplier || null,
             route: b.route || null,
             trucking_company: company || null,
+            // The detail behind the figure, so clicking a row can show it
+            // without a second request per row.
+            split: b.trucking_split || null,
+            trucker_invoice_no: (b.trucking_split && b.trucking_split.invoice_no) || null,
+            verified_on: (b.trucking_split && b.trucking_split.verified_on) || null,
+            conflict: b.trucking_conflict === undefined ? null : b.trucking_conflict,
             amount: priced ? amount : null,
             paid: already,
             balance,

@@ -5290,7 +5290,33 @@ async function renderMetalsTruckingTab() {
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${r.paid ? ledMoney(r.paid) : '—'}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${r.balance > 0.005 ? ledMoney(r.balance) : '—'}</td>
               <td style="padding:7px 9px;">${pill(r)}</td>
-            </tr>`).join('')
+            </tr>
+            ${r.split && (r.split.parts || []).length ? `
+            <tr class="trkDetail" data-for="${esc(r.bill_id)}" style="display:none; background:var(--surface-sunken);">
+              <td colspan="9" style="padding:10px 14px;">
+                <div style="display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start;">
+                  ${(r.split.parts || []).map((p) => `
+                    <div><div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(p.label)}</div>
+                      <div style="font-family:var(--font-mono); font-size:13px; margin-top:2px;">${ledMoney(p.amount)}</div></div>`).join('')}
+                  ${(r.split.others || []).length ? `
+                    <div style="min-width:220px;">
+                      <div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">Others · ${ledMoney(r.split.others_total)}</div>
+                      ${(r.split.others || []).map((o) => `
+                        <div style="margin-top:4px;">
+                          <span style="font-size:12px;">${esc(o.what)}</span>
+                          <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"> ${ledMoney(o.amount)}</span>
+                          <div style="font-size:11px; color:var(--text-muted); line-height:1.4;">${esc(o.note)}</div>
+                        </div>`).join('')}
+                    </div>` : ''}
+                  <div style="flex:1;"></div>
+                  <div style="text-align:right;">
+                    ${r.trucker_invoice_no ? `<div style="font-size:11px; color:var(--text-muted);">Trucker invoice ${esc(r.trucker_invoice_no)}</div>` : ''}
+                    ${r.verified_on ? `<div style="font-size:11px; color:var(--text-muted);">Verified ${esc(r.verified_on)}</div>` : ''}
+                    ${r.conflict ? `<div style="font-size:11px; color:var(--status-warn);">Typed total differs by ${ledMoney(r.conflict)}</div>` : ''}
+                  </div>
+                </div>
+              </td>
+            </tr>` : ''}`).join('')
             : `<tr><td colspan="9" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No bill names a trucker yet.'}</td></tr>`}</tbody>
         </table>
       </div>
@@ -5317,6 +5343,24 @@ async function renderMetalsTruckingTab() {
     const el = document.querySelector(`[data-trk-filter="${k}"]`);
     if (el) wireUsDateField(el);
   });
+  // ── CLICK A ROW FOR THE SPLIT ────────────────────────────────────────
+  // Apsara, 2026-09-10: "There should be a provision to view the detailed
+  // split on amount on clicking that row". Folded away rather than shown,
+  // because five more columns is the thing that made the first bill form
+  // unreadable — and most of the time the question is "what do I owe", not
+  // "what is it made of".
+  document.querySelectorAll('tr[data-bill]').forEach((tr) => {
+    const detail = document.querySelector(`.trkDetail[data-for="${tr.dataset.bill}"]`);
+    if (!detail) return;
+    tr.style.cursor = 'pointer';
+    tr.onclick = (e) => {
+      // Not when she is clicking something inside the row that does its own
+      // thing — a status pill today, a button tomorrow.
+      if (e.target.closest('button, a, input')) return;
+      detail.style.display = detail.style.display === 'none' ? 'table-row' : 'none';
+    };
+  });
+
   $('trkClear').onclick = () => { truckingFilters = {}; renderMetalsTruckingTab(); };
   $('btnPayTrucking').onclick = () => openTruckingPay(data);
 }

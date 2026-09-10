@@ -163,6 +163,95 @@ function cleanItems(input) {
     return out;
 }
 
+// ── WHAT THE HAULAGE IS ACTUALLY MADE OF ─────────────────────────────────
+// Apsara, 2026-09-10: "There should be a provision to view the detailed split
+// on amount on clicking that row..Rate Line Haul Others Dry Run Extra Scale
+// ..Here there should be note on others so that we can expand and view it
+// more detail".
+//
+// One number for haulage answers "how much" and never "why", and "why" is the
+// question when a trucker's invoice arrives $340 above the quote.
+//
+// ── THE PARTS ARE HER SPREADSHEET'S, NOT MY GUESS ───────────────────────
+// She first listed "Rate Line Haul Others Dry Run Extra Scale" and I took
+// Rate for a dollar line. Then she sent the sheet she actually keeps, whose
+// columns are Line Haul, Port Fees, Chassis Rent, Others, Net Amount — with
+// Line Haul at 650 on every row. So Rate IS Line Haul: the agreed price of
+// the move. Port Fees and Chassis Rent are what a drayage invoice really
+// carries and I had invented neither.
+//
+// Dry Run and Extra Scale are kept because she named them and they are real
+// events — a truck sent and turned away, a second weighing — even though her
+// sheet folds them into Others today.
+//
+// OTHERS stays a list, because the next thing is different every time and a
+// column named Others with no detail behind it is a number nobody can
+// defend. Each one carries a NOTE, required for the same reason the sales
+// charge note is: the line that cannot be explained is the one that gets
+// written off.
+const TRUCKING_PARTS = ['line_haul', 'port_fees', 'chassis_rent', 'dry_run', 'extra_scale'];
+
+// Labels, so the form and the expanded row read the way her sheet does
+// rather than the way the keys are spelled.
+const TRUCKING_PART_LABELS = {
+    line_haul: 'Line Haul', port_fees: 'Port Fees', chassis_rent: 'Chassis Rent',
+    dry_run: 'Dry Run', extra_scale: 'Extra Scale',
+};
+
+function cleanTruckingOthers(input) {
+    const out = [];
+    for (const o of (Array.isArray(input) ? input : [])) {
+        if (!o) continue;
+        const what = String(o.what || '').trim();
+        const amount = round2(num(o.amount));
+        const note = String(o.note || o.why || '').trim();
+        if (!what && amount === null && !note) continue;         // a blank row
+        if (!what) throw new Error('an other charge needs a name — what is it for?');
+        if (amount === null) throw new Error(`"${what}" needs an amount`);
+        if (!note) throw new Error(`"${what}" needs a note saying what it was — that is the whole point of it being an Other`);
+        const id = String(o.id || '').trim()
+            || `TRK_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+        out.push({ id, what, amount, note });
+    }
+    return out;
+}
+
+function cleanTruckingSplit(input) {
+    const t = input || {};
+    const out = {};
+    let any = false;
+    for (const k of TRUCKING_PARTS) {
+        const v = num(t[k]);
+        out[k] = v;
+        if (v !== null) any = true;
+    }
+    // The trucker's OWN invoice number — her sheet's "Invoice No." column, and
+    // not the supplier's invoice_no already on the bill. Two documents, two
+    // numbers, and one field for both would make the pair unreconcilable.
+    out.invoice_no = String(t.invoice_no || '').trim() || null;
+    // Her "Last Verified": who checked this against the trucker's invoice and
+    // when. Recorded rather than computed — it is a statement about a human
+    // having looked, which nothing here can infer.
+    out.verified_on = String(t.verified_on || '').trim() || null;
+    if (out.invoice_no || out.verified_on) any = true;
+
+    out.others = cleanTruckingOthers(t.others);
+    if (out.others.length) any = true;
+    out.present = any;
+    out.others_total = round2(out.others.reduce((s, o) => s + (o.amount || 0), 0)) || 0;
+    // Present-but-unpriced is possible: an invoice number logged before the
+    // figures are known. That is a total of null, not zero — the same
+    // distinction the haulage list draws between "priced at nothing" and
+    // "nobody has filled this in".
+    const anyMoney = TRUCKING_PARTS.some((k) => out[k] !== null) || out.others.length > 0;
+    out.total = !anyMoney ? null
+        : round2(TRUCKING_PARTS.reduce((s, k) => s + (out[k] || 0), 0) + out.others_total);
+    out.parts = TRUCKING_PARTS
+        .filter((k) => out[k] !== null)
+        .map((k) => ({ key: k, label: TRUCKING_PART_LABELS[k], amount: out[k] }));
+    return out;
+}
+
 function compute(input) {
     const b = input || {};
     const gross = num(b.gross);
@@ -251,7 +340,17 @@ function compute(input) {
     const stated = num(b.supplier_invoice_amount);
     const amountUsed = stated !== null ? stated : amount;
 
-    const trucking = num(b.trucking_amount);
+    // ── THE SPLIT DECIDES THE TOTAL ──────────────────────────────────────
+    // Once there is a split, the haulage figure is its sum and stops being
+    // typed. Anything she typed is KEPT and reported, never overwritten —
+    // same rule as the container weight and the supplier invoice amount.
+    let split = { present: false, others: [], others_total: 0, total: null };
+    try { split = cleanTruckingSplit(b.trucking_split); } catch (e) { /* reported on save */ }
+    const typedTrucking = num(b.trucking_amount);
+    const trucking = (split.present && split.total !== null) ? split.total : typedTrucking;
+    const truckingConflict = (split.present && typedTrucking !== null && split.total !== null
+        && Math.abs(typedTrucking - split.total) >= 0.005)
+        ? round2(typedTrucking - split.total) : null;
 
     // ── BALANCE IS WHAT IS STILL OWED ────────────────────────────────────
     // Her formula on 2026-09-09 was "Amount − Trucking − Advance". She then
@@ -319,6 +418,9 @@ function compute(input) {
         computed_amount: amount,
         amount: amountUsed,
         net_payable: netPayable,
+        trucking_split: split,
+        trucking_amount_used: trucking,
+        trucking_conflict: truckingConflict,
         amount_is_stated: stated !== null,
         amount_differs: (stated !== null && amount !== null && Math.abs(stated - amount) >= 0.01)
             ? round2(stated - amount) : null,
@@ -634,7 +736,7 @@ function groupColumns(groupId) {
 // or computed. The arithmetic had been right the whole time and one of her
 // columns simply could not be filled in.
 const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)
-    .concat(['supplier_invoice_amount', 'price_unit', 'note', 'items']);
+    .concat(['supplier_invoice_amount', 'price_unit', 'note', 'items', 'trucking_split']);
 
 // ── A PASTED LINK IS RENDERED, SO IT IS CHECKED ──────────────────────────
 // These come back out into the table as clickable links. A "javascript:..."
@@ -676,6 +778,9 @@ function clean(input) {
     // still remembers what she meant to type — not silently dropped from a
     // total she reads a week later.
     if ('items' in out) out.items = cleanItems(out.items);
+    // Validated on the way IN so an Other with no note fails while she still
+    // remembers what it was, rather than becoming an unexplained line later.
+    if ('trucking_split' in out) out.trucking_split = cleanTruckingSplit(out.trucking_split);
     return out;
 }
 
@@ -780,4 +885,5 @@ module.exports = {
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
     cleanItems,
     groupColumns,
+    cleanTruckingSplit, cleanTruckingOthers, TRUCKING_PARTS, TRUCKING_PART_LABELS,
 };
