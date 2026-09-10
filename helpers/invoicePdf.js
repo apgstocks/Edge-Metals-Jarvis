@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
+const { round2 } = require('./money');
 
 const TEMPLATE_DIR = path.join(__dirname, '..', 'assets', 'invoice-classic');
 
@@ -215,7 +216,15 @@ function buildInvoiceClassicHtml(data) {
     const itemRowsHtml = lineItems.map((item, i) => {
         const qty = Number(item.weight) || 0;
         const rate = Number(item.rate) || 0;
-        const amount = Number(item.amount != null ? item.amount : qty * rate);
+        // ── ROUNDED, LIKE ITS TWO SISTER FILES ───────────────────────
+        // helpers/invoiceSheet.js and helpers/proformaPdf.js both wrap this
+        // in round2; this one lost it in 7f16c64 "invoice change". 29,000 lb
+        // at $0.41 is 11889.999999999998 in floating point, and this figure
+        // goes on a document a customer pays against. Her own figure, when
+        // she has typed one, still wins untouched.
+        const amount = item.amount != null
+            ? Number(item.amount)
+            : round2(qty * rate);
         // Booking#/Container#/Seal# use a smaller 8.5pt (was 8pt, bumped
         // one step less than the other columns' +1pt) + tighter padding
         // and nowrap+hidden-overflow — real Helvetica (reportlab) renders
@@ -337,6 +346,19 @@ function buildInvoiceClassicHtml(data) {
         item_rows: itemRowsHtml.join('\n'),
         notes_rows: notesRowsHtml,
         final_amount_fmt: formatMoney2(finalAmount),
+        // ── ONE SIGNATURE FILE, TWO PRESENTATIONS ────────────────────────
+        // 7f16c64 replaced the shared {{signature_block}} with the image
+        // pasted inline as base64. Understandable: the shared block is
+        // left-aligned at 34px and her new layout needs it centred at 8mm in
+        // a table cell, so the block did not fit and the image did.
+        //
+        // Her MARKUP is kept exactly — the wrapper, the sizing, the centring
+        // are hers. Only the src comes from helpers/signature.js now, so the
+        // invoice and the proforma cannot end up showing different
+        // signatures the day the file is replaced. That drift is the whole
+        // reason ab3cf26 unified them in the first place.
+        signature_src: require('./signature').signatureDataUrl() || '',
+        signature_block: require('./signature').signatureBlockHtml(),
         packing_rows: packingRowsHtml.join('\n'),
         total_net_lbs_fmt: formatInt(totalNetLbs),
         total_net_mt_fmt: totalNetMt.toFixed(3),
@@ -366,11 +388,29 @@ async function renderModes(html, modes, opts) {
                 document.body.classList.remove('only-invoice', 'only-packing');
                 if (m) document.body.classList.add(m);
             }, mode === 'both' ? null : `only-${mode}`);
-            const pdf = await page.pdf({
+            // ── ONE PAGE, PER MODE ───────────────────────────────────
+            // Restored 2026-09-10. e20d8a1 "separate inv and packing list"
+            // rewrote this into a loop over modes and the fitter did not come
+            // with it — the invoice went back to spilling a near-empty second
+            // page, which is what pdfFittedToOnePage was written for on
+            // 2026-08-29. Read as an accidental drop rather than a decision:
+            // that commit is about SEPARATING two documents, and the proforma
+            // path a few files away still fits to one page.
+            //
+            // Inside the loop deliberately. Each mode is a different amount of
+            // content — the invoice alone, the packing list alone, or both —
+            // so each needs measuring on its own. Fitting once outside would
+            // scale all three by whatever the longest one needed.
+            const { pdfFittedToOnePage } = require('./pdfFit');
+            const pdf = await pdfFittedToOnePage(page, {
                 width: '816px',
                 printBackground: true,
                 preferCSSPageSize: true,
-            });
+                // Its @page is 210mm x 297mm — real A4 — and the fitter
+                // measures against that, not against the 816px width above.
+                // Saying only the width let it default to 297 by luck rather
+                // than by statement.
+            }, { pageHeightMm: 297, pageWidthMm: 210, label: `invoice ${mode}` });
             // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
             // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
             out[mode] = Buffer.from(pdf);

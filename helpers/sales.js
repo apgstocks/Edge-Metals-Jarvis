@@ -278,7 +278,11 @@ const COLUMNS = [
       hint: 'LC or TT — when the money moves' },
     { key: 'shipment_terms',  label: 'Shipment terms', group: 'shipment', choices: SHIPMENT_TERMS,
       suggest: true, hint: 'FOB, CFR, CIF … — where your responsibility ends' },
-    { key: 'item',            label: 'Item',           group: 'shipment', suggest: true },
+    // In its own group so the FORM renders the line editor beside it — the
+    // same group id bills uses, which is what dashboard/index.html keys the
+    // item table on. Without it the backend took multi-grade sales and the
+    // form had nowhere to type them, which is where this sat for a day.
+    { key: 'item',            label: 'Item',           group: 'items', suggest: true },
 
     { key: 'customer',       label: 'Customer name',  group: 'customer', suggest: true },
     { key: 'date',           label: 'Date',           group: 'customer', date: true },
@@ -330,10 +334,24 @@ const GROUPS = [
     { id: 'shipment',  label: 'Shipment' },
     { id: 'customer',  label: 'Customer' },
     { id: 'documents', label: 'Documents' },
+    // Apsara, 2026-09-10: "boss what if i have multiple items in sales under
+    // the same container". compute() has taken them since this morning; this
+    // is the group the form hangs the line editor off, exactly as bills does.
+    { id: 'items',     label: 'Items and weights', full: true, keys: ['item'] },
     { id: 'money',     label: 'Weight & money' },
 ];
 
 const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
+
+// Same helper bills has, so the form can walk a group in the order the group
+// states rather than in COLUMNS order.
+function groupColumns(groupId) {
+    const g = GROUPS.find((x) => x.id === groupId);
+    if (g && Array.isArray(g.keys)) {
+        return g.keys.map((k) => COLUMNS.find((c) => c.key === k)).filter(Boolean);
+    }
+    return COLUMNS.filter((c) => c.group === groupId);
+}
 
 // A sale's own filterable columns. NOT bills' — a sale has a customer and an
 // HBL number where a bill has a supplier and a container number, and reusing
@@ -570,4 +588,5 @@ module.exports = {
     compute, withTotals, list, listWithTotals, getSale,
     addSale, editSale, deleteSale, summary,
     sortRows, duplicates, cleanCharges, CHARGE_DIRECTIONS, TERMS, SHIPMENT_TERMS,
+    groupColumns,
 };

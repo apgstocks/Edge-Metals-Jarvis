@@ -1783,6 +1783,66 @@ section('G11 — typing the item lines and the haulage split');
     dom.window.close();
 }
 
+section('G12 — several grades on a sale, typed on the form');
+{
+    // Apsara, 2026-09-10: "boss what if i have multiple items in sales under
+    // the same container". helpers/sales.compute has taken lines since this
+    // morning — what was missing is that the SALES form had no items group,
+    // so the editor rendered nowhere and they could only be posted through
+    // the API. Backend support with no way to type it is not the feature.
+    const saves = [];
+    const SROWS = [];
+    const { w, dom } = await mount({
+        '/api/sales': () => ({ sales: SROWS, summary: sales.summary(SROWS),
+            columns: sales.tableColumns(), fields: sales.COLUMNS, groups: sales.GROUPS,
+            facets: sales.facets(SROWS), filterable: sales.FILTERABLE, total_unfiltered: 0 }),
+        '/api/sales/preview': () => sales.compute({}),
+        '/api/bills': billsRoute,
+    });
+    const doc = w.document;
+    const realApi = w.api;
+    w.api = async (p, opts) => {
+        if (opts && opts.method) { saves.push(JSON.parse(opts.body || '{}')); return { ok: true, sale: { id: 'S9' } }; }
+        return realApi(p, opts);
+    };
+    await w.renderLedgerTab('sales');
+    w.openLedgerForm('sales');
+
+    ck('the sale form has an item editor too',
+       !!doc.getElementById('ledItemsBox'),
+       'the backend took lines all day and the form had nowhere to type them');
+    doc.getElementById('ledItemAdd').click();
+    doc.getElementById('ledItemAdd').click();
+    ck('  two grades on one container', doc.querySelectorAll('#ledItemsBox [data-item]').length === 2);
+
+    const fire = (el) => el.dispatchEvent(new w.Event('input', { bubbles: true }));
+    const setIt = (i, f, v) => {
+        const el = doc.querySelector(`#ledItemsBox input[data-i="${i}"][data-f="${f}"]`);
+        el.value = v; fire(el);
+    };
+    setIt(0, 'description', 'Al combo'); setIt(0, 'weight', '15800'); setIt(0, 'price', '0.41');
+    setIt(1, 'description', 'Auto cast'); setIt(1, 'weight', '11900'); setIt(1, 'price', '0.38');
+    ck('  each is invoiced on its own weight and price',
+       /6,478\.00/.test(doc.querySelector('#ledItemsBox [data-item="0"]').textContent)
+       && /4,522\.00/.test(doc.querySelector('#ledItemsBox [data-item="1"]').textContent),
+       doc.getElementById('ledItemsBox').textContent.replace(/\s+/g, ' ').slice(0, 200));
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const body = saves.filter((b) => b.items).pop();
+    ck('the lines reach the server', body && body.items.length === 2, JSON.stringify(body && body.items));
+    ck('  and a sale line takes a ticket exactly as a bill line does',
+       !!doc.querySelector('.ledItemTicket[data-i="0"]'),
+       'one cleanItems, one editor, both sides');
+
+    // The Item box above the lines is still there for the one-grade case.
+    ck('a single-grade sale still has its plain Item box',
+       !!doc.querySelector('#ledgerForm [name="item"]'));
+
+    doc.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

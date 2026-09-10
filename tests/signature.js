@@ -52,7 +52,16 @@ const sig = require(path.join(R, 'helpers', 'signature.js'));
     const invoiceTpl = fs.readFileSync(path.join(R, 'assets/invoice-classic/template.html'), 'utf8');
     const proformaTpl = fs.readFileSync(path.join(R, 'assets/proforma-dc2/template.html'), 'utf8');
 
-    ck('the invoice template has a signature slot', invoiceTpl.includes('{{signature_block}}'));
+    // ── ONE FILE, TWO PRESENTATIONS ──────────────────────────────────────
+    // 7f16c64 replaced the shared block with the image pasted inline as
+    // base64, because her new layout needs it centred at 8mm in a table cell
+    // and the shared block is left-aligned at 34px. Her markup stayed; only
+    // the src is substituted now. So the assertion is no longer "the invoice
+    // uses the shared BLOCK" — it is "the invoice's signature comes from the
+    // shared FILE", which is the thing that actually matters.
+    ck('the invoice template takes its signature from the shared file',
+       invoiceTpl.includes('{{signature_src}}') || invoiceTpl.includes('{{signature_block}}'),
+       'a second copy drifts the day the signature is replaced');
     ck('the proforma template has a signature slot', proformaTpl.includes('{{signature_block}}'));
     ck('the invoice no longer carries a duplicate inline copy',
        !invoiceTpl.includes('data:image/png;base64'));
@@ -62,7 +71,15 @@ const sig = require(path.join(R, 'helpers', 'signature.js'));
     // the proforma had for months.
     const invoiceSrc = fs.readFileSync(path.join(R, 'helpers/invoicePdf.js'), 'utf8');
     const proformaSrc = fs.readFileSync(path.join(R, 'helpers/proformaPdf.js'), 'utf8');
-    ck('invoicePdf.js fills the slot', /signature_block:\s*require\('\.\/signature'\)/.test(invoiceSrc));
+    ck('invoicePdf.js fills the slot',
+       /signature_(block|src):\s*require\('\.\/signature'\)/.test(invoiceSrc));
+    ck('  and nothing is left unsubstituted in the rendered invoice',
+       (() => {
+           const { buildInvoiceClassicHtml } = require(path.join(R, 'helpers/invoicePdf'));
+           const out = buildInvoiceClassicHtml({ items: [{ description: 'X', weight: 100, rate: 1 }] });
+           return !out.html.includes('{{signature') && /<img src="data:image\/png;base64,[A-Za-z0-9+/=]{100,}/.test(out.html);
+       })(),
+       'a slot with nothing filling it is exactly the bug this file was written about');
     ck('proformaPdf.js fills the slot', /require\('\.\/signature'\)\.signatureBlockHtml\(\)/.test(proformaSrc));
     ck('proformaPdf.js no longer hardcodes an empty spacer',
        !/const signatureBlock = '<div style="height:34px/.test(proformaSrc));
