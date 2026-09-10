@@ -674,9 +674,10 @@ section('G2 — the Pay form: one transfer, several containers');
     const PAY_ROUTE = {
         payments: [], summary: { total: 0 },
         open_bills: [
-            { id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1111111', balance: 3440 },
-            { id: 'B2', supplier: 'Eccomelt', container_no: 'HMMU2222222', balance: 3440 },
-            { id: 'B3', supplier: 'Oakland Metals', container_no: 'TGHU3333333', balance: 120 },
+            { id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1111111', balance: 3440, amount: 3440, paid: 0 },
+            { id: 'B2', supplier: 'Eccomelt', container_no: 'HMMU2222222', balance: 3440, amount: 4000, paid: 560 },
+            { id: 'B3', supplier: 'Eccomelt', container_no: 'TGHU3333333', balance: 120, amount: 120, paid: 0 },
+            { id: 'B9', supplier: 'Oakland Metals', container_no: 'OAKU9999999', balance: 500, amount: 500, paid: 0 },
         ],
         credit: { Eccomelt: 1680 },
         modes: require(path.join(ROOT, 'helpers/billPayments')).BILL_PAYMENT_MODES,
@@ -709,18 +710,52 @@ section('G2 — the Pay form: one transfer, several containers');
        (html.match(/id="payModal"/g) || []).length === 1,
        'two #payModal means close() deletes the wrong one');
 
+    // ── IT ASKS WHO IS BEING PAID FIRST ──────────────────────────────
+    // Apsara, 2026-09-10: "It must ask to select the supplier first."
     await w.openBillPayForm();
+    ck('it asks for the supplier before anything else', !!doc.getElementById('bpWho'));
+    ck('  and no payment form is up yet', !doc.getElementById('bpModal'),
+       'the container list is meaningless until it knows whose it is');
+    const who = [...doc.querySelectorAll('.bpWhoPick')];
+    ck('  every supplier with something outstanding is offered', who.length === 2,
+       who.map((b) => b.dataset.supplier).join(','));
+    ck('  saying how much is pending against each',
+       /\$7,000\.00 pending/.test(who[0].textContent) && /3 containers/.test(who[0].textContent),
+       who[0].textContent.replace(/\s+/g, ' ').trim());
+    ck('  biggest first, because that is the one she is here about',
+       who[0].dataset.supplier === 'Eccomelt', who[0].dataset.supplier);
+    ck('  and the credit she is already holding',
+       /1,680/.test(who[0].textContent), 'an advance she cannot see is an advance she pays twice');
+    ck('  with a box for a supplier who has no open containers',
+       !!doc.getElementById('bpWhoOther'),
+       'an advance is usually paid before any bill exists');
+
+    who[0].click();
+    await new Promise((r) => setTimeout(r, 40));
     const m = doc.getElementById('bpModal');
-    ck('the form opens', !!m);
-    ck('  listing every container still owing', doc.querySelectorAll('#bpRows tr[data-bill]').length === 3);
+    ck('choosing one opens the payment form', !!m);
+    ck('  and the picker is gone', !doc.getElementById('bpWho'));
+    ck('  the supplier is filled in for her',
+       doc.getElementById('bpSupplier').value === 'Eccomelt',
+       doc.getElementById('bpSupplier').value);
+    ck('  and not retypeable, so it cannot drift from what she picked',
+       doc.getElementById('bpSupplier').readOnly === true);
+    ck('  listing only that supplier\'s containers',
+       doc.querySelectorAll('#bpRows tr[data-bill]').length === 3,
+       [...doc.querySelectorAll('#bpRows tr[data-bill]')].map((r) => r.dataset.bill).join(','));
+    ck('  another supplier\'s container is not on the list',
+       !doc.querySelector('#bpRows tr[data-bill="B9"]'),
+       'a wire to Eccomelt against an Oakland container is a false statement about who was paid');
     ck('  with the amount owed shown per container',
        /\$3,440\.00/.test(doc.getElementById('bpRows').textContent));
-    ck('  and the supplier credit she already has',
-       /1,680/.test(m.textContent), 'an advance she cannot see is an advance she pays twice');
+    ck('  a part-paid one says how much is already in',
+       /560\.00 paid of/.test(doc.querySelector('#bpRows tr[data-bill="B2"]').textContent),
+       doc.querySelector('#bpRows tr[data-bill="B2"]').textContent.replace(/\s+/g, ' ').trim());
+    ck('  and the total pending is stated once',
+       /\$7,000\.00 pending across 3 containers/.test(doc.getElementById('bpPending').textContent),
+       doc.getElementById('bpPending').textContent);
     ck('  the date defaults to today', /^\d\d\/\d\d\/\d{4}$/.test(doc.getElementById('bpDate').value));
-    ck('  supplier offers what she has typed before',
-       !!doc.querySelector('#bplist-supplier option[value="Eccomelt"]'),
-       'ledlist-* only exist while the BILL form is mounted');
+    ck('  and she can go back and change supplier', !!doc.getElementById('bpWhoAgain'));
 
     const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
 
@@ -795,16 +830,16 @@ section('G2 — the Pay form: one transfer, several containers');
            Math.abs(body.allocations.reduce((s, a) => s + a.amount, 0) - 7000) < 0.005);
         ck('  and it is a payment, not an advance', body.kind === 'payment');
         ck('  carrying the bank, which Zelle and Wire require', body.bank === 'Chase');
+        ck('  and the supplier she chose at the door', body.supplier === 'Eccomelt', body.supplier);
     }
     ck('a successful save closes the form', !doc.getElementById('bpModal'));
     await new Promise((r) => setTimeout(r, 40));
 
     // The advance path: same form, no containers ticked.
-    await w.openBillPayForm();
+    await w.openBillPayForm({ supplier: 'Eccomelt' });
     const a2 = doc.getElementById('bpAmount');
     a2.value = '5000'; fire(a2, 'input');
     doc.getElementById('bpBank').value = 'Chase';
-    doc.getElementById('bpSupplier').value = 'Eccomelt';
     ck('an unallocated amount cannot be saved as a payment',
        doc.getElementById('bpSave').disabled === true);
     ck('  but Save as advance is always available',
@@ -819,7 +854,7 @@ section('G2 — the Pay form: one transfer, several containers');
        (posted[1].allocations || []).length === 0,
        'her answer was "I choose when to apply it"');
 
-    await w.openBillPayForm();
+    await w.openBillPayForm({ supplier: 'Eccomelt' });
     doc.getElementById('bpClose').click();
     await new Promise((r) => setTimeout(r, 40));
     ck('close removes the form', !doc.getElementById('bpModal'));
@@ -872,7 +907,7 @@ section('G3 — spending an advance she already paid');
     });
     const doc = w.document;
     await w.renderLedgerTab('bills');
-    await w.openBillPayForm();
+    await w.openBillPayForm({ supplier: 'Eccomelt' });
 
     const link = doc.querySelector('.bpApply[data-supplier="Eccomelt"]');
     ck('the credit she holds is a button, not just a number', !!link);
@@ -963,7 +998,7 @@ section('G4 — deleting a payment, and saying what that undoes');
     };
     const doc = w.document;
     await w.renderLedgerTab('bills');
-    await w.openBillPayForm();
+    await w.openBillPayForm({ supplier: 'Eccomelt' });
 
     ck('the payments already recorded are listed',
        doc.querySelectorAll('#bpModal div[data-payment]').length === 2,

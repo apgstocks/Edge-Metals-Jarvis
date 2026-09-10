@@ -145,9 +145,20 @@ function creditBySupplier() {
 // Allocations are checked BEFORE anything is written: an allocation naming a
 // bill that does not exist, or adding up to more than the payment, is a
 // mistake worth refusing rather than storing and reporting oddly forever.
-function cleanAllocations(input, amount, { allowUnallocated = false } = {}) {
+// Two names for the same supplier is a data-entry question, not a matching
+// question — the Bills form type-aheads off the values already stored, so the
+// string she picks IS the string on the bill. Compared case- and
+// whitespace-insensitively only, deliberately: anything fuzzier would start
+// deciding that "Eccomelt" and "Eccomelt LLC" are one company, which is a
+// judgement no payment route should be making on its own.
+const sameSupplier = (a, b) =>
+    String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+function cleanAllocations(input, amount, { allowUnallocated = false, supplier = null } = {}) {
     const bills = require('./bills');
-    const known = new Set(bills.list().map((b) => b.id));
+    const all = bills.list();
+    const known = new Set(all.map((b) => b.id));
+    const byId = new Map(all.map((b) => [b.id, b]));
     const out = [];
     for (const a of (input || [])) {
         const billId = String((a && a.bill_id) || '').trim();
@@ -155,6 +166,23 @@ function cleanAllocations(input, amount, { allowUnallocated = false } = {}) {
         if (!billId) continue;
         if (amt === null || amt <= 0) continue;
         if (!known.has(billId)) throw new Error(`no bill ${billId}`);
+        // ── ONE PAYMENT, ONE SUPPLIER ────────────────────────────────────
+        // Apsara, 2026-09-10: "It must ask to select the supplier first...
+        // Then show only related supplier container".
+        //
+        // The picker in dashboard/index.html only offers containers belonging
+        // to the supplier she chose. This is the same rule stated where it is
+        // enforced rather than where it is displayed — the trucker-bill route
+        // learned that the hard way ("Written at the same time as the button
+        // this time"). A wire marked Eccomelt sitting against an Oakland
+        // Metals container is not a UI slip; it is a supplier statement that
+        // is false, and it would silently settle the wrong company's invoice.
+        if (supplier) {
+            const b = byId.get(billId);
+            if (b && !sameSupplier(b.supplier, supplier)) {
+                throw new Error(`container ${b.container_no || billId} belongs to ${b.supplier || 'no supplier'}, not ${supplier}`);
+            }
+        }
         const already = out.find((x) => x.bill_id === billId);
         if (already) already.amount = round2(already.amount + amt);
         else out.push({ bill_id: billId, amount: round2(amt) });
@@ -221,8 +249,18 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
     if (advance && !String(input.supplier || '').trim()) {
         throw new Error('an advance needs a supplier — it is credit against them until you apply it');
     }
+    // A payment names its supplier too, as of 2026-09-10: the form asks who
+    // is being paid BEFORE anything else, so there is no longer a path that
+    // legitimately leaves this blank, and an unnamed payment is one that
+    // cannot be checked against the containers it claims to settle.
+    if (!advance && !String(input.supplier || '').trim()) {
+        throw new Error('a payment needs a supplier — choose who is being paid');
+    }
 
-    const allocations = cleanAllocations(input.allocations, amount, { allowUnallocated: advance });
+    const allocations = cleanAllocations(input.allocations, amount, {
+        allowUnallocated: advance,
+        supplier: String(input.supplier || '').trim() || null,
+    });
 
     const rec = {
         id: newId(),
@@ -272,8 +310,11 @@ async function applyAdvance(paymentId, allocations = []) {
         const amount = num(rows[i].amount) || 0;
         let merged;
         try {
+            // Bound to the advance's OWN supplier, not to whatever the
+            // caller sent: credit paid to one supplier cannot settle
+            // another's container, and this is the route that would let it.
             merged = cleanAllocations([...(rows[i].allocations || []), ...allocations], amount,
-                                      { allowUnallocated: true });
+                                      { allowUnallocated: true, supplier: rows[i].supplier || null });
         } catch (e) { problem = e.message; return rows; }
         rows[i] = { ...rows[i], allocations: merged, updated_at: new Date().toISOString() };
         out = rows[i];
@@ -320,5 +361,5 @@ module.exports = {
     list, allocationsFor, paidFor, paidByBill,
     advancesFor, advanceCredit, creditBySupplier,
     addBillPayment, addAdvance, applyAdvance, deleteBillPayment, summary,
-    cleanAllocations,
+    cleanAllocations, sameSupplier,
 };

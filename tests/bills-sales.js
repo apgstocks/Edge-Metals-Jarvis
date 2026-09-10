@@ -793,6 +793,89 @@ section('L — cash, and the yard cash box it must not touch');
        `${before} -> ${petty.balance()} — the yard rule must be untouched`);
 }
 
+section('M — one payment, one supplier, enforced where it is not displayed');
+{
+    // Apsara, 2026-09-10: "It must ask to select the supplier first... Then
+    // show only related supplier container which are unpaid/part paid."
+    //
+    // The picker is the easy half and it is not enforcement. These drive the
+    // ROUTE, which the yard assistant and anything else can reach without
+    // going near the form.
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const bp = require(path.join(ROOT, 'helpers/billPayments'));
+
+    const mk = async (supplier, container) => (await req('POST', '/api/bills', { sid: admin, body: {
+        date: '09/10/2026', supplier, container_no: container,
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0,
+        supplier_price: 0.25,
+    } })).json.bill;
+    const eccoA = await mk('Sortby Eccomelt', 'SORT1');
+    const eccoB = await mk('Sortby Eccomelt', 'SORT2');
+    const oak   = await mk('Sortby Oakland', 'SORT3');
+
+    const crossed = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 500, mode: 'Wire', bank: 'Chase',
+        supplier: 'Sortby Eccomelt',
+        allocations: [{ bill_id: oak.id, amount: 500 }],
+    } });
+    ck('a payment cannot settle another supplier\'s container', crossed.status === 400, crossed.raw);
+    ck('  and the refusal names both sides',
+       /Sortby Oakland/.test(crossed.json.error || '') && /SORT3/.test(crossed.json.error || ''),
+       crossed.json.error);
+    ck('  nothing was recorded', (bp.paidByBill()[oak.id] || 0) === 0);
+
+    const half = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 1000, mode: 'Wire', bank: 'Chase',
+        supplier: 'Sortby Eccomelt',
+        allocations: [{ bill_id: eccoA.id, amount: 600 }, { bill_id: eccoB.id, amount: 400 }],
+    } });
+    ck('the same payment across that supplier\'s own containers is fine', half.status === 200, half.raw);
+
+    // Case and stray spaces are typing, not a different company.
+    const spaced = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 100, mode: 'Wire', bank: 'Chase',
+        supplier: '  sortby eccomelt ',
+        allocations: [{ bill_id: eccoA.id, amount: 100 }],
+    } });
+    ck('  and case or a stray space is not a different supplier', spaced.status === 200, spaced.raw);
+
+    const nameless = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        date: '09/10/2026', amount: 100, mode: 'Wire', bank: 'Chase',
+        allocations: [{ bill_id: eccoA.id, amount: 100 }],
+    } });
+    ck('a payment with no supplier at all is refused', nameless.status === 400, nameless.raw);
+    ck('  saying to choose who is being paid', /needs a supplier/.test(nameless.json.error || ''),
+       nameless.json.error);
+
+    // Applying credit is bound by the ADVANCE's supplier, not by the caller's.
+    const adv = await req('POST', '/api/bill-payments', { sid: admin, body: {
+        kind: 'advance', date: '09/10/2026', amount: 900, mode: 'Wire', bank: 'Chase',
+        supplier: 'Sortby Eccomelt', allocations: [],
+    } });
+    ck('an advance is held against the supplier', adv.status === 200, adv.raw);
+    const misapplied = await req('POST', `/api/bill-payments/${adv.json.payment.id}/apply`,
+        { sid: admin, body: { allocations: [{ bill_id: oak.id, amount: 300 }] } });
+    ck('credit cannot be applied to another supplier\'s container',
+       misapplied.status === 400, misapplied.raw);
+    ck('  and the advance is untouched',
+       (bp.list().find((x) => x.id === adv.json.payment.id).allocations || []).length === 0,
+       'a refused apply that half-applied would be worse than one that failed loudly');
+    const applied = await req('POST', `/api/bill-payments/${adv.json.payment.id}/apply`,
+        { sid: admin, body: { allocations: [{ bill_id: eccoB.id, amount: 300 }] } });
+    ck('  but to their own, it applies', applied.status === 200, applied.raw);
+
+    // What the picker is built from.
+    const open = (await req('GET', '/api/bill-payments', { sid: admin })).json.open_bills;
+    const mine = open.filter((b) => String(b.supplier || '').startsWith('Sortby'));
+    ck('the open list carries the supplier the picker groups by',
+       mine.every((b) => !!b.supplier), JSON.stringify(mine.map((b) => b.supplier)));
+    ck('  and what is paid so far, so a part-paid one can say so',
+       mine.every((b) => typeof b.paid === 'number' && typeof b.amount === 'number'),
+       JSON.stringify(mine[0]));
+    ck('  listing only containers with something still owing',
+       mine.every((b) => b.balance > 0), JSON.stringify(mine.map((b) => b.balance)));
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
