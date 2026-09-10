@@ -4889,7 +4889,7 @@ async function renderLedgerTab(kind) {
         ${kind === 'sales' && r.balance !== null && r.balance > 0.005
           ? `<button class="btn btn-secondary ledger-paid" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Mark paid</button>` : ''}
         ${kind === 'sales' && r.balance !== null && Math.abs(r.balance) <= 0.005
-          ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:#2F7D22; font-size:10px; font-family:var(--font-mono); margin-right:6px;">paid${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
+          ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:var(--status-good, #4ade80); font-size:10px; font-family:var(--font-mono); margin-right:6px;">paid${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
         <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
         <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
         ${(r.missing_tares && r.missing_tares.length)
@@ -5019,17 +5019,91 @@ async function renderLedgerTab(kind) {
   });
 }
 
-// ── THE LIGHT SHEET ──────────────────────────────────────────────────────
-// Apsara, 2026-09-10: "i want light colour on that bill".
-// Scoped to the Edge Metals ledger modals only — the rest of the app stays
-// dark. Lives at the top level because BOTH the bill form and the bill
-// payment form use it; it used to sit inside openLedgerForm, which made it
-// invisible to anything declared above and threw a ReferenceError the moment
-// a second form reached for it.
-const LEDGER_LIGHT = {
-  paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
-  ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
+// ── THE SHEET, IN TWO PALETTES ───────────────────────────────────────────
+// Apsara, 2026-09-10: "i want light colour on that bill", then — shown three
+// palettes side by side and asked which — "B but give an option to toggle to
+// C as well".
+//
+// B is the paper one: warm off-white, soft borders, BLUE for money and for
+// Save. The green it replaces is the dark app's accent doing a job it was not
+// designed for: a green button beside a black amount on a stark white sheet
+// is the specific thing that read as wrong.
+//
+// C is the app's own dark, for when a light panel in a dark app is the thing
+// that grates. Her choice, remembered per browser.
+//
+// ONE OBJECT, TWO VALUES. Every form in the Edge Metals set reads these keys
+// and nothing else — no form carries a hex of its own — so a third palette
+// would be twelve lines here and nothing anywhere else. The status colours
+// live here too for the same reason: they were hardcoded in eleven places,
+// which is eleven places to miss when the sheet goes dark and that red stops
+// being readable.
+const LEDGER_THEMES = {
+  paper: {
+    paper: '#FFFFFF', sunken: '#FBFBFA', line: '#DAD7D2', lineSoft: '#E7E5E1',
+    ink: '#1C1B19', inkMuted: '#6B6862', inkFaint: '#8C8983',
+    accent: '#185FA5', accentInk: '#FFFFFF',
+    danger: '#A32D2D', ok: '#0F6E56', warn: '#854F0B',
+  },
+  dark: {
+    paper: '#1B2126', sunken: '#14181B', line: '#2A3036', lineSoft: '#232A30',
+    ink: '#E8EDF0', inkMuted: '#93A1AA', inkFaint: '#6E7A83',
+    accent: '#378ADD', accentInk: '#FFFFFF',
+    danger: '#F09595', ok: '#5DCAA5', warn: '#EF9F27',
+  },
 };
+
+// Which one is showing. `let`, because the toggle swaps it and re-renders —
+// the forms read it at render time, so nothing needs to know it changed.
+let LEDGER_THEME_NAME = (() => {
+  try { return localStorage.getItem('ledgerTheme') === 'dark' ? 'dark' : 'paper'; }
+  catch (e) { return 'paper'; }   // private mode, embedded webview, whatever
+})();
+let LEDGER_LIGHT = LEDGER_THEMES[LEDGER_THEME_NAME];
+
+// ── ONE HANDLER FOR EVERY COPY OF THE BUTTON ─────────────────────────────
+// Delegated on the document rather than wired per form: seven forms carry the
+// toggle and an eighth will be added without remembering to bind it. Re-renders
+// whatever is currently open by closing and reopening it — the forms read the
+// palette at render time, so there is nothing to repaint in place.
+if (typeof window !== 'undefined' && !window.__ledThemeWired) {
+  window.__ledThemeWired = true;
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('#ledTheme');
+    if (!btn) return;
+    setLedgerTheme(LEDGER_THEME_NAME === 'dark' ? 'paper' : 'dark');
+    // Reopen whatever is showing. Each form registers how to rebuild itself
+    // when it opens (ledgerReopen below) — a repaint threaded through seven
+    // forms would be seven places to miss a colour, and the forms read the
+    // palette at render time anyway. Nothing typed is lost on the bill form
+    // because it autosaves; the payment forms are short.
+    if (typeof ledgerReopen === 'function') ledgerReopen();
+  });
+}
+
+// Set by whichever Edge Metals form is open, cleared when it closes.
+let ledgerReopen = null;
+
+// A function, not the const, because a top-level `const` is in scope for this
+// script and is NOT a property of window — so tests (and anything else
+// outside) cannot see it. Learned the hard way on salesSubTab, which a test
+// read as undefined and happily compared against.
+function ledgerTheme() { return LEDGER_LIGHT; }
+
+function setLedgerTheme(name) {
+  LEDGER_THEME_NAME = LEDGER_THEMES[name] ? name : 'paper';
+  LEDGER_LIGHT = LEDGER_THEMES[LEDGER_THEME_NAME];
+  try { localStorage.setItem('ledgerTheme', LEDGER_THEME_NAME); } catch (e) {}
+}
+
+// The control itself, so every form shows the same one in the same place.
+function ledgerThemeToggle() {
+  const L = LEDGER_LIGHT;
+  const on = LEDGER_THEME_NAME === 'dark';
+  return `<button id="ledTheme" title="${on ? 'Switch to the paper sheet' : 'Switch to the dark sheet'}"
+    aria-label="Switch sheet colour"
+    style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.inkMuted}; cursor:pointer;">${on ? 'Paper' : 'Dark'}</button>`;
+}
 
 // ── SELLING A CONTAINER SHE ALREADY BOUGHT ───────────────────────────────
 // Apsara, 2026-09-10, asked how a Sales row is created: "From the matching
@@ -5052,6 +5126,7 @@ async function openFromBill() {
       <div class="card" style="width:min(700px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
           <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">New sale from a bill</h3>
+          ${ledgerThemeToggle()}
           <button id="fbClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
         <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">Which container are you selling?</div>
@@ -5063,14 +5138,14 @@ async function openFromBill() {
               <span style="font-family:var(--font-mono); font-size:12px; color:${L.ink}; width:110px;">${esc(b.container_no)}</span>
               <span style="flex:1; font-size:12px; color:${L.inkMuted}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(b.supplier || '')}${b.description ? ' · ' + esc(b.description) : ''}</span>
               <span style="font-family:var(--font-mono); font-size:11px; color:${L.inkFaint};">${money(b.amount)}</span>
-              ${b.sold ? `<span style="font-size:10px; color:#2F7D22;">sold</span>` : ''}
+              ${b.sold ? `<span style="font-size:10px; color:${L.ok};">sold</span>` : ''}
             </button>`).join('')
             : `<div style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">No bills with a container number yet.</div>`}
         </div>
         <div style="margin-top:10px; font-size:11px; color:${L.inkFaint};">
           ${data.unsold || 0} of ${rows.length} not sold yet. Nothing here? Use Add sale for a container that never had a bill.
         </div>
-        <div id="fbErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="fbErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
     </div>`);
 
@@ -5078,6 +5153,7 @@ async function openFromBill() {
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
   $('fbClose').onclick = close;
+  ledgerReopen = () => { close(); openFromBill(); };
 
   document.querySelectorAll('.fbPick').forEach((b) => {
     if (b.disabled) return;
@@ -5219,7 +5295,7 @@ async function renderPayables(which) {
             which === 'commission' ? '' : `<div style="font-size:10px; color:var(--text-muted); white-space:normal; max-width:340px;">${esc(p.why || '')}</div>`}</td>
           <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${salesMoney(p.amount)}</td>
           <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${salesMoney(p.paid)}</td>
-          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:${p.balance > 0.005 ? 'var(--text-primary)' : '#2F7D22'};">${p.balance > 0.005 ? salesMoney(p.balance) : 'settled'}</td>
+          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:${p.balance > 0.005 ? 'var(--text-primary)' : 'var(--status-good, #4ade80)'};">${p.balance > 0.005 ? salesMoney(p.balance) : 'settled'}</td>
         </tr>`).join('')
         : `<tr><td colspan="7" style="padding:22px; text-align:center; color:var(--text-muted);">Nothing here yet. ${which === 'commission' ? 'Set a commission rate on a container.' : 'Add a charge you pay to a container.'}</td></tr>`}</tbody>
     </table></div>`;
@@ -5283,6 +5359,7 @@ async function openReceiptForm(data, customer) {
       <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;">
           <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Receipt — ${esc(customer)}</h3>
+          ${ledgerThemeToggle()}
           <button id="rcClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
@@ -5310,9 +5387,9 @@ async function openReceiptForm(data, customer) {
           <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="rcLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
           <div style="flex:1;"></div>
           <button id="rcCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-          <button id="rcSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record it</button>
+          <button id="rcSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">Record it</button>
         </div>
-        <div id="rcErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="rcErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
     </div>`);
 
@@ -5322,6 +5399,7 @@ async function openReceiptForm(data, customer) {
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
   $('rcClose').onclick = close; $('rcCancel').onclick = close;
+  ledgerReopen = () => { close(); openReceiptForm(data, customer); };
 
   const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
   const allocs = () => [...document.querySelectorAll('.rcAmt')]
@@ -5332,7 +5410,7 @@ async function openReceiptForm(data, customer) {
     const left = Math.round((sent - a) * 100) / 100;
     $('rcAllocated').textContent = money(a);
     $('rcLeft').textContent = money(left);
-    $('rcLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    $('rcLeft').style.color = left < -0.005 ? L.danger : (Math.abs(left) < 0.005 ? L.ok : L.ink);
     const ok = sent > 0 && Math.abs(left) < 0.005;
     $('rcSave').disabled = !ok;
     $('rcSave').style.opacity = ok ? '1' : '.45';
@@ -5391,6 +5469,7 @@ async function openSettleForm(data, which) {
       <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;">
           <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Pay ${which === 'commission' ? 'commission' : 'charges'}</h3>
+          ${ledgerThemeToggle()}
           <button id="stClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
@@ -5418,9 +5497,9 @@ async function openSettleForm(data, which) {
           <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="stLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
           <div style="flex:1;"></div>
           <button id="stCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-          <button id="stSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record payment</button>
+          <button id="stSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">Record payment</button>
         </div>
-        <div id="stErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="stErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
     </div>`);
 
@@ -5430,6 +5509,7 @@ async function openSettleForm(data, which) {
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
   $('stClose').onclick = close; $('stCancel').onclick = close;
+  ledgerReopen = () => { close(); openSettleForm(data, which); };
 
   const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
   const allocs = () => [...document.querySelectorAll('.stAmt')]
@@ -5442,7 +5522,7 @@ async function openSettleForm(data, which) {
     const left = Math.round((sent - a) * 100) / 100;
     $('stAllocated').textContent = money(a);
     $('stLeft').textContent = money(left);
-    $('stLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    $('stLeft').style.color = left < -0.005 ? L.danger : (Math.abs(left) < 0.005 ? L.ok : L.ink);
     const ok = sent > 0 && Math.abs(left) < 0.005;
     $('stSave').disabled = !ok;
     $('stSave').style.opacity = ok ? '1' : '.45';
@@ -5511,6 +5591,7 @@ async function openMarkPaid(row) {
       <div class="card" style="width:min(600px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
           <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Mark paid — ${esc(row.container_no || row.invoice_no || 'container')}</h3>
+          ${ledgerThemeToggle()}
           <button id="mpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
         <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">
@@ -5557,9 +5638,9 @@ async function openMarkPaid(row) {
           <span id="mpAfter" style="font-size:12px; color:${L.inkMuted};"></span>
           <span style="flex:1;"></span>
           <button id="mpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-          <button id="mpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record it</button>
+          <button id="mpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">Record it</button>
         </div>
-        <div id="mpErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="mpErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
     </div>`);
 
@@ -5571,6 +5652,7 @@ async function openMarkPaid(row) {
   document.addEventListener('keydown', esc2);
   $('mpClose').onclick = close;
   $('mpCancel').onclick = close;
+  ledgerReopen = () => { close(); openMarkPaid(row); };
 
   const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
   const chosen = () => {
@@ -5665,6 +5747,7 @@ function openBillPaySupplier(data) {
       <div class="card" style="width:min(560px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
           <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Record a payment</h3>
+          ${ledgerThemeToggle()}
           <button id="bpWhoClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
         <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">Who are you paying?</div>
@@ -5674,14 +5757,14 @@ function openBillPaySupplier(data) {
             <button class="bpWhoPick" data-supplier="${esc(r.name)}"
               style="display:flex; width:100%; align-items:center; gap:10px; padding:10px 12px; background:none; border:none; border-bottom:1px solid ${L.lineSoft}; cursor:pointer; text-align:left;">
               <span style="flex:1; font-size:13px; color:${L.ink};">${esc(r.name)}</span>
-              ${credit[r.name] ? `<span style="font-size:11px; color:#2F7D22;">${money(credit[r.name])} credit</span>` : ''}
+              ${credit[r.name] ? `<span style="font-size:11px; color:${L.ok};">${money(credit[r.name])} credit</span>` : ''}
               <span style="font-size:11px; color:${L.inkFaint}; white-space:nowrap;">${r.count} container${r.count === 1 ? '' : 's'}</span>
               <span style="font-family:var(--font-mono); font-size:12px; color:${r.pending > 0 ? L.ink : L.inkFaint}; white-space:nowrap;">${r.pending > 0 ? money(r.pending) + ' pending' : 'nothing pending'}</span>
             </button>`).join('')
             : `<div style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing outstanding. Name a supplier below to record an advance.</div>`}
         </div>
 
-        ${unnamed ? `<div style="margin-top:8px; font-size:11px; color:#8A6D00;">${unnamed} container${unnamed === 1 ? ' has' : 's have'} no supplier on the bill, so ${unnamed === 1 ? 'it cannot' : 'they cannot'} be paid yet — open the bill and add one.</div>` : ''}
+        ${unnamed ? `<div style="margin-top:8px; font-size:11px; color:${L.warn};">${unnamed} container${unnamed === 1 ? ' has' : 's have'} no supplier on the bill, so ${unnamed === 1 ? 'it cannot' : 'they cannot'} be paid yet — open the bill and add one.</div>` : ''}
 
         <div style="display:flex; gap:8px; align-items:flex-end; margin-top:14px; padding-top:13px; border-top:1px solid ${L.line};">
           <div style="flex:1;">
@@ -5690,7 +5773,7 @@ function openBillPaySupplier(data) {
               style="width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;">
             <datalist id="bpwholist">${rows.map((r) => `<option value="${esc(r.name)}"></option>`).join('')}</datalist>
           </div>
-          <button id="bpWhoGo" class="btn btn-primary" style="font-size:11px; padding:8px 18px;">Continue</button>
+          <button id="bpWhoGo" class="btn btn-primary" style="font-size:11px; padding:8px 18px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">Continue</button>
         </div>
       </div>
     </div>`);
@@ -5699,6 +5782,7 @@ function openBillPaySupplier(data) {
   const esc2 = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', esc2);
   $('bpWhoClose').onclick = close;
+  ledgerReopen = () => { close(); openBillPaySupplier(data); };
   const go = (name) => { if (!String(name || '').trim()) return; close(); openBillPayForm({ supplier: String(name).trim() }); };
   document.querySelectorAll('.bpWhoPick').forEach((b) => { b.onclick = () => go(b.dataset.supplier); });
   $('bpWhoGo').onclick = () => go($('bpWhoOther').value);
@@ -5787,7 +5871,7 @@ async function openBillPayForm(opts = {}) {
   const recorded = (data.payments || []).slice().reverse();
 
   const creditLines = Object.entries(credit).map(([sup, amt]) =>
-    `<button class="bpApply" data-supplier="${esc(sup)}" style="background:none; border:none; padding:0 2px; cursor:pointer; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted;">${esc(sup)} <b style="color:#2F7D22;">${money(amt)}</b> — apply</button>`).join(' · ');
+    `<button class="bpApply" data-supplier="${esc(sup)}" style="background:none; border:none; padding:0 2px; cursor:pointer; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted;">${esc(sup)} <b style="color:${L.ok};">${money(amt)}</b> — apply</button>`).join(' · ');
 
   document.body.insertAdjacentHTML('beforeend', `
     <div id="bpModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
@@ -5797,6 +5881,7 @@ async function openBillPayForm(opts = {}) {
             ${applying ? 'Apply advance' : 'Record a payment'} — ${esc(supplier)}
             ${applying ? '' : `<button id="bpWhoAgain" style="background:none; border:none; padding:0 0 0 6px; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted; cursor:pointer;">change</button>`}
           </h3>
+          ${ledgerThemeToggle()}
           <button id="bpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
 
@@ -5847,7 +5932,7 @@ async function openBillPayForm(opts = {}) {
               <span style="color:${L.inkFaint}; white-space:nowrap;">${(pm.allocations || []).length} container${(pm.allocations || []).length === 1 ? '' : 's'}</span>
               <span style="font-family:var(--font-mono); color:${L.ink}; white-space:nowrap;">${money(pm.amount)}</span>
               <button class="bpDel" data-payment="${esc(pm.id)}" data-containers="${(pm.allocations || []).length}"
-                style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:#B3261E; cursor:pointer; white-space:nowrap;">Delete</button>
+                style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer; white-space:nowrap;">Delete</button>
             </div>`).join('')
             : `<div style="padding:16px; text-align:center; font-size:12px; color:${L.inkFaint};">No payments recorded yet.</div>`}
         </div>`}
@@ -5859,10 +5944,10 @@ async function openBillPayForm(opts = {}) {
           <div style="display:flex; gap:8px;">
             <button id="bpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
             ${applying ? '' : `<button id="bpAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>`}
-            <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">${applying ? 'Apply' : 'Record payment'}</button>
+            <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">${applying ? 'Apply' : 'Record payment'}</button>
           </div>
         </div>
-        <div id="bpErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+        <div id="bpErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
 
       </div>
     </div>`);
@@ -5891,6 +5976,7 @@ async function openBillPayForm(opts = {}) {
   document.addEventListener('keydown', esc2);
   $('bpClose').onclick = close;
   $('bpCancel').onclick = close;
+  ledgerReopen = () => { close(); openBillPayForm(opts); };
   if ($('bpWhoAgain')) $('bpWhoAgain').onclick = () => { close(); openBillPayForm(); };
 
   const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
@@ -5912,7 +5998,7 @@ async function openBillPayForm(opts = {}) {
     const left = Math.round((sent - alloc) * 100) / 100;
     $('bpAllocated').textContent = money(alloc);
     $('bpLeft').textContent = money(left);
-    $('bpLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    $('bpLeft').style.color = left < -0.005 ? L.danger : (Math.abs(left) < 0.005 ? L.ok : L.ink);
 
     // helpers/billPayments.js cleanAllocations() REFUSES a plain payment whose
     // allocations don't sum to the amount — "record it as an advance instead".
@@ -5972,7 +6058,7 @@ async function openBillPayForm(opts = {}) {
   // The server audits every one of these (api.js, delete-bill-payment) and
   // re-mirrors the affected containers to the Shipment tab, so the sheet
   // does not keep showing a payment that no longer exists.
-  const disarm = (b) => { b.textContent = 'Delete'; b.style.background = 'none'; b.style.color = '#B3261E'; };
+  const disarm = (b) => { b.textContent = 'Delete'; b.style.background = 'none'; b.style.color = L.danger; };
   let armed = null;
   document.querySelectorAll('.bpDel').forEach((btn) => {
     btn.onclick = async () => {
@@ -5981,7 +6067,7 @@ async function openBillPayForm(opts = {}) {
         armed = btn;
         const n = Number(btn.dataset.containers || 0);
         btn.textContent = n ? `Delete — reopens ${n} container${n === 1 ? '' : 's'}?` : 'Delete — sure?';
-        btn.style.background = '#B3261E'; btn.style.color = '#FFFFFF';
+        btn.style.background = L.danger; btn.style.color = '#FFFFFF';
         setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
         return;
       }
@@ -6216,7 +6302,8 @@ function openLedgerForm(kind, existing, seed) {
             <span id="ledSaveState" style="font-family:var(--font-mono); font-size:10px; color:${LEDGER_LIGHT.inkFaint};"></span>
             <!-- Apsara, 2026-09-10: "at top right close option should be
                  there in bill." Escape closes it too. -->
-            <button id="ledClose" title="Close (Esc)" aria-label="Close"
+            ${ledgerThemeToggle()}
+          <button id="ledClose" title="Close (Esc)" aria-label="Close"
               style="background:none; border:none; color:${LEDGER_LIGHT.inkMuted}; font-size:22px; line-height:1; cursor:pointer; padding:0 2px;">&times;</button>
           </div>
         </div>
@@ -6233,7 +6320,7 @@ function openLedgerForm(kind, existing, seed) {
           <div style="flex:1;"></div>
           <div style="display:flex; gap:8px;">
             <button id="ledCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${LEDGER_LIGHT.paper}; color:${LEDGER_LIGHT.inkMuted}; border-color:${LEDGER_LIGHT.line};">Cancel</button>
-            <button id="ledSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">${editing ? 'Save changes' : 'Save'}</button>
+            <button id="ledSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${LEDGER_LIGHT.accent}; border-color:${LEDGER_LIGHT.accent}; color:${LEDGER_LIGHT.accentInk};">${editing ? 'Save changes' : 'Save'}</button>
           </div>
         </div>
         <div id="ledWarn" style="font-size:11px; color:#8A5A00; margin-top:9px;"></div>
@@ -6258,6 +6345,8 @@ function openLedgerForm(kind, existing, seed) {
   const onEscape = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onEscape);
   $('ledClose').onclick = close;
+  // The bill/sales form autosaves, so reopening it loses nothing typed.
+  ledgerReopen = () => { close(); openLedgerForm(kind, existing, seed); };
   $('ledCancel').onclick = close;
 
   const readForm = () => {
@@ -6326,8 +6415,8 @@ function openLedgerForm(kind, existing, seed) {
         const v = r[key];
         const shown = how === 'money' ? ledMoney(v) : ledNum(v);
         return `<div>
-          <div style="font-size:11px; color:#8B949B;">${label}</div>
-          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? '#8B949B' : (key === 'balance' ? '#2F7D22' : '#14181B')};">${shown}</div>
+          <div style="font-size:11px; color:${LEDGER_LIGHT.inkFaint};">${label}</div>
+          <div style="font-size:17px; font-weight:500; margin-top:2px; font-family:var(--font-mono); color:${v === null || v === undefined ? '#8B949B' : (key === 'balance' ? L.ok : '#14181B')};">${shown}</div>
         </div>`;
       });
       $('ledPreview').innerHTML = cells.join('');

@@ -71,6 +71,15 @@ async function mount(routes) {
     return { w, dom };
 }
 
+// jsdom normalises "#1C1B19" to "rgb(28, 27, 25)" the moment anything else
+// touches the element, so styles are compared by value rather than by string.
+const rgbEq = (got, hex) => {
+    const h = String(hex || '').replace('#', '');
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const s = String(got || '').replace(/\s/g, '');
+    return s === `rgb(${r},${g},${b})` || s.toLowerCase() === `#${h}`.toLowerCase();
+};
+
 const BILL_ROWS = [
     { id: 'B1', route: 'HOUSTON / BUSAN', carrier: 'MSC', supplier: 'Eccomelt',
       trucking_company: 'Bayou Haulage', date: '09/10/2026', booking_no: '272766480',
@@ -440,8 +449,12 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
     // Apsara, 2026-09-10: "alignmnet not proper and i want light colour on
     // that bill".
     const sheet = w.document.querySelector('#ledgerModal .card');
-    ck('the bill form is a light sheet',
-       /background:#F6F7F8/.test(sheet.getAttribute('style') || ''),
+    // Read from the palette, not from a hex copied into the test. She chose
+    // "B but give an option to toggle to C as well" on 2026-09-10, so a test
+    // holding its own hex is a test that fails on a correct palette change.
+    const T = w.ledgerTheme();
+    ck('the bill form is a sheet in the chosen palette',
+       (sheet.getAttribute('style') || '').includes(`background:${T.sunken}`),
        sheet.getAttribute('style'));
     // Only the NAMED fields. wireUsDateField appends a hidden native
     // <input type="date"> beside each date box purely to open the platform
@@ -452,7 +465,7 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
        // "#14181B" to "rgb(20, 24, 27)" the moment anything else touches the
        // element — wireUsDateField sets paddingRight on the date box — so a
        // literal hex match failed on a correctly-styled field.
-       inputs.filter((i) => i.name).every((i) => /20,\s*24,\s*27|#14181B/i.test(i.style.color || '')),
+       inputs.filter((i) => i.name).every((i) => rgbEq(i.style.color, T.ink)),
        inputs.filter((i) => i.name && !/20,\s*24,\s*27|#14181B/i.test(i.style.color || ''))
              .map((i) => `${i.name}=${i.style.color}`).join(',') || 'invisible form');
 
@@ -814,7 +827,8 @@ section('G2 — the Pay form: one transfer, several containers');
     // Over-allocation has to be visible BEFORE submit.
     b3.value = '900'; fire(b3, 'input');
     ck('over-allocating locks Save again', doc.getElementById('bpSave').disabled === true);
-    ck('  and says so in red', doc.getElementById('bpLeft').style.color === 'rgb(179, 38, 30)',
+    ck('  and says so in red',
+       rgbEq(doc.getElementById('bpLeft').style.color, w.ledgerTheme().danger),
        doc.getElementById('bpLeft').style.color);
     b3.value = '120'; fire(b3, 'input');
 
@@ -1359,6 +1373,64 @@ section('G7 — a fixed list the form actually offers');
        labels.join(' | '));
     ck('  and "Terms" alone is gone from the header',
        !labels.includes('Terms'), labels.join(' | '));
+
+    doc.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
+section('G8 — the sheet has two palettes and she picks');
+{
+    // Apsara, 2026-09-10, shown three palettes: "B but give an option to
+    // toggle to C as well."
+    const { w, dom } = await mount({ '/api/bills': billsRoute,
+        '/api/bills/preview': () => bills.compute({}) });
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    w.openLedgerForm('bills');
+
+    const sheetOf = () => doc.querySelector('#ledgerModal .card').getAttribute('style');
+    ck('it opens on the paper palette', /background:#FBFBFA/.test(sheetOf()), sheetOf().slice(0, 80));
+    ck('  which is warm, not the stark white it was',
+       !/#F6F7F8|#FFFFFF;/.test(sheetOf().split(';')[0]), sheetOf().slice(0, 60));
+    ck('  and money reads blue, not the dark app\'s green',
+       w.ledgerTheme().accent === '#185FA5', w.ledgerTheme().accent);
+
+    ck('  and Save wears the accent, not the dark app\'s green',
+       rgbEq(doc.getElementById('ledSave').style.backgroundColor, w.ledgerTheme().accent),
+       doc.getElementById('ledSave').style.backgroundColor);
+
+    const toggle = doc.getElementById('ledTheme');
+    ck('every form carries the toggle', !!toggle);
+    ck('  labelled with where it goes, not where it is',
+       toggle.textContent === 'Dark', toggle.textContent);
+
+    toggle.click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('clicking it actually repaints the form',
+       /background:#14181B/.test(sheetOf()), sheetOf().slice(0, 80));
+    ck('  not merely stores a preference and leave the sheet alone',
+       w.ledgerTheme().ink === '#E8EDF0', w.ledgerTheme().ink);
+    ck('  and the label flips',
+       doc.getElementById('ledTheme').textContent === 'Paper',
+       doc.getElementById('ledTheme').textContent);
+
+    ck('the choice is remembered', w.localStorage.getItem('ledgerTheme') === 'dark',
+       String(w.localStorage.getItem('ledgerTheme')));
+
+    // Status colours must move with the sheet or the red goes unreadable on
+    // dark — they were hardcoded in eleven places before this.
+    ck('the status colours belong to the palette, not to the form',
+       w.ledgerTheme().danger === '#F09595' && w.ledgerTheme().ok === '#5DCAA5',
+       JSON.stringify([w.ledgerTheme().danger, w.ledgerTheme().ok]));
+    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    ck('  with no form carrying a hex of its own',
+       !/#B3261E|#2F7D22|#8A6D00/.test(html),
+       'eleven hardcoded status colours is eleven places to miss');
+
+    doc.getElementById('ledTheme').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('and back again', /background:#FBFBFA/.test(sheetOf()), sheetOf().slice(0, 80));
 
     doc.getElementById('ledClose').click();
     await new Promise((r) => setTimeout(r, 40));
