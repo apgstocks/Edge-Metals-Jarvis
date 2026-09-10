@@ -55,6 +55,10 @@ const MZ = 'Mazariegos';
 const OTHER = 'Oakland Metals';
 // Carries the weight/price probe bills so they cannot move MZ's running total.
 const PROBE = 'Probe Metals';
+// And the storage fixtures get their own too — sections I and J had already
+// given MZ receipts with no yard, so counting MZ's unrecorded bucket measured
+// those as well. Second time today a shared fixture supplier bit; hence this.
+const YARDCO = 'Yardco Metals';
 
 (async () => {
 
@@ -363,6 +367,76 @@ section('K — Edge Metals and the yard keep separate books');
        require(path.join(ROOT, 'helpers/json')).loadJson(cfg.LOADS_FILE, []).length === 0);
 }
 
+section('K2 — Storage: whose yard is holding it');
+{
+    // Apsara, 2026-09-11: "for local deliveries,i might keep our inventory in
+    // other yards. so a field called Storage needs to be invented. There i can
+    // point the yard name with whom the material remains."
+    const r1 = await inv.addReceipt({ date: '09/20/2026', supplier: YARDCO, storage: 'Rad Metal',
+        items: [{ description: 'Al combo', weight: '12000', price: '0.40' }] });
+    await new Promise((r) => setTimeout(r, 5));
+    await inv.addReceipt({ date: '09/21/2026', supplier: YARDCO, storage: 'rad  metal',
+        items: [{ description: 'Auto cast', weight: '8000', price: '0.30' }] });
+    // DELIBERATELY THE HEAVIEST. A mutation removing the recorded-first sort
+    // survived a lighter fixture, because the bucket then sorted last on
+    // weight anyway and the rule under test was never exercised. It is also
+    // the realistic case: early on, most material has no yard against it.
+    const nowhere = await inv.addReceipt({ date: '09/22/2026', supplier: YARDCO,
+        items: [{ description: 'Al combo', weight: '50000', price: '0.40' }] });
+
+    ck('a receipt keeps the yard it was given', r1.storage === 'Rad Metal', String(r1.storage));
+    ck('  and a blank one stays null, not an empty string',
+       nowhere.storage === null, JSON.stringify(nowhere.storage));
+
+    // buildRecord rebuilds from a fixed field list. The ETA on outbound loads
+    // was lost to exactly this two days ago, so it is checked rather than
+    // assumed.
+    const edited = await inv.editReceipt(r1.id, { supplier: YARDCO, date: '09/20/2026',
+        storage: 'Rad Metal', note: 'corrected', items: r1.items });
+    ck('  and survives an edit', edited.storage === 'Rad Metal', String(edited.storage));
+
+    const yards = inv.byStorage(YARDCO);
+    const rad = yards.find((y) => y.recorded);
+    ck('two spellings of one yard are one row',
+       rad && rad.receipts === 2 && rad.weight_lb === 20000, JSON.stringify(rad));
+    ck('  labelled with the EARLIEST spelling, not the latest typo',
+       rad && rad.label === 'Rad Metal', rad && rad.label);
+    ck('  and the type-ahead offers that spelling back',
+       inv.storageNames().includes('Rad Metal') && !inv.storageNames().includes('rad  metal'),
+       JSON.stringify(inv.storageNames()));
+
+    // A BLANK IS NOT "OUR YARD". Her own rule from the trucking work: a
+    // figure nobody entered is reported, not assumed.
+    const gap = yards.find((y) => !y.recorded);
+    ck('material with no yard recorded gets its own bucket',
+       gap && gap.weight_lb === 50000, JSON.stringify(gap));
+    ck('  named so it reads as a gap, not as a yard called nothing',
+       gap && gap.label === inv.NO_STORAGE, gap && gap.label);
+    ck('  and it is NOT folded into any yard\'s total',
+       rad && rad.weight_lb === 20000, JSON.stringify(rad));
+    ck('  sorted last EVEN THOUGH it is the heaviest',
+       yards[yards.length - 1] === gap && gap.weight_lb > rad.weight_lb,
+       'at the top it would read as her biggest storage location');
+
+    ck('filtering to a yard finds both spellings',
+       inv.forSupplier(YARDCO, { storage: 'RAD METAL' }).length === 2,
+       String(inv.forSupplier(YARDCO, { storage: 'RAD METAL' }).length));
+    ck('  and asking for the unrecorded ones is a real query',
+       inv.forSupplier(YARDCO, { storage: inv.NO_STORAGE }).length === 1);
+
+    // Across suppliers, because "which yard is holding what" is not a
+    // per-supplier question when a yard rings up asking for space.
+    await inv.addReceipt({ date: '09/23/2026', supplier: OTHER, storage: 'Rad Metal',
+        items: [{ description: 'Al combo', weight: '1000', price: '0.40' }] });
+    const all = inv.byStorage().find((y) => y.label === 'Rad Metal');
+    ck('the all-supplier view totals a yard across suppliers',
+       all.weight_lb === 21000, JSON.stringify(all));
+    ck('  and names who the material belongs to',
+       all.suppliers.join(',') === [YARDCO, OTHER].sort().join(','), JSON.stringify(all.suppliers));
+    ck('  while the per-supplier view still shows only theirs',
+       inv.byStorage(YARDCO).find((y) => y.label === 'Rad Metal').weight_lb === 20000);
+}
+
 section('L — the page actually renders her columns, in her order');
 {
     // The distinction this codebase keeps needing: "the helper returns a
@@ -374,11 +448,23 @@ section('L — the page actually renders her columns, in her order');
     // MOST, which by this point in the file is the probe supplier — routing
     // only MZ left that fetch unmatched, the page rendered an error div, and
     // four assertions failed for a reason that had nothing to do with them.
-    const routes = { '/api/edge-inventory/suppliers': { ok: true, suppliers: sa.overview(), unassigned: sa.unassigned() } };
-    for (const s2 of sa.suppliers()) {
+    // MIRRORS THE API PAYLOAD FIELD FOR FIELD. It did not, briefly, and the
+    // By-yard assertions failed against an empty table for the only reason
+    // that mattered: the mock had no by_storage in it. A stub that is a
+    // subset of the real response tests the page against a server that does
+    // not exist.
+    const routes = {
+        '/api/edge-inventory/suppliers': {
+            ok: true, suppliers: sa.overview(), unassigned: sa.unassigned(),
+            by_storage: inv.byStorage(), storage_names: inv.storageNames(),
+        },
+    };
+    for (const s2 of sa.overview().map((o) => o.supplier)) {
         routes[`/api/edge-inventory/${encodeURIComponent(s2)}`] = {
             ok: true, supplier: s2, account: sa.statement(s2),
-            receipts: inv.forSupplier(s2), by_grade: inv.byGrade(s2), received: inv.summary(s2),
+            receipts: inv.forSupplier(s2), by_grade: inv.byGrade(s2),
+            by_storage: inv.byStorage(s2), storage_names: inv.storageNames(),
+            received: inv.summary(s2),
         };
     }
     // beforeParse, NOT after construction. jsdom runs the page's scripts while
@@ -386,11 +472,25 @@ section('L — the page actually renders her columns, in her order');
     // — loadSuppliers() has already run against the real (absent) fetch and
     // thrown, and the page renders empty. Cost four failing assertions to
     // notice, because an empty table fails every check about its contents.
+    const posted = [];
     const dom = new JSDOM(html, {
         runScripts: 'dangerously', url: 'http://localhost/edge-inventory',
         beforeParse(w) {
-            w.fetch = (u) => {
-                const body = routes[String(u).split('?')[0]] || { ok: true };
+            w.fetch = (u, opts) => {
+                if (opts && opts.method === 'POST') {
+                    posted.push({ url: String(u), body: JSON.parse(opts.body || '{}') });
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, receipt: {} }) });
+                }
+                // A supplier the stub does not know about answers like the
+                // real server would for one with nothing on file, rather than
+                // returning a shape the page has to survive by luck.
+                const key = String(u).split('?')[0];
+                const empty = /\/api\/edge-inventory\/[^/]+$/.test(key) && !(key in routes)
+                    ? { ok: true, account: { rows: [], opening: 0, debit_total: 0, credit_total: 0, closing: 0 },
+                        receipts: [], by_grade: [], by_storage: [], storage_names: [],
+                        received: { weight_lb: 0, weight_mt: 0, amount: 0, receipts: 0 } }
+                    : null;
+                const body = empty || routes[key] || { ok: true };
                 return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
             };
             w.confirm = () => true;
@@ -433,12 +533,63 @@ section('L — the page actually renders her columns, in her order');
     ck('  every row carries a running balance',
        cells.every((c) => c[6] && /\$/.test(c[6])), JSON.stringify(cells.map((c) => c[6])));
 
+    // ── THE YARD VIEW IS ON SCREEN, NOT JUST IN THE HELPER ───────────────
+    doc.getElementById('supPick').value = YARDCO;
+    doc.getElementById('supPick').dispatchEvent(new dom.window.Event('change'));
+    await new Promise((r) => setTimeout(r, 200));
+    const yardCells = [...doc.querySelectorAll('#storageBox tbody tr')].map((tr) =>
+        [...tr.querySelectorAll('td')].map((td) => td.textContent.trim()));
+    ck('the By yard tab lists the yards holding this supplier\'s metal',
+       yardCells.some((c) => /Rad Metal/.test(c[0]) && /20,000 lb/.test(c[2])),
+       JSON.stringify(yardCells));
+    ck('  and says plainly when nobody recorded a yard',
+       yardCells.some((c) => /not recorded/.test(c[0]) && /nobody said where/.test(c[0])),
+       JSON.stringify(yardCells));
+    ck('  with the unrecorded row LAST, though it is the heaviest',
+       /not recorded/.test(yardCells[yardCells.length - 1][0]), JSON.stringify(yardCells.map((c) => c[0])));
+
+    ck('the yard filter offers the yards she has used',
+       [...doc.querySelectorAll('#fStorage option')].map((o) => o.value).includes('Rad Metal'),
+       [...doc.querySelectorAll('#fStorage option')].map((o) => o.value).join('|'));
+    ck('  and a way to find the ones nobody filled in',
+       [...doc.querySelectorAll('#fStorage option')].map((o) => o.value).includes('(not recorded)'));
+
     ck('the delivery form asks for a supplier and no buyer',
        !!doc.getElementById('rm_supplier') && !doc.querySelector('[id*="buyer" i]'));
+    ck('  and for the yard holding it, with the learned list behind it',
+       !!doc.getElementById('rm_storage')
+       && doc.getElementById('rm_storage').getAttribute('list') === 'yardlist'
+       && [...doc.querySelectorAll('#yardlist option')].some((o) => o.value === 'Rad Metal'),
+       [...doc.querySelectorAll('#yardlist option')].map((o) => o.value).join('|'));
     ck('  and opens with one packing-list line ready',
        (() => { doc.getElementById('btnAddReceipt').click();
                 return doc.querySelectorAll('#rm_items input[data-f="description"]').length === 1; })(),
        String(doc.querySelectorAll('#rm_items > div').length));
+
+    // ── WHAT THE FORM ACTUALLY POSTS ─────────────────────────────────────
+    // A mutation deleting `storage` from the request body SURVIVED, because
+    // this test opened the form and never saved from it. Rendering a field is
+    // not sending it, and a yard she types that never reaches the server is
+    // exactly the silent loss this whole feature is about.
+    const type = (id, v) => { const el = doc.getElementById(id); el.value = v; el.dispatchEvent(new dom.window.Event('input')); };
+    type('rm_supplier', 'Brand New Supplier');
+    type('rm_storage', 'Rad Metal');
+    type('rm_pl', 'PL-900');
+    const line = doc.querySelector('#rm_items input[data-f="description"]');
+    line.value = 'Al combo'; line.dispatchEvent(new dom.window.Event('input'));
+    const wtIn = doc.querySelector('#rm_items input[data-f="weight"]');
+    wtIn.value = '7000'; wtIn.dispatchEvent(new dom.window.Event('input'));
+    doc.getElementById('recSave').click();
+    await new Promise((r) => setTimeout(r, 200));
+
+    const sent = posted.find((p2) => /\/api\/edge-inventory$/.test(p2.url));
+    ck('saving posts the delivery', !!sent, JSON.stringify(posted));
+    ck('  carrying the yard she typed', sent && sent.body.storage === 'Rad Metal',
+       JSON.stringify(sent && sent.body));
+    ck('  along with the supplier and the packing list line',
+       sent && sent.body.supplier === 'Brand New Supplier'
+       && (sent.body.items || []).length === 1 && sent.body.items[0].description === 'Al combo',
+       JSON.stringify(sent && sent.body));
 
     dom.window.close();
 }

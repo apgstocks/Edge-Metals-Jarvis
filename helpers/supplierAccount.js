@@ -305,8 +305,19 @@ function suppliers() {
 }
 
 // One line per supplier for the index: what they are owed right now.
+//
+// The list is the union of who has been BILLED or PAID and who has DELIVERED.
+// An inventory-only supplier shows a zero account, which is true — they have
+// delivered and not yet invoiced — and, crucially, they appear at all. Built
+// from suppliers() alone, the Edge Inventory page could not show the
+// deliveries of anyone without a bill. Found by its own test.
 function overview() {
-    return suppliers().map((s) => {
+    const inv = require('./edgeInventory');
+    const seen = new Map();
+    for (const s of suppliers()) seen.set(s.toLowerCase(), s);
+    for (const s of inv.suppliers()) if (!seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s);
+    const all = [...seen.values()].sort((a, b) => a.localeCompare(b));
+    return all.map((s) => {
         const r = rows(s);
         return {
             supplier: s,

@@ -92,6 +92,10 @@ tr:last-child td { border-bottom:none; }
     </div>
     <div class="field" style="margin-bottom:0;"><label>From</label><input id="fFrom" placeholder="MM/DD/YYYY" autocomplete="off"></div>
     <div class="field" style="margin-bottom:0;"><label>To</label><input id="fTo" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+    <div class="field" style="margin-bottom:0; min-width:180px;">
+      <label>Storage</label>
+      <select id="fStorage"><option value="">Any yard</option></select>
+    </div>
     <button id="btnApply" class="btn btn-secondary">Apply</button>
     <button id="btnClear" class="btn btn-secondary">Clear</button>
     <span style="flex:1;"></span>
@@ -106,11 +110,16 @@ tr:last-child td { border-bottom:none; }
     <button class="subtab-btn" data-subtab="account">Account</button>
     <button class="subtab-btn" data-subtab="deliveries">Deliveries</button>
     <button class="subtab-btn" data-subtab="grades">By grade</button>
+    <button class="subtab-btn" data-subtab="storage">By yard</button>
   </div>
 
   <div id="panelAccount"><div id="acctBox"></div></div>
   <div id="panelDeliveries" class="hidden"><div id="delivBox" style="display:flex; flex-direction:column; gap:10px;"></div></div>
   <div id="panelGrades" class="hidden"><div id="gradeBox"></div></div>
+  <div id="panelStorage" class="hidden">
+    <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">Where this supplier's material is sitting. Anything with no yard recorded is listed last &mdash; it is a gap to fill, not a location.</div>
+    <div id="storageBox"></div>
+  </div>
 
   <div id="recModalOverlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; overflow-y:auto;">
     <div class="card" style="width:100%; max-width:720px; padding:22px 24px; max-height:90vh; overflow-y:auto;">
@@ -122,6 +131,12 @@ tr:last-child td { border-bottom:none; }
         <div class="field"><label>Date</label><input id="rm_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <div class="field"><label>Packing list no</label><input id="rm_pl" placeholder="their document number"></div>
         <div class="field"><label>Container no (if known)</label><input id="rm_container" placeholder="left blank until it is stuffed"></div>
+        <!-- "for local deliveries,i might keep our inventory in other yards.
+             so a field called Storage needs to be invented. There i can point
+             the yard name with whom the material remains."
+             Blank does NOT mean our yard — it means nobody said. The by-yard
+             view carries those in their own bucket so they can be fixed. -->
+        <div class="field" style="grid-column:1/-1;"><label>Storage &mdash; whose yard is holding it</label><input id="rm_storage" list="yardlist" placeholder="leave blank only if you do not know yet" autocomplete="off"><datalist id="yardlist"></datalist></div>
       </div>
       <div class="field" style="margin-top:10px;"><label>Note</label><input id="rm_note"></div>
 
@@ -173,6 +188,7 @@ function setSubtab(name) {
   $('panelAccount').classList.toggle('hidden', name !== 'account');
   $('panelDeliveries').classList.toggle('hidden', name !== 'deliveries');
   $('panelGrades').classList.toggle('hidden', name !== 'grades');
+  $('panelStorage').classList.toggle('hidden', name !== 'storage');
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
@@ -227,6 +243,7 @@ function deliveryCard(r) {
         <div>
           <div style="font-size:13px; font-weight:600; color:var(--text-strong);">${esc(r.packing_list_no || 'Delivery')}</div>
           <div style="font-size:11px; color:var(--text-faint); margin-top:2px;">${esc(r.date || '(no date)')}${r.container_no ? ' · ' + esc(r.container_no) : ''} · ${esc(r.id)}</div>
+          <div style="font-size:11px; margin-top:3px; color:${r.storage ? 'var(--text-muted)' : 'var(--status-warning)'};">${r.storage ? 'At ' + esc(r.storage) : 'No storage yard recorded'}</div>
         </div>
         <div style="text-align:right; font-family:var(--font-mono); font-size:12px;">
           <div style="color:var(--text-strong);">${esc(wt(r.weight_lb, 'lb'))}</div>
@@ -261,6 +278,22 @@ function gradeTable(rows) {
   </table>`;
 }
 
+// ── WHAT IS SITTING AT WHICH YARD ──────────────────────────────────────
+// The reason the Storage field exists. A column she reads one delivery at a
+// time answers nothing; this is the question she actually asks.
+function storageTable(rows) {
+  if (!rows.length) return `<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing recorded for this supplier yet.</div>`;
+  return `<table>
+    <thead><tr><th>Yard</th><th style="text-align:right;">Deliveries</th><th style="text-align:right;">Net lbs</th><th style="text-align:right;">Net MT</th><th style="text-align:right;">Value</th></tr></thead>
+    <tbody>${rows.map((y) => `<tr>
+      <td style="${y.recorded ? '' : 'color:var(--status-warning);'}">${esc(y.label)}${y.recorded ? '' : ' &mdash; nobody said where this went'}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${y.receipts}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${esc(wt(y.weight_lb, 'lb'))}</td>
+      <td style="text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${esc(wt(y.weight_mt, 'mt'))}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${money(y.amount)}</td></tr>`).join('')}</tbody>
+  </table>`;
+}
+
 function card(label, value, tone) {
   return `<div class="card" style="padding:12px 14px;">
     <div style="font-size:11px; color:var(--text-faint);">${esc(label)}</div>
@@ -269,7 +302,15 @@ function card(label, value, tone) {
 }
 
 async function loadSuppliers() {
-  const { suppliers, unassigned } = await api('/api/edge-inventory/suppliers');
+  const { suppliers, unassigned, storage_names } = await api('/api/edge-inventory/suppliers');
+  // The yard filter and the form's type-ahead are the SAME learned list —
+  // one source, so a yard she can filter by is always one she can type.
+  const keep = $('fStorage').value;
+  $('fStorage').innerHTML = ['<option value="">Any yard</option>']
+    .concat((storage_names || []).map((y) => `<option value="${esc(y)}">${esc(y)}</option>`))
+    .concat('<option value="(not recorded)">(not recorded)</option>').join('');
+  $('fStorage').value = keep;
+  $('yardlist').innerHTML = (storage_names || []).map((y) => `<option value="${esc(y)}"></option>`).join('');
   $('supPick').innerHTML = suppliers.length
     ? suppliers.map((s) => `<option value="${esc(s.supplier)}">${esc(s.supplier)} — ${money(s.closing)} owed</option>`).join('')
     : '<option value="">(no suppliers yet)</option>';
@@ -290,7 +331,22 @@ async function loadSupplier() {
   const qs = new URLSearchParams();
   if (toIso($('fFrom').value)) qs.set('from', toIso($('fFrom').value));
   if (toIso($('fTo').value)) qs.set('to', toIso($('fTo').value));
-  DATA = await api(`/api/edge-inventory/${encodeURIComponent(SUPPLIER)}?${qs}`);
+  if ($('fStorage').value) qs.set('storage', $('fStorage').value);
+  // ── A BAD RESPONSE MUST NOT KILL THE PAGE ────────────────────────────
+  // Only the FIRST load was guarded. Everything after it — changing supplier,
+  // applying a filter, saving a delivery — ran unprotected, so a response
+  // missing a field threw an uncaught TypeError and left the page half
+  // painted with no error anywhere she could see. Found by a test that saved
+  // a delivery for a brand-new supplier.
+  try {
+    DATA = await api(`/api/edge-inventory/${encodeURIComponent(SUPPLIER)}?${qs}`);
+    if (!DATA || !DATA.account) throw new Error(`No account came back for ${SUPPLIER}.`);
+  } catch (e) {
+    $('cards').innerHTML = '';
+    $('acctBox').innerHTML = `<div style="padding:30px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">${esc(e.message)}</div>`;
+    $('delivBox').innerHTML = ''; $('gradeBox').innerHTML = ''; $('storageBox').innerHTML = '';
+    return;
+  }
 
   $('cards').innerHTML = [
     card('Owed to them', money(DATA.account.closing), DATA.account.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'),
@@ -304,6 +360,7 @@ async function loadSupplier() {
     ? DATA.receipts.map(deliveryCard).join('')
     : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No deliveries recorded for this supplier.</div>';
   $('gradeBox').innerHTML = gradeTable(DATA.by_grade);
+  $('storageBox').innerHTML = storageTable(DATA.by_storage || []);
 
   $('delivBox').querySelectorAll('.btn-del-rec').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm('Delete this delivery? It does not affect the account.')) return;
@@ -314,7 +371,7 @@ async function loadSupplier() {
 
 $('supPick').addEventListener('change', () => { SUPPLIER = $('supPick').value; loadSupplier(); });
 $('btnApply').addEventListener('click', loadSupplier);
-$('btnClear').addEventListener('click', () => { $('fFrom').value = ''; $('fTo').value = ''; loadSupplier(); });
+$('btnClear').addEventListener('click', () => { $('fFrom').value = ''; $('fTo').value = ''; $('fStorage').value = ''; loadSupplier(); });
 
 // ── THE DELIVERY FORM ──────────────────────────────────────────────────
 // "mimic add load form but we will have only seller in form" — a party, a
@@ -347,6 +404,10 @@ function openRec() {
   // LA, like every other date in this app — a delivery is a US yard date.
   $('rm_date').value = now.toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles', month: '2-digit', day: '2-digit', year: 'numeric' });
   $('rm_pl').value = ''; $('rm_container').value = ''; $('rm_note').value = '';
+  // Pre-filled from the yard filter when one is set: recording three
+  // deliveries into the same yard should not mean typing it three times.
+  // Never pre-filled with a guess when no filter is on.
+  $('rm_storage').value = ($('fStorage').value && $('fStorage').value !== '(not recorded)') ? $('fStorage').value : '';
   recItems = [{}]; paintRecItems();
   $('recError').classList.add('hidden');
   $('recModalOverlay').classList.remove('hidden');
@@ -362,6 +423,7 @@ $('recSave').addEventListener('click', async () => {
     date: $('rm_date').value.trim(),
     packing_list_no: $('rm_pl').value.trim(),
     container_no: $('rm_container').value.trim(),
+    storage: $('rm_storage').value.trim(),
     note: $('rm_note').value.trim(),
     items: recItems.filter((it) => it.description || it.weight || it.price),
   };

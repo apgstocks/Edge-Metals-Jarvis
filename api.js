@@ -4502,7 +4502,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/edge-inventory/suppliers', (req, res) => {
         try {
             const sa = require('./helpers/supplierAccount');
-            res.json({ ok: true, suppliers: sa.overview(), unassigned: sa.unassigned() });
+            const inv = require('./helpers/edgeInventory');
+            res.json({
+                ok: true,
+                suppliers: sa.overview(),
+                unassigned: sa.unassigned(),
+                // Everything she is holding, wherever it is, across suppliers.
+                by_storage: inv.byStorage(),
+                storage_names: inv.storageNames(),
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -4518,8 +4526,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 ok: true,
                 supplier: who,
                 account: sa.statement(who, { from: req.query.from, to: req.query.to }),
-                receipts: inv.forSupplier(who, { from: req.query.from, to: req.query.to }),
+                receipts: inv.forSupplier(who, {
+                    from: req.query.from, to: req.query.to, storage: req.query.storage,
+                }),
                 by_grade: inv.byGrade(who),
+                // Apsara, 2026-09-11: "for local deliveries,i might keep our
+                // inventory in other yards. so a field called Storage needs to
+                // be invented." Per supplier here; the whole picture is on
+                // /api/edge-inventory/suppliers, because "which yard is
+                // holding what" is not a per-supplier question when a yard
+                // rings up asking her to clear space.
+                by_storage: inv.byStorage(who),
+                storage_names: inv.storageNames(),
                 received: inv.summary(who),
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
