@@ -209,7 +209,21 @@ function cleanCharges(input) {
 // Her ten columns, in her order. `derived: true` marks the two this file
 // computes, so the client renders them read-only and cannot post a total that
 // does not follow from its own weight and price.
+// How she gets paid. A closed list: LC and TT are the two, and anything else
+// in this box is a typo rather than a third arrangement.
 const TERMS = ['LC', 'TT'];
+
+// ── AND HOW IT SHIPS, WHICH IS A DIFFERENT QUESTION ──────────────────────
+// Apsara, 2026-09-10: "rename terms with payment terms and next to it should
+// be shipment terms."
+//
+// Two things were living under one word. LC/TT says when the money moves;
+// FOB/CIF says where her responsibility for the container ends — and that
+// second one decides whether ocean freight is her cost or the customer's,
+// which is exactly the charge-direction question the charge list asks per
+// line. Suggested rather than enforced: Incoterms have editions and she
+// trades on terms this file has no business refusing.
+const SHIPMENT_TERMS = ['FOB', 'CFR', 'CIF', 'EXW', 'FAS', 'DAP', 'DDP'];
 
 const COLUMNS = [
     // ── BOOKING FIRST, THEN CONTAINER ────────────────────────────────────
@@ -223,9 +237,11 @@ const COLUMNS = [
     // two tables join on the same pair.
     { key: 'booking_no',     label: 'Booking no',     group: 'shipment' },
     { key: 'container_no',   label: 'Container no',   group: 'shipment' },
-    { key: 'terms',          label: 'Terms',          group: 'shipment', choices: TERMS,
-      hint: 'LC or TT' },
-    { key: 'item',           label: 'Item',           group: 'shipment', suggest: true },
+    { key: 'terms',           label: 'Payment terms',  group: 'shipment', choices: TERMS,
+      hint: 'LC or TT — when the money moves' },
+    { key: 'shipment_terms',  label: 'Shipment terms', group: 'shipment', choices: SHIPMENT_TERMS,
+      suggest: true, hint: 'FOB, CFR, CIF … — where your responsibility ends' },
+    { key: 'item',            label: 'Item',           group: 'shipment', suggest: true },
 
     { key: 'customer',       label: 'Customer name',  group: 'customer', suggest: true },
     { key: 'date',           label: 'Date',           group: 'customer', date: true },
@@ -266,8 +282,11 @@ const COLUMNS = [
 const LEGACY_WRITABLE = ['freight_charges'];
 
 // Her ten, in the order she listed them, for the table. The form uses GROUPS.
+// Her order, 2026-09-10: "i wnt proforma date on right of item .next to it
+// should be reference .rename terms with payment terms and next to it should
+// be shipment terms."
 const TABLE_ORDER = ['booking_no', 'container_no', 'date', 'hbl_no', 'invoice_no',
-    'customer', 'terms', 'proforma_date', 'reference', 'item',
+    'customer', 'terms', 'shipment_terms', 'item', 'proforma_date', 'reference',
     'weight', 'invoice_price', 'amount', 'received', 'balance'];
 
 const GROUPS = [
@@ -283,7 +302,7 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 // HBL number where a bill has a supplier and a container number, and reusing
 // the wrong list would leave the search box quietly matching nothing.
 const FILTERABLE = ['customer', 'invoice_no', 'hbl_no', 'reference',
-    'booking_no', 'container_no', 'item', 'terms'];
+    'booking_no', 'container_no', 'item', 'terms', 'shipment_terms'];
 const filterRows = (rows, q) => bills.filterRows(rows, q, FILTERABLE);
 // Same self-learning list as bills — the customers she has invoiced are the
 // customers offered. See helpers/bills.js:facets.
@@ -291,6 +310,10 @@ function facets(rows) {
     const of = (f) => [...new Set((rows || []).map((r) => String(r[f] || '').trim()).filter(Boolean))].sort();
     return { customer: of('customer'), reference: of('reference'),
              item: of('item'), terms: of('terms'),
+             // Her own past values first, then the standard ones, so a term
+             // she actually uses is at the top and an unused Incoterm is
+             // still one keystroke away.
+             shipment_terms: [...new Set([...of('shipment_terms'), ...SHIPMENT_TERMS])],
              booking_no: of('booking_no'), container_no: of('container_no') };
 }
 
@@ -326,6 +349,11 @@ function clean(input) {
     // no note must fail at the point she saves it, where she still remembers
     // why she typed it, rather than being quietly dropped from a total later.
     if ('charges' in out) out.charges = cleanCharges(out.charges);
+    // Uppercased, not refused: "cfr" and "CFR" are the same term, and a list
+    // this file only suggests is not a list it may reject.
+    if ('shipment_terms' in out && out.shipment_terms) {
+        out.shipment_terms = String(out.shipment_terms).trim().toUpperCase();
+    }
     if ('terms' in out && out.terms) {
         const t = TERMS.find((x) => x.toLowerCase() === String(out.terms).toLowerCase());
         if (!t) throw new Error(`terms must be ${TERMS.join(' or ')}`);
@@ -502,5 +530,5 @@ module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, FILTERABLE, filterRows, facets,
     compute, withTotals, list, listWithTotals, getSale,
     addSale, editSale, deleteSale, summary,
-    sortRows, duplicates, cleanCharges, CHARGE_DIRECTIONS, TERMS,
+    sortRows, duplicates, cleanCharges, CHARGE_DIRECTIONS, TERMS, SHIPMENT_TERMS,
 };

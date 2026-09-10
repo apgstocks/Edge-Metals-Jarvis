@@ -1195,21 +1195,31 @@ section('G6 — four tabs, two stores');
     const doc = w.document;
     await w.renderLedgerTab('sales');
 
-    const tabs = [...doc.querySelectorAll('.sales-sub')].map((b) => b.dataset.sub);
-    ck('all four tabs are there', tabs.join(',') === 'outgoing,incoming,freight,commission', tabs.join(','));
-    // Read off the DOM, not off w.salesSubTab: a top-level `let` is in scope
-    // for the script but is NOT a property of window, so that read was
-    // comparing undefined and would have passed for any default.
-    ck('  Outgoing is where it opens',
-       /var\(--accent\)/.test(doc.querySelector('.sales-sub[data-sub="outgoing"]').getAttribute('style'))
-       && !/var\(--accent\)/.test(doc.querySelector('.sales-sub[data-sub="freight"]').getAttribute('style')),
-       doc.querySelector('.sales-sub[data-sub="outgoing"]').getAttribute('style'));
+    // ── FOUR NAV TABS, NOT ONE TAB WITH FOUR SUB-TABS ────────────────
+    // Apsara, 2026-09-10, after the first build nested them: "i told that i
+    // want sales to be in different tabs na". They are entries in the nav,
+    // beside Bills — asserted against the rendered nav, because a strip of
+    // sub-tabs inside Sales passed the previous version of this test.
+    const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
+    ck('all four are tabs in their own right',
+       ['sales', 'sales-incoming', 'sales-freight', 'sales-commission']
+         .every((t) => nav.includes(t)), nav.join(','));
+    ck('  labelled by what they hold, not by "Sales"',
+       [...doc.querySelectorAll('.nav-btn')]
+         .filter((b) => String(b.dataset.tab).startsWith('sales'))
+         .map((b) => b.textContent).join(',') === 'Outgoing,Incoming,Freight,Commission',
+       [...doc.querySelectorAll('.nav-btn')].filter((b) => String(b.dataset.tab).startsWith('sales')).map((b) => b.textContent).join(','));
+    ck('  sitting next to Bills, so the grouping is still legible',
+       nav.indexOf('sales') === nav.indexOf('bills') + 1, nav.join(','));
+    ck('  and there is no second row of sub-tabs',
+       doc.querySelectorAll('.sales-sub').length === 0,
+       'two rows of tabs for one thing is chrome, not navigation');
     ck('  and the duplicate container is called out where she will see it',
        /appears 2 times under B1/.test(doc.getElementById('viewRoot').textContent),
        'a duplicate double-counts on the join to Bills');
 
     // ── FREIGHT ──────────────────────────────────────────────────────────
-    doc.querySelector('.sales-sub[data-sub="freight"]').click();
+    await w.renderSalesSubTab('freight');
     await new Promise((r) => setTimeout(r, 60));
     let text = doc.getElementById('viewRoot').textContent;
     ck('Freight lists the charge she pays', /Ocean freight/.test(text));
@@ -1223,7 +1233,7 @@ section('G6 — four tabs, two stores');
        'a Freight table with its own container box is a second copy that will disagree');
 
     // ── COMMISSION ───────────────────────────────────────────────────────
-    doc.querySelector('.sales-sub[data-sub="commission"]').click();
+    await w.renderSalesSubTab('commission');
     await new Promise((r) => setTimeout(r, 60));
     text = doc.getElementById('subBody').textContent;
     ck('Commission shows how it was worked out, not a second weight box',
@@ -1259,7 +1269,7 @@ section('G6 — four tabs, two stores');
     }
 
     // ── INCOMING ─────────────────────────────────────────────────────────
-    doc.querySelector('.sales-sub[data-sub="incoming"]').click();
+    await w.renderSalesSubTab('incoming');
     await new Promise((r) => setTimeout(r, 60));
     text = doc.getElementById('subBody').textContent;
     ck('Incoming lists what arrived', /11,865\.00/.test(text), text.slice(0, 160));
@@ -1269,11 +1279,18 @@ section('G6 — four tabs, two stores');
        /Bank charges/.test(text) && /Discounts/.test(text));
     ck('  and a way to record a new one', !!doc.getElementById('btnReceipt'));
 
+    // ── AND OUTGOING STILL RENDERS OUTGOING ──────────────────────────────
+    // It did not, briefly: renderLedgerTab opened with a guard left over from
+    // the sub-tab build that sent it back to whichever sales view had been
+    // shown last. Clicking Outgoing would have quietly given her Incoming.
     // ── FROM THE MATCHING BILL ───────────────────────────────────────────
-    doc.querySelector('.sales-sub[data-sub="outgoing"]').click();
+    await w.renderLedgerTab('sales');
     await new Promise((r) => setTimeout(r, 60));
-    doc.getElementById('btnFromBill').click();
+    doc.getElementById("btnFromBill").click();
     await new Promise((r) => setTimeout(r, 50));
+    ck('Outgoing renders Outgoing, whatever was open before',
+       !!doc.getElementById('btnFromBill') && !doc.getElementById('subBody'),
+       'a stale sub-tab guard sent it to Incoming instead');
     ck('New from bill lists the containers already bought', !!doc.getElementById('fbModal'));
     ck('  one already sold is shown and NOT offered',
        doc.querySelector('.fbPick[data-id="B_B"]').disabled === true,
@@ -1298,6 +1315,53 @@ section('G6 — four tabs, two stores');
        'a suggestion is not a row');
 
     await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
+section('G7 — a fixed list the form actually offers');
+{
+    // `choices` sat on the sales columns for a day and was rendered nowhere,
+    // so Payment terms was a plain text box that the server then rejected on
+    // save — the worst order to find out that a field has a fixed set.
+    const ROWS = [{ id: 'S1', booking_no: 'B1', container_no: 'C1', customer: 'Daekwang',
+                    date: '09/10/2026', terms: 'TT', shipment_terms: 'CFR',
+                    weight: 29000, invoice_price: 0.41 }].map(sales.withTotals);
+    const { w, dom } = await mount({
+        '/api/sales': () => ({ sales: ROWS, summary: sales.summary(ROWS),
+            columns: sales.tableColumns(), fields: sales.COLUMNS, groups: sales.GROUPS,
+            facets: sales.facets(ROWS), filterable: sales.FILTERABLE, total_unfiltered: 1 }),
+        '/api/sales/preview': () => sales.compute({}),
+        '/api/bills': billsRoute,
+    });
+    const doc = w.document;
+    await w.renderLedgerTab('sales');
+    w.openLedgerForm('sales');
+
+    ck('Payment terms offers its fixed list',
+       !!doc.querySelector('#ledlist-terms option[value="LC"]')
+       && !!doc.querySelector('#ledlist-terms option[value="TT"]'),
+       'a closed list the form does not show is a text box that fails on save');
+    ck('  and the box is wired to it',
+       doc.querySelector('#ledgerForm [name="terms"]').getAttribute('list') === 'ledlist-terms');
+    ck('Shipment terms offers the standard ones',
+       !!doc.querySelector('#ledlist-shipment_terms option[value="FOB"]')
+       && !!doc.querySelector('#ledlist-shipment_terms option[value="CIF"]'));
+    ck('  with what she has already used in the list too',
+       !!doc.querySelector('#ledlist-shipment_terms option[value="CFR"]'));
+    ck('  and neither is a <select>, so an unlisted term can still be typed',
+       doc.querySelector('#ledgerForm [name="shipment_terms"]').tagName === 'INPUT');
+
+    const labels = [...doc.querySelectorAll('#viewRoot thead th')].map((t) => t.textContent.trim());
+    ck('the table reads in her order',
+       labels.indexOf('Proforma date') === labels.indexOf('Item') + 1
+       && labels.indexOf('Reference') === labels.indexOf('Proforma date') + 1
+       && labels.indexOf('Shipment terms') === labels.indexOf('Payment terms') + 1,
+       labels.join(' | '));
+    ck('  and "Terms" alone is gone from the header',
+       !labels.includes('Terms'), labels.join(' | '));
+
+    doc.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 40));
     dom.window.close();
 }
 

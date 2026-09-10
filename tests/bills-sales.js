@@ -238,14 +238,26 @@ section('D — her columns, in her order');
     // Freight charges is off the table on purpose — it became a charge with a
     // note. compute() still folds the stored value in, so nothing entered
     // before today is lost; section N covers that.
+    // Reordered 2026-09-10: "i wnt proforma date on right of item .next to it
+    // should be reference .rename terms with payment terms and next to it
+    // should be shipment terms."
     const sw = ['Booking no', 'Container no', 'Date', 'HBL number', 'Invoice number',
-        'Customer name', 'Terms', 'Proforma date', 'Reference', 'Item',
-        'Weight', 'Invoice price', 'Invoice amount', 'Received', 'Balance'];
+        'Customer name', 'Payment terms', 'Shipment terms', 'Item', 'Proforma date',
+        'Reference', 'Weight', 'Invoice price', 'Invoice amount', 'Received', 'Balance'];
     ck('the sale has the columns she listed', sales.tableColumns().length === sw.length,
        String(sales.tableColumns().length));
     ck('  in her order, booking before container',
        sales.tableColumns().map((c) => c.label).join('|') === sw.join('|'),
        sales.tableColumns().map((c) => c.label).join('|'));
+    const at = (l) => sw.indexOf(l);
+    ck('  proforma date sits to the right of item, reference beside it',
+       at('Proforma date') === at('Item') + 1 && at('Reference') === at('Proforma date') + 1);
+    ck('  and shipment terms next to payment terms',
+       at('Shipment terms') === at('Payment terms') + 1);
+    ck('  two different questions, no longer one word',
+       sales.COLUMNS.find((c) => c.key === 'terms').label === 'Payment terms'
+       && !!sales.COLUMNS.find((c) => c.key === 'shipment_terms'),
+       'LC/TT says when the money moves; FOB/CIF says where her risk ends');
     ck('  which is the same pair bills is keyed on, so the two can join',
        bills.COLUMNS.some((c) => c.key === 'booking_no') && bills.COLUMNS.some((c) => c.key === 'container_no'),
        'margin per container needs both sides keyed the same way');
@@ -593,10 +605,19 @@ section('F — who may see her supplier prices');
 
     // The nav hides them too — UX only, the server above is the boundary.
     const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
-    ck('both tabs are registered under Operations',
+    // Sales became FOUR entries on 2026-09-10 — "i told that i want sales to
+    // be in different tabs na" — so this now checks that every one of them is
+    // under Operations rather than that a single 'Sales' label exists.
+    ck('every tab is registered under Operations',
        /\{ id: 'bills', label: 'Bills', group: 'Operations' \}/.test(html)
-       && /\{ id: 'sales', label: 'Sales', group: 'Operations' \}/.test(html),
+       && ['sales', 'sales-incoming', 'sales-freight', 'sales-commission']
+            .every((id) => new RegExp(`id: '${id}',\\s+label: '[A-Za-z]+',\\s+group: 'Operations'`).test(html)),
        'her answer when asked: "Both as new tabs under Operations"');
+    ck('  and the three derived views each have their own branch',
+       /if \(tab === 'sales-incoming'\) return renderSalesSubTab\('incoming'\)/.test(html)
+       && /if \(tab === 'sales-freight'\) return renderSalesSubTab\('freight'\)/.test(html)
+       && /if \(tab === 'sales-commission'\) return renderSalesSubTab\('commission'\)/.test(html),
+       'a nav entry with no branch is a tab that loads for ever');
     ck('  and each one actually renders something',
        /if \(tab === 'bills'\) return renderLedgerTab\('bills'\)/.test(html)
        && /if \(tab === 'sales'\) return renderLedgerTab\('sales'\)/.test(html),
@@ -1018,6 +1039,20 @@ section('N — sales at container grain: charges, commission, and the join');
         charges: [{ what: 'Detention', amount: 450, direction: 'in' }] } });
     ck('the ROUTE refuses a charge with no note too', viaRoute.status === 400, viaRoute.raw);
 
+    // Shipment terms are SUGGESTED, not policed — Incoterms have editions and
+    // she trades on terms this file has no business refusing.
+    const ship = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang', terms: 'TT', shipment_terms: 'cfr' } });
+    ck('a shipment term is tidied, not rejected',
+       ship.status === 200 && ship.json.sale.shipment_terms === 'CFR', ship.raw);
+    const odd = await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Daekwang', terms: 'TT', shipment_terms: 'DAT' } });
+    ck('  and one not on the list is still accepted',
+       odd.status === 200, 'unlike payment terms, this list only suggests');
+    ck('  while payment terms stays closed',
+       (await req('POST', '/api/sales', { sid: admin, body: {
+           date: '09/10/2026', customer: 'Daekwang', terms: 'DP' } })).status === 400);
+
     const listed = await req('GET', '/api/sales', { sid: admin });
     ck('the sales list can be searched by container',
        (listed.json.filterable || []).includes('container_no'),
@@ -1319,6 +1354,71 @@ section('P — settling what a sale costs: freight out, and the agent');
     const staff = (await login('staff-pw-ccccccccccc')).json.sid;
     ck('staff cannot reach settlements',
        (await req('GET', '/api/sales-settlements', { sid: staff })).status === 403);
+}
+
+section('Q — the customer box, and the figures that move as she types');
+{
+    // Apsara, 2026-09-10: "also i want customer to be populated with address
+    // book data as i type match" and "also i want invoice amount and
+    // commission amount to be computed dynamically".
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const ab = require(path.join(ROOT, 'helpers/addressBook'));
+
+    // Two aliases for one company — she calls it both, and offering only the
+    // first is how the second gets typed by hand and stops matching.
+    await ab.addManualEntry(['Daekwang Steel', 'DK Metals'], 'Busan, Korea');
+    await ab.addManualEntry(['Hanwha'], 'Seoul, Korea');
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Typed By Hand Co', booking_no: 'FAC1', container_no: 'FACU1' } });
+
+    const listed = await req('GET', '/api/sales', { sid: admin });
+    const offered = listed.json.facets.customer || [];
+    ck('the address book feeds the customer type-ahead',
+       offered.includes('Daekwang Steel') && offered.includes('Hanwha'),
+       JSON.stringify(offered));
+    ck('  every alias, not just the first',
+       offered.includes('DK Metals'),
+       'one company she calls two things is still one company');
+    ck('  and what she has already invoiced is still there',
+       offered.includes('Typed By Hand Co'), JSON.stringify(offered));
+    ck('  her own customers first, spelled the way the invoices say',
+       offered.indexOf('Typed By Hand Co') < offered.indexOf('Daekwang Steel'),
+       JSON.stringify(offered));
+    ck('  with no duplicates', new Set(offered).size === offered.length, JSON.stringify(offered));
+    ck('  and the column is marked as a suggesting one',
+       (sales.COLUMNS.find((c) => c.key === 'customer') || {}).suggest === true,
+       'the facet list is worth nothing if the field does not read it');
+
+    // ── COMPUTED WHILE SHE TYPES ─────────────────────────────────────────
+    // The strip in the form and the cards on the tab are the same list, and
+    // both are fed by this route. Every figure it names must come back.
+    const pv = await req('POST', '/api/sales/preview', { sid: admin, body: {
+        weight: 29000, invoice_price: 0.41, commission_per_mt: 6,
+        charges: [{ what: 'Detention', amount: 450, direction: 'in', why: 'their delay' }],
+    } });
+    ck('a preview computes the invoice amount before anything is saved',
+       pv.json.amount === 11890, String(pv.json.amount));
+    ck('  and the commission with it', pv.json.commission_amount === 78.92,
+       String(pv.json.commission_amount));
+    ck('  and what the customer will owe', pv.json.receivable === 12340, String(pv.json.receivable));
+    ck('  without saving a row', (await req('GET', '/api/sales', { sid: admin }))
+       .json.sales.every((x) => x.container_no !== 'FACU9'));
+
+    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const cards = /sales: \{[\s\S]*?cards: \[([\s\S]*?)\],\n  \},/.exec(html);
+    ck('the live strip names the invoice amount and the commission',
+       !!cards && /'amount'/.test(cards[1]) && /'commission_amount'/.test(cards[1]),
+       cards ? cards[1].replace(/\s+/g, ' ').trim() : 'card list not found');
+    ck('  and no longer names a column that became a charge',
+       !!cards && !/freight_charges/.test(cards[1]),
+       'freight_charges is folded into the charge list — a dead card is a dash for ever');
+    ck('  every figure it names really comes back from preview',
+       !!cards && [...cards[1].matchAll(/'([a-z_]+)',\s*'(money|num)'/g)]
+         .every((m) => Object.prototype.hasOwnProperty.call(pv.json, m[1])),
+       cards ? [...cards[1].matchAll(/'([a-z_]+)',\s*'(money|num)'/g)].map((m) => m[1]).join(',') : '');
+    ck('  and the strip is fed by the SERVER, not a second copy of her formulas',
+       /\$\{K\.path\}\/preview/.test(html),
+       'computing this in the browser is free to disagree with the file that decides it');
 }
 
 if (server) server.close();

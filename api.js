@@ -3985,7 +3985,30 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             res.json({
                 sales: rows,
                 summary: s.summary(rows),
-                facets: s.facets(all),
+                // ── THE ADDRESS BOOK FEEDS THE CUSTOMER BOX ──────────────
+                // Apsara, 2026-09-10: "also i want customer to be populated
+                // with address book data as i type match".
+                //
+                // Merged on the SERVER into the same facets the type-ahead
+                // already reads, so the form needs no second lookup and the
+                // list is one list. Every alias is offered, not just the
+                // first: an entry labelled "Daekwang/DK Metals" is one
+                // company she calls two things, and offering only the first
+                // is how the second gets typed by hand and stops matching.
+                facets: (() => {
+                    const f = s.facets(all);
+                    try {
+                        const book = require('./helpers/addressBook').loadAddressBook();
+                        const names = [];
+                        for (const e of (book || [])) for (const a of (e.aliases || [])) {
+                            if (String(a || '').trim()) names.push(String(a).trim());
+                        }
+                        // Her own past customers first — those are the ones
+                        // spelled the way the invoices already say.
+                        f.customer = [...new Set([...(f.customer || []), ...names])];
+                    } catch (e) { console.warn('[SALES] address book unavailable:', e.message); }
+                    return f;
+                })(),
                 filterable: s.FILTERABLE,
                 total_unfiltered: all.length,
                 columns: s.tableColumns(),

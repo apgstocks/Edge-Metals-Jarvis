@@ -762,7 +762,26 @@ const NAV_ITEMS = [
   // both. This nav filtering is only so nobody sees a tab that would refuse
   // them; api.js carries the reasoning.
   { id: 'bills', label: 'Bills', group: 'Operations' },
-  { id: 'sales', label: 'Sales', group: 'Operations' },
+
+  // ── SALES IS FOUR TABS, NOT ONE TAB WITH FOUR SUB-TABS ───────────────
+  // Apsara, 2026-09-10: "What if we have tabs like Outgoing(invoice data),
+  // Incoming(payment data), Freight(...) Similarly a tab called commission",
+  // and then, when the first build nested them inside Sales: "i told that i
+  // want sales to be in different tabs na".
+  //
+  // Four entries in the nav, beside Bills. A strip of sub-tabs inside one
+  // Sales tab is one click further from everything and it hides three of the
+  // four behind a tab that does not name them — which is the same as not
+  // having built them. They sit adjacent here, so the grouping is still
+  // legible without a second row of chrome.
+  //
+  // They are FOUR VIEWS OF TWO STORES, not four tables. Freight and
+  // Commission are derived from the container row (see helpers/sales.js and
+  // helpers/salesSettlements.js); the nav says nothing about storage.
+  { id: 'sales',            label: 'Outgoing',   group: 'Operations' },
+  { id: 'sales-incoming',   label: 'Incoming',   group: 'Operations' },
+  { id: 'sales-freight',    label: 'Freight',    group: 'Operations' },
+  { id: 'sales-commission', label: 'Commission', group: 'Operations' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -936,6 +955,9 @@ async function loadTab(tab) {
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
     if (tab === 'bills') return renderLedgerTab('bills');
     if (tab === 'sales') return renderLedgerTab('sales');
+    if (tab === 'sales-incoming') return renderSalesSubTab('incoming');
+    if (tab === 'sales-freight') return renderSalesSubTab('freight');
+    if (tab === 'sales-commission') return renderSalesSubTab('commission');
     if (tab === 'trucker-bills') return renderTruckerTab();
     if (tab === 'petty') return renderPettyCashTab();
     if (tab === 'spend') return renderSpendReportTab();
@@ -4689,12 +4711,29 @@ const LEDGER_KINDS = {
   sales: {
     eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale', editLabel: 'Edit sale',
     path: '/api/sales', listKey: 'sales', itemKey: 'sale',
-    money: ['invoice_price', 'amount', 'freight_charges'],
-    filters: ['customer'],
+    money: ['invoice_price', 'amount', 'commission_per_mt', 'commission_amount',
+            'received', 'balance'],
+    filters: ['customer', 'terms', 'item'],
     weights: ['weight'],
-    cards: [['Weight (lbs)', 'weight_lb', 'num'], ['Weight (MT)', 'weight_mt', 'num'],
+    // ── WHAT THE LIVE STRIP SHOWS WHILE SHE TYPES ────────────────────────
+    // Apsara, 2026-09-10: "also i want invoice amount and commission amount
+    // to be computed dynamically". Both were already computed server-side;
+    // what was missing is that this list — which drives BOTH the totals strip
+    // in the form and the cards on the tab — still named freight_charges, a
+    // column that became a charge with a note, and never named commission at
+    // all. So the figure existed and she could not see it until after saving.
+    //
+    // Every one of these comes back from POST /api/sales/preview on each
+    // keystroke. Computing them in the browser would be a second
+    // implementation of her own formulas, free to disagree with the first.
+    // Balance is deliberately NOT here: it depends on receipts, so a preview
+    // of an unsaved row can only ever show a dash, and a permanent dash in a
+    // live strip trains her to stop reading the strip. It is a column on the
+    // table, where there is a saved row for it to mean something about.
+    cards: [['Weight (MT)', 'weight_mt', 'num'],
             ['Invoice amount', 'amount', 'money'],
-            ['Freight charges', 'freight_charges', 'money'], ['Net of freight', 'net_of_freight', 'money']],
+            ['Commission', 'commission_amount', 'money'],
+            ['Receivable', 'receivable', 'money']],
   },
 };
 
@@ -4796,34 +4835,23 @@ const ledgerFilters = { bills: {}, sales: {} };
 // disagree. Commission especially — it is weight x rate, so a second weight
 // on a Commission table would compute the agent's money off a stale figure
 // and nothing on screen would say so.
-let salesSubTab = 'outgoing';
-const SALES_SUBTABS = [
-  ['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
-  ['freight', 'Freight'], ['commission', 'Commission'],
-];
-function salesSubTabBar() {
-  const tab = ([id, label]) => {
-    const on = salesSubTab === id;
-    return `<button class="sales-sub" data-sub="${id}" style="background:none; border:none; cursor:pointer;`
-      + ` font-size:12px; padding:8px 14px;`
-      + ` color:${on ? 'var(--text-primary)' : 'var(--text-muted)'};`
-      + ` border-bottom:2px solid ${on ? 'var(--accent)' : 'transparent'};">${label}</button>`;
-  };
-  return `<div style="display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px;">`
-    + SALES_SUBTABS.map(tab).join('') + `</div>`;
-}
-
-function wireSalesSubTabs() {
-  document.querySelectorAll('.sales-sub').forEach((b) => {
-    b.onclick = () => { salesSubTab = b.dataset.sub; renderLedgerTab('sales'); };
-  });
-}
+// The three derived sales views share one render function; the NAV is what
+// switches between them (see the Operations block above), so there is no
+// current-sub-tab state to keep. There WAS, briefly, and it was a bug: a
+// leftover `if (salesSubTab !== 'outgoing') return renderSalesSubTab(...)`
+// at the top of renderLedgerTab meant clicking Outgoing rendered whichever
+// sales view had been open last. Caught by its own test, which could not
+// find the New-from-bill button because the page was showing Incoming.
+const SALES_TAB_TITLES = {
+  incoming: ['Sales', 'Incoming'],
+  freight: ['Sales', 'Freight'],
+  commission: ['Sales', 'Commission'],
+};
 
 async function renderLedgerTab(kind) {
   // Incoming, Freight and Commission are their own screens — they are not the
   // sales table with different columns, and pretending otherwise is how a
   // charge list ends up rendered as a row of blanks.
-  if (kind === 'sales' && salesSubTab !== 'outgoing') return renderSalesSubTab(salesSubTab);
   const K = LEDGER_KINDS[kind];
   const f = ledgerFilters[kind] || {};
   // Sent to the SERVER, which filters and then totals — so the summary row
@@ -4882,7 +4910,6 @@ async function renderLedgerTab(kind) {
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
       </div>
-      ${kind === 'sales' ? salesSubTabBar() : ''}
       ${kind === 'sales' && (data.duplicates || []).length ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
         ${(data.duplicates || []).map((d) => `${esc(d.container_no)} appears ${d.ids.length} times under ${esc(d.booking_no)}`).join(' · ')}
         — usually a typo, occasionally a container split across two invoices. Worth a look either way: the margin against Bills counts it twice.
@@ -4952,7 +4979,6 @@ async function renderLedgerTab(kind) {
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
   }).catch(() => {});
 
-  if (kind === 'sales') wireSalesSubTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
@@ -5074,9 +5100,16 @@ async function openFromBill() {
 // each of those numbers is decided, and a tab cannot disagree with the tab
 // beside it.
 async function renderSalesSubTab(which) {
+  const [eyebrow, title] = SALES_TAB_TITLES[which] || ['Sales', which];
   const root = $('viewRoot');
-  root.innerHTML = `<div class="section-title">Sales</div>${salesSubTabBar()}<div id="subBody" style="color:var(--text-muted); font-size:13px;">Loading…</div>`;
-  wireSalesSubTabs();
+  root.innerHTML = `
+    <div style="max-width:100%; margin:0 auto; padding:34px 28px 80px;">
+      <div style="margin-bottom:14px;">
+        <div class="eyebrow">${esc(eyebrow)}</div>
+        <h2 style="font-size:19px; text-transform:uppercase; margin:0;">${esc(title)}</h2>
+      </div>
+      <div id="subBody" style="color:var(--text-muted); font-size:13px;">Loading…</div>
+    </div>`;
   try {
     if (which === 'incoming') await renderIncoming();
     else await renderPayables(which);
@@ -5135,7 +5168,7 @@ async function renderIncoming() {
         return;
       }
       await api(`/api/sales-receipts/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' });
-      renderSalesSubTab('incoming');
+      loadTab('sales-incoming');
     };
   });
 }
@@ -5330,7 +5363,7 @@ async function openReceiptForm(data, customer) {
         ref: $('rcRef').value, customer, allocations: allocs(),
       }) });
       close();
-      renderSalesSubTab('incoming');
+      loadTab('sales-incoming');
     } catch (e) { $('rcErr').textContent = e.message || 'Could not record it'; }
   };
 }
@@ -5440,7 +5473,7 @@ async function openSettleForm(data, which) {
         ref: $('stRef').value, payee: $('stPayee').value, allocations: allocs(),
       }) });
       close();
-      renderSalesSubTab(which);
+      loadTab(which === 'commission' ? 'sales-commission' : 'sales-freight');
     } catch (e) { $('stErr').textContent = e.message || 'Could not record it'; }
   };
 }
@@ -6102,7 +6135,7 @@ function openLedgerForm(kind, existing, seed) {
       // click lands slightly wrong. The options come from the values already
       // on her bills, so typing a new supplier puts it in the list the moment
       // the bill saves. Nothing to maintain and nothing to fall out of step.
-      c.suggest ? `list="ledlist-${esc(c.key)}"` : '',
+      (c.suggest || (c.choices && c.choices.length)) ? `list="ledlist-${esc(c.key)}"` : '',
       // ── ROOM FOR THE UNIT, OR IT SITS ON THE NUMBER ──────────────────
       // The price field renders "$ 0.14 /lb" with the $ and /lb absolutely
       // positioned. Right-aligned text ran straight under the suffix and came
@@ -6119,8 +6152,17 @@ function openLedgerForm(kind, existing, seed) {
 
     // white-space:nowrap is the other half of the alignment fix — a label
     // that cannot wrap cannot push its input a line below its neighbours.
-    const opts = c.suggest ? ((ledgerState.facets || {})[c.key] || []) : [];
-    const datalist = c.suggest
+    // ── WHAT THE BOX OFFERS ──────────────────────────────────────────
+    // Two sources, one list. `suggest` is what she has already typed, fed by
+    // the server's facets; `choices` is a fixed set the column declares —
+    // LC/TT, FOB/CFR/CIF. `choices` was on the columns for a day and rendered
+    // nowhere, so Payment terms was a plain text box the server then rejected
+    // on save, which is the worst order to find out.
+    const opts = [...new Set([
+      ...(c.suggest ? ((ledgerState.facets || {})[c.key] || []) : []),
+      ...(Array.isArray(c.choices) ? c.choices : []),
+    ])];
+    const datalist = opts.length
       ? `<datalist id="ledlist-${esc(c.key)}">${opts.map((o) => `<option value="${esc(o)}"></option>`).join('')}</datalist>`
       : '';
 
