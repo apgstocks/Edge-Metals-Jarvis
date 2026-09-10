@@ -659,20 +659,25 @@ section('F — who may see her supplier prices');
     // Sales became FOUR entries on 2026-09-10 — "i told that i want sales to
     // be in different tabs na" — so this now checks that every one of them is
     // under Operations rather than that a single 'Sales' label exists.
-    ck('every tab is registered under Operations',
+    // Two nav entries, tabs inside — her last word, seeing six stacked in the
+    // sidebar: "i want them to be tabs inside not separate option".
+    ck('Edge Metals is two entries under Operations',
        /\{ id: 'bills', label: 'Bills', group: 'Operations' \}/.test(html)
-       && ['sales', 'sales-incoming', 'sales-freight', 'sales-commission']
-            .every((id) => new RegExp(`id: '${id}',\\s+label: '[A-Za-z]+',\\s+group: 'Operations'`).test(html)),
+       && /\{ id: 'sales', label: 'Sales', group: 'Operations' \}/.test(html),
        'her answer when asked: "Both as new tabs under Operations"');
-    ck('  and the three derived views each have their own branch',
-       /if \(tab === 'sales-incoming'\) return renderSalesSubTab\('incoming'\)/.test(html)
-       && /if \(tab === 'sales-freight'\) return renderSalesSubTab\('freight'\)/.test(html)
-       && /if \(tab === 'sales-commission'\) return renderSalesSubTab\('commission'\)/.test(html),
-       'a nav entry with no branch is a tab that loads for ever');
+    ck('  with no nav entry per view',
+       !/id: 'sales-incoming'/.test(html) && !/id: 'metals-trucking'/.test(html),
+       'six top-level entries for two subjects is clutter');
+    ck('  and the strips name every view',
+       /\['outgoing', 'Outgoing'\]/.test(html) && /\['trucking', 'Trucking'\]/.test(html),
+       'a view with no tab is a view she cannot reach');
     ck('  and each one actually renders something',
-       /if \(tab === 'bills'\) return renderLedgerTab\('bills'\)/.test(html)
-       && /if \(tab === 'sales'\) return renderLedgerTab\('sales'\)/.test(html),
+       /if \(tab === 'bills'\) \{ metalsTab\.bills = 'bills'; return renderLedgerTab\('bills'\); \}/.test(html)
+       && /if \(tab === 'sales'\) \{ metalsTab\.sales = 'outgoing'; return renderLedgerTab\('sales'\); \}/.test(html),
        'a nav entry with no branch is a tab that loads for ever');
+    ck('    landing on the first tab, not wherever she was last',
+       /metalsTab\.sales = 'outgoing'/.test(html),
+       'remembering the sub-tab is what made an earlier build show Incoming for Outgoing');
     ck('  the table is built from the SERVER columns, not a second list here',
        /ledgerState\.columns|Array\.isArray\(data\.columns\)/.test(html)
        && !/Source\/Destination/.test(html),

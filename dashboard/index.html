@@ -763,33 +763,29 @@ const NAV_ITEMS = [
   // them; api.js carries the reasoning.
   { id: 'bills', label: 'Bills', group: 'Operations' },
 
-  // ── SALES IS FOUR TABS, NOT ONE TAB WITH FOUR SUB-TABS ───────────────
-  // Apsara, 2026-09-10: "What if we have tabs like Outgoing(invoice data),
-  // Incoming(payment data), Freight(...) Similarly a tab called commission",
-  // and then, when the first build nested them inside Sales: "i told that i
-  // want sales to be in different tabs na".
+  // ── TWO NAV ENTRIES, TABS INSIDE ─────────────────────────────────────
+  // This has been round the houses and the last word is hers, seeing it
+  // deployed: "i want them to be tabs inside not separate option".
   //
-  // Four entries in the nav, beside Bills. A strip of sub-tabs inside one
-  // Sales tab is one click further from everything and it hides three of the
-  // four behind a tab that does not name them — which is the same as not
-  // having built them. They sit adjacent here, so the grouping is still
-  // legible without a second row of chrome.
+  // The history, so nobody re-litigates it: they began as sub-tabs inside
+  // Sales; she said "i told that i want sales to be in different tabs na" and
+  // they became six nav entries; then she saw those six stacked in the
+  // sidebar — Bills, Outgoing, Incoming, Freight, Commission, Trucking — and
+  // six top-level entries for what is two subjects reads as clutter. She is
+  // right both times: they DO need to be tabs, and they need to be tabs
+  // INSIDE something rather than a second row of chrome under a name that
+  // mentions none of them.
   //
-  // They are FOUR VIEWS OF TWO STORES, not four tables. Freight and
-  // Commission are derived from the container row (see helpers/sales.js and
-  // helpers/salesSettlements.js); the nav says nothing about storage.
-  { id: 'sales',            label: 'Outgoing',   group: 'Operations' },
-  { id: 'sales-incoming',   label: 'Incoming',   group: 'Operations' },
-  { id: 'sales-freight',    label: 'Freight',    group: 'Operations' },
-  { id: 'sales-commission', label: 'Commission', group: 'Operations' },
-
-  // ── EDGE METALS HAULAGE ──────────────────────────────────────────────
-  // Apsara, 2026-09-10: "Similar to sales,crate a tab called Trucking".
-  // Deliberately NOT the existing Truckers tab above, which is Edge Yard —
-  // different company, different store, different line in the spend report.
-  // The label says Trucking against the Yard's Truckers so the two read apart
-  // at a glance in the same menu.
-  { id: 'metals-trucking', label: 'Trucking', group: 'Operations' },
+  // So: two entries, each with its own strip.
+  //   Bills  → Bills · Trucking
+  //   Sales  → Outgoing · Incoming · Freight · Commission
+  //
+  // Trucking sits under BILLS rather than Sales because that is where its
+  // data comes from — a haulage line IS a bill's trucking amount, derived
+  // and never stored (see helpers/metalsTrucking.js). Filing it under Sales
+  // would put it one subject away from the thing it is made of. Say the word
+  // and it moves; the strip is one array.
+  { id: 'sales', label: 'Sales', group: 'Operations' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -961,12 +957,11 @@ async function loadTab(tab) {
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
-    if (tab === 'bills') return renderLedgerTab('bills');
-    if (tab === 'sales') return renderLedgerTab('sales');
-    if (tab === 'sales-incoming') return renderSalesSubTab('incoming');
-    if (tab === 'sales-freight') return renderSalesSubTab('freight');
-    if (tab === 'sales-commission') return renderSalesSubTab('commission');
-    if (tab === 'metals-trucking') return renderMetalsTruckingTab();
+    if (tab === 'bills') { metalsTab.bills = 'bills'; return renderLedgerTab('bills'); }
+    // Arriving from the NAV always lands on the first tab of the section.
+    // Remembering which sub-tab was last open is what made an earlier build
+    // render Incoming when she clicked Outgoing.
+    if (tab === 'sales') { metalsTab.sales = 'outgoing'; return renderLedgerTab('sales'); }
     if (tab === 'trucker-bills') return renderTruckerTab();
     if (tab === 'petty') return renderPettyCashTab();
     if (tab === 'spend') return renderSpendReportTab();
@@ -4856,6 +4851,41 @@ const ledgerFilters = { bills: {}, sales: {} };
 // at the top of renderLedgerTab meant clicking Outgoing rendered whichever
 // sales view had been open last. Caught by its own test, which could not
 // find the New-from-bill button because the page was showing Incoming.
+// Which tab is showing in each section. Reset by the nav on arrival.
+const metalsTab = { bills: 'bills', sales: 'outgoing' };
+
+const METALS_TABS = {
+  bills: [['bills', 'Bills'], ['trucking', 'Trucking']],
+  sales: [['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
+          ['freight', 'Freight'], ['commission', 'Commission']],
+};
+
+function metalsTabBar(section) {
+  const cur = metalsTab[section];
+  const one = ([id, label]) => {
+    const on = cur === id;
+    return `<button class="metals-tab" data-section="${section}" data-tab="${id}"`
+      + ` style="background:none; border:none; cursor:pointer; font-size:12px; padding:8px 14px;`
+      + ` color:${on ? 'var(--text-primary)' : 'var(--text-muted)'};`
+      + ` border-bottom:2px solid ${on ? 'var(--accent)' : 'transparent'};">${label}</button>`;
+  };
+  return `<div style="display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px;">`
+    + METALS_TABS[section].map(one).join('') + `</div>`;
+}
+
+function wireMetalsTabs() {
+  document.querySelectorAll('.metals-tab').forEach((b) => {
+    b.onclick = () => {
+      const { section, tab } = b.dataset;
+      metalsTab[section] = tab;
+      if (section === 'bills') {
+        return tab === 'trucking' ? renderMetalsTruckingTab() : renderLedgerTab('bills');
+      }
+      return tab === 'outgoing' ? renderLedgerTab('sales') : renderSalesSubTab(tab);
+    };
+  });
+}
+
 const SALES_TAB_TITLES = {
   incoming: ['Sales', 'Incoming'],
   freight: ['Sales', 'Freight'],
@@ -4924,6 +4954,7 @@ async function renderLedgerTab(kind) {
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
       </div>
+      ${kind === 'sales' || kind === 'bills' ? metalsTabBar(kind === 'sales' ? 'sales' : 'bills') : ''}
       ${kind === 'sales' && (data.duplicates || []).length ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
         ${(data.duplicates || []).map((d) => `${esc(d.container_no)} appears ${d.ids.length} times under ${esc(d.booking_no)}`).join(' · ')}
         — usually a typo, occasionally a container split across two invoices. Worth a look either way: the margin against Bills counts it twice.
@@ -4993,6 +5024,7 @@ async function renderLedgerTab(kind) {
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
   }).catch(() => {});
 
+  wireMetalsTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
@@ -5198,6 +5230,7 @@ async function openFromBill() {
 let truckingFilters = {};
 
 async function renderMetalsTruckingTab() {
+  metalsTab.bills = 'trucking';
   const qs = Object.entries(truckingFilters)
     .filter(([, v]) => String(v || '').trim() !== '')
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
@@ -5252,6 +5285,7 @@ async function renderMetalsTruckingTab() {
         </div>
         <button id="btnPayTrucking" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">Pay</button>
       </div>
+      ${metalsTabBar('bills')}
 
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:12px;">
         ${card('Haulage', ledMoney(sum.amount))}
@@ -5361,6 +5395,7 @@ async function renderMetalsTruckingTab() {
     };
   });
 
+  wireMetalsTabs();
   $('trkClear').onclick = () => { truckingFilters = {}; renderMetalsTruckingTab(); };
   $('btnPayTrucking').onclick = () => openTruckingPay(data);
 }
@@ -5520,6 +5555,7 @@ async function openTruckingPay(data, company) {
 // each of those numbers is decided, and a tab cannot disagree with the tab
 // beside it.
 async function renderSalesSubTab(which) {
+  metalsTab.sales = which;
   const [eyebrow, title] = SALES_TAB_TITLES[which] || ['Sales', which];
   const root = $('viewRoot');
   root.innerHTML = `
@@ -5528,8 +5564,10 @@ async function renderSalesSubTab(which) {
         <div class="eyebrow">${esc(eyebrow)}</div>
         <h2 style="font-size:19px; text-transform:uppercase; margin:0;">${esc(title)}</h2>
       </div>
+      ${metalsTabBar('sales')}
       <div id="subBody" style="color:var(--text-muted); font-size:13px;">Loading…</div>
     </div>`;
+  wireMetalsTabs();
   try {
     if (which === 'incoming') await renderIncoming();
     else await renderPayables(which);

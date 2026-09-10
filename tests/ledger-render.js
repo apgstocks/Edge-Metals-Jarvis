@@ -1223,25 +1223,18 @@ section('G6 — four tabs, two stores');
     const doc = w.document;
     await w.renderLedgerTab('sales');
 
-    // ── FOUR NAV TABS, NOT ONE TAB WITH FOUR SUB-TABS ────────────────
-    // Apsara, 2026-09-10, after the first build nested them: "i told that i
-    // want sales to be in different tabs na". They are entries in the nav,
-    // beside Bills — asserted against the rendered nav, because a strip of
-    // sub-tabs inside Sales passed the previous version of this test.
+    // ── TABS INSIDE, NOT SIX NAV ENTRIES ─────────────────────────────
+    // Her last word on this, seeing six of them stacked in the sidebar:
+    // "i want them to be tabs inside not separate option".
     const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
-    ck('all four are tabs in their own right',
-       ['sales', 'sales-incoming', 'sales-freight', 'sales-commission']
-         .every((t) => nav.includes(t)), nav.join(','));
-    ck('  labelled by what they hold, not by "Sales"',
-       [...doc.querySelectorAll('.nav-btn')]
-         .filter((b) => String(b.dataset.tab).startsWith('sales'))
-         .map((b) => b.textContent).join(',') === 'Outgoing,Incoming,Freight,Commission',
-       [...doc.querySelectorAll('.nav-btn')].filter((b) => String(b.dataset.tab).startsWith('sales')).map((b) => b.textContent).join(','));
-    ck('  sitting next to Bills, so the grouping is still legible',
-       nav.indexOf('sales') === nav.indexOf('bills') + 1, nav.join(','));
-    ck('  and there is no second row of sub-tabs',
-       doc.querySelectorAll('.sales-sub').length === 0,
-       'two rows of tabs for one thing is chrome, not navigation');
+    ck('Edge Metals is two nav entries, not six',
+       nav.filter((t) => t === 'bills' || t === 'sales').length === 2
+       && !nav.some((t) => /^sales-|^metals-/.test(t)),
+       nav.filter((t) => /sales|bill|truck/.test(t)).join(','));
+    ck('  and the four live in a strip inside Sales',
+       [...doc.querySelectorAll('.metals-tab[data-section="sales"]')].map((b) => b.dataset.tab).join(',')
+         === 'outgoing,incoming,freight,commission',
+       [...doc.querySelectorAll('.metals-tab[data-section="sales"]')].map((b) => b.dataset.tab).join(','));
     ck('  and the duplicate container is called out where she will see it',
        /appears 2 times under B1/.test(doc.getElementById('viewRoot').textContent),
        'a duplicate double-counts on the join to Bills');
@@ -1499,7 +1492,11 @@ section('G9 — the Trucking tab');
     await w.renderMetalsTruckingTab();
 
     const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
-    ck('Trucking is its own tab', nav.includes('metals-trucking'), nav.join(','));
+    ck('Trucking is a tab inside Bills, where its data comes from',
+       [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(',')
+         === 'bills,trucking',
+       [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(','));
+    ck('  not a nav entry of its own', !nav.includes('metals-trucking'), nav.join(','));
     ck('  and the Edge YARD trucker tab is still there, separately',
        nav.includes('truckers'),
        'different company, different store, different line in the spend report');
