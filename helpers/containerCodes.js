@@ -73,4 +73,66 @@ function combineInvNo(invNo, containerNos) {
     return base.slice(0, base.length - list[0].length) + shorten(list);
 }
 
-module.exports = { shorten, combineInvNo };
+// ── SEVERAL containers merged onto ONE invoice ────────────────────────────
+//
+// Apsara, 2026-09-10: "When i add two containers, only one container's invoice
+// number is coming, second container inv no is getting appended with a comma".
+//
+// combineInvNo() above only ever produced the SHORT comma form, which is
+// correct exactly when every container shares the same head — same date, same
+// item code:
+//
+//     260901_AL_26JY96 + 260901_AL_26JY97  ->  260901_AL_26JY96,97
+//
+// It is WRONG the moment the item codes differ. "260901_AL_26JY96,97" says
+// both containers are ALUMINIUM COMBO when the second is REGULAR COMBO. That
+// is a false statement of goods on a document that goes to a customs broker,
+// and it is not fixable downstream because the item code is the only thing in
+// the number that names the material.
+//
+// So: group by head, shorten WITHIN a head, and join the groups with "_".
+//
+//     260901_AL_26JY96 + 260901_RC_26JY97
+//         -> 260901_AL_26JY96,260901_RC_26JY97
+//     260901_AL_26JY96 + 260901_AL_26JY97 + 260901_RC_26JY98
+//         -> 260901_AL_26JY96,97,260901_RC_26JY98
+//
+// Confirmed with her: mixed materials -> both full numbers, same material ->
+// the short comma form, unchanged.
+//
+// SEPARATOR IS A COMMA, not an underscore. Apsara, 2026-09-10, correcting my
+// first cut: "it should be 260901_AL_26JY96,260901_RC_26JY97". One separator
+// throughout, so the number reads as one list however it is built — and an
+// underscore is already the separator INSIDE a number (date_item_code), so
+// using it between numbers too made the boundary invisible: in
+// "260901_AL_26JY96_260901_RC_26JY97" nothing tells you where one number ends.
+// The comma does, and it is the character the short form has always used.
+//
+// Order is sheet order, and heads keep their first-appearance position, so the
+// number reads in the same sequence as the item rows underneath it.
+function combineInvNos(invNos) {
+    const list = [];
+    for (const raw of (invNos || [])) {
+        const v = String(raw || '').trim();
+        if (v && !list.includes(v)) list.push(v);   // dedupe, keep order
+    }
+    if (!list.length) return '';
+    if (list.length === 1) return list[0];
+
+    // head = everything up to and including the last "_"; tail = the container
+    // code. A number with no "_" has no head, so it can only ever group with
+    // an identical-head ('') sibling — which is right: there is nothing to
+    // prove the two belong to the same series.
+    const groups = [];                    // [{ head, tails[] }] in first-seen order
+    for (const invNo of list) {
+        const i = invNo.lastIndexOf('_');
+        const head = i === -1 ? '' : invNo.slice(0, i + 1);
+        const tail = i === -1 ? invNo : invNo.slice(i + 1);
+        const g = groups.find((x) => x.head === head);
+        if (g) g.tails.push(tail);
+        else groups.push({ head, tails: [tail] });
+    }
+    return groups.map((g) => g.head + shorten(g.tails)).join(',');
+}
+
+module.exports = { shorten, combineInvNo, combineInvNos };

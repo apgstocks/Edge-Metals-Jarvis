@@ -343,26 +343,59 @@ async function findContainersByNumber(containerQuery) {
 function invNoTailCodes(invNo) {
     const s = safeStr(invNo).toUpperCase().trim();
     if (!s) return [];
-    const idx = s.lastIndexOf('_');
-    const tail = idx === -1 ? s : s.slice(idx + 1);
-    const parts = tail.split(',').map((x) => x.trim()).filter(Boolean);
-    if (!parts.length) return [];
 
-    // EXPAND the shortened form back to whole codes. Since 2026-09-01 a
-    // multi-container Inv No writes the shared prefix once —
-    // "260901_AL_26JY95,96,97" — so the bare "96" and "97" here mean
-    // 26JY96 and 26JY97. Without this, searching "26JY97" would silently
-    // fail to find a merged invoice: the stored token is just "97".
+    // COMMA is the one separator, at both levels: between whole numbers of
+    // different materials and between shortened codes of the same one.
     //
-    // A later part that carries its OWN letters (a run crossing a code
-    // change, e.g. "26JY99,26KA01") is already whole and is left alone.
-    const head = parts[0];
-    const m = head.match(/^(.*?)(\d+)$/);
-    const prefix = m && m[1] ? m[1] : '';
-    return parts.map((p, i) => {
-        if (i === 0 || !prefix) return p;
-        return /^\d+$/.test(p) ? `${prefix}${p}` : p;
-    });
+    //   260901_AL_26JY96                     -> 26JY96
+    //   260901_RC_26JY100,101                -> 26JY100, 26JY101
+    //   260901_AL_26JY96,260901_RC_26JY97    -> 26JY96, 26JY97
+    //   260901_AL_26JY96,97,260901_RC_26JY98 -> 26JY96, 26JY97, 26JY98
+    //
+    // A segment is told apart by whether it carries an underscore: with one it
+    // is a WHOLE number (date_item_code) and its tail is everything after the
+    // last underscore; without one it is a bare code, shortened against
+    // whatever prefix came before it.
+    //
+    // This used to take only the LAST underscore-token of the whole string, so
+    // searching "26JY96" for a mixed-material merged invoice returned nothing
+    // — which on a search box reads as "that container does not exist" rather
+    // than "the parser gave up".
+    // Tolerate the UNDERSCORE-joined spelling too. It is not what Jarvis
+    // writes — Apsara, 2026-09-10: "it should be
+    // 260901_AL_26JY96,260901_RC_26JY97" — but her own manual filing uses it
+    // (her sample packing list is named 260901_AL_26JY96_260901_RC_26JY97_
+    // PACKING_LIST.pdf), so a number pasted from a filename must still find
+    // both containers rather than silently only the last. A whole number
+    // starting mid-string is a boundary; insert the comma the writer omitted.
+    // Replace the JOINING underscore, rather than inserting a comma before the
+    // head — inserting leaves the first segment ending in a stray "_", whose
+    // tail is then the empty string and the container is dropped. (It was, on
+    // the first attempt.)
+    const normalized = s.replace(/_(?=\d{6}_[A-Z]{2}_)/g, ',');
+
+    const out = [];
+    let prefix = '';
+    for (const raw of normalized.split(',')) {
+        const seg = raw.trim();
+        if (!seg) continue;
+        const i = seg.lastIndexOf('_');
+        let tail = i === -1 ? seg : seg.slice(i + 1);
+        if (/^\d+$/.test(tail) && prefix) {
+            // A bare run of digits is the short form — "97" after "26JY96"
+            // means 26JY97. Without this, searching "26JY97" would fail on a
+            // merged invoice because the stored token is just "97".
+            tail = prefix + tail;
+        } else {
+            // Anything carrying its own letters is already whole (a run
+            // crossing a code change, e.g. "26JY99,26KA01") and becomes the
+            // prefix for whatever follows it.
+            const m = tail.match(/^(.*?)(\d+)$/);
+            prefix = m && m[1] ? m[1] : prefix;
+        }
+        if (tail) out.push(tail);
+    }
+    return out;
 }
 
 // Mirror of findContainersByNumber, keyed on the Inv No. tail instead of the
@@ -545,7 +578,15 @@ async function buildMultiContainerInvoiceData(containerNos) {
             const fv = evalFreight(d.freight_charge);
             if (fv > 0) freight = fv;
         }
-        const itemDesc = resolveItemDesc(d.item_desc, first.inv_no);
+        // d.inv_no, NOT first.inv_no. This is the MERGED path: every row here
+        // can be a different container with its own number and its own item
+        // code. Falling back to the first row's number meant a REGULAR COMBO
+        // container merged behind an ALUMINIUM one resolved to ALUMINIUM
+        // COMBO whenever its own Item Description cell was blank — the wrong
+        // goods named on a customs document, and the same class of bug as
+        // "Invoice description should be Aluminium combo,regular combo as
+        // both are there". first.inv_no stays as the last-resort fallback.
+        const itemDesc = resolveItemDesc(d.item_desc, d.inv_no || first.inv_no);
         const weightLbs = Math.round(weight * 2204.62);
         const packing = packingLookup.get(containerNo) || null;
         const pr = packing ? findPackingRow(packing.rows, itemDesc) : null;
@@ -578,10 +619,34 @@ async function buildMultiContainerInvoiceData(containerNos) {
     // under, since there's no single container number to key off of here.
     const distinctContainers = Array.from(new Set(lineItems.map((li) => li.container_no)));
 
+    // ── the number has to name EVERY container on the document ─────────────
+    // Apsara, 2026-09-10: "When i add two containers, only one container's
+    // invoice number is coming, second container inv no is getting appended
+    // with a comma".
+    //
+    // This returned first.inv_no — literally the first matched row's number.
+    // A two-container merge went out billing the customer under a number that
+    // named one of the two containers they were being billed for. Same bug
+    // helpers/containerCodes.js was created to fix on the email/voice path;
+    // this path never got it.
+    //
+    // combineInvNos() groups by head, so containers sharing a date AND item
+    // code keep the short comma form she specified on 2026-09-01, while
+    // different item codes are joined whole rather than pretending to share a
+    // material. Sheet order, so the number reads in the same sequence as the
+    // item rows beneath it.
+    //
+    // Deliberately NOT written back to the Invoice sheet: that stays a
+    // per-container ledger with one full number per row (see
+    // helpers/proformaSheetLog.js's note — "sheet per container, PDF
+    // combined"). This is the PDF/form identity only.
+    const rowInvNos = matchedRows.map((row) => safeStr(rowToDict(row, colMap).inv_no)).filter(Boolean);
+    const mergedInvNo = require('./containerCodes').combineInvNos(rowInvNos) || first.inv_no;
+
     return {
         container_no: distinctContainers.join('+'),
         consignee: first.consignee,
-        inv_no: first.inv_no,
+        inv_no: mergedInvNo,
         inv_date: first.inv_date,
         hbl_no: first.hbl_no,
         booking_no: first.booking_no,

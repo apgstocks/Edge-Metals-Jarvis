@@ -317,7 +317,12 @@ function buildInvoiceClassicHtml(data) {
         // on a financial document. With it, a combined number breaks between
         // whole invoice numbers. Escape FIRST, then insert the tag, or the
         // angle brackets get escaped too.
-        inv_no: escapeHtml(data.inv_no || '').replace(/_/g, '_<wbr>'),
+        // Also after a COMMA (2026-09-10): the mixed-material number separates
+        // whole numbers with one — "260901_AL_26JY96,260901_RC_26JY97" — and
+        // a comma is no more a break opportunity in CSS than an underscore is.
+        // Without this the preferred break is mid-number at an underscore
+        // instead of at the boundary between the two numbers.
+        inv_no: escapeHtml(data.inv_no || '').replace(/([_,])/g, '$1<wbr>'),
         item_label: escapeHtml(itemLabels(lineItems, data.inv_no)),
         inv_date: escapeHtml(formatDate(data.inv_date)),
         other_ref: otherRef,

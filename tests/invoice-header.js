@@ -73,9 +73,25 @@ console.log('\n=== the number can wrap ===');
 const tpl = fs.readFileSync(R('assets/invoice-classic/template.html'), 'utf8');
 const cell = (tpl.match(/<div style="[^"]*">\{\{inv_no\}\}<\/div>/) || [])[0] || '';
 ck('the Inv No cell allows a long token to break', /overflow-wrap\s*:\s*anywhere/.test(cell), true);
-ck('...and <wbr> hints are inserted per underscore',
-   /inv_no:\s*escapeHtml\([^)]*\)\.replace\(\/_\/g,\s*'_<wbr>'\)/.test(src), true);
-ck('the hint adds no character to the copied text', '260901_AL_26JY96'.replace(/_/g, '_<wbr>').replace(/<wbr>/g, ''), '260901_AL_26JY96');
+// Behaviour, not source shape — asserted on the ASSEMBLED html, so this does
+// not fail again the next time the substitution is rewritten.
+// 2026-09-10: commas too. The mixed-material number separates whole numbers
+// with one ("260901_AL_26JY96,260901_RC_26JY97"), and a comma is no more a
+// break opportunity in CSS than an underscore is, so without a hint there the
+// preferred break lands mid-number instead of between the two numbers.
+{
+  const { buildInvoiceClassicHtml: build } = require(R('helpers/invoicePdf'));
+  const cellOf = (n) => (build({ inv_no: n, line_items: [{ item_desc: 'Aluminium combo' }] }).html
+    .match(/overflow-wrap:anywhere;word-wrap:break-word;">([\s\S]*?)<\/div>/) || [])[1] || '';
+  ck('...and <wbr> hints are inserted per underscore',
+     cellOf('260901_AL_26JY96'), '260901_<wbr>AL_<wbr>26JY96');
+  ck('...and per comma, between whole numbers',
+     cellOf('260901_AL_26JY96,260901_RC_26JY97'),
+     '260901_<wbr>AL_<wbr>26JY96,<wbr>260901_<wbr>RC_<wbr>26JY97');
+  ck('the hint adds no character to the copied text',
+     cellOf('260901_AL_26JY96,260901_RC_26JY97').replace(/<wbr>/g, ''),
+     '260901_AL_26JY96,260901_RC_26JY97');
+}
 
 console.log('\n=== separate invoice / packing list ===');
 // Apsara, 2026-09-09: "Use seprate flag."

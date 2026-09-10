@@ -74,6 +74,107 @@ section('A — the invoice number names every container');
        cc.combineInvNo(once, ['26JY90', '26JY91']));
 }
 
+section('A2 — MIXED materials keep their own item codes');
+{
+    // Apsara, 2026-09-10: "When i add two containers, only one container's
+    // invoice number is coming, second container inv no is getting appended
+    // with a comma".
+    //
+    // The comma form writes the head ONCE. That is right for containers that
+    // share a date and an item code, and a false statement of goods the moment
+    // they do not: "260901_AL_26JY96,97" says both containers are ALUMINIUM
+    // COMBO when the second is REGULAR COMBO. On a document a customs broker
+    // reads, that is not a cosmetic difference.
+    // Apsara, 2026-09-10, correcting my first cut, which joined with "_":
+    // "it should be 260901_AL_26JY96,260901_RC_26JY97". ONE separator
+    // throughout — an underscore is already the separator INSIDE a number
+    // (date_item_code), so using it between numbers too made the boundary
+    // invisible.
+    ck('AL + RC → both full numbers, comma-separated',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_RC_26JY97'])
+         === '260901_AL_26JY96,260901_RC_26JY97',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_RC_26JY97']));
+    ck('  and NOT joined with an underscore',
+       !cc.combineInvNos(['260901_AL_26JY96', '260901_RC_26JY97']).includes('96_260901'),
+       'the underscore spelling hides where one number ends and the next begins');
+
+    // Confirmed with her: same material keeps the 2026-09-01 comma form. This
+    // change must not touch the case that was already right.
+    ck('  same material is UNCHANGED — still the comma form',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_AL_26JY97'])
+         === '260901_AL_26JY96,97',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_AL_26JY97']));
+
+    ck('  mixed batch: shorten within a material, join across',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_AL_26JY97', '260901_RC_26JY98'])
+         === '260901_AL_26JY96,97,260901_RC_26JY98',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_AL_26JY97', '260901_RC_26JY98']));
+
+    ck('  head order follows sheet order, not alphabetical',
+       cc.combineInvNos(['260901_RC_26JY98', '260901_AL_26JY96'])
+         === '260901_RC_26JY98,260901_AL_26JY96',
+       'the number must read in the same sequence as the item rows beneath it');
+
+    ck('  a single container is left exactly as it was',
+       cc.combineInvNos(['260901_AL_26JY96']) === '260901_AL_26JY96');
+    ck('  a repeated number is not written twice',
+       cc.combineInvNos(['260901_AL_26JY96', '260901_AL_26JY96']) === '260901_AL_26JY96',
+       'one container with several line items must not double its own number');
+    ck('  nothing in, nothing out', cc.combineInvNos([]) === '');
+    ck('  a run crossing a code change stays whole',
+       cc.combineInvNos(['260901_RC_26JY99', '260901_RC_26KA01'])
+         === '260901_RC_26JY99,26KA01',
+       '26JY99,01 would name a container that does not exist');
+
+    // The merged-invoice builder must actually USE it. This was the bug: it
+    // returned first.inv_no, so a two-container merge billed the customer
+    // under a number naming one of the two containers.
+    const isrc = fs.readFileSync(path.join(ROOT, 'helpers/invoiceSheet.js'), 'utf8');
+    ck('  buildMultiContainerInvoiceData uses the combiner',
+       /combineInvNos\(rowInvNos\)/.test(isrc),
+       'it returned first.inv_no — the first matched row, ignoring the rest');
+    ck('  ...and it is NOT written back to the sheet',
+       !/inv_no:\s*mergedInvNo[\s\S]{0,400}appendRow/.test(isrc),
+       'the Invoice sheet is a per-container ledger — one full number per row');
+
+    // Found while fixing the number: the same function resolved EVERY row's
+    // item description from the FIRST row's invoice number, so a REGULAR
+    // COMBO container merged behind an ALUMINIUM one was labelled ALUMINIUM
+    // whenever its own Item Description cell was blank.
+    // ── the search box has to find them again ──────────────────────────────
+    // invNoTailCodes took only the LAST "_" token, so searching "26JY96" for
+    // a mixed-material merged invoice returned nothing — which on a search box
+    // reads as "that container does not exist", not "the parser gave up".
+    const inv = require(path.join(ROOT, 'helpers/invoiceSheet.js'));
+    const tails = (n) => JSON.stringify(inv.invNoTailCodes(n));
+    ck('  the plain number still expands as before',
+       tails('260901_AL_26JY96') === '["26JY96"]', tails('260901_AL_26JY96'));
+    ck('  the comma form still expands as before',
+       tails('260901_RC_26JY100,101') === '["26JY100","26JY101"]',
+       tails('260901_RC_26JY100,101'));
+    ck('  and the mixed form finds BOTH containers',
+       tails('260901_AL_26JY96,260901_RC_26JY97') === '["26JY96","26JY97"]',
+       tails('260901_AL_26JY96,260901_RC_26JY97'));
+    ck('  ...short and whole codes in one number',
+       tails('260901_AL_26JY96,97,260901_RC_26JY98') === '["26JY96","26JY97","26JY98"]',
+       tails('260901_AL_26JY96,97,260901_RC_26JY98'));
+    ck('  a code run crossing a code change stays whole',
+       tails('260901_RC_26JY99,26KA01') === '["26JY99","26KA01"]',
+       tails('260901_RC_26JY99,26KA01'));
+    // Not what Jarvis writes, but it IS how her own files are named — a number
+    // pasted from a filename must still find both containers.
+    ck('  the UNDERSCORE spelling from her filing is tolerated on search',
+       tails('260901_AL_26JY96_260901_RC_26JY97') === '["26JY96","26JY97"]',
+       tails('260901_AL_26JY96_260901_RC_26JY97'));
+    ck('  ...including the mixed short/whole one',
+       tails('260901_AL_26JY96,97_260901_RC_26JY98') === '["26JY96","26JY97","26JY98"]',
+       tails('260901_AL_26JY96,97_260901_RC_26JY98'));
+
+    ck('  each row resolves its description from its OWN number',
+       /resolveItemDesc\(d\.item_desc, d\.inv_no \|\| first\.inv_no\)/.test(isrc),
+       'first.inv_no put the wrong goods on the mixed-material invoice');
+}
+
 section('B — and it refuses when the number is not from that series');
 {
     // She typed the number herself, or pasted it from her old system. Gluing
