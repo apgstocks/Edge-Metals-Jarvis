@@ -121,8 +121,17 @@ function collectRows({ payments, expenses, from, to }) {
         // SELL it, and a margin worked out from a Supplier line that quietly
         // contains both is wrong in the direction that looks fine.
         const isSaleCost = p.load_kind === 'sale_cost';
+        // ── SIXTH KIND: EDGE METALS HAULAGE ──────────────────────────────
+        // Apsara 2026-09-10 asked for a Trucking tab built from the bills,
+        // with a pay option. helpers/metalsTrucking.js writes one row here per
+        // transfer, load_kind 'metals_trucking'.
+        //
+        // NOT folded into 'trucker'. That is the Edge YARD haulier line, and
+        // one figure covering both companies could never be split again.
+        const isMetalsTrucking = p.load_kind === 'metals_trucking';
         rows.push({
-            kind: isTrucker ? 'trucker' : isBill ? 'supplier' : isSaleCost ? 'sale_cost' : 'load',
+            kind: isTrucker ? 'trucker' : isBill ? 'supplier' : isSaleCost ? 'sale_cost'
+                : isMetalsTrucking ? 'metals_trucking' : 'load',
             direction: isSale ? 'in' : 'out',
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
@@ -142,7 +151,7 @@ function collectRows({ payments, expenses, from, to }) {
             bank: (p.bank && String(p.bank).trim()) || NOT_RECORDED,
             amount: round2(amount),
             label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : isBill ? 'Supplier'
-                : isSaleCost ? 'Sale cost' : 'Load'} ${p.load_id}`.trim(),
+                : isSaleCost ? 'Sale cost' : isMetalsTrucking ? 'Metals haulage' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
         });
     }
@@ -221,7 +230,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // right — an empty column invites the question "why is that zero".
     const byBank = {};
     let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0, supplierTotal = 0;
-    let saleCostTotal = 0;
+    let saleCostTotal = 0, metalsTruckingTotal = 0;
 
     for (const r of rows) {
         const m = monthOf(r.date);
@@ -247,6 +256,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // had been left out.
         else if (r.kind === 'supplier') supplierTotal = round2(supplierTotal + r.amount);
         else if (r.kind === 'sale_cost') saleCostTotal = round2(saleCostTotal + r.amount);
+        else if (r.kind === 'metals_trucking') metalsTruckingTotal = round2(metalsTruckingTotal + r.amount);
         else expenseTotal = round2(expenseTotal + r.amount);
     }
 
@@ -323,6 +333,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         truckerTotal,
         supplierTotal,
         saleCostTotal,
+        metalsTruckingTotal,
         count: rows.length,
         cash,
         rows,                      // the drill-down, already sorted newest first

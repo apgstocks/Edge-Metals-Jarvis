@@ -41,7 +41,7 @@ const PAYMENT_MODES = ['Zelle', 'Wire', 'Cash', 'Cheque'];
 // Edge Metals and never touches it, whatever its mode. A SET rather than a
 // second `!== 'bill'` test, because the third Metals kind arrived within the
 // day and the fourth will not announce itself either.
-const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);
+const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost', 'metals_trucking']);
 
 // Money is compared to the cent. Floating point makes 4010 * 2.2 come out as
 // 8822.000000000001, so a load paid exactly to the penny would otherwise
@@ -162,7 +162,7 @@ async function addPayment(input = {}) {
     const loadKind = (() => {
         const k = String(input.load_kind || '').trim();
         if (!k || k === 'purchase') return 'purchase';
-        if (['sale', 'trucker', 'bill', 'sale_cost'].includes(k)) return k;
+        if (['sale', 'trucker', 'bill', 'sale_cost', 'metals_trucking'].includes(k)) return k;
         throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
     })();
     const drawsPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);

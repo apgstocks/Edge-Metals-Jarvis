@@ -1594,6 +1594,158 @@ section('R — several grades in one container');
        perTicket.json.bill.net_lb === 15800, String(perTicket.json.bill.net_lb));
 }
 
+section('S — Edge Metals haulage, which is not the yard\'s');
+{
+    // Apsara, 2026-09-10: "Similar to sales,crate a tab called Trucking,and
+    // put all the relevant details from bill to this..give an option to pay.
+    // Also give an option to filter by date,month,trucking company,status".
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
+    const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
+    const spend = require(path.join(ROOT, 'helpers/spendReport'));
+
+    const mk = async (container, company, amount, date) => (await req('POST', '/api/bills', { sid: admin, body: {
+        date, supplier: 'Haul Metals', container_no: container, booking_no: 'HAULBK',
+        gross: 40000, truck: 14000, container: 8000, chassis: 6000, boxes: 0,
+        supplier_price: 0.25, trucking_company: company, trucking_amount: amount,
+    } })).json.bill;
+    const h1 = await mk('HAULU1', 'Sher Trucking', 1200, '09/10/2026');
+    const h2 = await mk('HAULU2', 'Sher Trucking', 1200, '08/08/2026');
+    const h3 = await mk('HAULU3', 'Bayou Haulage', 900, '09/02/2026');
+    await mk('HAULU4', 'Sher Trucking', 0, '09/03/2026');
+
+    const mine = () => mt.payables().filter((r) => String(r.supplier) === 'Haul Metals');
+    ck('every bill with a trucking amount becomes a haulage line',
+       mine().length === 3, String(mine().length));
+    ck('  one with a company but no amount does not',
+       !mine().some((r) => r.container_no === 'HAULU4'),
+       'a $0 payable is a row she skips past every time');
+    ck('  and each carries what it came from',
+       mine().every((r) => r.container_no && r.booking_no && r.supplier),
+       'all the relevant details from bill');
+    ck('  starting unpaid', mine().every((r) => r.status === 'unpaid'));
+
+    // ── HER FOUR FILTERS ─────────────────────────────────────────────────
+    const f = (q) => mt.filterPayables(mine(), q);
+    ck('filter by trucking company',
+       f({ trucking_company: 'Sher Trucking' }).length === 2,
+       String(f({ trucking_company: 'Sher Trucking' }).length));
+    ck('  case is typing, not a different company',
+       f({ trucking_company: 'sher trucking' }).length === 2);
+    ck('filter by month', f({ month: '2026-09' }).length === 2,
+       JSON.stringify(f({ month: '2026-09' }).map((r) => r.month)));
+    ck('filter by a date range', f({ from: '09/01/2026', to: '09/05/2026' }).length === 1,
+       JSON.stringify(f({ from: '09/01/2026', to: '09/05/2026' }).map((r) => r.date)));
+    ck('  and her MM/DD/YYYY is understood, not compared as text',
+       f({ from: '09/01/2026' }).length === 2,
+       '"09/01/2026" sorts before "08/08/2026" as a string — that is the trap');
+
+    const pay = await req('POST', '/api/metals-trucking', { sid: admin, body: {
+        date: '09/12/2026', amount: 1600, mode: 'Wire', bank: 'Chase',
+        trucking_company: 'Sher Trucking',
+        allocations: [{ bill_id: h1.id, amount: 1200 }, { bill_id: h2.id, amount: 400 }],
+    } });
+    ck('one transfer pays two hauls', pay.status === 200, pay.raw);
+    const after = () => mt.payables().filter((r) => String(r.supplier) === 'Haul Metals');
+    ck('  the settled one reads paid',
+       after().find((r) => r.bill_id === h1.id).status === 'paid');
+    ck('  the part-paid one reads part',
+       after().find((r) => r.bill_id === h2.id).status === 'part',
+       after().find((r) => r.bill_id === h2.id).status);
+    ck('filter by status unpaid keeps the part-paid one',
+       mt.filterPayables(after(), { status: 'unpaid' }).length === 2,
+       'a haul she still owes money on belongs in the list she works from');
+    ck('  and paid shows only the settled', 
+       mt.filterPayables(after(), { status: 'paid' }).length === 1);
+    ck('  the summary describes the rows it was given, not everything',
+       mt.summary(mt.filterPayables(after(), { status: 'paid' })).amount === 1200,
+       'a summary over everything while the table shows a subset is what breaks trust in a filter');
+
+    // ── AND THE ROUTE MUST FILTER TOO, NOT JUST THE HELPER ───────────────
+    // A mutation survived here on 2026-09-10: the route could total EVERY
+    // haul while returning a filtered table and nothing noticed, because the
+    // only assertion was against the helper. The cards would then describe
+    // rows that are not on screen, which is the exact failure that makes a
+    // filter something she stops believing.
+    const filtered = await req('GET', '/api/metals-trucking?trucking_company=Bayou%20Haulage', { sid: admin });
+    ck('the route applies her filter', filtered.status === 200
+       && filtered.json.payables.every((r) => r.trucking_company === 'Bayou Haulage'),
+       JSON.stringify(filtered.json.payables.map((r) => r.trucking_company)));
+    ck('  and totals the rows it returned, not every row',
+       filtered.json.summary.amount
+         === Math.round(filtered.json.payables.reduce((t, r) => t + r.amount, 0) * 100) / 100,
+       JSON.stringify({ card: filtered.json.summary.amount,
+                        rows: filtered.json.payables.reduce((t, r) => t + r.amount, 0) }));
+    ck('    while still saying how many there are in total',
+       filtered.json.total_unfiltered > filtered.json.payables.length,
+       JSON.stringify({ shown: filtered.json.payables.length, all: filtered.json.total_unfiltered }));
+    ck('  the facets come from EVERY row, not the filtered ones',
+       (filtered.json.facets.trucking_company || []).includes('Sher Trucking'),
+       'narrowing by trucker would otherwise empty the trucker list she just used');
+
+    const crossed = await req('POST', '/api/metals-trucking', { sid: admin, body: {
+        date: '09/12/2026', amount: 100, mode: 'Wire', bank: 'Chase',
+        trucking_company: 'Sher Trucking', allocations: [{ bill_id: h3.id, amount: 100 }],
+    } });
+    ck('a payment cannot settle another haulier\'s container', crossed.status === 400, crossed.raw);
+    ck('  naming who actually hauled it', /Bayou Haulage/.test(crossed.json.error || ''), crossed.json.error);
+
+    const over = await req('POST', '/api/metals-trucking', { sid: admin, body: {
+        date: '09/12/2026', amount: 500, mode: 'Wire', bank: 'Chase',
+        trucking_company: 'Sher Trucking', allocations: [{ bill_id: h1.id, amount: 500 }],
+    } });
+    ck('paying a settled haul again is refused', over.status === 400, over.raw);
+
+    // ── ITS OWN LINE IN THE SPEND REPORT ─────────────────────────────────
+    const rows = listPayments().filter((p) => p.load_kind === 'metals_trucking');
+    ck('the transfer reaches the spend ledger', rows.length === 1, String(rows.length));
+    ck('  under its own kind, not the yard\'s trucker line',
+       rows[0].load_kind === 'metals_trucking',
+       'one figure covering both companies could never be split again');
+    const rep = spend.buildSpendReport({ payments: listPayments() });
+    ck('  with its own total', rep.metalsTruckingTotal === 1600, String(rep.metalsTruckingTotal));
+    ck('    kept out of the yard trucker total',
+       rep.truckerTotal === 0 || !rep.rows.some((x) => x.kind === 'trucker' && x.amount === 1600),
+       JSON.stringify({ trucker: rep.truckerTotal, metals: rep.metalsTruckingTotal }));
+
+    // Cash out on Metals haulage must not touch the yard box.
+    const petty = require(path.join(ROOT, 'helpers/pettyCash'));
+    await petty.addTopUp({ date: '09/13/2026', amount: 2000, note: 'haulage test float' });
+    const before = petty.balance();
+    const cash = await req('POST', '/api/metals-trucking', { sid: admin, body: {
+        date: '09/13/2026', amount: 900, mode: 'Cash', trucking_company: 'Bayou Haulage',
+        allocations: [{ bill_id: h3.id, amount: 900 }],
+    } });
+    ck('a cash haulage payment records with no bank', cash.status === 200, cash.raw);
+    ck('  and does NOT move the Edge Yard petty cash box',
+       petty.balance() === before, `${before} -> ${petty.balance()}`);
+
+    // ── THE ROWS ARE DERIVED, SO THEY FOLLOW THE BILL ────────────────────
+    await req('PUT', `/api/bills/${h1.id}`, { sid: admin, body: { trucking_amount: 1500 } });
+    ck('changing the bill changes the haulage line',
+       mt.payables().find((r) => r.bill_id === h1.id).amount === 1500,
+       'nothing is copied, so nothing can go stale');
+    ck('  and what was paid against it still counts',
+       mt.payables().find((r) => r.bill_id === h1.id).balance === 300,
+       String(mt.payables().find((r) => r.bill_id === h1.id).balance));
+
+    const audit = require(path.join(ROOT, 'helpers/audit'));
+    const pid = pay.json.payment.id;
+    const gone = await req('DELETE', `/api/metals-trucking/${pid}`, { sid: admin });
+    ck('deleting a haulage payment succeeds', gone.status === 200, gone.raw);
+    ck('  the hauls owe again',
+       mt.payables().find((r) => r.bill_id === h2.id).status === 'unpaid');
+    ck('  its ledger row goes too',
+       listPayments().filter((p) => p.load_id === pid).length === 0);
+    ck('  and it is audited',
+       audit.listEntries().some((e) => e.subject === pid && e.action === 'delete-metals-trucking'));
+
+    const staff = (await login('staff-pw-ccccccccccc')).json.sid;
+    ck('staff cannot reach Metals haulage',
+       (await req('GET', '/api/metals-trucking', { sid: staff })).status === 403,
+       'the YARD trucker tab is theirs; this one is not');
+}
+
 if (server) server.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

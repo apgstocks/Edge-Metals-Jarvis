@@ -1437,6 +1437,120 @@ section('G8 — the sheet has two palettes and she picks');
     dom.window.close();
 }
 
+section('G9 — the Trucking tab');
+{
+    // Apsara, 2026-09-10: "Similar to sales,crate a tab called Trucking".
+    const posted = [];
+    const seen = [];
+    const ROWS = [
+        { bill_id: 'B1', date: '09/10/2026', month: '2026-09', booking_no: 'HB1',
+          container_no: 'HAULU1', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
+          amount: 1200, paid: 0, balance: 1200, status: 'unpaid' },
+        { bill_id: 'B2', date: '09/08/2026', month: '2026-09', booking_no: 'HB1',
+          container_no: 'HAULU2', supplier: 'Haul Metals', trucking_company: 'Sher Trucking',
+          amount: 1200, paid: 400, balance: 800, status: 'part' },
+        { bill_id: 'B3', date: '09/02/2026', month: '2026-09', booking_no: 'HB2',
+          container_no: 'HAULU3', supplier: 'Haul Metals', trucking_company: 'Bayou Haulage',
+          amount: 900, paid: 900, balance: 0, status: 'paid' },
+    ];
+    const { w, dom } = await mount({
+        '/api/metals-trucking': (q, opts) => {
+            if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true }; }
+            seen.push(q);
+            const rows = ROWS.filter((r) => !q.trucking_company || r.trucking_company === q.trucking_company)
+                             .filter((r) => !q.status || (q.status === 'unpaid' ? r.status !== 'paid' : r.status === q.status));
+            return { payables: rows, open_payables: rows.filter((r) => r.balance > 0.005),
+                     summary: { amount: rows.reduce((t, r) => t + r.amount, 0),
+                                paid: rows.reduce((t, r) => t + r.paid, 0),
+                                outstanding: rows.reduce((t, r) => t + r.balance, 0),
+                                unpaid_count: rows.filter((r) => r.status !== 'paid').length },
+                     total_unfiltered: ROWS.length,
+                     facets: { trucking_company: ['Bayou Haulage', 'Sher Trucking'],
+                               month: ['2026-09'], status: ['unpaid', 'part', 'paid'] },
+                     payments: [], modes: ['Wire', 'Cash'], banks: ['Chase'] };
+        },
+    });
+    const doc = w.document;
+    await w.renderMetalsTruckingTab();
+
+    const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
+    ck('Trucking is its own tab', nav.includes('metals-trucking'), nav.join(','));
+    ck('  and the Edge YARD trucker tab is still there, separately',
+       nav.includes('truckers'),
+       'different company, different store, different line in the spend report');
+
+    let text = doc.getElementById('viewRoot').textContent;
+    ck('every haul from the bills is listed',
+       doc.querySelectorAll('tr[data-bill]').length === 3,
+       String(doc.querySelectorAll('tr[data-bill]').length));
+    ck('  with what it came from', /HAULU1/.test(text) && /Haul Metals/.test(text) && /HB1/.test(text));
+    ck('  its trucker', /Sher Trucking/.test(text));
+    ck('  and what is outstanding', /\$2,000\.00/.test(text), text.slice(0, 200));
+    ck('a part-paid haul says so', /part/.test(text));
+    ck('  and a settled one says paid', /paid/.test(text));
+
+    // ── HER FOUR FILTERS REACH THE SERVER ────────────────────────────────
+    const co = doc.querySelector('[data-trk-filter="trucking_company"]');
+    ck('there is a filter for each of the four she asked for',
+       !!co && !!doc.querySelector('[data-trk-filter="month"]')
+       && !!doc.querySelector('[data-trk-filter="status"]')
+       && !!doc.querySelector('[data-trk-filter="from"]')
+       && !!doc.querySelector('[data-trk-filter="to"]'));
+    co.value = 'Sher Trucking';
+    co.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    ck('choosing one asks the SERVER, not the browser',
+       seen.some((q) => q.trucking_company === 'Sher Trucking'),
+       JSON.stringify(seen));
+    ck('  and the table narrows', doc.querySelectorAll('tr[data-bill]').length === 2);
+    ck('  the cards narrow with it, so they describe what is on screen',
+       /\$2,400\.00/.test(doc.getElementById('viewRoot').textContent),
+       'a summary over everything while the table shows a subset is what breaks a filter');
+
+    doc.getElementById('trkClear').click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('Clear puts everything back', doc.querySelectorAll('tr[data-bill]').length === 3);
+
+    // ── PAY ──────────────────────────────────────────────────────────────
+    doc.getElementById('btnPayTrucking').click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('Pay asks which trucker first', !!doc.getElementById('trkWho'));
+    const picks = [...doc.querySelectorAll('.trkWhoPick')];
+    ck('  offering only those still owed money', picks.length === 1,
+       picks.map((b) => b.dataset.company).join(','));
+    ck('  with what they are owed', /\$2,000\.00 owing/.test(picks[0].textContent),
+       picks[0].textContent.replace(/\s+/g, ' ').trim());
+    picks[0].click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('choosing opens the payment form', !!doc.getElementById('trkModal'));
+    ck('  listing only that trucker\'s hauls',
+       doc.querySelectorAll('#trkRows tr[data-bill]').length === 2,
+       'a wire marked Sher against a container Bayou hauled is a false statement');
+    ck('  a part-paid one says how much is already in',
+       /400\.00 paid of/.test(doc.querySelector('#trkRows tr[data-bill="B2"]').textContent));
+
+    const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+    doc.getElementById('trkAmount').value = '2000'; fire(doc.getElementById('trkAmount'), 'input');
+    ck('  and refuses to save until it is allocated',
+       doc.getElementById('trkSave').disabled === true);
+    doc.querySelectorAll('.trkPick').forEach((cb) => { cb.checked = true; fire(cb, 'change'); });
+    ck('  ticking both fills what they owe and unlocks Save',
+       doc.getElementById('trkSave').disabled === false,
+       [...doc.querySelectorAll('.trkAmt')].map((e) => e.value).join(','));
+    doc.getElementById('trkBank').value = 'Chase';
+    doc.getElementById('trkSave').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('one transfer, two hauls, one record', posted.length === 1, JSON.stringify(posted));
+    if (posted.length) {
+        ck('  naming the trucker', posted[0].trucking_company === 'Sher Trucking');
+        ck('  and both containers', posted[0].allocations.length === 2);
+        ck('  summing to what was sent',
+           posted[0].allocations.reduce((t, a) => t + a.amount, 0) === 2000);
+    }
+    await new Promise((r) => setTimeout(r, 40));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

@@ -3927,6 +3927,64 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── EDGE METALS HAULAGE ──────────────────────────────────────────────
+    // Apsara, 2026-09-10: "Similar to sales,crate a tab called Trucking,and
+    // put all the relevant details from bill to this..give an option to pay.
+    // Also give an option to filter by date,month,trucking company,status".
+    //
+    // The rows are DERIVED from the bills — nothing is copied into a store of
+    // its own — and the filters run here so the summary always describes the
+    // rows on screen.
+    app.get('/api/metals-trucking', (req, res) => {
+        try {
+            const mt = require('./helpers/metalsTrucking');
+            const all = mt.payables();
+            const rows = mt.filterPayables(all, req.query || {});
+            res.json({
+                payables: rows,
+                open_payables: rows.filter((r) => r.balance > 0.005),
+                summary: mt.summary(rows),
+                total_unfiltered: all.length,
+                facets: mt.facets(all),
+                payments: mt.list(),
+                modes: mt.TRUCKING_MODES,
+                statuses: mt.STATUSES,
+                banks: require('./helpers/banks').options(),
+                other: require('./helpers/banks').OTHER,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/metals-trucking', async (req, res) => {
+        try {
+            const mt = require('./helpers/metalsTrucking');
+            const rec = await mt.addTruckingPayment({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, payment: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/metals-trucking/:id', async (req, res) => {
+        try {
+            const mt = require('./helpers/metalsTrucking');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const doomed = mt.list().find((x) => x.id === id);
+            if (!doomed) return res.status(404).json({ error: `no payment ${id}` });
+            const entry = await audit.record({
+                action: 'delete-metals-trucking', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: {
+                    company: 'edge-metals', date: doomed.date, mode: doomed.mode,
+                    bank: doomed.bank, trucking_company: doomed.trucking_company,
+                    amount: doomed.amount, allocations: doomed.allocations || [],
+                },
+            });
+            await mt.deleteTruckingPayment(id);
+            await audit.complete(entry, 'done', { reopened: (doomed.allocations || []).length });
+            res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.get('/api/sales-settlements', (req, res) => {
         try {
             const st = require('./helpers/salesSettlements');
