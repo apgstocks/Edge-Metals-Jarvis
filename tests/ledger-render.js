@@ -1144,6 +1144,163 @@ section('G5 — mark as paid, and the shortfall it will not let vanish');
     dom.window.close();
 }
 
+section('G6 — four tabs, two stores');
+{
+    // Apsara, 2026-09-10: "What if we have tabs like Outgoing(invoice data),
+    // Incoming(payment data), Freight(...) Similarly a tab called commission"
+    //
+    // She gets the four. Freight and Commission are VIEWS of the container
+    // row — what is asserted here is that they carry NO second copy of the
+    // booking, container or weight, because four copies of one fact disagree.
+    const posted = [];
+    const SROWS = [{ id: 'S1', booking_no: 'B1', container_no: 'C1', customer: 'Daekwang',
+                     date: '09/10/2026', weight: 29000, invoice_price: 0.41,
+                     receivable: 11890, received: 0, balance: 11890,
+                     bank_charge: 0, discount: 0 }].map((r) => ({ ...sales.withTotals(r), ...r }));
+    const PAYABLES = [
+        { key: 'S1|charge|CHG1', sale_id: 'S1', kind: 'charge', charge_id: 'CHG1',
+          booking_no: 'B1', container_no: 'C1', hbl_no: 'HBL9', what: 'Ocean freight',
+          why: 'LAX to Busan on B1', amount: 2850, paid: 1000, balance: 1850 },
+        { key: 'S1|commission', sale_id: 'S1', kind: 'commission', charge_id: null,
+          booking_no: 'B1', container_no: 'C1', hbl_no: 'HBL9', what: 'Commission',
+          why: '6 per MT on 13.154 MT invoiced', amount: 78.92, paid: 0, balance: 78.92 },
+    ];
+    const { w, dom } = await mount({
+        '/api/sales': () => ({ sales: SROWS, summary: sales.summary(SROWS),
+            columns: sales.tableColumns(), fields: sales.COLUMNS, groups: sales.GROUPS,
+            facets: sales.facets(SROWS), filterable: sales.FILTERABLE,
+            total_unfiltered: 1, duplicates: [{ booking_no: 'B1', container_no: 'C1', ids: ['S1', 'S2'] }] }),
+        '/api/sales-receipts': () => ({ receipts: [
+            { id: 'R1', date: '09/12/2026', customer: 'Daekwang', mode: 'Wire', bank: 'Chase',
+              ref: 'W-1', amount: 11865, allocations: [{ sale_id: 'S1', amount: 11865, deduction_amount: 25 }] }],
+            summary: { received: 11865, bank_charges: 25, discounts: 0 },
+            open_invoices: [], modes: ['Wire'], banks: ['Chase'] }),
+        '/api/sales-settlements': (q, opts) => {
+            if (opts && opts.method === 'POST') { posted.push(JSON.parse(opts.body)); return { ok: true }; }
+            return { settlements: [], summary: {}, payables: PAYABLES,
+                     open_payables: PAYABLES.filter((p) => p.balance > 0.005),
+                     modes: ['Wire', 'Cash'], banks: ['Chase'], payees: ['HMM'] };
+        },
+        '/api/sales/sellable': () => ({ bills: [
+            { id: 'B_A', booking_no: 'DALA1', container_no: 'MSKU1', supplier: 'Eccomelt',
+              description: 'Auto cast', net_lb: 29000, amount: 9280, sold: false },
+            { id: 'B_B', booking_no: 'DALA1', container_no: 'MSKU2', supplier: 'Eccomelt',
+              description: 'Auto cast', net_lb: 28000, amount: 8960, sold: true }],
+            unsold: 1 }),
+        '/api/sales/from-bill/B_A': () => ({ ok: true, already_sold: null,
+            suggestion: { booking_no: 'DALA1', container_no: 'MSKU1', item: 'Auto cast',
+                          weight: 29000, weight_unit: 'lb' } }),
+        '/api/bills': billsRoute,
+    });
+    const doc = w.document;
+    await w.renderLedgerTab('sales');
+
+    const tabs = [...doc.querySelectorAll('.sales-sub')].map((b) => b.dataset.sub);
+    ck('all four tabs are there', tabs.join(',') === 'outgoing,incoming,freight,commission', tabs.join(','));
+    // Read off the DOM, not off w.salesSubTab: a top-level `let` is in scope
+    // for the script but is NOT a property of window, so that read was
+    // comparing undefined and would have passed for any default.
+    ck('  Outgoing is where it opens',
+       /var\(--accent\)/.test(doc.querySelector('.sales-sub[data-sub="outgoing"]').getAttribute('style'))
+       && !/var\(--accent\)/.test(doc.querySelector('.sales-sub[data-sub="freight"]').getAttribute('style')),
+       doc.querySelector('.sales-sub[data-sub="outgoing"]').getAttribute('style'));
+    ck('  and the duplicate container is called out where she will see it',
+       /appears 2 times under B1/.test(doc.getElementById('viewRoot').textContent),
+       'a duplicate double-counts on the join to Bills');
+
+    // ── FREIGHT ──────────────────────────────────────────────────────────
+    doc.querySelector('.sales-sub[data-sub="freight"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    let text = doc.getElementById('viewRoot').textContent;
+    ck('Freight lists the charge she pays', /Ocean freight/.test(text));
+    ck('  with the note that says why it exists',
+       /LAX to Busan/.test(text), 'a charge without its reason is a column again');
+    ck('  what is paid and what is left', /1,850\.00/.test(text) && /1,000\.00/.test(text), text.slice(0, 200));
+    ck('  and NOT the commission, which is its own tab',
+       !/Commission/.test(doc.getElementById('subBody').textContent));
+    ck('  the container and booking are shown, not re-entered',
+       !doc.querySelector('#subBody input[name="container_no"]'),
+       'a Freight table with its own container box is a second copy that will disagree');
+
+    // ── COMMISSION ───────────────────────────────────────────────────────
+    doc.querySelector('.sales-sub[data-sub="commission"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    text = doc.getElementById('subBody').textContent;
+    ck('Commission shows how it was worked out, not a second weight box',
+       /6 per MT on 13\.154 MT invoiced/.test(text), text.slice(0, 160));
+    ck('  and not the freight charge', !/Ocean freight/.test(text));
+
+    // Paying it.
+    doc.getElementById('btnSettle').click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('Pay opens the settle form', !!doc.getElementById('stModal'));
+    ck('  listing only what this tab is about',
+       doc.querySelectorAll('#stRows tr[data-key]').length === 1,
+       [...doc.querySelectorAll('#stRows tr[data-key]')].map((r) => r.dataset.key).join(','));
+    const fire = (el, ev) => el.dispatchEvent(new w.Event(ev, { bubbles: true }));
+    doc.getElementById('stAmount').value = '78.92'; fire(doc.getElementById('stAmount'), 'input');
+    ck('  and refuses to save until it is allocated',
+       doc.getElementById('stSave').disabled === true);
+    const cb = doc.querySelector('.stPick');
+    cb.checked = true; fire(cb, 'change');
+    ck('  ticking it fills what is owed and unlocks Save',
+       doc.getElementById('stSave').disabled === false,
+       doc.querySelector('.stAmt').value);
+    doc.getElementById('stPayee').value = 'Agent Ltd';
+    doc.getElementById('stBank').value = 'Chase';
+    doc.getElementById('stSave').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('recording posts one settlement', posted.length === 1, JSON.stringify(posted));
+    if (posted.length) {
+        ck('  naming the container AND what on it',
+           posted[0].allocations[0].sale_id === 'S1' && posted[0].allocations[0].kind === 'commission',
+           JSON.stringify(posted[0].allocations[0]));
+        ck('  and who was paid', posted[0].payee === 'Agent Ltd');
+    }
+
+    // ── INCOMING ─────────────────────────────────────────────────────────
+    doc.querySelector('.sales-sub[data-sub="incoming"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    text = doc.getElementById('subBody').textContent;
+    ck('Incoming lists what arrived', /11,865\.00/.test(text), text.slice(0, 160));
+    ck('  and says how much of the gap was a bank charge',
+       /25\.00 deducted/.test(text), text.slice(0, 220));
+    ck('  with the bank charge kept on its own figure',
+       /Bank charges/.test(text) && /Discounts/.test(text));
+    ck('  and a way to record a new one', !!doc.getElementById('btnReceipt'));
+
+    // ── FROM THE MATCHING BILL ───────────────────────────────────────────
+    doc.querySelector('.sales-sub[data-sub="outgoing"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    doc.getElementById('btnFromBill').click();
+    await new Promise((r) => setTimeout(r, 50));
+    ck('New from bill lists the containers already bought', !!doc.getElementById('fbModal'));
+    ck('  one already sold is shown and NOT offered',
+       doc.querySelector('.fbPick[data-id="B_B"]').disabled === true,
+       'a second sale on one container double-counts on the join');
+    ck('  the unsold one is', doc.querySelector('.fbPick[data-id="B_A"]').disabled === false);
+    doc.querySelector('.fbPick[data-id="B_A"]').click();
+    await new Promise((r) => setTimeout(r, 60));
+    const form = doc.getElementById('ledgerForm');
+    ck('choosing it opens the sale form', !!form);
+    ck('  with the container carried across, not typed again',
+       form.querySelector('[name="container_no"]').value === 'MSKU1',
+       form.querySelector('[name="container_no"]').value);
+    ck('  and the booking with it, which is what makes the join work',
+       form.querySelector('[name="booking_no"]').value === 'DALA1',
+       'a typo here breaks margin-per-container in silence');
+    ck('  the purchased weight as a starting point',
+       form.querySelector('[name="weight"]').value === '29000',
+       form.querySelector('[name="weight"]').value);
+    ck('  still dated today in LA', /^\d\d\/\d\d\/\d{4}$/.test(form.querySelector('[name="date"]').value));
+    ck('  and NOTHING was saved by opening it',
+       !doc.getElementById('ledSaveState') || !/Saved/.test(doc.getElementById('ledSaveState').textContent),
+       'a suggestion is not a row');
+
+    await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
 section('H — and the sheet write is coalesced, not one per keystroke');
 {
     // The Sheets API is rate-limited per minute. "On every modification"

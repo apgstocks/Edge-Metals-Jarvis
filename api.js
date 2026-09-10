@@ -3861,6 +3861,119 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── WHAT A SALE COSTS, AND PAYING IT OFF ─────────────────────────────
+    // Her answer, asked whether freight and commission are settled
+    // separately: "Yes — both get settled separately."
+    // ── A SALE STARTS FROM THE BILL IT WAS BOUGHT ON ─────────────────────
+    // Apsara, 2026-09-10, asked how a Sales row should be created: "From the
+    // matching Bill."
+    //
+    // It carries the container number across rather than having it typed a
+    // second time — which is the whole reason margin-per-container works at
+    // all. A typo here breaks the join silently: no error, just a container
+    // that cost something and earned nothing.
+    //
+    // A SUGGESTION, not a save. Same contract as /api/bills/from-booking:
+    // nothing is written until she presses save on the form.
+    app.get('/api/sales/from-bill/:billId', (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const s = require('./helpers/sales');
+            const bill = b.listWithTotals().find((x) => x.id === String(req.params.billId));
+            if (!bill) return res.status(404).json({ error: 'no such bill' });
+
+            const already = s.list().find((x) =>
+                String(x.booking_no || '').trim().toUpperCase() === String(bill.booking_no || '').trim().toUpperCase()
+                && String(x.container_no || '').trim().toUpperCase() === String(bill.container_no || '').trim().toUpperCase()
+                && String(bill.container_no || '').trim());
+
+            res.json({
+                ok: true,
+                suggestion: {
+                    booking_no: bill.booking_no || '',
+                    container_no: bill.container_no || '',
+                    item: bill.description || '',
+                    // The purchased weight, as a STARTING point. The invoiced
+                    // weight is what the customer is billed and can differ
+                    // after reweighing — and commission runs off the invoiced
+                    // one, so this must stay editable rather than derived.
+                    weight: bill.net_lb === null || bill.net_lb === undefined ? '' : bill.net_lb,
+                    weight_unit: 'lb',
+                    hbl_no: '', date: '',
+                },
+                bill: { id: bill.id, supplier: bill.supplier, amount: bill.amount,
+                        net_lb: bill.net_lb, net_mt: bill.net_mt, route: bill.route },
+                // Reported so the form can say so rather than making a second
+                // row that would double-count on the join.
+                already_sold: already ? { id: already.id, invoice_no: already.invoice_no || null } : null,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // The bills she has bought that have no sale against them yet.
+    app.get('/api/sales/sellable', (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const s = require('./helpers/sales');
+            const sold = new Set(s.list().map((x) =>
+                `${String(x.booking_no || '').trim().toUpperCase()}|${String(x.container_no || '').trim().toUpperCase()}`));
+            const rows = b.listWithTotals()
+                .filter((x) => String(x.container_no || '').trim())
+                .map((x) => ({ id: x.id, booking_no: x.booking_no || '', container_no: x.container_no,
+                               supplier: x.supplier || '', description: x.description || '',
+                               net_lb: x.net_lb, amount: x.amount,
+                               sold: sold.has(`${String(x.booking_no || '').trim().toUpperCase()}|${String(x.container_no || '').trim().toUpperCase()}`) }));
+            res.json({ bills: rows, unsold: rows.filter((x) => !x.sold).length });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/sales-settlements', (req, res) => {
+        try {
+            const st = require('./helpers/salesSettlements');
+            const all = st.payables();
+            res.json({
+                settlements: st.list(),
+                summary: st.summary(),
+                payables: all,
+                open_payables: all.filter((p) => p.balance > 0.005),
+                modes: st.SETTLEMENT_MODES,
+                banks: require('./helpers/banks').options(),
+                other: require('./helpers/banks').OTHER,
+                payees: [...new Set(st.list().map((x) => x.payee).filter(Boolean))].sort(),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/sales-settlements', async (req, res) => {
+        try {
+            const st = require('./helpers/salesSettlements');
+            const rec = await st.addSettlement({ ...(req.body || {}), created_by: (req.role || null) });
+            res.json({ ok: true, settlement: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/sales-settlements/:id', async (req, res) => {
+        try {
+            const st = require('./helpers/salesSettlements');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const doomed = st.list().find((x) => x.id === id);
+            if (!doomed) return res.status(404).json({ error: `no settlement ${id}` });
+            const entry = await audit.record({
+                action: 'delete-sale-cost', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: {
+                    company: 'edge-metals', date: doomed.date, mode: doomed.mode,
+                    bank: doomed.bank, payee: doomed.payee, amount: doomed.amount,
+                    allocations: doomed.allocations || [],
+                },
+            });
+            await st.deleteSettlement(id);
+            await audit.complete(entry, 'done', { reopened: (doomed.allocations || []).length });
+            res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.get('/api/sales', (req, res) => {
         try {
             const s = require('./helpers/sales');

@@ -32,6 +32,17 @@ const { loadJson, mutateJson } = require('./json');
 // copies of a dropdown.
 const PAYMENT_MODES = ['Zelle', 'Wire', 'Cash', 'Cheque'];
 
+// ── WHOSE BOOKS A ROW BELONGS TO ─────────────────────────────────────────
+// Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge Metals
+// is different", and, asked directly, that Edge Metals cash is separate from
+// the yard's petty cash reserve.
+//
+// Petty cash is an EDGE YARD ledger. A payment carrying one of these kinds is
+// Edge Metals and never touches it, whatever its mode. A SET rather than a
+// second `!== 'bill'` test, because the third Metals kind arrived within the
+// day and the fourth will not announce itself either.
+const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);
+
 // Money is compared to the cent. Floating point makes 4010 * 2.2 come out as
 // 8822.000000000001, so a load paid exactly to the penny would otherwise
 // report a pending balance of -0.000000000001 and never read as settled.
@@ -151,10 +162,10 @@ async function addPayment(input = {}) {
     const loadKind = (() => {
         const k = String(input.load_kind || '').trim();
         if (!k || k === 'purchase') return 'purchase';
-        if (['sale', 'trucker', 'bill'].includes(k)) return k;
+        if (['sale', 'trucker', 'bill', 'sale_cost'].includes(k)) return k;
         throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
     })();
-    const drawsPettyCash = mode === 'Cash' && loadKind !== 'bill';
+    const drawsPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);
 
     let cashEntry = null;
     let cashTaken = null;
@@ -291,7 +302,7 @@ async function deletePayment(id) {
     // An Edge Metals cash payment never came out of this box (see
     // drawsPettyCash above), so refunding one would credit the yard with cash
     // it never spent — inventing money, which is worse than losing it.
-    if (removed && doomed && doomed.mode === 'Cash' && doomed.load_kind !== 'bill') {
+    if (removed && doomed && doomed.mode === 'Cash' && !EDGE_METALS_KINDS.has(doomed.load_kind)) {
         // By the withdrawal's own id when we have it, else by payment id —
         // reverseForPayment accepts either, and the entry id is the one that
         // survives a payment written before the link was stamped.
@@ -323,7 +334,7 @@ async function deletePaymentsForLoad(loadId) {
         return next;
     });
     for (const p of doomed) {
-        if (p.mode !== 'Cash' || p.load_kind === 'bill') continue;   // see deletePayment
+        if (p.mode !== 'Cash' || EDGE_METALS_KINDS.has(p.load_kind)) continue;   // see deletePayment
         const key = p.petty_cash_entry_id || p.id;
         try {
             await require('./pettyCash').reverseForPayment(key, { createdBy: null });

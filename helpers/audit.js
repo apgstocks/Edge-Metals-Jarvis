@@ -61,6 +61,7 @@ const ACTIONS = [
     'delete-bill-payment',        // a supplier payment removed from Edge Metals
     'delete-bill-advance',        // a supplier advance removed, un-applying its credit
     'delete-sales-receipt',       // a customer receipt removed, reopening its containers
+    'delete-sale-cost',           // a freight or commission settlement removed
     'resign-paid-load',           // signature replaced after money moved
     'edit-locked-load',           // the edit-unlock prompt satisfied by this profile
 ];

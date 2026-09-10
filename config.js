@@ -176,6 +176,10 @@ const FILES = {
     // from PAYMENTS_FILE because it flows the other way — see the header of
     // helpers/salesReceipts.js for why it writes no row to the spend ledger.
     SALES_RECEIPTS_FILE: path.join(DATA_DIR, 'sales_receipts.json'),
+    // What a sale COSTS: charges she pays and agent commission. Money out, so
+    // unlike receipts it does mirror into PAYMENTS_FILE — load_kind
+    // 'sale_cost', its own line in the spend report.
+    SALES_SETTLEMENTS_FILE: path.join(DATA_DIR, 'sales_settlements.json'),
     // Yard assistant transcripts — per Apsara 2026-08-29: "keep on storing the
     // conversations of yard assistant somewhere. so per day one log", then
     // "create a folder inside yard folder as log. put the logs over there."

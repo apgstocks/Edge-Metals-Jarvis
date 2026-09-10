@@ -628,10 +628,16 @@ section('F — who may see her supplier prices');
     ck('  every row offers an edit, not just a delete',
        /class="btn btn-secondary ledger-edit"/.test(html) && /openLedgerForm\(kind, row\)/.test(html),
        'a typo in a seal number should not mean retyping eighteen fields');
+    // The signature grew a third argument on 2026-09-10 (`seed`, a suggestion
+    // for a NEW row, from the bill a container was bought on). Matched on the
+    // first two so it pins the thing that matters — one form, not two.
     ck('  and the SAME form does add and edit',
-       /function openLedgerForm\(kind, existing\)/.test(html)
+       /function openLedgerForm\(kind, existing/.test(html)
        && (html.match(/const sections = groups\.map/g) || []).length === 1,
        'two copies of an 18-field layout is two things to keep in step');
+    ck('    and a suggestion is NOT passed as an existing row',
+       /function openLedgerForm\(kind, existing, seed\)/.test(html),
+       'a seed in the existing slot would make autosave PUT against an id that is not there');
     ck('  an edit sends the emptied fields too',
        /if \(!\(k in body\)\) body\[k\] = ''/.test(html),
        'the server PATCHes, so a dropped blank means the old value survives');
@@ -1188,6 +1194,131 @@ section('O — mark as paid, and the $25 the bank took on the way');
     const staff = (await login('staff-pw-ccccccccccc')).json.sid;
     ck('staff cannot touch receipts at all',
        (await req('GET', '/api/sales-receipts', { sid: staff })).status === 403);
+}
+
+section('P — settling what a sale costs: freight out, and the agent');
+{
+    // Apsara, 2026-09-10, asked whether freight and commission need paid or
+    // unpaid tracking: "Yes — both get settled separately."
+    const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const st = require(path.join(ROOT, 'helpers/salesSettlements'));
+    const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
+    const spend = require(path.join(ROOT, 'helpers/spendReport'));
+
+    const row = (await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Costco Metals', booking_no: 'COST1',
+        container_no: 'COSTU1', weight: 29000, invoice_price: 0.41, commission_per_mt: 6,
+        charges: [
+            { what: 'Ocean freight', amount: 2850, direction: 'out', why: 'LAX to Busan' },
+            { what: 'Detention', amount: 450, direction: 'in', why: 'their delay, rebilled' },
+        ],
+    } })).json.sale;
+
+    const open = () => st.payables().filter((p) => p.sale_id === row.id);
+    ck('an outgoing charge becomes a payable', open().some((p) => p.what === 'Ocean freight'),
+       JSON.stringify(open().map((p) => p.what)));
+    ck('  and so does the commission', open().some((p) => p.kind === 'commission'));
+    ck('  a charge the CUSTOMER pays is not one of them',
+       !open().some((p) => p.what === 'Detention'),
+       'that is a receivable — putting it here has Edge Metals paying itself');
+    ck('  the commission payable is the computed figure',
+       open().find((p) => p.kind === 'commission').amount === 78.92,
+       String(open().find((p) => p.kind === 'commission').amount));
+    ck('  and says how it was worked out',
+       /per MT on/.test(open().find((p) => p.kind === 'commission').why),
+       open().find((p) => p.kind === 'commission').why);
+
+    const freight = open().find((p) => p.what === 'Ocean freight');
+    const part = await req('POST', '/api/sales-settlements', { sid: admin, body: {
+        date: '09/12/2026', amount: 1000, mode: 'Wire', bank: 'Chase', payee: 'HMM',
+        allocations: [{ sale_id: row.id, kind: 'charge', charge_id: freight.charge_id, amount: 1000 }],
+    } });
+    ck('a part payment against a charge is fine', part.status === 200, part.raw);
+    ck('  and the rest stays outstanding',
+       st.payables().find((p) => p.key === freight.key).balance === 1850,
+       String(st.payables().find((p) => p.key === freight.key).balance));
+
+    // One transfer covering the freight balance AND the commission.
+    const rest = await req('POST', '/api/sales-settlements', { sid: admin, body: {
+        date: '09/13/2026', amount: 1928.92, mode: 'Wire', bank: 'Chase', payee: 'HMM',
+        allocations: [
+            { sale_id: row.id, kind: 'charge', charge_id: freight.charge_id, amount: 1850 },
+            { sale_id: row.id, kind: 'commission', amount: 78.92 },
+        ],
+    } });
+    ck('one transfer settles a charge and the commission together', rest.status === 200, rest.raw);
+    ck('  both are square', st.payables().filter((p) => p.sale_id === row.id)
+       .every((p) => Math.abs(p.balance) < 0.005),
+       JSON.stringify(st.payables().filter((p) => p.sale_id === row.id).map((p) => p.balance)));
+    ck('  and this container has nothing left outstanding',
+       st.payables().filter((p) => p.sale_id === row.id)
+         .every((p) => Math.abs(p.balance) < 0.005),
+       JSON.stringify(st.payables().filter((p) => p.sale_id === row.id)));
+
+    const over = await req('POST', '/api/sales-settlements', { sid: admin, body: {
+        date: '09/13/2026', amount: 10, mode: 'Wire', bank: 'Chase', payee: 'HMM',
+        allocations: [{ sale_id: row.id, kind: 'charge', charge_id: freight.charge_id, amount: 10 }],
+    } });
+    ck('paying something already settled is refused', over.status === 400, over.raw);
+    ck('  saying what is actually left on it',
+       /nothing outstanding/.test(over.json.error || ''), over.json.error);
+
+    const noPayee = await req('POST', '/api/sales-settlements', { sid: admin, body: {
+        date: '09/13/2026', amount: 10, mode: 'Wire', bank: 'Chase',
+        allocations: [{ sale_id: row.id, kind: 'commission', amount: 10 }],
+    } });
+    ck('a settlement has to say who was paid', noPayee.status === 400, noPayee.raw);
+
+    // ── IT IS MONEY OUT, SO IT IS IN THE SPEND REPORT ────────────────────
+    const ledger = listPayments().filter((p) => p.load_kind === 'sale_cost');
+    ck('each transfer writes ONE ledger row, and a refused one writes none',
+       ledger.length === 2, String(ledger.length));
+    ck('  under its own kind, not folded into supplier payments',
+       ledger.every((p) => p.load_kind === 'sale_cost'),
+       'freight is what it costs to SELL, not what was paid for metal');
+    const rep = spend.buildSpendReport({ payments: listPayments() });
+    ck('  and the report gives it its own total',
+       rep.saleCostTotal === 2928.92, String(rep.saleCostTotal));
+    ck('    kept out of the supplier total',
+       !rep.rows.some((x) => x.kind === 'supplier' && x.amount === 1928.92),
+       'a margin worked out from a supplier line containing freight is wrong the flattering way');
+    ck('    and out of expenses, which is where an unnamed kind would land',
+       rep.rows.filter((x) => x.kind === 'sale_cost').length === 2,
+       JSON.stringify(rep.rows.map((x) => x.kind)));
+
+    // Cash out on an Edge Metals cost must not touch the yard box.
+    const petty = require(path.join(ROOT, 'helpers/pettyCash'));
+    await petty.addTopUp({ date: '09/13/2026', amount: 500, note: 'float for the sale-cost test' });
+    const before = petty.balance();
+    const row2 = (await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/10/2026', customer: 'Costco Metals', booking_no: 'COST2', container_no: 'COSTU2',
+        weight: 29000, invoice_price: 0.41,
+        charges: [{ what: 'Fumigation', amount: 120, direction: 'out', why: 'wooden dunnage' }] } })).json.sale;
+    const fum = st.payables().find((p) => p.sale_id === row2.id);
+    const cash = await req('POST', '/api/sales-settlements', { sid: admin, body: {
+        date: '09/13/2026', amount: 120, mode: 'Cash', payee: 'Fumigation co',
+        allocations: [{ sale_id: row2.id, kind: 'charge', charge_id: fum.charge_id, amount: 120 }],
+    } });
+    ck('a cash settlement records with no bank', cash.status === 200, cash.raw);
+    ck('  and does NOT move the Edge Yard petty cash box',
+       petty.balance() === before, `${before} -> ${petty.balance()}`);
+
+    // ── DELETING TAKES THE LEDGER ROW WITH IT ────────────────────────────
+    const audit = require(path.join(ROOT, 'helpers/audit'));
+    const sid2 = rest.json.settlement.id;
+    const gone = await req('DELETE', `/api/sales-settlements/${sid2}`, { sid: admin });
+    ck('deleting a settlement succeeds', gone.status === 200, gone.raw);
+    ck('  the charge and commission owe again',
+       st.payables().find((p) => p.key === freight.key).balance === 1850,
+       String(st.payables().find((p) => p.key === freight.key).balance));
+    ck('  its ledger row goes too',
+       listPayments().filter((p) => p.load_id === sid2).length === 0,
+       'a settlement deleted here and left in the spend report is money that never comes back');
+    ck('  and it is audited', audit.listEntries().some((e) => e.subject === sid2 && e.action === 'delete-sale-cost'));
+
+    const staff = (await login('staff-pw-ccccccccccc')).json.sid;
+    ck('staff cannot reach settlements',
+       (await req('GET', '/api/sales-settlements', { sid: staff })).status === 403);
 }
 
 if (server) server.close();

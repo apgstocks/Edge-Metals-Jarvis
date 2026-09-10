@@ -4786,7 +4786,44 @@ function ledgerCell(row, col, cfgK) {
 // lose what she narrowed to.
 const ledgerFilters = { bills: {}, sales: {} };
 
+// ── FOUR TABS, TWO STORES ────────────────────────────────────────────────
+// Apsara, 2026-09-10: "What if we have tabs like Outgoing(invoice data),
+// Incoming(payment data), Freight(...) Similarly a tab called commission"
+//
+// She gets the four tabs. Freight and Commission are VIEWS of the container
+// row, not stores of their own: both would otherwise hold their own copy of
+// booking, container, carrier and weight, and four copies of the same fact
+// disagree. Commission especially — it is weight x rate, so a second weight
+// on a Commission table would compute the agent's money off a stale figure
+// and nothing on screen would say so.
+let salesSubTab = 'outgoing';
+const SALES_SUBTABS = [
+  ['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
+  ['freight', 'Freight'], ['commission', 'Commission'],
+];
+function salesSubTabBar() {
+  const tab = ([id, label]) => {
+    const on = salesSubTab === id;
+    return `<button class="sales-sub" data-sub="${id}" style="background:none; border:none; cursor:pointer;`
+      + ` font-size:12px; padding:8px 14px;`
+      + ` color:${on ? 'var(--text-primary)' : 'var(--text-muted)'};`
+      + ` border-bottom:2px solid ${on ? 'var(--accent)' : 'transparent'};">${label}</button>`;
+  };
+  return `<div style="display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px;">`
+    + SALES_SUBTABS.map(tab).join('') + `</div>`;
+}
+
+function wireSalesSubTabs() {
+  document.querySelectorAll('.sales-sub').forEach((b) => {
+    b.onclick = () => { salesSubTab = b.dataset.sub; renderLedgerTab('sales'); };
+  });
+}
+
 async function renderLedgerTab(kind) {
+  // Incoming, Freight and Commission are their own screens — they are not the
+  // sales table with different columns, and pretending otherwise is how a
+  // charge list ends up rendered as a row of blanks.
+  if (kind === 'sales' && salesSubTab !== 'outgoing') return renderSalesSubTab(salesSubTab);
   const K = LEDGER_KINDS[kind];
   const f = ledgerFilters[kind] || {};
   // Sent to the SERVER, which filters and then totals — so the summary row
@@ -4841,9 +4878,15 @@ async function renderLedgerTab(kind) {
         </div>
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
+          ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
       </div>
+      ${kind === 'sales' ? salesSubTabBar() : ''}
+      ${kind === 'sales' && (data.duplicates || []).length ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
+        ${(data.duplicates || []).map((d) => `${esc(d.container_no)} appears ${d.ids.length} times under ${esc(d.booking_no)}`).join(' · ')}
+        — usually a typo, occasionally a container split across two invoices. Worth a look either way: the margin against Bills counts it twice.
+      </div>` : ''}
       <div style="display:grid; grid-template-columns:repeat(${K.cards.length}, 1fr); gap:8px; margin-bottom:12px;">${cards}</div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
         ${ledFilterBox('q', 'Search', 'any field', f.q, 200)}
@@ -4909,6 +4952,8 @@ async function renderLedgerTab(kind) {
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
   }).catch(() => {});
 
+  if (kind === 'sales') wireSalesSubTabs();
+  if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
@@ -4954,6 +4999,451 @@ const LEDGER_LIGHT = {
   paper: '#FFFFFF', sunken: '#F6F7F8', line: '#DDE1E4', lineSoft: '#EBEDEF',
   ink: '#14181B', inkMuted: '#5F6970', inkFaint: '#8B949B',
 };
+
+// ── SELLING A CONTAINER SHE ALREADY BOUGHT ───────────────────────────────
+// Apsara, 2026-09-10, asked how a Sales row is created: "From the matching
+// Bill." It carries the container number across instead of having it typed a
+// second time, which is the only reason margin-per-container can be worked
+// out at all — a typo here breaks the join in silence: no error, just a
+// container that cost something and earned nothing.
+//
+// Bills already sold are shown and NOT offered. A second sales row on one
+// container would double-count on that same join.
+async function openFromBill() {
+  const L = LEDGER_LIGHT;
+  const data = await api('/api/sales/sellable');
+  const rows = data.bills || [];
+  const money = (n) => (n === null || n === undefined) ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="fbModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(700px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">New sale from a bill</h3>
+          <button id="fbClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">Which container are you selling?</div>
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:360px; overflow-y:auto;">
+          ${rows.length ? rows.map((b) => `
+            <button class="fbPick" data-id="${esc(b.id)}" ${b.sold ? 'disabled' : ''}
+              style="display:flex; width:100%; align-items:center; gap:10px; padding:9px 12px; background:none; border:none; border-bottom:1px solid ${L.lineSoft}; text-align:left; cursor:${b.sold ? 'default' : 'pointer'}; opacity:${b.sold ? '.45' : '1'};">
+              <span style="font-family:var(--font-mono); font-size:11px; color:${L.inkMuted}; width:82px;">${esc(b.booking_no || '—')}</span>
+              <span style="font-family:var(--font-mono); font-size:12px; color:${L.ink}; width:110px;">${esc(b.container_no)}</span>
+              <span style="flex:1; font-size:12px; color:${L.inkMuted}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(b.supplier || '')}${b.description ? ' · ' + esc(b.description) : ''}</span>
+              <span style="font-family:var(--font-mono); font-size:11px; color:${L.inkFaint};">${money(b.amount)}</span>
+              ${b.sold ? `<span style="font-size:10px; color:#2F7D22;">sold</span>` : ''}
+            </button>`).join('')
+            : `<div style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">No bills with a container number yet.</div>`}
+        </div>
+        <div style="margin-top:10px; font-size:11px; color:${L.inkFaint};">
+          ${data.unsold || 0} of ${rows.length} not sold yet. Nothing here? Use Add sale for a container that never had a bill.
+        </div>
+        <div id="fbErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+
+  const close = () => { const m = $('fbModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('fbClose').onclick = close;
+
+  document.querySelectorAll('.fbPick').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = async () => {
+      try {
+        const r = await api(`/api/sales/from-bill/${encodeURIComponent(b.dataset.id)}`);
+        if (r.already_sold) {
+          $('fbErr').textContent = 'That container already has a sale against it.';
+          return;
+        }
+        close();
+        // A SUGGESTION into the ordinary add form — nothing is saved until
+        // she presses save, same contract as pre-filling a bill from a
+        // booking.
+        openLedgerForm('sales', null, r.suggestion);
+      } catch (e) { $('fbErr').textContent = e.message || 'Could not read that bill'; }
+    };
+  });
+}
+
+// ── INCOMING, FREIGHT, COMMISSION ────────────────────────────────────────
+// Three screens over the SAME container rows. Freight and Commission read
+// helpers/salesSettlements.payables(), which derives both from the charge
+// list and the commission rate on the row — so there is exactly one place
+// each of those numbers is decided, and a tab cannot disagree with the tab
+// beside it.
+async function renderSalesSubTab(which) {
+  const root = $('viewRoot');
+  root.innerHTML = `<div class="section-title">Sales</div>${salesSubTabBar()}<div id="subBody" style="color:var(--text-muted); font-size:13px;">Loading…</div>`;
+  wireSalesSubTabs();
+  try {
+    if (which === 'incoming') await renderIncoming();
+    else await renderPayables(which);
+  } catch (e) {
+    $('subBody').innerHTML = `<div style="color:var(--status-warn); font-size:13px;">${esc(e.message || 'could not load')}</div>`;
+  }
+}
+
+const salesMoney = (n) => (n === null || n === undefined || isNaN(Number(n)))
+  ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function renderIncoming() {
+  const data = await api('/api/sales-receipts');
+  const rows = (data.receipts || []).slice().reverse();
+  const sum = data.summary || {};
+  const open = data.open_invoices || [];
+  const owed = open.reduce((t, x) => t + (Number(x.balance) || 0), 0);
+
+  $('subBody').innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
+      ${[['Received', salesMoney(sum.received)], ['Still owed', salesMoney(owed)],
+         ['Bank charges', salesMoney(sum.bank_charges)], ['Discounts', salesMoney(sum.discounts)]]
+        .map(([l, v]) => `<div class="card" style="padding:12px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${l}</div>
+          <div style="font-size:16px; font-weight:700; margin-top:4px;">${v}</div></div>`).join('')}
+    </div>
+    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+      <button id="btnReceipt" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">Record receipt</button>
+    </div>
+    <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead><tr style="color:var(--text-muted); text-align:left;">
+        ${['Date', 'Customer', 'How', 'Into', 'Reference', 'Containers', 'Amount', ''].map((h, i) => `<th style="padding:6px 9px; font-weight:400; ${i === 6 ? 'text-align:right;' : ''}">${h}</th>`).join('')}
+      </tr></thead>
+      <tbody>${rows.length ? rows.map((r) => `
+        <tr data-receipt="${esc(r.id)}" style="border-top:1px solid var(--line);">
+          <td style="padding:7px 9px; font-family:var(--font-mono);">${esc(r.date || '')}</td>
+          <td style="padding:7px 9px;">${esc(r.customer || '')}</td>
+          <td style="padding:7px 9px;">${esc(r.mode || '')}</td>
+          <td style="padding:7px 9px; color:var(--text-muted);">${esc(r.bank || '—')}</td>
+          <td style="padding:7px 9px; color:var(--text-muted);">${esc(r.ref || '—')}</td>
+          <td style="padding:7px 9px; color:var(--text-muted);">${(r.allocations || []).length}${
+            (r.allocations || []).some((a) => a.deduction_amount) ? ` · ${salesMoney((r.allocations || []).reduce((t, a) => t + (Number(a.deduction_amount) || 0), 0))} deducted` : ''}</td>
+          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${salesMoney(r.amount)}</td>
+          <td style="padding:7px 9px;"><button class="rcpt-del" data-id="${esc(r.id)}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button></td>
+        </tr>`).join('')
+        : `<tr><td colspan="8" style="padding:22px; text-align:center; color:var(--text-muted);">Nothing received yet.</td></tr>`}</tbody>
+    </table></div>`;
+
+  $('btnReceipt').onclick = () => openReceiptForm(data);
+  document.querySelectorAll('.rcpt-del').forEach((b) => {
+    b.onclick = async () => {
+      if (b.dataset.armed !== '1') {
+        document.querySelectorAll('.rcpt-del').forEach((x) => { x.dataset.armed = ''; x.textContent = 'Delete'; });
+        b.dataset.armed = '1'; b.textContent = 'Delete — reopens its containers?';
+        setTimeout(() => { if (b.dataset.armed === '1') { b.dataset.armed = ''; b.textContent = 'Delete'; } }, 5000);
+        return;
+      }
+      await api(`/api/sales-receipts/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' });
+      renderSalesSubTab('incoming');
+    };
+  });
+}
+
+// Freight and Commission are the same screen over a filtered payables list.
+// Written once: they differ by which rows and which columns, and two copies
+// would have drifted the first time a settle rule changed.
+async function renderPayables(which) {
+  const data = await api('/api/sales-settlements');
+  const all = (data.payables || []).filter((p) => which === 'commission'
+    ? p.kind === 'commission' : p.kind === 'charge');
+  const outstanding = all.reduce((t, p) => t + Math.max(0, Number(p.balance) || 0), 0);
+  const total = all.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+
+  $('subBody').innerHTML = `
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
+      ${[[which === 'commission' ? 'Commission' : 'Charges', salesMoney(total)],
+         ['Outstanding', salesMoney(outstanding)],
+         ['Lines', String(all.length)]]
+        .map(([l, v]) => `<div class="card" style="padding:12px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${l}</div>
+          <div style="font-size:16px; font-weight:700; margin-top:4px;">${v}</div></div>`).join('')}
+    </div>
+    <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+      <button id="btnSettle" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">Pay</button>
+    </div>
+    <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
+      <thead><tr style="color:var(--text-muted); text-align:left;">
+        <th style="padding:6px 9px; font-weight:400;">Booking</th>
+        <th style="padding:6px 9px; font-weight:400;">Container</th>
+        <th style="padding:6px 9px; font-weight:400;">HBL</th>
+        <th style="padding:6px 9px; font-weight:400;">${which === 'commission' ? 'Basis' : 'What'}</th>
+        <th style="padding:6px 9px; font-weight:400; text-align:right;">Amount</th>
+        <th style="padding:6px 9px; font-weight:400; text-align:right;">Paid</th>
+        <th style="padding:6px 9px; font-weight:400; text-align:right;">Outstanding</th>
+      </tr></thead>
+      <tbody>${all.length ? all.map((p) => `
+        <tr style="border-top:1px solid var(--line);">
+          <td style="padding:7px 9px; font-family:var(--font-mono);">${esc(p.booking_no || '—')}</td>
+          <td style="padding:7px 9px; font-family:var(--font-mono);">${esc(p.container_no || '—')}</td>
+          <td style="padding:7px 9px; color:var(--text-muted);">${esc(p.hbl_no || '—')}</td>
+          <td style="padding:7px 9px;">${esc(which === 'commission' ? p.why : p.what)}${
+            which === 'commission' ? '' : `<div style="font-size:10px; color:var(--text-muted); white-space:normal; max-width:340px;">${esc(p.why || '')}</div>`}</td>
+          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${salesMoney(p.amount)}</td>
+          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${salesMoney(p.paid)}</td>
+          <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:${p.balance > 0.005 ? 'var(--text-primary)' : '#2F7D22'};">${p.balance > 0.005 ? salesMoney(p.balance) : 'settled'}</td>
+        </tr>`).join('')
+        : `<tr><td colspan="7" style="padding:22px; text-align:center; color:var(--text-muted);">Nothing here yet. ${which === 'commission' ? 'Set a commission rate on a container.' : 'Add a charge you pay to a container.'}</td></tr>`}</tbody>
+    </table></div>`;
+
+  $('btnSettle').onclick = () => openSettleForm(data, which);
+}
+
+// ── ONE RECEIPT, SEVERAL CONTAINERS ──────────────────────────────────────
+// The customer-side twin of openBillPayForm. Same rule, same reason: it asks
+// WHO PAID first, then lists only that customer's outstanding containers.
+// A TT from Daekwang ticked against a container invoiced to someone else is a
+// false statement about who is square, and the route refuses it — this is the
+// step that means she never gets told off for it.
+async function openReceiptForm(data, customer) {
+  const L = LEDGER_LIGHT;
+  const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const all = data.open_invoices || [];
+  const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
+  const lab = `display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:5px; white-space:nowrap;`;
+
+  if (!customer) {
+    const by = new Map();
+    for (const x of all) {
+      const n = String(x.customer || '').trim();
+      if (!n) continue;
+      const cur = by.get(n) || { name: n, count: 0, owed: 0 };
+      cur.count += 1; cur.owed = Math.round((cur.owed + (Number(x.balance) || 0)) * 100) / 100;
+      by.set(n, cur);
+    }
+    const list = [...by.values()].sort((a, b) => b.owed - a.owed);
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="rcWho" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+        <div class="card" style="width:min(560px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+            <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Record receipt</h3>
+            <button id="rcWhoClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+          </div>
+          <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">Who paid?</div>
+          <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:320px; overflow-y:auto;">
+            ${list.length ? list.map((c) => `
+              <button class="rcWhoPick" data-customer="${esc(c.name)}" style="display:flex; width:100%; align-items:center; gap:10px; padding:10px 12px; background:none; border:none; border-bottom:1px solid ${L.lineSoft}; cursor:pointer; text-align:left;">
+                <span style="flex:1; font-size:13px; color:${L.ink};">${esc(c.name)}</span>
+                <span style="font-size:11px; color:${L.inkFaint};">${c.count} container${c.count === 1 ? '' : 's'}</span>
+                <span style="font-family:var(--font-mono); font-size:12px; color:${L.ink};">${money(c.owed)} owing</span>
+              </button>`).join('')
+              : `<div style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing outstanding.</div>`}
+          </div>
+        </div>
+      </div>`);
+    const closeWho = () => { const m = $('rcWho'); if (m) m.remove(); };
+    $('rcWhoClose').onclick = closeWho;
+    document.querySelectorAll('.rcWhoPick').forEach((b) => {
+      b.onclick = () => { closeWho(); openReceiptForm(data, b.dataset.customer); };
+    });
+    return;
+  }
+
+  const open = all.filter((x) => String(x.customer || '').trim().toLowerCase() === String(customer).trim().toLowerCase());
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="rcModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Receipt — ${esc(customer)}</h3>
+          <button id="rcClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
+          <div><label style="${lab}">Received on</label><input id="rcDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
+          <div><label style="${lab}">Amount arrived</label><input id="rcAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+          <div><label style="${lab}">How</label><select id="rcMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+          <div id="rcBankField"><label style="${lab}">Into</label><select id="rcBank" style="${fieldCss}">${(data.banks || []).map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div><label style="${lab}">Reference</label><input id="rcRef" autocomplete="off" style="${fieldCss}"></div>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin:14px 0 6px;">Which containers does it cover?</div>
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:260px; overflow-y:auto;">
+          <table style="width:100%; border-collapse:collapse;">
+            <tbody id="rcRows">${open.length ? open.map((b) => `
+              <tr data-sale="${esc(b.id)}" style="border-top:1px solid ${L.lineSoft};">
+                <td style="padding:6px 8px;"><input type="checkbox" class="rcPick" data-sale="${esc(b.id)}"></td>
+                <td style="padding:6px 8px; font-size:12px; font-family:var(--font-mono); color:${L.inkMuted};">${esc(b.booking_no || '')}</td>
+                <td style="padding:6px 8px; font-size:12px; font-family:var(--font-mono); color:${L.ink};">${esc(b.container_no || b.invoice_no || '')}</td>
+                <td style="padding:6px 8px; font-size:12px; text-align:right; font-family:var(--font-mono); color:${L.inkMuted};">${money(b.balance)}</td>
+                <td style="padding:6px 8px;"><input class="rcAmt" data-sale="${esc(b.id)}" data-balance="${esc(b.balance)}" inputmode="decimal" autocomplete="off" style="width:110px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;"></td>
+              </tr>`).join('') : `<tr><td style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing owing from ${esc(customer)}.</td></tr>`}</tbody>
+          </table>
+        </div>
+        <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
+          <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="rcAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="rcLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div style="flex:1;"></div>
+          <button id="rcCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
+          <button id="rcSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record it</button>
+        </div>
+        <div id="rcErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+
+  $('rcDate').value = toUsDate(todayYardDateStr());
+  wireUsDateField('rcDate');
+  const close = () => { const m = $('rcModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('rcClose').onclick = close; $('rcCancel').onclick = close;
+
+  const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
+  const allocs = () => [...document.querySelectorAll('.rcAmt')]
+    .map((el) => ({ sale_id: el.dataset.sale, amount: num(el.value) })).filter((a) => a.amount > 0);
+  const retotal = () => {
+    const sent = num($('rcAmount').value);
+    const a = allocs().reduce((t, x) => t + x.amount, 0);
+    const left = Math.round((sent - a) * 100) / 100;
+    $('rcAllocated').textContent = money(a);
+    $('rcLeft').textContent = money(left);
+    $('rcLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    const ok = sent > 0 && Math.abs(left) < 0.005;
+    $('rcSave').disabled = !ok;
+    $('rcSave').style.opacity = ok ? '1' : '.45';
+    const m = $('rcMode').value;
+    if ($('rcBankField')) $('rcBankField').style.display = (m === 'Wire' || m === 'Zelle') ? '' : 'none';
+  };
+  document.querySelectorAll('.rcPick').forEach((cb) => {
+    cb.onchange = () => {
+      const amt = document.querySelector(`.rcAmt[data-sale="${cb.dataset.sale}"]`);
+      if (!amt) return;
+      if (cb.checked) {
+        const sent = num($('rcAmount').value);
+        const already = allocs().reduce((t, x) => t + x.amount, 0);
+        const room = sent > 0 ? Math.max(0, sent - already) : Infinity;
+        const bal = num(amt.dataset.balance);
+        amt.value = (room === Infinity ? bal : Math.min(bal, room)).toFixed(2);
+      } else { amt.value = ''; }
+      retotal();
+    };
+  });
+  document.querySelectorAll('.rcAmt').forEach((el) => { el.oninput = retotal; });
+  $('rcAmount').oninput = retotal;
+  $('rcMode').onchange = retotal;
+  retotal();
+
+  $('rcSave').onclick = async () => {
+    $('rcErr').textContent = '';
+    try {
+      const mode = $('rcMode').value;
+      await api('/api/sales-receipts', { method: 'POST', body: JSON.stringify({
+        date: $('rcDate').value, amount: $('rcAmount').value, mode,
+        bank: (mode === 'Wire' || mode === 'Zelle') ? $('rcBank').value : '',
+        ref: $('rcRef').value, customer, allocations: allocs(),
+      }) });
+      close();
+      renderSalesSubTab('incoming');
+    } catch (e) { $('rcErr').textContent = e.message || 'Could not record it'; }
+  };
+}
+
+// ── PAYING A CHARGE OR A COMMISSION ──────────────────────────────────────
+// One transfer across several payables, the third form of this shape. Payee
+// is free text and NOT checked against the lines: a charge records what it
+// was for, not who to pay, so there is nothing here to check it against.
+// Recording an unverifiable claim is honest; pretending to verify it is not.
+async function openSettleForm(data, which) {
+  const L = LEDGER_LIGHT;
+  const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const open = (data.open_payables || []).filter((p) => which === 'commission'
+    ? p.kind === 'commission' : p.kind === 'charge');
+  const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
+  const lab = `display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:5px; white-space:nowrap;`;
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="stModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Pay ${which === 'commission' ? 'commission' : 'charges'}</h3>
+          <button id="stClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
+          <div><label style="${lab}">Date</label><input id="stDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
+          <div><label style="${lab}">Amount sent</label><input id="stAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+          <div><label style="${lab}">Paid to</label><input id="stPayee" autocomplete="off" list="stpayees" style="${fieldCss}"><datalist id="stpayees">${(data.payees || []).map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist></div>
+          <div><label style="${lab}">How</label><select id="stMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
+          <div id="stBankField"><label style="${lab}">From</label><select id="stBank" style="${fieldCss}">${(data.banks || []).map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
+          <div><label style="${lab}">Reference</label><input id="stRef" autocomplete="off" style="${fieldCss}"></div>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin:14px 0 6px;">What is this paying?</div>
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); max-height:260px; overflow-y:auto;">
+          <table style="width:100%; border-collapse:collapse;"><tbody id="stRows">${open.length ? open.map((p) => `
+            <tr data-key="${esc(p.key)}" style="border-top:1px solid ${L.lineSoft};">
+              <td style="padding:6px 8px;"><input type="checkbox" class="stPick" data-key="${esc(p.key)}"></td>
+              <td style="padding:6px 8px; font-size:12px; font-family:var(--font-mono); color:${L.inkMuted};">${esc(p.booking_no || '')}</td>
+              <td style="padding:6px 8px; font-size:12px; font-family:var(--font-mono); color:${L.ink};">${esc(p.container_no || '')}</td>
+              <td style="padding:6px 8px; font-size:12px; color:${L.ink};">${esc(p.what)}</td>
+              <td style="padding:6px 8px; font-size:12px; text-align:right; font-family:var(--font-mono); color:${L.inkMuted};">${money(p.balance)}</td>
+              <td style="padding:6px 8px;"><input class="stAmt" data-key="${esc(p.key)}" data-sale="${esc(p.sale_id)}" data-kind="${esc(p.kind)}" data-charge="${esc(p.charge_id || '')}" data-balance="${esc(p.balance)}" inputmode="decimal" autocomplete="off" style="width:110px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;"></td>
+            </tr>`).join('') : `<tr><td style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">Nothing outstanding.</td></tr>`}</tbody></table>
+        </div>
+        <div style="border-top:1px solid ${L.line}; padding-top:13px; margin-top:14px; display:flex; align-items:flex-end; gap:24px; flex-wrap:wrap;">
+          <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="stAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="stLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
+          <div style="flex:1;"></div>
+          <button id="stCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
+          <button id="stSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px;">Record payment</button>
+        </div>
+        <div id="stErr" style="color:#B3261E; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+
+  $('stDate').value = toUsDate(todayYardDateStr());
+  wireUsDateField('stDate');
+  const close = () => { const m = $('stModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('stClose').onclick = close; $('stCancel').onclick = close;
+
+  const num = (v) => { const n = parseFloat(String(v || '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : 0; };
+  const allocs = () => [...document.querySelectorAll('.stAmt')]
+    .map((el) => ({ sale_id: el.dataset.sale, kind: el.dataset.kind,
+                    charge_id: el.dataset.charge || null, amount: num(el.value) }))
+    .filter((a) => a.amount > 0);
+  const retotal = () => {
+    const sent = num($('stAmount').value);
+    const a = allocs().reduce((t, x) => t + x.amount, 0);
+    const left = Math.round((sent - a) * 100) / 100;
+    $('stAllocated').textContent = money(a);
+    $('stLeft').textContent = money(left);
+    $('stLeft').style.color = left < -0.005 ? '#B3261E' : (Math.abs(left) < 0.005 ? '#2F7D22' : L.ink);
+    const ok = sent > 0 && Math.abs(left) < 0.005;
+    $('stSave').disabled = !ok;
+    $('stSave').style.opacity = ok ? '1' : '.45';
+    const m = $('stMode').value;
+    if ($('stBankField')) $('stBankField').style.display = (m === 'Wire' || m === 'Zelle') ? '' : 'none';
+  };
+  document.querySelectorAll('.stPick').forEach((cb) => {
+    cb.onchange = () => {
+      const amt = document.querySelector(`.stAmt[data-key="${cb.dataset.key}"]`);
+      if (!amt) return;
+      if (cb.checked) {
+        const sent = num($('stAmount').value);
+        const already = allocs().reduce((t, x) => t + x.amount, 0);
+        const room = sent > 0 ? Math.max(0, sent - already) : Infinity;
+        const bal = num(amt.dataset.balance);
+        amt.value = (room === Infinity ? bal : Math.min(bal, room)).toFixed(2);
+      } else { amt.value = ''; }
+      retotal();
+    };
+  });
+  document.querySelectorAll('.stAmt').forEach((el) => { el.oninput = retotal; });
+  $('stAmount').oninput = retotal;
+  $('stMode').onchange = retotal;
+  retotal();
+
+  $('stSave').onclick = async () => {
+    $('stErr').textContent = '';
+    try {
+      const mode = $('stMode').value;
+      await api('/api/sales-settlements', { method: 'POST', body: JSON.stringify({
+        date: $('stDate').value, amount: $('stAmount').value, mode,
+        bank: (mode === 'Wire' || mode === 'Zelle') ? $('stBank').value : '',
+        ref: $('stRef').value, payee: $('stPayee').value, allocations: allocs(),
+      }) });
+      close();
+      renderSalesSubTab(which);
+    } catch (e) { $('stErr').textContent = e.message || 'Could not record it'; }
+  };
+}
 
 // ── MARK AS PAID, AND THE MONEY THE BANK KEPT ────────────────────────────
 // Apsara, 2026-09-10: "In outgoing-give the option as mark as paid..sometimes
@@ -5528,7 +6018,12 @@ async function openBillPayForm(opts = {}) {
 // appears here without an edit.
 // `existing` present = editing that row; absent = adding a new one. ONE
 // function for both, so the two layouts cannot drift apart.
-function openLedgerForm(kind, existing) {
+// `seed` is a SUGGESTION for a new row — from the bill a container was bought
+// on. Deliberately a third argument rather than being passed as `existing`:
+// `existing` means editing a saved row, and conflating the two would have the
+// autosave issue a PUT against an id that is not there. Named `seed` because
+// `prefill` is already taken further down by the booking picker's markup.
+function openLedgerForm(kind, existing, seed) {
   const K = LEDGER_KINDS[kind];
   const editing = !!(existing && existing.id);
   const all = ledgerState.fields || [];
@@ -5569,7 +6064,9 @@ function openLedgerForm(kind, existing) {
     // else's document, and pre-filling it with today would be a plausible
     // wrong answer, which is worse than a blank box.
     const fallback = (!existing && name === 'date') ? toUsDate(todayYardDateStr()) : undefined;
-    const val = existing ? existing[name] : fallback;
+    const suggested = (!existing && seed && seed[name] !== undefined && seed[name] !== '')
+      ? seed[name] : undefined;
+    const val = existing ? existing[name] : (suggested !== undefined ? suggested : fallback);
     const existingVal = val;
 
     if (c.textarea) {

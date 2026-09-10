@@ -108,7 +108,8 @@ function compute(input) {
     let charges = [];
     try { charges = cleanCharges(s.charges); } catch (e) { charges = []; }
     if (!charges.length && freight) {
-        charges = [{ what: 'Freight', amount: round2(freight), direction: 'out',
+        charges = [{ id: 'CHG_LEGACY_FREIGHT', what: 'Freight', amount: round2(freight),
+                     direction: 'out',
                      why: 'Entered as the Freight charges column before charges had notes.' }];
     }
     const sumWhere = (d) => round2(charges.filter((c) => c.direction === d)
@@ -191,7 +192,16 @@ function cleanCharges(input) {
         if (!direction) {
             throw new Error(`"${what}" needs to say whether you pay it or the customer does`);
         }
-        out.push({ what, amount, direction, why });
+        // ── A STABLE ID PER CHARGE ───────────────────────────────────────
+        // helpers/salesSettlements.js pays these off one at a time, so an
+        // allocation has to name WHICH charge. By array index it would follow
+        // the wrong charge the first time one is deleted from the middle —
+        // and it would follow it silently, moving a settled freight payment
+        // onto an unrelated detention line. An id she never sees, minted once
+        // and preserved on every later save.
+        const id = String((c && c.id) || '').trim()
+            || `CHG_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+        out.push({ id, what, amount, direction, why });
     }
     return out;
 }

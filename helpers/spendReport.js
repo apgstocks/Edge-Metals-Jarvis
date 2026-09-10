@@ -111,8 +111,18 @@ function collectRows({ payments, expenses, from, to }) {
         // into the Loads line would overstate it with the right grand total —
         // right number, wrong story, which survives a long time.
         const isBill = p.load_kind === 'bill';
+        // ── FIFTH KIND: WHAT A SALE COSTS ────────────────────────────────
+        // Apsara 2026-09-10, designing the sales tabs, answered that freight
+        // and commission "get settled separately". helpers/salesSettlements.js
+        // writes one row here per transfer, load_kind:'sale_cost'.
+        //
+        // Its own line, not folded into Supplier. A supplier payment buys
+        // metal; ocean freight and an agent's commission are what it costs to
+        // SELL it, and a margin worked out from a Supplier line that quietly
+        // contains both is wrong in the direction that looks fine.
+        const isSaleCost = p.load_kind === 'sale_cost';
         rows.push({
-            kind: isTrucker ? 'trucker' : isBill ? 'supplier' : 'load',
+            kind: isTrucker ? 'trucker' : isBill ? 'supplier' : isSaleCost ? 'sale_cost' : 'load',
             direction: isSale ? 'in' : 'out',
             id: p.id,
             date: p.paid_on || String(p.created_at || '').slice(0, 10),
@@ -131,7 +141,8 @@ function collectRows({ payments, expenses, from, to }) {
             // which is correct: there is no account behind them.
             bank: (p.bank && String(p.bank).trim()) || NOT_RECORDED,
             amount: round2(amount),
-            label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : isBill ? 'Supplier' : 'Load'} ${p.load_id}`.trim(),
+            label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : isBill ? 'Supplier'
+                : isSaleCost ? 'Sale cost' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
         });
     }
@@ -210,6 +221,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // right — an empty column invites the question "why is that zero".
     const byBank = {};
     let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0, supplierTotal = 0;
+    let saleCostTotal = 0;
 
     for (const r of rows) {
         const m = monthOf(r.date);
@@ -234,6 +246,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // precisely how supplier payments would have landed if this branch
         // had been left out.
         else if (r.kind === 'supplier') supplierTotal = round2(supplierTotal + r.amount);
+        else if (r.kind === 'sale_cost') saleCostTotal = round2(saleCostTotal + r.amount);
         else expenseTotal = round2(expenseTotal + r.amount);
     }
 
@@ -309,6 +322,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // the reader to pick which number to believe.
         truckerTotal,
         supplierTotal,
+        saleCostTotal,
         count: rows.length,
         cash,
         rows,                      // the drill-down, already sorted newest first
