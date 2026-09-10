@@ -104,6 +104,21 @@ function buildRecord(entry) {
         buyer         : String(entry.buyer).trim(),
         buyer_address : entry.buyer_address || null,
         trucker_name  : entry.trucker_name || null,
+        // ── THE TRUCKER'S PROMISED DELIVERY (2026-09-10) ──────────────────
+        // Apsara: "trucker will give estimated delivery date and time. I want
+        // to send a enquiry at that date and time reg the load delivery
+        // status". A DATE plus a TIME, held as the wall clock the driver
+        // actually said, with the zone beside them — turning it into an
+        // instant here would bake in whatever zone the server is in.
+        //
+        // DELIBERATELY NOT CALLED `eta`. In this codebase `eta` already means
+        // the VESSEL's arrival on an Edge Metals booking
+        // (helpers/cutoffBackfill.js, helpers/gemini.js's extraction schema),
+        // and a field that reuses a taken name is a field that eventually
+        // gets read by the code that owns the other meaning.
+        delivery_eta_date : entry.delivery_eta_date || null,
+        delivery_eta_time : entry.delivery_eta_time || null,
+        delivery_eta_tz   : entry.delivery_eta_tz || null,
         // Optional link back to whichever quote-request pipeline actually
         // led to this sale — 'lane' (workflow/quoteRequests.js, trucker
         // lane quotes) or 'contact' (workflow/contactQuoteRequests.js).
@@ -144,6 +159,10 @@ async function addOutboundLoad(entry) {
     rec.id = null;
     rec.created_at = new Date().toISOString();
     rec.created_by = entry.created_by || 'unknown';
+    // Set here and not in buildRecord, because buildRecord also runs on every
+    // edit and would reset a delivered load to in_transit each time.
+    rec.delivery_status = 'in_transit';
+    rec.delivered_at = null;
     await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
         rec.id = nextOutboundId(loads);
         loads.unshift(rec);
@@ -155,6 +174,19 @@ async function addOutboundLoad(entry) {
 
 async function editOutboundLoad(id, entry) {
     const patch = buildRecord(entry);
+    // ── AN EDIT MUST NOT UN-DELIVER A LOAD ───────────────────────────────
+    // buildRecord rebuilds from a fixed field list, so anything it does not
+    // name is wiped by the Object.assign below — the trap this file's own
+    // patchOutboundLoad comment records having already sprung once, on
+    // pdf_link. delivery_status and delivered_at are recorded by arriving,
+    // not by this form, so they are carried across rather than rebuilt.
+    // Without this, correcting a typo on a delivered load would silently put
+    // it back in transit and let a new enquiry be scheduled against it.
+    const prior = getOutboundLoad(id);
+    if (prior) {
+        patch.delivery_status = prior.delivery_status || 'in_transit';
+        patch.delivered_at = prior.delivered_at || null;
+    }
     // An edit invalidates the ticket. Same rule helpers/loads.js applies to a
     // purchase: the stored PDF shows the OLD figures, so leaving the link in
     // place would keep serving a document that disagrees with the record it
@@ -183,6 +215,32 @@ async function patchOutboundLoad(id, patch) {
         if (l) { Object.assign(l, patch, { updated_at: new Date().toISOString() }); updated = l; }
         return loads;
     });
+    return updated;
+}
+
+// ── ARRIVED ─────────────────────────────────────────────────────────────
+// The other half of the delivery enquiry: once she knows it landed, the
+// pending "has it been delivered?" has to stop. Cancelling here rather than
+// leaving it to the condition gate means the task is gone from her queue
+// immediately, not merely inert until its ETA comes round.
+//
+// `on` is when it was DELIVERED, which is not always when she recorded it —
+// a driver phones at six and she enters it next morning.
+async function markDelivered(id, { on = null, by = null } = {}) {
+    const updated = await patchOutboundLoad(id, {
+        delivery_status: 'delivered',
+        delivered_at: on || new Date().toISOString(),
+        delivered_by: by || null,
+    });
+    if (!updated) return null;
+    try {
+        await require('./deliveryEnquiry').cancelForLoad(id, 'delivered');
+    } catch (e) {
+        // The load IS delivered; that fact must survive a queue problem. Loud
+        // in the log rather than thrown, or she would be told the delivery did
+        // not record when it did.
+        console.error('[DELIVERY] marked delivered but could not cancel the enquiry:', e.message);
+    }
     return updated;
 }
 
@@ -282,4 +340,5 @@ function getOutboundReport(allLoads, { from, to } = {}) {
 module.exports = {
     normaliseDraws, patchOutboundLoad,
     loadOutboundLoads, addOutboundLoad, editOutboundLoad, deleteOutboundLoad, getOutboundLoad, getOutboundReport, getLoadMargin,
+    markDelivered,
 };

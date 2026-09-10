@@ -186,6 +186,40 @@ function evaluateCondition(task) {
         return leg.status === 'awaiting_reply' ? 'fire' : 'skip';
     }
 
+    // Delivery-status enquiry gate (2026-09-10) — see helpers/deliveryEnquiry.js.
+    // Two separate ways this task can be moot by the time it comes due, and
+    // both of them are things she did on the dashboard minutes ago:
+    //
+    //   · she marked the load delivered. Asking the trucker whether it
+    //     arrived, after she has recorded that it arrived, is the exact
+    //     nagging cancelMatching exists to stop everywhere else.
+    //   · the ETA moved. deliveryEnquiry.syncForLoad cancels and re-enqueues
+    //     on every edit, so a task pinned to the OLD instant should only ever
+    //     still be here if that cancel half-failed — and two enquiries an hour
+    //     apart is worse than none. Pinned rather than inferred: the task
+    //     carries the instant it was scheduled FOR, so this compares two
+    //     facts instead of guessing which task is the current one.
+    //
+    // Backed by data/outbound_loads.json, its own store, hence its own
+    // condition type rather than bending workflow_flag_true to reach it.
+    if (task.condition.type === 'outbound_load_delivered') {
+        const { getOutboundLoad } = require('./outboundLoads');
+        const load = getOutboundLoad(task.condition.load_id);
+        if (!load) return 'skip';               // deleted — nothing to ask about
+        // A DIFFERENT load wearing the same id. nextOutboundId reissues the id
+        // of a deleted load, so this is the one comparison that can tell the
+        // two apart. See helpers/deliveryEnquiry.js's note on the condition.
+        if (task.condition.load_created_at
+            && load.created_at !== task.condition.load_created_at) return 'skip';
+        if (String(load.delivery_status || '').toLowerCase() === 'delivered') return 'skip';
+        if (task.condition.eta_at) {
+            const de = require('./deliveryEnquiry');
+            const now = de.etaFor(load);
+            if (!now || now.toISOString() !== task.condition.eta_at) return 'skip';
+        }
+        return 'fire';
+    }
+
     // Per-container stage check — used when task is tied to a specific container.
     // Skips (auto-completes) if the target container's stage has reached or passed
     // the condition's step.
@@ -321,4 +355,10 @@ module.exports = {
     enqueue, dueTasks, archive, updateTask, cancel, cancelMatching, evaluateCondition,
     newId,
     nextFireAt, describeRepeat, rescheduleRecurring, parseAtTime, DEFAULT_TZ,
+    // Exported 2026-09-10 for helpers/deliveryEnquiry.js, which turns a
+    // trucker's "3:30 PM Thursday" into an instant. Exported rather than
+    // copied: this is the only DST-correct wall-clock conversion in the
+    // process, and a second one would disagree with it twice a year on
+    // exactly the days nobody is looking.
+    instantForZonedWallClock, zonedParts,
 };

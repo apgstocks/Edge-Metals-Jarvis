@@ -107,6 +107,16 @@ tr:last-child td { border-bottom:none; }
       </div>
       <div class="field" style="margin-top:10px;"><label>Description (optional overall note)</label><input id="lm_description"></div>
 
+      <!-- The trucker's promised delivery. Both halves are needed: a date on
+           its own cannot schedule an enquiry at a time, and Jarvis says so
+           rather than guessing an hour. -->
+      <div style="margin-top:16px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Delivery the trucker promised (optional)</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px;">
+        <div class="field"><label>Delivery date</label><input id="lm_eta_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+        <div class="field"><label>Delivery time (LA)</label><input id="lm_eta_time" type="time" autocomplete="off"></div>
+      </div>
+      <div id="lm_eta_note" style="font-size:11px; color:var(--text-faint); margin-top:4px;">Give both and Jarvis will ask the trucker for a delivery status at that moment.</div>
+
       <div style="margin-top:16px; font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Items</div>
       <div id="lm_items" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
       <button id="btnAddItem" type="button" class="btn btn-secondary" style="margin-top:8px; padding:6px 12px; font-size:10px;">+ Add item</button>
@@ -238,21 +248,53 @@ function loadCard(l) {
           <thead><tr><th>Item</th><th>Net</th><th>Price</th><th>Amount</th></tr></thead>
           <tbody>${l.items.map((it) => `<tr><td>${esc(it.description)}</td><td>${it.net_weight ?? '—'} ${esc(l.weight_unit)}</td><td>${it.price ?? '—'}</td><td>${fmtMoney(it.amount)}</td></tr>`).join('')}</tbody>
         </table>` : ''}
-      <div style="margin-top:10px; text-align:right;">
+      ${deliveryLine(l)}
+      <div style="margin-top:10px; text-align:right; display:flex; gap:8px; justify-content:flex-end;">
+        ${l.delivery_status === 'delivered' ? '' : `<button class="btn btn-secondary btn-delivered" data-id="${esc(l.id)}" style="padding:5px 10px; font-size:10px;">Mark delivered</button>`}
         <button class="btn btn-danger btn-del-load" data-id="${esc(l.id)}" style="padding:5px 10px; font-size:10px;">Delete</button>
       </div>
     </div>`;
+}
+
+// Three states, said in three different ways, because "delivered" and "we are
+// going to ask about it" and "nobody set an ETA" are three different things
+// and a single grey line would let the third hide inside the second.
+function deliveryLine(l) {
+  if (l.delivery_status === 'delivered') {
+    return `<div style="margin-top:10px; font-size:11px; color:var(--status-success);">Delivered${l.delivered_at ? ' · ' + esc(fmtDate(l.delivered_at.slice(0, 10), '')) : ''}</div>`;
+  }
+  if (!l.delivery_eta_text) {
+    return `<div style="margin-top:10px; font-size:11px; color:var(--text-faint);">No delivery time from the trucker — add one and Jarvis will chase it.</div>`;
+  }
+  // An ETA with no pending enquiry means the scheduling was refused (unknown
+  // trucker, time already gone). Saying "due at X" alone would let her assume
+  // it is being chased when it is not.
+  return l.delivery_enquiry_pending
+    ? `<div style="margin-top:10px; font-size:11px; color:var(--text-muted);">Due ${esc(l.delivery_eta_text)} · Jarvis will ask ${esc(l.trucker_name || 'the trucker')} then</div>`
+    : `<div style="margin-top:10px; font-size:11px; color:var(--status-warning, var(--text-faint));">Due ${esc(l.delivery_eta_text)} · no enquiry scheduled — check the trucker name is one on file</div>`;
 }
 async function loadLoads() {
   const root = $('loadsList');
   root.innerHTML = '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Loading…</div>';
   try {
-    const { loads } = await api('/api/outbound-loads');
+    // A BARE ARRAY, not { loads }. Fixed in 0e0763f ("sales.map is not a
+    // function"), then reintroduced by b060298 on 2026-09-01 — since which
+    // date this whole page has thrown on `loads.length` and shown nothing.
+    // Re-fixed 2026-09-10. If it comes back a third time, the destructure is
+    // being carried in from an old copy of this file, not written afresh.
+    const loads = await api('/api/outbound-loads');
     root.innerHTML = loads.length ? loads.map(loadCard).join('') : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No outbound loads yet.</div>';
     root.querySelectorAll('.btn-del-load').forEach((btn) => btn.addEventListener('click', async () => {
       if (!confirm('Delete this outbound load?')) return;
       await api(`/api/outbound-loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
       loadLoads();
+    }));
+    root.querySelectorAll('.btn-delivered').forEach((btn) => btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/outbound-loads/${encodeURIComponent(btn.dataset.id)}/delivered`, { method: 'POST', body: '{}' });
+        loadLoads();
+      } catch (e) { btn.disabled = false; alert(e.message); }
     }));
   } catch (e) {
     root.innerHTML = `<div style="padding:30px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">${esc(e.message)}</div>`;
@@ -297,7 +339,7 @@ async function loadReport() {
   }
 }
 $('btnRptApply').addEventListener('click', () => { rptFrom = toIsoDate($('rptFrom').value); rptTo = toIsoDate($('rptTo').value); loadReport(); });
-wireUsDateField('rptFrom'); wireUsDateField('rptTo'); wireUsDateField('lm_date');
+wireUsDateField('rptFrom'); wireUsDateField('rptTo'); wireUsDateField('lm_date'); wireUsDateField('lm_eta_date');
 $('btnRptClear').addEventListener('click', () => { rptFrom = ''; rptTo = ''; $('rptFrom').value = ''; $('rptTo').value = ''; loadReport(); });
 
 // ── Add load modal ───────────────────────────────────────────────────────
@@ -313,6 +355,9 @@ function itemRowHtml(i) {
 }
 function openLoadModal() {
   $('lm_buyer').value = ''; $('lm_buyer_address').value = ''; $('lm_date').value = '';
+  // Cleared with the rest of the form. A stale ETA left behind would schedule
+  // an enquiry on the NEXT load she opens this modal for.
+  $('lm_eta_date').value = ''; $('lm_eta_time').value = '';
   $('lm_trucker').value = ''; $('lm_description').value = '';
   $('lm_items').innerHTML = itemRowHtml(0);
   $('lm_inbound_search').value = ''; $('lm_inbound_results').innerHTML = '';
@@ -373,11 +418,27 @@ $('lmSave').addEventListener('click', async () => {
     date: toIsoDate($('lm_date').value) || null, trucker_name: $('lm_trucker').value.trim() || null,
     description: $('lm_description').value.trim() || '',
     items, linked_inbound_load_ids: linkedInbound.map((l) => l.id),
+    delivery_eta_date: toIsoDate($('lm_eta_date').value) || null,
+    delivery_eta_time: $('lm_eta_time').value || null,
   };
+  // A date with no time cannot schedule anything, and half an ETA saved
+  // silently is a load she believes is being chased and is not.
+  const etaD = !!body.delivery_eta_date, etaT = !!body.delivery_eta_time;
+  if (etaD !== etaT) {
+    $('lmError').textContent = etaD
+      ? 'Give the delivery time as well as the date, or clear the date — an enquiry needs both.'
+      : 'Give the delivery date as well as the time, or clear the time — an enquiry needs both.';
+    $('lmError').classList.remove('hidden');
+    return;
+  }
   try {
-    await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(body) });
+    const out = await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(body) });
     closeLoadModal();
     loadLoads();
+    // Said out loud rather than left in the server log: an ETA she typed that
+    // produced no enquiry is the one thing about this feature she cannot see.
+    const enq = out && out.enquiry;
+    if (enq && !enq.scheduled && enq.why && enq.why !== 'no_eta' && enq.message) alert(enq.message);
   } catch (e) { $('lmError').textContent = e.message; $('lmError').classList.remove('hidden'); }
 });
 

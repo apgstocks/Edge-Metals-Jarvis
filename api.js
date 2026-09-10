@@ -4311,8 +4311,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const { loadOutboundLoads, getLoadMargin } = require('./helpers/outboundLoads');
             const { paymentSummary } = require('./helpers/payments');
+            const de = require('./helpers/deliveryEnquiry');
             const loads = loadOutboundLoads().map((l) => ({
                 ...l, ...getLoadMargin(l),
+                // Rendered here, not in the browser: turning a wall clock in
+                // America/Los_Angeles into readable text is the one bit of
+                // zone maths in this feature, and a second copy of it in
+                // client JS would read the phone's zone instead of the load's.
+                delivery_eta_text: de.describeEta(l),
+                delivery_enquiry_pending: de.pendingForLoad(l.id).length > 0,
                 // Sales get payment tracking too: a buyer paying in
                 // instalments is the same problem from the other side.
                 payment: paymentSummary(l.id, l.amount),
@@ -4371,6 +4378,33 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         return v.ok ? null : v.errors.join(' ');
     }
 
+    // ── Delivery-status enquiry, shared by create and edit ───────────────
+    // Apsara, 2026-09-10: "trucker will give estimated delivery date and
+    // time. I want to send a enquiry at that date and time reg the load
+    // delivery status". See helpers/deliveryEnquiry.js.
+    //
+    // NEVER THROWS. A load that saved must report as saved; whether the
+    // enquiry could also be scheduled is a separate, lesser fact that travels
+    // back beside it. Throwing would make an unknown trucker name look like a
+    // failed save and have her enter the load twice.
+    async function scheduleDeliveryEnquiry(record, req, how) {
+        try {
+            const de = require('./helpers/deliveryEnquiry');
+            const out = how === 'created'
+                ? await de.scheduleForLoad(record, { created_by: req.role || 'web' })
+                : await de.syncForLoad(record, { created_by: req.role || 'web', reason: 'eta_changed' });
+            // 'no_eta' is not a problem — most loads never get one. Anything
+            // else that failed to schedule is something she should see.
+            if (!out.scheduled && out.why && out.why !== 'no_eta' && out.message) {
+                console.warn(`[DELIVERY] ${record.id}: ${out.why} — ${out.message}`);
+            }
+            return out;
+        } catch (e) {
+            console.error('[DELIVERY] could not schedule the enquiry:', e.message);
+            return { scheduled: false, why: 'error', message: e.message };
+        }
+    }
+
     app.post('/api/outbound-loads', async (req, res) => {
         const b = req.body || {};
         try {
@@ -4382,9 +4416,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
+                delivery_eta_date: b.delivery_eta_date, delivery_eta_time: b.delivery_eta_time,
+                delivery_eta_tz: b.delivery_eta_tz,
                 created_by: b.created_by || req.role || 'unknown',
             });
-            res.json({ ok: true, load: record });
+            // The load is saved either way. Scheduling the enquiry is a
+            // second, weaker promise — an unknown trucker or a past ETA must
+            // not fail the save — so its outcome rides back on the response
+            // as `enquiry` for the form to show, rather than being thrown.
+            const enquiry = await scheduleDeliveryEnquiry(record, req, 'created');
+            res.json({ ok: true, load: record, enquiry });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
             if (!isValidation) console.error('[API] create outbound load failed:', err.message);
@@ -4403,9 +4444,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
+                delivery_eta_date: b.delivery_eta_date, delivery_eta_time: b.delivery_eta_time,
+                delivery_eta_tz: b.delivery_eta_tz,
             });
             if (!record) return res.status(404).json({ error: 'not found' });
-            res.json({ ok: true, load: record });
+            // syncForLoad, not scheduleForLoad: an edit can move the ETA or
+            // change the trucker, and a task left pointing at the old one
+            // would ask the wrong haulier at the wrong hour.
+            const enquiry = await scheduleDeliveryEnquiry(record, req, 'edited');
+            res.json({ ok: true, load: record, enquiry });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
             if (!isValidation) console.error('[API] edit outbound load failed:', err.message);
@@ -4423,10 +4470,41 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // receipts behind would sum against nothing and quietly inflate
             // any future "what have we paid" figure.
             await require('./helpers/payments').deletePaymentsForLoad(req.params.id);
+            // And so does the enquiry. A pending "has it been delivered?"
+            // against a load that no longer exists would still fire — the
+            // condition gate skips a missing load, but only once its ETA comes
+            // round, so it sits in her task list until then looking live.
+            try {
+                await require('./helpers/deliveryEnquiry').cancelForLoad(req.params.id, 'load_deleted');
+            } catch (e) {
+                console.error('[DELIVERY] load deleted but its enquiry was not cancelled:', e.message);
+            }
 
             res.json({ ok: true });
         } catch (err) {
             console.error('[API] delete outbound load failed:', err.message);
+            res.status(500).json({ error: err.message });
+        }
+    });
+
+    // ── "It arrived" ─────────────────────────────────────────────────────
+    // Registered AFTER /api/outbound-loads/:id (a GET) but that is a
+    // different verb, so no route-ordering hazard here. POST rather than PUT
+    // because it records an event, and deliberately its own route rather than
+    // a field on the edit form: the edit form rebuilds the record and would
+    // need delivery_status threaded through validation for something that is
+    // not a correction to the load at all.
+    app.post('/api/outbound-loads/:id/delivered', async (req, res) => {
+        try {
+            const { markDelivered } = require('./helpers/outboundLoads');
+            const updated = await markDelivered(req.params.id, {
+                on: (req.body || {}).delivered_at || null,
+                by: req.role || null,
+            });
+            if (!updated) return res.status(404).json({ error: 'not found' });
+            res.json({ ok: true, load: updated });
+        } catch (err) {
+            console.error('[API] mark outbound load delivered failed:', err.message);
             res.status(500).json({ error: err.message });
         }
     });
