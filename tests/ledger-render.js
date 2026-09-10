@@ -1752,6 +1752,64 @@ section('G11 — typing the item lines and the haulage split');
        /6,478\.00/.test(doc.querySelector('#ledItemsBox [data-item="0"]').textContent),
        doc.querySelector('#ledItemsBox [data-item="0"]').textContent.replace(/\s+/g, ' ').trim());
 
+    // ── THE HEADER LINES UP WITH THE BOXES ───────────────────────────────
+    // Apsara, 2026-09-11, with a screenshot: "header and box alignment not
+    // proper". The cause was not spacing. The header and the item rows were
+    // two INDEPENDENT flex rows with hand-matched pixel widths, and the row's
+    // description input carried a second `style` attribute that the browser
+    // silently discarded — so `flex:1` never applied there while it did in
+    // the header, and the two laid out by different rules.
+    //
+    // jsdom computes no layout, so this cannot measure where the columns
+    // land. It does not need to: they are now all driven by ONE grid template,
+    // and if every row carries the same template with the same number of
+    // cells, they CANNOT land differently. That is the property to pin.
+    {
+        const box = doc.getElementById('ledItemsBox');
+        const header = box.querySelector('.ledItemsHead');
+        const rowsN = [...box.querySelectorAll('[data-item] > div:first-child')];
+        const totals = box.querySelector('.ledItemsFoot');
+        const tmpl = (el) => el && el.style.gridTemplateColumns;
+
+        ck('the header is laid out on a grid, not a flex row of typed widths',
+           !!tmpl(header), header && header.getAttribute('style'));
+        ck('  every item row uses the SAME template',
+           rowsN.length === 2 && rowsN.every((r) => tmpl(r) && tmpl(r) === tmpl(header)),
+           JSON.stringify({ header: tmpl(header), rows: rowsN.map(tmpl) }));
+        ck('  and so does the totals row',
+           tmpl(totals) === tmpl(header), `${tmpl(totals)} vs ${tmpl(header)}`);
+        ck('  which is six columns wide',
+           (tmpl(header).match(/\S+/g) || []).length === 6, tmpl(header));
+        ck('  and every row fills all six of them',
+           [header, ...rowsN, totals].every((r) => r.children.length === 6),
+           JSON.stringify([header, ...rowsN, totals].map((r) => r.children.length)));
+
+        // ── THE DEFECT ITSELF, CHECKED IN THE SOURCE ─────────────────────
+        // The first version of this assertion read box.innerHTML and a
+        // mutation reintroducing the duplicate SURVIVED it. Of course it did:
+        // innerHTML serialises the PARSED DOM, and the parser has already
+        // thrown the second attribute away — the check could never see the
+        // thing it was looking for. That is the whole reason the original bug
+        // was invisible, reproduced inside its own test.
+        //
+        // So this reads the file. cell() emits a complete style="", so a
+        // literal style= written next to a cell(...) interpolation is a second
+        // one, and the browser will silently drop it.
+        // Comment lines stripped first — the note above paintItems QUOTES the
+        // broken form to explain it, and a lint that flags its own
+        // documentation is a lint people delete.
+        const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')
+            .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+        const doubled = src.match(/\$\{cell\([^}]*\}\s*style=/g) || [];
+        ck('  no caller writes a style attribute alongside cell(), which emits its own',
+           doubled.length === 0,
+           `${doubled.length} found — the browser keeps the FIRST and drops the rest: ${doubled[0] || ''}`);
+
+        // Price sat left-aligned prose in a column of right-aligned figures.
+        ck('  the price box is right-aligned like every other number',
+           doc.querySelector('#ledItemsBox input[data-f="price"]').style.textAlign === 'right');
+    }
+
     // The weighbridge ticket is folded away until asked for.
     const ticket = doc.querySelector('.ledTicket[data-i="1"]');
     ck('each line hides its weighbridge ticket', ticket.style.display === 'none',

@@ -6967,7 +6967,14 @@ function openLedgerForm(kind, existing, seed) {
   const money0 = (n) => (n === null || n === undefined || isNaN(Number(n))) ? '—'
     : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const numOf = (v) => { const n = parseFloat(String(v ?? '').replace(/[$,\s]/g, '')); return isFinite(n) ? n : null; };
-  const cell = (val, ph, w) => `style="width:${w}; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;" value="${esc(val ?? '')}" placeholder="${esc(ph || '')}" autocomplete="off"`;
+  // ── cell() OWNS THE style ATTRIBUTE. NOTHING MAY ADD A SECOND ──────────
+  // This emits a complete style="", so a caller that wrote its own alongside
+  // it produced <input style="..." ... style="..."> — and a browser keeps the
+  // FIRST and silently drops the second. That is exactly how the item row lost
+  // its `flex:1` and why the header stopped lining up with the boxes; see the
+  // note above paintItems. Anything extra now comes through `extra`, which is
+  // appended INSIDE the one style attribute and cannot be discarded.
+  const cell = (val, ph, w, extra) => `style="width:${w}; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; ${extra || ''}" value="${esc(val ?? '')}" placeholder="${esc(ph || '')}" autocomplete="off"`;
 
   // The same arithmetic helpers/bills.js does, for the row she is typing into.
   // The SERVER still decides what is saved — this only keeps the line from
@@ -6986,40 +6993,70 @@ function openLedgerForm(kind, existing, seed) {
     return { wt, amt, hasTicket, tare };
   };
 
+  // ── ONE COLUMN DEFINITION, USED BY ALL THREE ROWS ────────────────────
+  // Apsara, 2026-09-11: "header and box alignment not proper".
+  //
+  // It was not a spacing tweak. The header and the item rows were two
+  // INDEPENDENT flex rows whose widths happened to be typed the same, and they
+  // drifted for a reason no amount of nudging px would have fixed: the
+  // description input carried TWO style attributes —
+  //
+  //     <input ... ${cell(..., '100%')} style="flex:1; ...">
+  //              ^ cell() emits style="width:100%..."   ^ and so does this
+  //
+  // and a browser keeps the FIRST and discards the second. So `flex:1` never
+  // applied. The header's Description was `flex:1` (flex-basis 0, takes what
+  // is left over); the row's was `width:100%` with the default flex-shrink,
+  // so the row negotiated its widths by a completely different rule and every
+  // column after Description landed somewhere else.
+  //
+  // Two independent lists of widths cannot be kept in step by care, so there
+  // is now ONE list. Header, every item row and the totals row all lay out on
+  // this same grid template; a column cannot move in one without moving in
+  // all three. Sales uses this same editor, so it is fixed there too.
+  const ITEM_COLS = 'minmax(0,1fr) 92px 72px 82px 96px 76px';
+  const ITEM_GRID = `display:grid; grid-template-columns:${ITEM_COLS}; gap:8px; align-items:center;`;
+
   function paintItems() {
     const box = $('ledItemsBox');
     if (!box) return;
     const rows = ledItems.map((it, i) => {
       const { wt, amt, hasTicket } = lineOf(it);
+      // Every numeric cell is right-aligned and monospaced — including Price,
+      // which was left-aligned prose in a column of right-aligned figures.
+      const numCell = (cls, extra) => `class="${cls}" data-i="${i}" style="text-align:right; font-family:var(--font-mono); font-size:12px; ${extra}"`;
       return `
       <div data-item="${i}" style="border-top:1px solid ${L.lineSoft}; padding:7px 0;">
-        <div style="display:flex; align-items:center; gap:8px;">
-          <input data-i="${i}" data-f="description" list="ledlist-description" ${cell(it.description, 'grade', '100%')} style="flex:1; height:28px; padding:0 8px; font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">
+        <div style="${ITEM_GRID}">
+          <input data-i="${i}" data-f="description" list="ledlist-description" ${cell(it.description, 'grade', '100%')}>
           ${hasTicket
             // Derived from this line's own ticket, so it is read-only — the
             // arithmetic is below and typing over it would make the two
             // disagree.
-            ? `<span class="ledItemNet" data-i="${i}" style="width:86px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.inkMuted};">${wt === null ? '—' : money0(wt)}</span>`
+            ? `<span ${numCell('ledItemNet', `color:${L.inkMuted};`)}>${wt === null ? '—' : money0(wt)}</span>`
             // No ticket means one weighing split on paper, and then the
             // weight is hers to type. The first version made this a span in
             // BOTH cases, which left no way to enter a plain-weight line at
             // all — caught by its own test.
-            : `<input data-i="${i}" data-f="weight" ${cell(it.weight, 'net lbs', '86px')} style="width:86px; height:28px; padding:0 8px; text-align:right; font-family:var(--font-mono); font-size:12px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none;">`}
-          <span class="ledItemMt" data-i="${i}" style="width:66px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.inkMuted};">${wt === null ? '—' : (Math.round((wt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })}</span>
-          <input data-i="${i}" data-f="price" ${cell(it.price, 'price', '72px')}>
-          <span class="ledItemAmt" style="width:88px; text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.ink};">${money0(amt)}</span>
-          <button type="button" class="ledItemTicket" data-i="${i}" title="Weighbridge ticket"
-            style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${hasTicket ? L.accent : L.inkFaint}; font-size:11px; padding:3px 7px; cursor:pointer;">ticket</button>
-          <button type="button" class="ledItemDel" data-i="${i}" aria-label="Remove line"
-            style="background:none; border:none; color:${L.inkFaint}; font-size:15px; cursor:pointer;">&times;</button>
+            : `<input data-i="${i}" data-f="weight" ${cell(it.weight, 'net lbs', '100%', 'text-align:right; font-family:var(--font-mono);')}>`}
+          <span ${numCell('ledItemMt', `color:${L.inkMuted};`)}>${wt === null ? '—' : (Math.round((wt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })}</span>
+          <input data-i="${i}" data-f="price" ${cell(it.price, 'price', '100%', 'text-align:right; font-family:var(--font-mono);')}>
+          <span class="ledItemAmt" style="text-align:right; font-family:var(--font-mono); font-size:12px; color:${L.ink};">${money0(amt)}</span>
+          <span style="display:flex; align-items:center; justify-content:flex-end; gap:6px;">
+            <button type="button" class="ledItemTicket" data-i="${i}" title="Weighbridge ticket"
+              style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${hasTicket ? L.accent : L.inkFaint}; font-size:11px; padding:3px 7px; cursor:pointer;">ticket</button>
+            <button type="button" class="ledItemDel" data-i="${i}" aria-label="Remove line"
+              style="background:none; border:none; color:${L.inkFaint}; font-size:15px; line-height:1; cursor:pointer; padding:0;">&times;</button>
+          </span>
         </div>
         <div class="ledTicket" data-i="${i}" style="display:${hasTicket ? 'flex' : 'none'}; align-items:center; gap:6px; margin-top:7px; padding:8px 10px; background:${L.sunken}; border-radius:var(--radius-sm); font-size:11px; color:${L.inkMuted};">
-          <span>Gross</span><input data-i="${i}" data-f="gross" ${cell(it.gross, '', '76px')}>
+          <span style="width:38px;">Gross</span><input data-i="${i}" data-f="gross" ${cell(it.gross, '', '80px', 'text-align:right; font-family:var(--font-mono);')}>
           <span>−</span>
-          <input data-i="${i}" data-f="truck" ${cell(it.truck, 'truck', '66px')}>
-          <input data-i="${i}" data-f="container" ${cell(it.container, 'container', '72px')}>
-          <input data-i="${i}" data-f="chassis" ${cell(it.chassis, 'chassis', '66px')}>
-          <input data-i="${i}" data-f="boxes" ${cell(it.boxes, 'boxes', '60px')}>
+          ${['truck', 'container', 'chassis', 'boxes'].map((k) =>
+            // One width for four boxes that hold the same kind of number. The
+            // old 66/72/66/60 made a row of tare figures look ragged for no
+            // reason a reader could name.
+            `<input data-i="${i}" data-f="${k}" ${cell(it[k], k, '80px', 'text-align:right; font-family:var(--font-mono);')}>`).join('')}
           <span>=</span>
           <span class="ledTicketNet" style="font-family:var(--font-mono); color:${L.ink};">${wt === null ? '—' : money0(wt)}</span>
         </div>
@@ -7028,26 +7065,26 @@ function openLedgerForm(kind, existing, seed) {
 
     const totalWt = ledItems.reduce((t, it) => t + (lineOf(it).wt || 0), 0);
     const totalAmt = ledItems.reduce((t, it) => t + (lineOf(it).amt || 0), 0);
+    const totalCell = (v) => `<span style="text-align:right; font-family:var(--font-mono); color:${L.ink};">${v}</span>`;
 
     box.innerHTML = `
       <div style="margin-top:10px;">
-        <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:${L.inkFaint}; padding-bottom:4px;">
-          <span style="flex:1;">Description</span>
-          <span style="width:86px; text-align:right;">Net lbs</span>
-          <span style="width:66px; text-align:right;">Net MT</span>
-          <span style="width:72px;">Price</span>
-          <span style="width:88px; text-align:right;">Amount</span>
-          <span style="width:78px;"></span>
+        <div class="ledItemsHead" style="${ITEM_GRID} font-size:11px; color:${L.inkFaint}; padding-bottom:4px;">
+          <span>Description</span>
+          <span style="text-align:right;">Net lbs</span>
+          <span style="text-align:right;">Net MT</span>
+          <span style="text-align:right;">Price</span>
+          <span style="text-align:right;">Amount</span>
+          <span></span>
         </div>
         ${rows || `<div style="border-top:1px solid ${L.lineSoft}; padding:12px 0; font-size:12px; color:${L.inkFaint};">One grade? Leave this empty and use the description and price above.</div>`}
-        <div style="border-top:1px solid ${L.line}; padding-top:8px; margin-top:4px; display:flex; align-items:center; gap:8px; font-size:12px;">
-          <button type="button" id="ledItemAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0;">+ Add item</button>
-          <span style="flex:1;"></span>
-          ${ledItems.length ? `<span style="width:86px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalWt)}</span>
-          <span style="width:66px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${(Math.round((totalWt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 })}</span>
-          <span style="width:72px;"></span>
-          <span style="width:88px; text-align:right; font-family:var(--font-mono); color:${L.ink};">${money0(totalAmt)}</span>
-          <span style="width:78px;"></span>` : ''}
+        <div class="ledItemsFoot" style="${ITEM_GRID} border-top:1px solid ${L.line}; padding-top:8px; margin-top:4px; font-size:12px;">
+          <button type="button" id="ledItemAdd" style="background:none; border:none; color:${L.accent}; font-size:12px; cursor:pointer; padding:0; text-align:left; justify-self:start;">+ Add item</button>
+          ${ledItems.length ? `${totalCell(money0(totalWt))}
+          ${totalCell((Math.round((totalWt / 2204.62) * 1000) / 1000).toLocaleString('en-US', { maximumFractionDigits: 3 }))}
+          <span></span>
+          ${totalCell(money0(totalAmt))}
+          <span></span>` : ''}
         </div>
       </div>`;
 
