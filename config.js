@@ -183,6 +183,13 @@ const FILES = {
     // the typing ENDED — there was nothing to reopen. This holds what she
     // filled in, so a BOL can be corrected and reissued. See helpers/bols.js.
     BOLS_FILE: path.join(DATA_DIR, 'bols.json'),
+
+    // ── WHICH ITEM NAMES MEAN THE SAME METAL (2026-09-16) ────────────────
+    // Apsara: "Warn me if al combo and aluminium combo,remember my
+    // selection-then next time let ai decide based on knowldge". Her
+    // decisions, kept — so one pile of aluminium stops reporting as two rows
+    // with one of them impossible. See helpers/itemAliases.js.
+    ITEM_ALIASES_FILE: path.join(DATA_DIR, 'item_aliases.json'),
     // What a sale COSTS: charges she pays and agent commission. Money out, so
     // unlike receipts it does mirror into PAYMENTS_FILE — load_kind
     // 'sale_cost', its own line in the spend report.

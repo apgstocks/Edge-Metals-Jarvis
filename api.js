@@ -4454,6 +4454,31 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const drawErr = checkDraws(b.items, null);
             if (drawErr) return res.status(400).json({ error: drawErr });
+
+            // ── YOU CANNOT SHIP WHAT YOU NEVER BOUGHT ────────────────────
+            // Apsara, 2026-09-16, choosing the strongest option offered:
+            // "Block the sale instead". A negative on-hand is never true of
+            // the metal, only of the paperwork, and the moment of the sale is
+            // the last point where somebody still remembers which load was
+            // never entered.
+            //
+            // Overridable on purpose — see helpers/stockGuard.js. A truck that
+            // has already left is a fact, and an app that refuses to write
+            // facts down gets worked around onto paper. `allow_negative` is
+            // only ever sent after she has been shown the numbers and said
+            // yes, exactly like petty cash's allow_partial.
+            if (!b.allow_negative) {
+                const guard = require('./helpers/stockGuard');
+                const short = guard.shortfalls(b.items);
+                if (short.length) {
+                    return res.status(400).json({
+                        error: guard.explain(short, b.weight_unit || 'lb'),
+                        code: 'STOCK_SHORT',
+                        shortfalls: short,
+                    });
+                }
+            }
+
             const { addOutboundLoad } = require('./helpers/outboundLoads');
             const record = await addOutboundLoad({
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
@@ -4486,6 +4511,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const drawErr = checkDraws((req.body || {}).items, req.params.id);
             if (drawErr) return res.status(400).json({ error: drawErr });
+
+            // Same guard on EDITS, with this load's own weights added back
+            // first — otherwise correcting 400 lb to 380 would be refused
+            // because the original 400 is still counted against stock.
+            if (!b.allow_negative) {
+                const guard = require('./helpers/stockGuard');
+                const short = guard.shortfalls(b.items, { excludeOutboundId: req.params.id });
+                if (short.length) {
+                    return res.status(400).json({
+                        error: guard.explain(short, b.weight_unit || 'lb'),
+                        code: 'STOCK_SHORT',
+                        shortfalls: short,
+                    });
+                }
+            }
+
             const { editOutboundLoad } = require('./helpers/outboundLoads');
             const record = await editOutboundLoad(req.params.id, {
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
@@ -5350,6 +5391,67 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             console.error('[bol] generate failed:', e);
             res.status(500).json({ error: e.message });
         }
+    });
+
+    // ── WHICH ITEM NAMES MEAN THE SAME METAL ────────────────────────────
+    // Apsara, 2026-09-16: "Warn me if al combo and aluminium combo,remember
+    // my selection-then next time let ai decide based on knowldge".
+    //
+    // GET  asks the question (the model proposes; nothing is joined)
+    // POST records HER answer, yes or no — both are remembered, because a
+    //      store that only keeps agreement turns into a nagging machine and
+    //      the prompt that matters gets clicked through with the rest.
+    app.get('/api/item-aliases', requireAdmin, (req, res) => {
+        try {
+            const a = require('./helpers/itemAliases');
+            res.json({ ok: true, aliases: a.list(), conflicts: a.conflicts() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/item-aliases/suggest', requireAdmin, async (req, res) => {
+        try {
+            const unknown = String(req.query.item || '').trim();
+            if (!unknown) return res.json({ ask: false, why: 'empty' });
+            // Candidates are the descriptions that actually CAME IN — a
+            // suggestion must name something she could really have in stock.
+            const { loadLoads } = require('./helpers/loads');
+            const known = [...new Set(loadLoads()
+                .flatMap((l) => (Array.isArray(l.items) ? l.items : []))
+                .map((it) => String((it && it.description) || '').trim())
+                .filter(Boolean))];
+            const out = await require('./helpers/itemMatch').suggestItemMatch(unknown, known);
+            res.json(out);
+        } catch (e) {
+            // Never fatal: an unanswered question is a row left visibly
+            // unmatched, which is recoverable. A 500 here would look like the
+            // sale failed.
+            console.error('[item-aliases] suggest failed (non-fatal):', e.message);
+            res.json({ ask: false, why: 'error' });
+        }
+    });
+
+    app.post('/api/item-aliases', requireAdmin, async (req, res) => {
+        try {
+            const b = req.body || {};
+            if (!String(b.a || '').trim() || !String(b.b || '').trim()) {
+                return res.status(400).json({ error: 'two item descriptions are required' });
+            }
+            // source is forced to 'user' — this route exists because SHE
+            // answered. An AI verdict is never settled (see itemAliases.js),
+            // and letting a client claim otherwise would make one wrong guess
+            // permanent with nobody ever asked.
+            const saved = await require('./helpers/itemAliases')
+                .remember(b.a, b.b, b.same === true, { by: req.role || null, source: 'user', note: b.note || null });
+            if (!saved) return res.status(400).json({ error: 'those are the same text, or empty' });
+            res.json({ ok: true, alias: saved });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/item-aliases', requireAdmin, async (req, res) => {
+        try {
+            const removed = await require('./helpers/itemAliases').forget(req.query.a, req.query.b);
+            res.json({ ok: true, removed });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // ── SAVED BILLS OF LADING ───────────────────────────────────────────

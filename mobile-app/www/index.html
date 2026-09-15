@@ -4666,6 +4666,60 @@ function wireLoadsEvents() {
     if (entry.mobile && $('ld_seller_phone') && !$('ld_seller_phone').value.trim()) $('ld_seller_phone').value = entry.mobile;
   });
 
+  // ── MORE GOING OUT THAN CAME IN ────────────────────────────────────────
+  // Apsara, 2026-09-16: "Block the sale instead", and separately "Warn me if
+  // al combo and aluminium combo,remember my selection-then next time let ai
+  // decide based on knowldge".
+  //
+  // Mirrors dashboard/index.html, including the ORDER, which is the point:
+  // the naming question first, the override second. Most of these refusals
+  // are not a shortage — they are the same metal typed two ways, which is
+  // what reported minus 300 lb of aluminium that was sitting in the yard.
+  // Asking about the override first would train her to click through a prompt
+  // whose real answer is "you typed it differently".
+  async function handleStockShort(err, sendSale) {
+    const short = (err && err.shortfalls) || [];
+    let learned = false;
+
+    for (const s of short) {
+      if (s.on_hand > 0) continue;   // a real partial shortage is not a spelling
+      let suggestion = null;
+      try {
+        suggestion = await api('/api/item-aliases/suggest?item=' + encodeURIComponent(s.typed_as || s.item));
+      } catch (e) { suggestion = null; }
+      if (!suggestion || !suggestion.ask) continue;
+
+      const same = confirm(
+        `${suggestion.question}\n\n` +
+        `Nothing has come IN as "${suggestion.unknown}", but there is stock of "${suggestion.match}".\n\n` +
+        `OK = same material (remembered, and I stop asking)\n` +
+        `Cancel = different`);
+      // Both answers are stored — a "no" that is not remembered means the
+      // same two alloys are queried every week until nobody reads the prompts.
+      try {
+        await api('/api/item-aliases', { method: 'POST', body: JSON.stringify({
+          a: suggestion.unknown, b: suggestion.match, same,
+        }) });
+      } catch (e) { /* not fatal — the sale still has to be recordable */ }
+      if (same) learned = true;
+    }
+
+    if (learned) {
+      try { await sendSale(); return; }
+      catch (e2) { if (!e2 || e2.code !== 'STOCK_SHORT') throw e2; err = e2; }
+    }
+
+    const lines = ((err && err.shortfalls) || []).map((s) => '  · ' + (s.on_hand <= 0
+      ? `${s.item}: nothing on hand, ${s.requested} going out`
+      : `${s.item}: ${s.on_hand} on hand, ${s.requested} going out (short ${s.short_by})`)).join('\n');
+    const ok = confirm(
+      `This ships more than the yard has on record:\n\n${lines}\n\n` +
+      `That usually means a purchase was never entered.\n\n` +
+      `OK = record it anyway\nCancel = stop and check the loads`);
+    if (!ok) throw new Error('Nothing was saved — check the missing purchase first.');
+    await sendSale({ allow_negative: true });
+  }
+
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
     // The load-level description box is gone; an edit of an older load must
@@ -4771,10 +4825,14 @@ function wireLoadsEvents() {
           items: payload.items,
           client_request_id: payload.client_request_id,
         };
-        if (isEdit) {
-          await api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(salePayload) });
-        } else {
-          await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(salePayload) });
+        const sendSale = (extra) => (isEdit
+          ? api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify({ ...salePayload, ...extra }) })
+          : api('/api/outbound-loads', { method: 'POST', body: JSON.stringify({ ...salePayload, ...extra }) }));
+        try {
+          await sendSale();
+        } catch (err) {
+          if (!err || err.code !== 'STOCK_SHORT') throw err;
+          await handleStockShort(err, sendSale);
         }
       } else if (isEdit) {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });

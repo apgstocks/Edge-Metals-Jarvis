@@ -2063,6 +2063,65 @@ const MUTATIONS = [
       // She would think the document had been issued.
       find: "      return set('Preview ready. Nothing was saved.');",
       to:   "      return set('Saved.');" },
+
+    // ── STOCK, ALIASES AND THE BLOCK (2026-09-16) ────────────────────────
+    { name: 'stock: a sale that empties the yard twice over is allowed again',
+      file: 'api.js', suites: ['stock-aliases'],
+      find: '            if (!b.allow_negative) {\n                const guard = require(\'./helpers/stockGuard\');\n                const short = guard.shortfalls(b.items);',
+      to:   '            if (false) {\n                const guard = require(\'./helpers/stockGuard\');\n                const short = guard.shortfalls(b.items);' },
+    { name: 'stock: a material NEVER bought is treated as unknown, not zero',
+      file: 'helpers/stockGuard.js', suites: ['stock-aliases'],
+      // The first version of this guard did exactly this, and it waved
+      // through the very sale that produced the minus-300 row.
+      find: '        const onHand = hit\n            ? (typeof hit.onHand === \'number\' ? hit.onHand : null)\n            : 0;',
+      to:   '        const onHand = hit && typeof hit.onHand === \'number\' ? hit.onHand : null;' },
+    { name: 'stock: lines are checked one at a time, so 400 + 400 slips past 600',
+      file: 'helpers/stockGuard.js', suites: ['stock-aliases'],
+      find: '        cur.weight = Math.round((cur.weight + n) * 100) / 100;',
+      to:   '        cur.weight = n;' },
+    { name: 'stock: the refusal stops naming the numbers',
+      file: 'helpers/stockGuard.js', suites: ['stock-aliases'],
+      // "Not enough stock" tells her nothing she can act on.
+      find: '            : `${s.item}${known}: only ${s.on_hand} ${unit} on hand, but ${s.requested} ${unit} is going out — short by ${s.short_by} ${unit}.`;',
+      to:   "            : 'Not enough stock.';" },
+    { name: 'stock: an edit is refused for its own weight',
+      file: 'api.js', suites: ['stock-aliases'],
+      // Correcting 900 down to 880 blocked, because the original 900 still
+      // counts against stock.
+      find: '                const short = guard.shortfalls(b.items, { excludeOutboundId: req.params.id });',
+      to:   '                const short = guard.shortfalls(b.items);' },
+    { name: 'alias: names are joined by resemblance instead of by her answer',
+      file: 'helpers/itemAliases.js', suites: ['stock-aliases'],
+      // The whole wrong version of this feature. "Al 6061" and "Al 6063"
+      // differ by one character and are different money.
+      find: '        if (!r || !r.same || r.source !== \'user\') continue;',
+      to:   '        if (!r || !r.same) continue;' },
+    { name: "alias: an AI guess is stored as settled, so one wrong guess is permanent",
+      file: 'helpers/itemAliases.js', suites: ['stock-aliases'],
+      find: "    const hit = loadAliases().find((r) => r && r.key === key && r.source === 'user');",
+      to:   '    const hit = loadAliases().find((r) => r && r.key === key);' },
+    { name: 'alias: a NO is not remembered, so she is asked every week',
+      file: 'api.js', suites: ['stock-aliases'],
+      find: "                .remember(b.a, b.b, b.same === true, { by: req.role || null, source: 'user', note: b.note || null });",
+      to:   "                .remember(b.a, b.b, true, { by: req.role || null, source: 'user', note: b.note || null });" },
+    { name: 'alias: the suggestion may name a material that is not in stock',
+      file: 'helpers/itemMatch.js', suites: ['stock-aliases'],
+      find: '    const real = open.find((k) => norm(k) === norm(picked));\n    if (!real) return { ask: false, why: \'not_in_stock\' };',
+      to:   '    const real = open.find((k) => norm(k) === norm(picked)) || picked;' },
+    { name: 'alias: a low-confidence guess is put to her as if it were certain',
+      file: 'helpers/itemMatch.js', suites: ['stock-aliases'],
+      find: "    if (out.confidence && out.confidence !== 'high') return { ask: false, why: 'unsure' };",
+      to:   '' },
+    { name: 'alias: the inventory stops folding the names she joined',
+      file: 'helpers/loads.js', suites: ['stock-aliases'],
+      find: '            const key = aliases.canonicalKey(g.description, aliasRows);',
+      to:   '            const key = String(g.description || \'\').toLowerCase();' },
+    { name: 'clients: the override is offered BEFORE the naming question',
+      file: 'dashboard/index.html', suites: ['stock-aliases'],
+      // Teaches her to click through a prompt whose real answer is "you
+      // typed it differently", and the stock figure stays wrong.
+      find: "        suggestion = await api('/api/item-aliases/suggest?item=' + encodeURIComponent(s.typed_as || s.item));",
+      to:   '        suggestion = null;' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

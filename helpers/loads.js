@@ -378,6 +378,51 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     const items = filtered.flatMap(l => Array.isArray(l.items) ? l.items : []);
     let byType = items.length ? groupItemsByDescription(items) : [];
 
+    // ── ONE METAL, ONE ROW — HER DECISIONS, NOT A GUESS ──────────────────
+    // Apsara, 2026-09-16: "Warn me if al combo and aluminium combo,remember
+    // my selection-then next time let ai decide based on knowldge".
+    //
+    // groupItemsByDescription keys on the text, so "Al combo" and "Aluminium
+    // combo" were two rows — and once a sale was recorded against the second
+    // one, the tab showed 600 lb on hand of one and MINUS 300 of the other
+    // for a single pile of aluminium. The figure was not just split, it was
+    // impossible.
+    //
+    // Folded AFTER grouping rather than by changing groupItemsByDescription,
+    // which also builds the load-ticket PDF: a document already issued to a
+    // seller should not silently start combining his lines because a decision
+    // was made weeks later about two words.
+    //
+    // Nothing is folded by resemblance. Only pairs SHE confirmed — see
+    // helpers/itemAliases.js for why similarity is the wrong instrument here
+    // ("Al 6061" and "Al 6063" differ by one character and are different
+    // money).
+    const aliases = require('./itemAliases');
+    const aliasRows = aliases.list();
+    if (aliasRows.length && byType.length) {
+        const merged = new Map();
+        for (const g of byType) {
+            const key = aliases.canonicalKey(g.description, aliasRows);
+            const cur = merged.get(key);
+            if (!cur) { merged.set(key, { ...g, _members: [g.description] }); continue; }
+            cur.count += g.count || 0;
+            cur.gross = round2((cur.gross || 0) + (g.gross || 0));
+            cur.tare = round2((cur.tare || 0) + (g.tare || 0));
+            cur.net = round2((cur.net || 0) + (g.net || 0));
+            cur.amount = round2((cur.amount || 0) + (g.amount || 0));
+            cur._members.push(g.description);
+        }
+        byType = [...merged.values()].map((g) => {
+            const label = aliases.displayName(g.description, items.map((it) => it && it.description), aliasRows);
+            const out = { ...g, description: label };
+            // Kept so the tab can say "counted with Aluminium combo" rather
+            // than a row silently changing name between two visits.
+            out.also_known_as = (g._members || []).filter((d) => aliases.norm(d) !== aliases.norm(label));
+            delete out._members;
+            return out;
+        });
+    }
+
     // ── On-hand (2026-08-24) ────────────────────────────────────────────────
     // Apsara: "when this outbound gets updated — inventory should also get
     // decreased na?" Correct, and it overrides her earlier "keep them
@@ -401,9 +446,14 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         try {
             const outbound = require('./outboundLoads').loadOutboundLoads();
             for (const o of outbound) {
+                const aliasRowsOut = require('./itemAliases').list();
                 for (const it of (o.items || [])) {
                     const raw = String(it.description || 'Other').trim();
-                    const k = raw.toLowerCase();
+                    // Keyed the same way the rows above are, or a sale
+                    // recorded under a confirmed alias would fail to find its
+                    // stock and print as a negative row of its own — which is
+                    // the exact symptom this change exists to end.
+                    const k = require('./itemAliases').canonicalKey(raw, aliasRowsOut) || raw.toLowerCase();
                     // The KEY is lower-cased so "Al combo" and "al combo"
                     // are one material; the SPELLING she typed is kept
                     // beside it, because the row pushed below used to be
@@ -422,14 +472,16 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         }
         if (shippedByType) {
             byType = byType.map((g) => {
-                const hit = shippedByType.get(String(g.description).trim().toLowerCase());
+                const hit = shippedByType.get(require('./itemAliases').canonicalKey(g.description, aliasRows)
+                                              || String(g.description).trim().toLowerCase());
                 const shipped = hit ? hit.net : 0;
                 return { ...g, shipped: round2(shipped), onHand: round2((g.net || 0) - shipped) };
             });
             // Material shipped that was never recorded as bought still has to
             // appear, or the tab shows nothing while the yard shows a hole.
             for (const [k, hit] of shippedByType) {
-                if (byType.some((g) => String(g.description).trim().toLowerCase() === k)) continue;
+                if (byType.some((g) => (require('./itemAliases').canonicalKey(g.description, aliasRows)
+                                        || String(g.description).trim().toLowerCase()) === k)) continue;
                 // hit.label, not k: labelling this row with the lower-cased
                 // grouping key made a sold-only item render as "al combo"
                 // next to bought items reading "Al combo" — one material

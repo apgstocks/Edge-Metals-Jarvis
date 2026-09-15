@@ -9205,6 +9205,76 @@ function wireLoadsEvents() {
     if (entry.mobile && $('ld_seller_phone') && !$('ld_seller_phone').value.trim()) $('ld_seller_phone').value = entry.mobile;
   });
 
+  // ── MORE GOING OUT THAN CAME IN ────────────────────────────────────────
+  // Apsara, 2026-09-16, choosing the strongest option offered: "Block the
+  // sale instead". The server refuses; this is what she sees.
+  //
+  // THE NAMING QUESTION COMES FIRST, and that ordering is the point. Most of
+  // these refusals are not a real shortage at all — they are "Aluminium
+  // combo" sold against a pile bought as "Al combo", which reported minus 300
+  // lb of a metal that was sitting in the yard. Asking about the OVERRIDE
+  // first would teach her to click through a prompt whose real answer is "you
+  // typed it differently", and the stock figure would stay wrong.
+  //
+  // So: ask what the item IS, remember the answer, retry. Only if that is not
+  // the problem does the override appear.
+  //
+  //   "Warn me if al combo and aluminium combo, remember my selection —
+  //    then next time let ai decide based on knowldge"
+  //
+  // The remembering is what makes this a question asked once rather than
+  // every week. See helpers/itemAliases.js.
+  async function handleStockShort(err, salePayload, sendSale) {
+    const short = (err && err.shortfalls) || [];
+    let learned = false;
+
+    for (const s of short) {
+      // Only worth asking when NOTHING is on hand under that name — a real
+      // partial shortage is a real shortage, not a spelling.
+      if (s.on_hand > 0) continue;
+      let suggestion = null;
+      try {
+        suggestion = await api('/api/item-aliases/suggest?item=' + encodeURIComponent(s.typed_as || s.item));
+      } catch (e) { suggestion = null; }
+      if (!suggestion || !suggestion.ask) continue;
+
+      const same = confirm(
+        `${suggestion.question}\n\n` +
+        `Nothing has ever come IN as "${suggestion.unknown}", but there is stock of "${suggestion.match}".\n\n` +
+        `OK = same material (I'll remember, and stop asking)\n` +
+        `Cancel = they are different`);
+      // BOTH answers are recorded. A "no" that is not remembered means the
+      // same two alloys get queried every week until the prompts stop being
+      // read — and then the one that matters gets clicked through too.
+      try {
+        await api('/api/item-aliases', { method: 'POST', body: JSON.stringify({
+          a: suggestion.unknown, b: suggestion.match, same,
+        }) });
+      } catch (e) { /* not fatal: the sale still has to be recordable */ }
+      if (same) learned = true;
+    }
+
+    // Now that she has answered, the shortfall may simply be gone.
+    if (learned) {
+      try { await sendSale(); return; }
+      catch (e2) { if (!e2 || e2.code !== 'STOCK_SHORT') throw e2; err = e2; }
+    }
+
+    // A genuine shortage. She is told the numbers and decides — because a
+    // truck that has already left is a fact, and an app that refuses to write
+    // facts down gets worked around onto paper. This is the ONLY place
+    // allow_negative is sent.
+    const lines = ((err && err.shortfalls) || []).map((s) => '  · ' + (s.on_hand <= 0
+      ? `${s.item}: nothing on hand, ${s.requested} going out`
+      : `${s.item}: ${s.on_hand} on hand, ${s.requested} going out (short ${s.short_by})`)).join('\n');
+    const ok = confirm(
+      `This sale ships more than the yard has on record:\n\n${lines}\n\n` +
+      `That usually means a purchase was never entered.\n\n` +
+      `OK = record it anyway\nCancel = stop, and I'll check the loads first`);
+    if (!ok) throw new Error('Nothing was saved — check the missing purchase first.');
+    await sendSale({ allow_negative: true });
+  }
+
   $('btnSaveLoad').addEventListener('click', async () => {
     syncItemsFromDom();
     // The load-level description box is gone; an edit of an older load
@@ -9304,10 +9374,14 @@ function wireLoadsEvents() {
           description: payload.description, weight_unit: payload.weight_unit, items: payload.items,
           client_request_id: payload.client_request_id,
         };
-        if (isEdit) {
-          await api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(salePayload) });
-        } else {
-          await api('/api/outbound-loads', { method: 'POST', body: JSON.stringify(salePayload) });
+        const sendSale = (extra) => (isEdit
+          ? api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify({ ...salePayload, ...extra }) })
+          : api('/api/outbound-loads', { method: 'POST', body: JSON.stringify({ ...salePayload, ...extra }) }));
+        try {
+          await sendSale();
+        } catch (err) {
+          if (!err || err.code !== 'STOCK_SHORT') throw err;
+          await handleStockShort(err, salePayload, sendSale);
         }
       } else if (isEdit) {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
