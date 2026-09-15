@@ -229,9 +229,24 @@ const TOOLS = {
         kind: 'read',
         description: 'Search recorded expenses by vendor, category, description or date range. Use this for any question about who was paid, what was bought, or what an expense was for — spend_report gives totals only and cannot name anyone.',
         params: {
-            vendor: { type: 'string', describe: 'part of a vendor or payee name, e.g. "Santiago"; matched loosely' },
-            category: { type: 'string', describe: 'part of a category, e.g. "fuel"' },
-            text: { type: 'string', describe: 'part of the description or notes' },
+            // ── ONE SEARCH BOX, NOT TWO ──────────────────────────────────
+            // This was `vendor` and `text` as separate parameters, and her
+            // own data broke it: one expense has Santiago in the VENDOR
+            // field ($240) and another names him only in the DESCRIPTION —
+            // "Weekly salary Santiago", $900. The model had to pick one, so
+            // "how much did we pay Santiago" answered $240 and left out the
+            // $900 without saying so.
+            //
+            // An undercount is the dangerous direction: nobody questions a
+            // figure that is lower than they feared. So one parameter that
+            // looks everywhere a name or a thing can be written. `vendor`
+            // and `text` are still accepted as aliases, because the prompt
+            // and any half-finished tool call may still use them, and they
+            // now mean the same thing rather than half the answer.
+            match: { type: 'string', describe: 'a person, company or thing — matched loosely against the vendor, the description AND the notes. Use this for "how much did we pay X" and for "what did we spend on Y".' },
+            vendor: { type: 'string', describe: 'alias for match' },
+            text: { type: 'string', describe: 'alias for match' },
+            category: { type: 'string', describe: 'part of a category, e.g. "fuel" or "labour"' },
             method: { type: 'string', describe: 'one of Cash, Zelle, Wire, Cheque, Card, Other' },
             from: { type: 'date', describe: 'earliest expense date, YYYY-MM-DD' },
             to: { type: 'date', describe: 'latest expense date, YYYY-MM-DD' },
@@ -239,12 +254,14 @@ const TOOLS = {
         run: async (p) => {
             const { loadExpenses } = require('./expenses');
             const like = (hay, needle) => String(hay || '').toLowerCase().includes(String(needle).trim().toLowerCase());
+            // Whichever the model reached for, they mean the same thing.
+            const needle = p.match || p.vendor || p.text || '';
             const rows = loadExpenses().filter((e) => {
-                if (p.vendor && !like(e.vendor, p.vendor)) return false;
+                // Vendor, description AND notes. A person can be recorded in
+                // any of the three — hers are in two — and searching one of
+                // them answers a money question with part of the answer.
+                if (needle && !(like(e.vendor, needle) || like(e.description, needle) || like(e.notes, needle))) return false;
                 if (p.category && !like(e.category, p.category)) return false;
-                // Description AND notes: "what did we pay for" is as likely
-                // to be in the note as in the one-line description.
-                if (p.text && !(like(e.description, p.text) || like(e.notes, p.text))) return false;
                 if (p.method && String(e.payment_method || '').toLowerCase() !== String(p.method).trim().toLowerCase()) return false;
                 if (p.from && String(e.date || '') < p.from) return false;
                 if (p.to && String(e.date || '') > p.to) return false;

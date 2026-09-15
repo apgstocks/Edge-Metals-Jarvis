@@ -219,6 +219,15 @@ section('E2 — it can see an EXPENSE, not just the month\'s total');
         // were already inside the range, so the range was never doing work.
         { id: 'X4', date: '2026-08-11', vendor: 'Santiago', category: 'Repairs',
           description: 'Gate weld', notes: null, payment_method: 'Cash', amount: 95 },
+        // ── NAMED ONLY IN THE DESCRIPTION, NO VENDOR ──────────────────────
+        // Straight from her data: a salary line carries the person's name in
+        // the description and leaves vendor empty. With `vendor` and `text`
+        // as separate parameters the model had to choose, so "how much did we
+        // pay Santiago" answered from one field and silently left this out.
+        // An undercount is the dangerous direction — nobody questions a
+        // figure lower than they feared.
+        { id: 'X5', date: '2026-09-10', vendor: null, category: 'Labour',
+          description: 'Weekly salary Santiago', notes: null, payment_method: 'Cash', amount: 900 },
     ];
     const expMod = require.resolve(path.join(ROOT, 'helpers/expenses'));
     require(expMod);
@@ -227,30 +236,44 @@ section('E2 — it can see an EXPENSE, not just the month\'s total');
     const run = (params) => tools.runRead('find_expenses', params);
 
     {
-        const r = await run({ vendor: 'Santiago' });
+        const r = await run({ match: 'Santiago' });
         ck('her actual question: what did we pay Santiago',
-           r.matched_total === 845.5, String(r.matched_total));
+           r.matched_total === 1745.5, String(r.matched_total));
         ck('  matching loosely, so "Santiago Welding" counts too',
-           r.rows.length === 3, JSON.stringify(r.rows.map((x) => x.vendor)));
+           r.rows.some((x) => x.id === 'X2'), JSON.stringify(r.rows.map((x) => x.id)));
+        // THE UNDERCOUNT THIS REPLACED. X5 names him in the DESCRIPTION and
+        // has no vendor at all; searching the vendor field alone answers
+        // $845.50 and omits $900 without ever saying so.
+        ck('  INCLUDING the one named only in the description',
+           r.rows.some((x) => x.id === 'X5'),
+           'searching one field answers a money question with part of the answer');
+        ck('  so no row carrying his name is left out',
+           r.rows.length === 4, JSON.stringify(r.rows.map((x) => x.id)));
+        // Whichever name the model reaches for, it gets the whole answer:
+        // there is no longer a wrong choice available to it.
+        for (const alias of ['vendor', 'text']) {
+            ck(`  the old "${alias}" parameter now means the same thing`,
+               (await run({ [alias]: 'Santiago' })).matched_total === 1745.5, alias);
+        }
         // The sum is computed in the tool, not left to the model. A total a
         // language model adds up in its head is a total nobody checked.
         ck('  and the TOTAL comes from the tool, not the model',
            typeof r.matched_total === 'number');
     }
     {
-        const r = await run({ vendor: 'santiago', from: '2026-09-01', to: '2026-09-30' });
+        const r = await run({ match: 'santiago', from: '2026-09-01', to: '2026-09-30' });
         ck('a date range narrows it — August\'s Santiago row drops out',
-           r.total === 2, String(r.total));
+           r.total === 3, String(r.total));
         ck('  leaving only what was spent in the window',
-           r.matched_total === 750.5, String(r.matched_total));
-        ck('  case does not matter', (await run({ vendor: 'SANTIAGO' })).total === 3);
+           r.matched_total === 1650.5, String(r.matched_total));
+        ck('  case does not matter', (await run({ match: 'SANTIAGO' })).total === 4);
     }
     {
-        const r = await run({ text: 'hose' });
+        const r = await run({ match: 'hose' });
         ck('it searches descriptions', r.rows.length === 1 && r.rows[0].id === 'X1');
     }
     {
-        const r = await run({ text: 'second visit' });
+        const r = await run({ match: 'second visit' });
         ck('  and notes, because "what for" is often written there',
            r.rows.length === 1 && r.rows[0].id === 'X2', JSON.stringify(r.rows));
     }
@@ -261,7 +284,7 @@ section('E2 — it can see an EXPENSE, not just the month\'s total');
     {
         // A genuine zero must be a RESULT, not an absence of capability —
         // exactly the distinction that was lost.
-        const r = await run({ vendor: 'Nobodyxyz' });
+        const r = await run({ match: 'Nobodyxyz' });
         ck('a vendor with nothing against them returns an empty list',
            r.total === 0 && Array.isArray(r.rows) && r.rows.length === 0);
         ck('  and a zero total, not undefined', r.matched_total === 0);
