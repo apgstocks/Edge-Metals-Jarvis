@@ -697,10 +697,18 @@ section('F — who may see her supplier prices');
     // under Operations rather than that a single 'Sales' label exists.
     // Two nav entries, tabs inside — her last word, seeing six stacked in the
     // sidebar: "i want them to be tabs inside not separate option".
-    ck('Edge Metals is two entries under Operations',
-       /\{ id: 'bills', label: 'Bills', group: 'Operations' \}/.test(html)
-       && /\{ id: 'sales', label: 'Sales', group: 'Operations' \}/.test(html),
-       'her answer when asked: "Both as new tabs under Operations"');
+    // The group NAME moved on 2026-09-15 ('Operations' → 'Edge Metals', when
+    // Apsara said "dont mix yard and edge metals"), so pinning the literal
+    // made a rename look like a regression. What matters here is unchanged
+    // and is asserted directly: two entries, and BOTH under the SAME heading,
+    // whatever that heading is currently called.
+    const gOf = (id) => ((html.match(new RegExp(`\\{ id: '${id}',[^}]*group: '([^']+)'`)) || [])[1] || null);
+    ck('Edge Metals is two entries, both under one heading',
+       !!gOf('bills') && gOf('bills') === gOf('sales'),
+       `bills → ${gOf('bills')}, sales → ${gOf('sales')}`);
+    ck('  and that heading is Edge Metals, not the yard\'s',
+       gOf('bills') === 'Edge Metals',
+       'supplier bills and sales are Edge Metals books, not Edge Yard\'s');
     ck('  with no nav entry per view',
        !/id: 'sales-incoming'/.test(html) && !/id: 'metals-trucking'/.test(html),
        'six top-level entries for two subjects is clutter');

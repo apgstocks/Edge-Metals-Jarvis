@@ -1716,6 +1716,66 @@ const MUTATIONS = [
       file: 'helpers/outboundLoads.js', suites: ['delivery-enquiry'],
       find: '        delivery_eta_time : entry.delivery_eta_time || null,',
       to:   '        delivery_eta_time : null,' },
+
+    // ── THE SIDEBAR, GROUPED BY COMPANY (2026-09-15) ─────────────────────
+    // Apsara: "dont mix yard and edge metals". Two ways that can silently
+    // come undone, and one of them already had.
+    { name: 'nav: the group sort is dropped, so Edge Yard prints twice',
+      file: 'dashboard/index.html', suites: ['page-headings'],
+      // This is not hypothetical. Spend Report sits between Expenses and
+      // Price Lists in NAV_ITEMS, and renderNav emits a heading only when the
+      // group CHANGES — so without the sort, "Edge Yard" appeared above AND
+      // below it, with Price Lists filed under the second copy.
+      find: '  visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));',
+      to:   '  // sort removed' },
+    { name: 'nav: Edge Metals bills are filed under the yard',
+      file: 'dashboard/index.html', suites: ['page-headings', 'bills-sales'],
+      // The exact mistake she named. Supplier bills are Edge Metals' books;
+      // trucker bills are the yard's. One heading wrong and the two read as
+      // one company's debts.
+      find: "  { id: 'bills', label: 'Bills', group: 'Edge Metals' },",
+      to:   "  { id: 'bills', label: 'Bills', group: 'Edge Yard' }," },
+    { name: 'nav: Spend Report is claimed by Edge Yard alone',
+      file: 'dashboard/index.html', suites: ['page-headings'],
+      // helpers/spendReport.js totals loadTotal/expenseTotal/truckerTotal
+      // ALONGSIDE supplierTotal/saleCostTotal/metalsTruckingTotal. Filing it
+      // under one company makes the number on screen a false claim about
+      // that company — the quietest kind of wrong.
+      find: "  { id: 'spend',     label: 'Spend Report', group: 'Both companies', adminOnly: true },",
+      to:   "  { id: 'spend',     label: 'Spend Report', group: 'Edge Yard', adminOnly: true }," },
+    { name: 'nav: the heading is emitted every time, so every item gets one',
+      file: 'dashboard/index.html', suites: ['page-headings'],
+      find: '    const header = n.group !== lastGroup',
+      to:   '    const header = true' },
+
+    // ── ONE HEADING PER PAGE (2026-09-15) ────────────────────────────────
+    // "it looks too much headers". The Expenses page stacked six heading-ish
+    // things before one expense appeared.
+    { name: 'headings: the ALL-CAPS page title comes back',
+      file: 'dashboard/index.html', suites: ['page-headings'],
+      find: "  return `<div class=\"page-head\">",
+      to:   "  return `<div class=\"page-head\"><h2 class=\"eyebrow\" style=\"text-transform:uppercase\">${esc(title)}</h2>" },
+    { name: 'headings: the description under the title is dropped',
+      file: 'dashboard/index.html', suites: ['page-headings'],
+      // She had to correct me on this one: "let the descripton of header be
+      // there..i am just telling you to group the side bar headings". The
+      // sentence explaining what a page is for stays.
+      find: '{ note, stats, chips, actions }',
+      to:   '{ note: _dropped, stats, chips, actions }' },
+    { name: 'petty: the top-up button loses its admin gate',
+      file: 'dashboard/index.html', suites: ['petty-cash-clients'],
+      // Moved into pageHead's `actions` during the revamp. The gate moving is
+      // fine; the gate vanishing is staff able to top up the cash box.
+      find: "        actions: isAdmin ? '<button id=\"btnAddPetty\"",
+      to:   "        actions: true ? '<button id=\"btnAddPetty\"" },
+    { name: 'petty: the empty-box warning loses the sentence telling her what to do',
+      file: 'dashboard/index.html', suites: ['petty-cash-clients'],
+      // I actually did this, during the revamp, and the test caught it: the
+      // website said less than the app about what happens when the box runs
+      // dry. She chose refusal over a negative balance; the screen has to say
+      // so BEFORE someone tries to pay a load in cash.
+      find: 'Cash payments are refused while this is empty. Add cash before paying a load in cash.',
+      to:   'Cash payments are refused while this is empty.' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

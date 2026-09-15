@@ -69,9 +69,12 @@ tr:last-child td { border-bottom:none; }
        / documents.html — this page was the one remaining page missing it, per
        Apsara: "outbound loads also no back button." -->
   <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
-  <div class="eyebrow">// Outbound Loads</div>
-  <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">Sales to buyers</h2>
-  <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Material sold/shipped OUT to a buyer (Eccomelt or anyone else) — the mirror of the yard Loads tab, which tracks purchases FROM suppliers.</div>
+  <!-- One heading, matching the rest of the app — Apsara, 2026-09-15: "it
+       looks too much headers". The eyebrow repeated the nav item and the
+       description was read once and furniture after. -->
+  <h2 id="obHead" style="font-size:19px; font-weight:600; text-transform:none; letter-spacing:-.01em; margin:0 0 5px;">Outbound loads</h2>
+  <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px; max-width:60ch;">Material sold or shipped OUT to a buyer — the mirror of the yard Loads tab, which tracks purchases FROM suppliers.</div>
+  <div id="obStats" style="display:flex; gap:22px; flex-wrap:wrap; margin-bottom:18px;"></div>
 
   <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
     <button class="subtab-btn" data-subtab="loads">Loads</button>
@@ -284,6 +287,13 @@ async function loadLoads() {
     // being carried in from an old copy of this file, not written afresh.
     const loads = await api('/api/outbound-loads');
     root.innerHTML = loads.length ? loads.map(loadCard).join('') : '<div style="padding:30px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No outbound loads yet.</div>';
+    // The figures ARE the heading now — value first, a quiet word beneath.
+    const stat = (label, value) => `<div><div style="font-size:20px; font-weight:600; color:var(--text-strong); line-height:1.1;">${value}</div><div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">${label}</div></div>`;
+    $('obStats').innerHTML = [
+      stat('loads', String(loads.length)),
+      stat('net weight', loads.reduce((t, l) => t + (Number(l.net_weight) || 0), 0).toLocaleString() + ' lb'),
+      stat('invoiced', fmtMoney(loads.reduce((t, l) => t + (Number(l.amount) || 0), 0))),
+    ].join('');
     root.querySelectorAll('.btn-del-load').forEach((btn) => btn.addEventListener('click', async () => {
       if (!confirm('Delete this outbound load?')) return;
       await api(`/api/outbound-loads/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });

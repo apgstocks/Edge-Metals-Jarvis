@@ -277,28 +277,39 @@ input::placeholder { color:var(--steel-500); }
   <!-- ══ SIDEBAR ══ -->
   <aside id="sidebar" style="width:252px; flex-shrink:0; background:var(--steel-950); display:flex; flex-direction:column;">
     <div style="height:5px; flex-shrink:0; background-image:repeating-linear-gradient(-45deg, var(--copper-400) 0, var(--copper-400) 3px, transparent 3px, transparent 11px);"></div>
-    <div style="padding:26px 22px 20px; border-bottom:1px solid var(--steel-800);">
-      <div style="display:flex; align-items:center; gap:13px;">
-        <div style="position:relative; width:44px; height:44px; flex-shrink:0;">
-          <span style="position:absolute; inset:-8px; border-radius:50%; background:radial-gradient(circle, rgba(215,126,61,.45), transparent 68%); animation:emGlow 2.2s ease-in-out infinite;"></span>
+    <!-- ── THE BRAND BLOCK, TIGHTENED ─────────────────────────────────────
+         Apsara, 2026-09-15: "it looks too much headers". This was the first
+         of them and the worst offender for space: a 44px mark, "// EDGE
+         METALS · OPS" and "LIVE · SYNCED FROM WHATSAPP" both wrapping onto
+         two lines in a 252px column, and ~300px gone before the first nav
+         item — which is why Board and Bookings sat below the fold.
+
+         Now: a 30px mark, two short lines that cannot wrap, and the live
+         state as a dot with a tooltip rather than a sentence in caps. The
+         text is still there on hover; the shouting is not. -->
+    <div style="padding:16px 18px 14px; border-bottom:1px solid var(--steel-800);">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div style="position:relative; width:30px; height:30px; flex-shrink:0;">
+          <span style="position:absolute; inset:-5px; border-radius:50%; background:radial-gradient(circle, rgba(215,126,61,.45), transparent 68%); animation:emGlow 2.2s ease-in-out infinite;"></span>
           <span style="position:absolute; inset:0; border-radius:50%; background:repeating-conic-gradient(rgba(215,126,61,.9) 0deg 14deg, transparent 14deg 36deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px)); animation:emSpin 9s linear infinite;"></span>
-          <span style="position:absolute; inset:3px; border-radius:50%; background:conic-gradient(from 0deg, transparent 0 64%, rgba(255,214,170,.95)); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); animation:emSpin 2.4s linear infinite;"></span>
-          <span style="position:absolute; inset:7px; border-radius:50%; background:repeating-conic-gradient(rgba(87,190,73,.7) 0deg 3deg, transparent 3deg 15deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); animation:emSpinRev 6s linear infinite;"></span>
-          <span style="position:absolute; inset:12px; border-radius:50%; border:1px solid rgba(255,214,170,.7); animation:emPing 2.2s cubic-bezier(.2,.7,.2,1) infinite;"></span>
-          <span style="position:absolute; left:50%; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; background:radial-gradient(circle at 40% 38%, #FFFFFF, #FFE7CB 40%, #FFB877 70%, #D77E3D 100%); box-shadow:0 0 26px rgba(255,214,170,1), 0 0 56px rgba(215,126,61,.6);"></span>
+          <span style="position:absolute; inset:2px; border-radius:50%; background:conic-gradient(from 0deg, transparent 0 64%, rgba(255,214,170,.95)); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); mask:radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px)); animation:emSpin 2.4s linear infinite;"></span>
+          <span style="position:absolute; inset:5px; border-radius:50%; background:repeating-conic-gradient(rgba(87,190,73,.7) 0deg 3deg, transparent 3deg 15deg); -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); mask:radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px)); animation:emSpinRev 6s linear infinite;"></span>
+          <span style="position:absolute; inset:8px; border-radius:50%; border:1px solid rgba(255,214,170,.7); animation:emPing 2.2s cubic-bezier(.2,.7,.2,1) infinite;"></span>
+          <span style="position:absolute; left:50%; top:50%; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:50%; background:radial-gradient(circle at 40% 38%, #FFFFFF, #FFE7CB 40%, #FFB877 70%, #D77E3D 100%); box-shadow:0 0 26px rgba(255,214,170,1), 0 0 56px rgba(215,126,61,.6);"></span>
         </div>
-        <div>
-          <div style="font-family:var(--font-mono); font-size:9.5px; font-weight:500; letter-spacing:.2em; text-transform:uppercase; color:var(--steel-400);">// Edge Metals · Ops</div>
-          <div style="font-family:var(--font-display); font-size:21px; font-weight:900; letter-spacing:.08em; color:#fff; text-transform:uppercase;">Jarvis</div>
+        <div style="min-width:0; flex:1;">
+          <div style="font-family:var(--font-display); font-size:17px; font-weight:800; letter-spacing:.04em; color:#fff;">Jarvis</div>
+          <div style="font-family:var(--font-mono); font-size:9.5px; color:var(--steel-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Edge Metals ops</div>
         </div>
+        <span id="waStatusDot" title="Checking…" style="width:8px; height:8px; border-radius:50%; background:var(--steel-600); flex-shrink:0;"></span>
       </div>
-      <div id="waStatusLine" style="display:flex; align-items:center; gap:8px; margin-top:16px;">
-        <span id="waStatusDot" style="width:7px; height:7px; border-radius:50%; background:var(--steel-600); flex-shrink:0;"></span>
-        <span id="waStatusText" style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--steel-300);">Checking…</span>
-      </div>
+      <!-- Kept in the DOM, hidden: the code that sets it writes here, and a
+           missing node would throw rather than quietly do nothing. The dot's
+           title carries the same words. -->
+      <div id="waStatusLine" style="display:none;"><span id="waStatusText"></span></div>
     </div>
 
-    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:14px 12px; display:flex; flex-direction:column; gap:2px;"></nav>
+    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:10px 10px; display:flex; flex-direction:column; gap:1px;"></nav>
 
     <div style="padding:16px 22px 20px; border-top:1px solid var(--steel-800);">
       <div id="todayLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--steel-300);"></div>
@@ -698,6 +709,74 @@ let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pendin
 // insertion history. renderNav() below reads `group` to insert section
 // headers and only shows a header if at least one item in it survives the
 // role filter (e.g. a non-admin 'user' role never sees "System").
+// ── ONE HEADING, NOT SIX ────────────────────────────────────────────────
+// Apsara, 2026-09-15: "it looks too much headers", after two attempts of mine
+// that missed. She was right and the count is the proof — the Expenses page
+// stacked SIX heading-ish things before one expense appeared:
+//
+//   YARD  ·  // EXPENSES  ·  EXPENSE TRACKER  ·  the description line  ·
+//   TODAY / ALL-TIME / ENTRIES  ·  2026-09-12
+//
+// and every one of them used the same small uppercase mono treatment, so none
+// of them won and the eye had nowhere to rest. My first fix merged three of
+// the six and kept the rest, which is why it still read the same.
+//
+// THE RULE: exactly one thing on a page looks like a heading. Everything else
+// is data, or a quiet word underneath data.
+//
+//   · the "// Something" eyebrow is gone. The sidebar already says Yard >
+//     Expenses and highlights it; saying it twice more is the clutter.
+//   · the title is sentence case at 19px, the SAME WORD as the nav item, so
+//     the eye confirms rather than re-reads.
+//   · the description line becomes a chip, or nothing. It is read once and is
+//     furniture forever after.
+//   · figures go ABOVE their labels and get BIGGER, not smaller. An earlier
+//     draft of this shrank them into a muted mono string; she runs the
+//     business on those numbers.
+//
+// `stats` is [label, value] — value first on screen, label quietly beneath.
+// `chips` are the short caveats that used to be a sentence ("admin only").
+// `note` is the one-line description under the title. It was dropped in the
+// first cut of this and she asked for it back — "let the descripton of header
+// be there" — so it stays. What went is the EYEBROW above it and the ALL-CAPS
+// title, which were the two that said nothing the nav item had not.
+function pageHead(title, { note = '', stats = [], chips = [], actions = '' } = {}) {
+  const L = 'font-size:11.5px; color:var(--text-muted); margin-top:2px;';
+  return `
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:16px;">
+      <div style="min-width:0;">
+        <h2 style="font-size:19px; font-weight:600; text-transform:none; letter-spacing:-.01em; margin:0;">${esc(title)}</h2>
+        ${note ? `<div style="font-size:12.5px; color:var(--text-muted); margin-top:5px; max-width:60ch;">${note}</div>` : ''}
+        ${stats.length ? `<div style="display:flex; gap:22px; flex-wrap:wrap; margin-top:12px;">${stats
+          .filter(Boolean)
+          .map(([label, value]) => `<div><div style="font-size:20px; font-weight:600; color:var(--text-strong); line-height:1.1;">${value}</div><div style="${L}">${esc(label)}</div></div>`)
+          .join('')}</div>` : ''}
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        ${chips.filter(Boolean).map((c) => `<span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:3px 7px;">${esc(c)}</span>`).join('')}
+        ${actions}
+      </div>
+    </div>`;
+}
+
+// ── GROUPED BY COMPANY, NOT BY JOB ──────────────────────────────────────
+// Apsara, 2026-09-15: "dont mix yard and edge metals".
+//
+// It was mixed, and the old group names hid it. "Operations" carried Board,
+// Bookings, Truckers, Suppliers and Documents — the freight side — AND Bills,
+// Sales and Edge Inventory, which helpers/bills.js opens by calling "EDGE
+// METALS, NOT EDGE YARD". One heading over two companies whose figures must
+// never meet is the sidebar version of the mistake every store in this app is
+// built to prevent.
+//
+// So the top level is now the COMPANY. The names say which, rather than
+// leaving "Yard" and "Operations" to be interpreted.
+//
+// SPEND REPORT BELONGS TO NEITHER and is filed under its own heading, because
+// helpers/spendReport.js totals loadTotal, expenseTotal and truckerTotal (the
+// yard) alongside supplierTotal, saleCostTotal and metalsTruckingTotal (Edge
+// Metals). Putting it under one company would state that it is that company's
+// report, which is exactly the false claim this regrouping is removing.
 const NAV_ITEMS = [
   // Scrap-yard side of the app — per Apsara 2026-08-16 ("Price lists also
   // move it under Yard"): split out of the old single "Operations" bucket,
@@ -707,13 +786,13 @@ const NAV_ITEMS = [
   // renderPriceContacts's "Price list contacts" page title) — relabeled
   // here for clarity since it now sits next to Loads/Inventory instead of
   // next to Email Contacts/WhatsApp, where "Contacts" alone was ambiguous.
-  { id: 'loads',     label: 'Loads',       group: 'Yard' },
-  { id: 'inventory', label: 'Inventory',   group: 'Yard' },
+  { id: 'loads',     label: 'Loads',       group: 'Edge Yard' },
+  { id: 'inventory', label: 'Inventory',   group: 'Edge Yard' },
   // Petty cash — the physical cash box, per Apsara 2026-09-02. NOT adminOnly:
   // staff see the balance ("staff can see the balance, admin can top up"),
   // and the page renders read-only for them. The write routes are
   // requireAdmin server-side, so the boundary does not depend on this flag.
-  { id: 'petty',     label: 'Petty Cash',  group: 'Yard' },
+  { id: 'petty',     label: 'Petty Cash',  group: 'Edge Yard' },
   // Trucker bills — what the yard OWES its hauliers. Apsara 2026-09-03,
   // "a tab called trucker for everyone", so not adminOnly, and added to the
   // staff nav filter below to match.
@@ -724,7 +803,7 @@ const NAV_ITEMS = [
   // messages. Two tabs both called Trucker, one holding contacts and one
   // holding debts, is a mistake waiting for a hurried afternoon. The mobile
   // app has no roster, so there the tab is just "Trucker" as she asked.
-  { id: 'trucker-bills', label: 'Trucker Bills', group: 'Yard' },
+  { id: 'trucker-bills', label: 'Trucker Bills', group: 'Edge Yard' },
   // ── EXPENSES ─────────────────────────────────────────────────────────
   // Apsara, 2026-09-15: "there is a expense tab in app but not website".
   // Correct, and it had been that way since the tab was built on 2026-08-19
@@ -734,23 +813,23 @@ const NAV_ITEMS = [
   //
   // adminOnly, matching the app's own gate and the server's: expenses are
   // money out, and staff keep Loads and the cash balance.
-  { id: 'expenses', label: 'Expenses', group: 'Yard', adminOnly: true },
+  { id: 'expenses', label: 'Expenses', group: 'Edge Yard', adminOnly: true },
   // Spend report — every figure the business pays out, both sides of it,
   // so adminOnly. Staff keep Loads and the cash balance.
-  { id: 'spend',     label: 'Spend Report', group: 'Yard', adminOnly: true },
-  { id: 'contacts',  label: 'Price Lists', group: 'Yard', adminOnly: true },
+  { id: 'spend',     label: 'Spend Report', group: 'Both companies', adminOnly: true },
+  { id: 'contacts',  label: 'Price Lists', group: 'Edge Yard', adminOnly: true },
   // Outbound loads (sales to buyers, e.g. Eccomelt) — mirror of Loads
   // above, but a separate standalone page (dashboard/outbound-loads.html),
   // not an in-app tab — same reasoning/pattern as address-book/quote-requests
   // below. adminOnly: carries buyer pricing/margin, same call as Bot &
   // Automation/Contacts & Outreach's admin-only entries.
-  { id: 'outbound-loads', label: 'Outbound Loads', group: 'Yard', adminOnly: true },
+  { id: 'outbound-loads', label: 'Outbound Loads', group: 'Edge Yard', adminOnly: true },
 
   // Freight-forwarding/booking side of the app.
-  { id: 'board',     label: 'Board',     group: 'Operations' },
-  { id: 'bookings',  label: 'Bookings',  group: 'Operations' },
-  { id: 'truckers',  label: 'Truckers',  group: 'Operations' },
-  { id: 'suppliers', label: 'Suppliers', group: 'Operations' },
+  { id: 'board',     label: 'Board',     group: 'Edge Metals' },
+  { id: 'bookings',  label: 'Bookings',  group: 'Edge Metals' },
+  { id: 'truckers',  label: 'Truckers',  group: 'Edge Metals' },
+  { id: 'suppliers', label: 'Suppliers', group: 'Edge Metals' },
   // Invoice/Proforma/Verification — added 2026-08-19 per Apsara ("i want
   // invoice,proforma,verification in separate tabs under documents").
   // Standalone page (dashboard/documents.html via the /documents route),
@@ -760,7 +839,7 @@ const NAV_ITEMS = [
   // the rest of Operations here. The narrower 'staff' role (Loads-only)
   // still can't reach it — server-side denied by omission from
   // STAFF_ALLOWED_PATH_PREFIXES in api.js, this is just matching UX.
-  { id: 'documents', label: 'Documents', group: 'Operations' },
+  { id: 'documents', label: 'Documents', group: 'Edge Metals' },
   // Apsara, 2026-09-09: "This is for edge metals not for edge yard. now i want
   // to build a bill tab ... In sales tab-i want customer name,date,invoice
   // number,HBL number..." — and, asked where they should go: "Both as new tabs
@@ -771,7 +850,7 @@ const NAV_ITEMS = [
   // STAFF_ALLOWED_PATH_PREFIXES, so the narrow 'staff' role gets a 403 on
   // both. This nav filtering is only so nobody sees a tab that would refuse
   // them; api.js carries the reasoning.
-  { id: 'bills', label: 'Bills', group: 'Operations' },
+  { id: 'bills', label: 'Bills', group: 'Edge Metals' },
 
   // ── TWO NAV ENTRIES, TABS INSIDE ─────────────────────────────────────
   // This has been round the houses and the last word is hers, seeing it
@@ -795,7 +874,7 @@ const NAV_ITEMS = [
   // and never stored (see helpers/metalsTrucking.js). Filing it under Sales
   // would put it one subject away from the thing it is made of. Say the word
   // and it moves; the strip is one array.
-  { id: 'sales', label: 'Sales', group: 'Operations' },
+  { id: 'sales', label: 'Sales', group: 'Edge Metals' },
   // ── EDGE INVENTORY ───────────────────────────────────────────────────
   // Apsara, 2026-09-11: "WANT TO HAVE a separate tab called Edge inventory.
   // there i want to maintain per supplier basis. inventory items and accounts
@@ -812,7 +891,7 @@ const NAV_ITEMS = [
   // companies. adminOnly: it shows supplier prices and a running account, so
   // the same call as Spend Report — and the server agrees by leaving
   // /api/edge-inventory out of STAFF_ALLOWED_PATH_PREFIXES.
-  { id: 'edge-inventory', label: 'Edge Inventory', group: 'Operations', adminOnly: true },
+  { id: 'edge-inventory', label: 'Edge Inventory', group: 'Edge Metals', adminOnly: true },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -923,6 +1002,21 @@ function renderNav() {
   // deliberately NOT on that allowlist.
   const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin')
     && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills'));
+  // ── ORDERED BY GROUP, NOT BY POSITION ────────────────────────────────
+  // A heading is emitted whenever the group CHANGES, so a group whose items
+  // are not contiguous in NAV_ITEMS prints its heading twice. Regrouping by
+  // company on 2026-09-15 made that real: Spend Report sits between Expenses
+  // and Price Lists in the array, so "Edge Yard" would have appeared above
+  // and below it.
+  //
+  // Sorted here rather than by shuffling NAV_ITEMS, because every entry in
+  // that array carries a comment explaining why it is where it is, and moving
+  // the entries would separate them from their reasons. Within a group the
+  // original order is kept — sort() is stable — so nothing else moves.
+  const GROUP_ORDER = ['Edge Yard', 'Both companies', 'Edge Metals',
+                       'Bot & Automation', 'Contacts & Outreach', 'System'];
+  const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? GROUP_ORDER.length : i; };
+  visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));
   let lastGroup = null;
   nav.innerHTML = visible.map(n => {
     const header = n.group !== lastGroup
@@ -1159,12 +1253,13 @@ async function renderInventory() {
 
   root.innerHTML = `
     <section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; justify-content:space-between; align-items:start; gap:12px;">
-        <div>
-          <div class="eyebrow">// Inventory</div>
-          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Item-type inventory</h2>
-          <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">Computed live from every current load — deleting a load removes its items here automatically, nothing is tallied separately.</div>
-        </div>
+      ${pageHead('Inventory', {
+        note: 'Computed live from every current load — deleting a load removes its material.',
+        stats: [['item types', String((data.byType || []).length)],
+                ['on hand', esc(((data.byType || []).reduce((t, g) => t + (Number(g.net) || 0), 0)).toLocaleString() + ' ' + (data.unit || 'lb'))]],
+        chips: ['live from loads'],
+      })}
+      <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
         <div style="position:relative;">
           <button id="btnInvExportMenu" class="btn" title="Export" style="padding:6px 10px; font-size:16px; line-height:1;">⋮</button>
           <div id="invExportMenu" class="ac-dropdown hidden" style="left:auto; right:0; width:170px; max-height:none;">
@@ -2095,7 +2190,10 @@ function updateWaBadge(status) {
   const dot = $('waStatusDot'), text = $('waStatusText'), banner = $('linkDownBanner'), bannerText = $('linkDownText');
   if (status.status === 'ready') {
     dot.style.background = 'var(--leaf-400)'; dot.style.boxShadow = '0 0 8px var(--leaf-400)'; dot.style.animation = 'jarvis-pulse 2.4s ease-in-out infinite';
-    text.textContent = 'Live · synced from WhatsApp'; banner.classList.add('hidden');
+    text.textContent = 'Live · synced from WhatsApp';
+    // The line is hidden now; the dot is what she sees, so it carries the words.
+    { const d = document.getElementById('waStatusDot'); if (d) d.title = 'Live · synced from WhatsApp'; }
+    banner.classList.add('hidden');
   } else if (status.status === 'qr') {
     dot.style.background = 'var(--status-warning)'; dot.style.boxShadow = '0 0 8px var(--status-warning)';
     text.textContent = 'QR scan needed'; bannerText.textContent = 'WhatsApp needs a QR scan to connect.'; banner.classList.remove('hidden');
@@ -2377,13 +2475,12 @@ const PRICE_CITIES = ['Los Angeles', 'Houston', 'San Antonio'];
 function renderPriceContacts() {
   $('viewRoot').innerHTML = `
     <section style="max-width:820px; margin:0 auto; padding:38px 40px 80px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px;">
-        <div><div class="eyebrow">// Contacts</div><h2 style="font-size:24px; text-transform:uppercase;">Price list contacts</h2></div>
-        <div style="display:flex; gap:10px;">
-          <button id="btnAddPriceGroup" class="btn btn-secondary">+ Add group</button>
-          <button id="btnAddPriceContact" class="btn btn-primary">+ Add contact</button>
-        </div>
-      </div>
+      ${pageHead('Price lists', {
+        note: 'Save a name once, then just say \\"send price list to &lt;name&gt;\\".',
+        chips: ['say "send price list to <name>"'],
+        actions: `<button id="btnAddPriceGroup" class="btn btn-secondary">+ Add group</button>
+          <button id="btnAddPriceContact" class="btn btn-primary">+ Add contact</button>`,
+      })}
       <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">Save a name once, then just say "send price list to &lt;name&gt;" on WhatsApp instead of typing a number. Groups work the same way — search by name, save it, then send to it exactly like an individual contact. "Standing" contacts (individual or group) also get the auto-notify when a price changes.</div>
 
       <div id="pcAddGroupBox" class="card hidden" style="padding:20px 22px; margin-bottom:16px;">
@@ -4499,19 +4596,14 @@ async function renderExpensesTab() {
 
   $('viewRoot').innerHTML = `
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
-        <div>
-          <div class="eyebrow">// Expenses</div>
-          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Expense tracker</h2>
-          <div style="font-size:13px; color:var(--text-muted);">Admin only. Syncs to the Expenses Google Sheet automatically.</div>
-        </div>
-        <button id="btnAddExpense" class="btn btn-primary">+ Add expense</button>
-      </div>
-      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:24px; flex-wrap:wrap;">
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Today</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(m(todayTotal))}</div></div>
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">All-time</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(m(report.total))}</div></div>
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(report.count)}</div></div>
-      </div>
+      ${pageHead('Expenses', {
+        note: 'Admin only. Syncs to the Expenses Google Sheet automatically.',
+        // The summary CARD is gone with the heading it sat under: those three
+        // figures are the heading now, larger than they were.
+        stats: [['all-time', esc(m(report.total))], ['today', esc(m(todayTotal))], ['entries', esc(report.count)]],
+        chips: ['admin only', 'syncs to sheet'],
+        actions: '<button id="btnAddExpense" class="btn btn-primary">+ Add expense</button>',
+      })}
       ${dates.length ? dates.map((date) => {
         const rows = byDate.get(date);
         const dayTotal = rows.reduce((t, e) => t + (e.amount || 0), 0);
@@ -4838,13 +4930,16 @@ async function renderSpendReportTab() {
 
   $('viewRoot').innerHTML = `
     <section style="max-width:1080px; margin:0 auto; padding:28px 20px 80px;">
-      <div style="margin-bottom:18px;">
-        <div class="eyebrow">// Reports</div>
-        <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Where the money went</h2>
-        <div style="font-size:13px; color:var(--text-muted);">${spendMethod
+      ${pageHead('Spend report', {
+        note: spendMethod
           ? `Showing <strong style="color:var(--text-strong);">${esc(spendMethod)}</strong> only — every figure below is ${esc(spendMethod)}.`
-          : 'Money OUT — what you paid sellers and spent on expenses, by month and by how it was paid. Sales income is shown separately.'}</div>
-      </div>
+          : 'Money OUT — what you paid sellers and spent on expenses, by month and by how it was paid. Sales income is shown separately.',
+        // The four figures were a card below the heading. They ARE the
+        // heading now: "where the money went" is what the numbers say.
+        stats: [['out', esc(money(rep.total))], ['loads', esc(money(rep.loadTotal))],
+                ['expenses', esc(money(rep.expenseTotal))], ['entries', esc(rep.count)]],
+        chips: [spendMethod ? `${spendMethod} only` : null, 'admin only'],
+      })}
 
       <!-- ── the filter bar ───────────────────────────────────────────────
            Apsara, 2026-09-02: "report layout is not proper. apply this month
@@ -4915,12 +5010,6 @@ async function renderSpendReportTab() {
         </div>
       </div>` : ''}
 
-      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:26px; flex-wrap:wrap;">
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Total out</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.total))}</div></div>
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Loads</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.loadTotal))}</div></div>
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Expenses</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(money(rep.expenseTotal))}</div></div>
-        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:22px; font-weight:800; color:var(--text-strong);">${esc(rep.count)}</div></div>
-      </div>
 
       <!-- ── money IN, kept apart from money out ──────────────────────────
            A payment against a SALE is a buyer paying US. Until 2026-09-02
@@ -7807,28 +7896,12 @@ async function renderTruckerTab() {
 
   $('viewRoot').innerHTML = `
     <div style="max-width:1120px; margin:0 auto; padding:34px 40px 80px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px;">
-        <div>
-          <div class="eyebrow">// Trucker</div>
-          <h2 style="font-size:19px; text-transform:uppercase; margin:0;">Haulage bills</h2>
-        </div>
-        <button id="btnAddTruckerBill" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">+ Add bill</button>
-      </div>
+      ${pageHead('Trucker bills', {
+        note: 'What the yard owes its hauliers, and what has been paid against each.',
+        stats: [['billed', payMoney(rep.billed)], ['paid', payMoney(rep.paid)], ['outstanding', payMoney(rep.outstanding)]],
+        actions: '<button id="btnAddTruckerBill" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">+ Add bill</button>',
+      })}
 
-      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:16px;">
-        <div class="card" style="padding:12px;">
-          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Billed</div>
-          <div style="font-size:16px; font-weight:700; margin-top:4px;">${payMoney(rep.billed)}</div>
-        </div>
-        <div class="card" style="padding:12px;">
-          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Paid</div>
-          <div style="font-size:16px; font-weight:700; margin-top:4px;">${payMoney(rep.paid)}</div>
-        </div>
-        <div class="card" style="padding:12px;">
-          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Outstanding</div>
-          <div style="font-size:16px; font-weight:700; margin-top:4px; color:${rep.outstanding > 0 ? 'var(--status-warn)' : 'var(--text-strong)'};">${payMoney(rep.outstanding)}</div>
-        </div>
-      </div>
       ${rep.overpaid > 0 ? `
       <!-- Shown ONLY when it is non-zero, and never netted against
            outstanding. Money paid beyond what was billed is something to ring
@@ -8043,20 +8116,15 @@ async function renderPettyCashTab() {
 
   $('viewRoot').innerHTML = `
     <section style="max-width:900px; margin:0 auto; padding:28px 20px 80px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
-        <div>
-          <div class="eyebrow">// Petty cash</div>
-          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Cash reserve</h2>
-          <div style="font-size:13px; color:var(--text-muted);">${isAdmin ? 'Cash paid against a load comes out of this balance.' : 'Read only — ask an admin to add cash.'}</div>
-        </div>
-        ${isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : ''}
-      </div>
-
-      <div class="card" style="padding:20px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">In the box</div>
-        <div style="font-size:32px; font-weight:800; color:${bal > 0 ? 'var(--text-strong)' : 'var(--status-warning, #d69e2e)'};">${esc(fmtAmount(bal) || '$0.00')}</div>
-        ${bal <= 0 ? `<div style="margin-top:8px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
-      </div>
+      ${pageHead('Petty cash', {
+        note: isAdmin ? 'Cash paid against a load comes out of this balance.' : 'Read only — ask an admin to add cash.',
+        // The balance was a 32px figure in a card of its own. It is the
+        // heading's first stat now — same prominence, one less block.
+        stats: [['in the box', esc(fmtAmount(bal))]],
+        chips: [isAdmin ? null : 'read only'],
+        actions: isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : '',
+      })}
+      ${bal <= 0 ? `<div class="card" style="padding:12px 16px; margin-bottom:18px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
 
       ${rows.length ? `
       <div class="card" style="padding:0; overflow:hidden;">
@@ -8612,21 +8680,20 @@ function renderLoads(loads) {
       .draft-card .d-sub { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px; }
     </style>
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
-        <div>
-          <div class="eyebrow">// Loads</div>
-          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Yard loads</h2>
-          <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+      ${pageHead('Loads', {
+        note: 'Camera or upload gross/tare weight, computed net, generated PDF ticket.',
+        stats: [
+          ['loads', String(loadsCache.length)],
+          ['net weight', esc(loadsCache.reduce((t, l) => t + (Number(l.net_weight) || 0), 0).toLocaleString())],
+          ['value', esc(fmtAmount(loadsCache.reduce((t, l) => t + (Number(l.amount) || 0), 0)) || '—')],
+        ],
+        actions: `<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
           <!-- Visible to every role. Recording material leaving the yard is
                yard work, same as recording it arriving — Apsara, 2026-08-24,
                asked directly whether sales should be denied to staff: "no".
                /api/outbound-loads is on the staff allowlist to match. -->
-          <button id="btnAddSale" class="btn">+ Sale</button>
-        </div>
-      </div>
+          <button id="btnAddSale" class="btn">+ Sale</button>`,
+      })}
       <!-- Search now also matches ITEM descriptions and per-item prices, per
            Apsara 2026-09-02 ("in load tab also, i should filter by item
            detail") — see filterLoads. The placeholder says so, because a

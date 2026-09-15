@@ -100,9 +100,22 @@ section('A — the tab is reachable and lists what was spent');
     // was undefined and two assertions failed for a reason that had nothing
     // to do with the tab.
     const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
-    ck('the nav offers Expenses',
-       /\{ id: 'expenses', label: 'Expenses', group: 'Yard', adminOnly: true \}/.test(src),
-       'the entry must exist, be labelled, and be admin-only');
+    // Was a grep for the whole entry verbatim, group name included. It broke
+    // the day the sidebar was regrouped by company ('Yard' → 'Edge Yard') —
+    // a purely visual change that has nothing to do with whether the Expenses
+    // tab exists, which is what this file is about. Which heading it sits
+    // under is tests/page-headings.js's business.
+    //
+    // So: assert what this test actually cares about. It is in the nav, it is
+    // labelled Expenses, and it is admin-only — money out is not staff's.
+    const navEntry = (src.match(/\{ id: 'expenses',[^}]*\}/) || [])[0] || '';
+    ck('the nav offers Expenses', !!navEntry && /label: 'Expenses'/.test(navEntry),
+       'the entry must exist and be labelled');
+    ck('  and it is admin-only — expenses are money out', /adminOnly: true/.test(navEntry),
+       navEntry || '(no expenses entry in NAV_ITEMS)');
+    ck('  and it renders as a button in the sidebar, not just in the array',
+       !!d.querySelector('#sideNav button[data-tab="expenses"]'),
+       'declared but never painted is a shape a grep cannot see');
     // The DISPATCH, not the function. A mutation deleting the routing line
     // left renderExpensesTab defined and unreachable, and every source-text
     // assertion still passed.

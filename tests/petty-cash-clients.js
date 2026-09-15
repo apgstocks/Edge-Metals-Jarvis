@@ -143,7 +143,15 @@ for (const [label, src] of CLIENTS) {
     ck(`${label}: the balance comes from the server, not summed here`,
        /pettyCash\.balance/.test(tab) && !/reduce\(/.test(tab),
        'a balance computed in two places is a balance two screens can disagree about');
-    ck(`${label}: the top-up button is admin-only`, /\$\{isAdmin \? '<button id="btnAddPetty"/.test(tab));
+    // Asserts the GATE, not the syntax around it. The website moved this
+    // button into pageHead's `actions` on 2026-09-15, so the old regex —
+    // which required the ternary to sit inside a `${...}` interpolation —
+    // failed on a button that was still every bit as admin-gated. The rule
+    // is: wherever btnAddPetty is emitted, isAdmin decides.
+    const addBtn = (tab.match(/[^\n]*btnAddPetty[^\n]*/) || [])[0] || '';
+    ck(`${label}: the top-up button is admin-only`,
+       /id="btnAddPetty"/.test(addBtn) && /isAdmin \?/.test(addBtn),
+       addBtn || '(btnAddPetty is not emitted at all)');
     ck(`${label}: an empty box says cash payments will be refused`,
        /Cash payments are refused while this is empty/.test(tab),
        'she chose refusal over a negative balance — the screen has to say so before someone tries');
@@ -160,8 +168,15 @@ for (const [label, src] of CLIENTS) {
 // staff visibility — the half of the change that is easy to forget
 {
     const web = CLIENTS.find(c => c[0] === 'website')[1];
+    // Was the whole entry verbatim, group name and all, which broke when the
+    // sidebar was regrouped by company — a rename this assertion does not
+    // care about. It cares about ONE bit: the absence of adminOnly.
+    const pettyEntry = (web.match(/\{ id: 'petty',[^}]*\}/) || [])[0] || '';
     ck('website: the nav entry is NOT adminOnly',
-       /\{ id: 'petty',\s+label: 'Petty Cash',\s+group: 'Yard' \},/.test(web));
+       !!pettyEntry && /label: 'Petty Cash'/.test(pettyEntry) && !/adminOnly/.test(pettyEntry),
+       pettyEntry || '(no petty entry in NAV_ITEMS)');
+    ck('website: and it is filed under the yard, whose cash box it is',
+       /group: 'Edge Yard'/.test(pettyEntry), pettyEntry);
     ck('website: and staff are not filtered out of it',
        /ROLE !== 'staff' \|\| n\.id === 'loads' \|\| n\.id === 'petty'/.test(web),
        'the staff filter allowed only Loads — without this the tab exists and staff never see it');
