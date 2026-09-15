@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design · BOL — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Same design tokens as dashboard/index.html — kept in sync by hand since
+   this is a standalone page (not part of the index.html SPA bundle). If the
+   main dashboard's theme changes, mirror the change here too. */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7; --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; min-height:100vh; }
+h1,h2 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+a:hover { color:var(--leaf-300); text-decoration:underline; text-underline-offset:3px; }
+button { font:inherit; }
+input { font-family:var(--font-sans); font-size:14px; }
+input::placeholder { color:var(--steel-500); }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.hidden { display:none !important; }
+textarea { font-family:inherit; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--steel-700); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-track { background:transparent; }
+</style>
+</head><body>
+<section style="max-width:760px; margin:0 auto; padding:38px 40px 80px;">
+  <a href="/" style="display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
+
+  <div class="eyebrow">// Design</div>
+  <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:10px;">Bill of lading</h2>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px; max-width:620px;">
+    Different customers want different things on their BOL. Pick a customer, drag the fields into the order you want, and switch off the ones they don't need. Everything else keeps the default.
+    <br><br>
+    This applies to the website <strong style="color:var(--text-body);">and</strong> the Edge Yard app &mdash; the same customer gets the same document either way.
+  </div>
+
+  <div style="display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap;">
+    <label style="font-family:var(--font-mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);">Layout for</label>
+    <select id="dbCustomer" style="flex:1; min-width:240px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:10px 12px; color:var(--text-strong); outline:none; font-size:14px;"></select>
+    <button id="dbAddCustomer" class="btn btn-secondary">+ Customer</button>
+  </div>
+
+  <div id="dbSource" style="font-size:12.5px; color:var(--text-faint); margin-bottom:16px;"></div>
+
+  <div class="card" style="padding:6px 0; margin-bottom:8px;">
+    <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); padding:12px 18px 10px;">Always on this document</div>
+    <div id="dbRequired"></div>
+  </div>
+
+  <div class="card" style="padding:6px 0;">
+    <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); padding:12px 18px 10px;">Your fields &mdash; drag to reorder</div>
+    <div id="dbFields"></div>
+    <div style="padding:14px 18px; border-top:1px solid var(--border-subtle);">
+      <button id="dbAddField" class="btn btn-secondary">+ Add your own field</button>
+    </div>
+  </div>
+
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:20px; flex-wrap:wrap;">
+    <div id="dbStatus" style="font-size:12.5px; color:var(--text-muted); flex:1; min-width:200px;"></div>
+    <div style="display:flex; gap:10px;">
+      <button id="dbResetCustomer" class="btn btn-secondary hidden" style="color:var(--status-danger); border-color:var(--status-danger);">Use the default instead</button>
+      <button id="dbSave" class="btn btn-primary">Save layout</button>
+    </div>
+  </div>
+</section>
+
+<script>
+// ── DESIGN / BOL — which fields each customer's BOL carries ────────────────
+// Apsara, 2026-09-16: "For different customer,i can have different field in
+// bol .. make the fields drag and drop in website as Design menu then under it
+// BOL like canvas website. easy for user to handle it."
+//
+// She asked for a free canvas and, when the trade-off was put to her, chose
+// this instead. The reasoning lives in helpers/bolLayouts.js's header; the
+// short version is that a BOL is a legal document, free positioning means
+// losing the guard that stops a blank carrier line reaching a driver, and a
+// field that can be dragged anywhere can be dragged off the page.
+//
+// ── DRAG *AND* ARROWS, DELIBERATELY ─────────────────────────────────────────
+// HTML5 drag-and-drop does not fire on touch. She opens this dashboard on an
+// iPad often enough that a drag-only list would be a screen she simply cannot
+// use there — and the failure is silent: the row just refuses to move. So each
+// row also has up/down arrows, which work everywhere and are faster than
+// dragging for moving one row one place.
+//
+// ── NOTHING SAVES UNTIL SHE PRESSES SAVE ────────────────────────────────────
+// Reordering is local until then. Auto-saving each drag would mean a stray
+// drag on the way past permanently changes what a customer's BOL looks like,
+// and she would not necessarily know it had happened.
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+let CATALOGUE = { optional: [], required: [], custom_prefix: 'custom:' };
+let customer = '';
+let fields = [];
+let dirty = false;
+
+function setStatus(msg, danger) {
+  $('dbStatus').textContent = msg || '';
+  $('dbStatus').style.color = danger ? 'var(--status-danger)' : 'var(--text-muted)';
+}
+
+function markDirty() {
+  dirty = true;
+  setStatus('Not saved yet.');
+}
+
+// ── LEAVING WITH UNSAVED CHANGES ───────────────────────────────────────────
+// A layout she dragged into shape and then navigated away from is work lost
+// with nothing to show it ever existed.
+window.addEventListener('beforeunload', (e) => {
+  if (!dirty) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
+function renderRequired() {
+  $('dbRequired').innerHTML = CATALOGUE.required.map((f) => `
+    <div style="display:flex; align-items:center; gap:12px; padding:11px 18px; border-top:1px solid var(--border-subtle);">
+      <span style="color:var(--text-faint); font-size:13px;">&#128274;</span>
+      <span style="flex:1; font-size:13.5px; color:var(--text-muted);">${esc(f.label)}</span>
+      <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint);">Required</span>
+    </div>`).join('');
+}
+
+function renderFields() {
+  $('dbFields').innerHTML = fields.map((f, i) => `
+    <div class="db-row" draggable="true" data-i="${i}" style="display:flex; align-items:center; gap:10px; padding:10px 18px; border-top:1px solid var(--border-subtle); ${f.shown ? '' : 'opacity:.5;'}">
+      <span class="db-grip" style="cursor:grab; color:var(--text-faint); font-size:15px; user-select:none;" title="Drag to reorder">&#8942;&#8942;</span>
+      <span style="flex:1; font-size:13.5px; color:var(--text-strong);">${esc(f.label)}${f.custom ? ' <span style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--copper-400);">yours</span>' : ''}</span>
+      <button class="db-up btn btn-secondary" data-i="${i}" ${i === 0 ? 'disabled' : ''} style="padding:5px 9px;" title="Move up">&uarr;</button>
+      <button class="db-down btn btn-secondary" data-i="${i}" ${i === fields.length - 1 ? 'disabled' : ''} style="padding:5px 9px;" title="Move down">&darr;</button>
+      <button class="db-toggle btn btn-secondary" data-i="${i}" style="padding:5px 12px; min-width:74px; ${f.shown ? 'color:var(--accent-onSoft); border-color:var(--accent);' : ''}">${f.shown ? 'Shown' : 'Hidden'}</button>
+      ${f.custom ? `<button class="db-remove btn btn-secondary" data-i="${i}" style="padding:5px 9px; color:var(--status-danger); border-color:var(--status-danger);" title="Remove this field">&times;</button>` : ''}
+    </div>`).join('');
+
+  $('dbFields').querySelectorAll('.db-up').forEach((b) => b.addEventListener('click', () => move(+b.dataset.i, -1)));
+  $('dbFields').querySelectorAll('.db-down').forEach((b) => b.addEventListener('click', () => move(+b.dataset.i, 1)));
+  $('dbFields').querySelectorAll('.db-toggle').forEach((b) => b.addEventListener('click', () => {
+    const i = +b.dataset.i; fields[i].shown = !fields[i].shown; markDirty(); renderFields();
+  }));
+  $('dbFields').querySelectorAll('.db-remove').forEach((b) => b.addEventListener('click', () => {
+    const i = +b.dataset.i;
+    if (!confirm(`Remove "${fields[i].label}" from this layout?`)) return;
+    fields.splice(i, 1); markDirty(); renderFields();
+  }));
+  wireDrag();
+}
+
+function move(i, by) {
+  const j = i + by;
+  if (j < 0 || j >= fields.length) return;
+  const [row] = fields.splice(i, 1);
+  fields.splice(j, 0, row);
+  markDirty();
+  renderFields();
+}
+
+// Index-based, not element-based. Rebuilding the list on every drop means the
+// element a listener closed over is gone by the next drag — a class of bug
+// this project has hit before with rebuilt inputs.
+let dragFrom = null;
+function wireDrag() {
+  $('dbFields').querySelectorAll('.db-row').forEach((row) => {
+    row.addEventListener('dragstart', (e) => {
+      dragFrom = +row.dataset.i;
+      e.dataTransfer.effectAllowed = 'move';
+      // Firefox will not start a drag at all without data set on the transfer.
+      e.dataTransfer.setData('text/plain', String(dragFrom));
+      row.style.opacity = '.4';
+    });
+    row.addEventListener('dragend', () => { row.style.opacity = ''; dragFrom = null; });
+    row.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const to = +row.dataset.i;
+      if (dragFrom === null || dragFrom === to) return;
+      const [moved] = fields.splice(dragFrom, 1);
+      fields.splice(to, 0, moved);
+      dragFrom = null;
+      markDirty();
+      renderFields();
+    });
+  });
+}
+
+async function loadCustomerList(selectKey) {
+  const d = await api('/api/bol-layouts');
+  CATALOGUE = { optional: d.optional || [], required: d.required || [], custom_prefix: d.custom_prefix || 'custom:' };
+  const opts = ['<option value="">Default &mdash; every other customer</option>']
+    .concat((d.layouts || []).map((l) => `<option value="${esc(l.customer)}">${esc(l.customer)}</option>`));
+  $('dbCustomer').innerHTML = opts.join('');
+  if (selectKey != null) $('dbCustomer').value = selectKey;
+  renderRequired();
+}
+
+async function loadLayout(who) {
+  const d = await api(`/api/bol-layouts/resolve?customer=${encodeURIComponent(who || '')}`);
+  customer = who || '';
+  fields = (d.fields || []).map((f) => ({ ...f }));
+  dirty = false;
+  // Said plainly rather than left to be inferred from an empty screen: a
+  // customer showing the default's fields looks identical to one with their
+  // own layout that happens to match.
+  $('dbSource').textContent = !customer
+    ? 'This is the layout every customer without one of their own will use.'
+    : (d.source === 'customer'
+        ? `${customer} has their own layout.`
+        : `${customer} has no layout of their own yet — this is the default. Save to give them one.`);
+  $('dbResetCustomer').classList.toggle('hidden', !customer || d.source !== 'customer');
+  setStatus('');
+  renderFields();
+}
+
+$('dbCustomer').addEventListener('change', async () => {
+  if (dirty && !confirm('You have unsaved changes to this layout. Discard them?')) {
+    $('dbCustomer').value = customer;
+    return;
+  }
+  try { await loadLayout($('dbCustomer').value); }
+  catch (e) { setStatus(e.message, true); }
+});
+
+$('dbAddCustomer').addEventListener('click', async () => {
+  const name = (prompt('Which customer? Type their name exactly as it appears on the BOL.') || '').trim();
+  if (!name) return;
+  try {
+    // Loaded, not saved. A customer only gets a layout of their own once she
+    // presses Save — typing a name by mistake should not create one.
+    await loadLayout(name);
+    if (![...$('dbCustomer').options].some((o) => o.value.toLowerCase() === name.toLowerCase())) {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = name;
+      $('dbCustomer').appendChild(o);
+    }
+    $('dbCustomer').value = name;
+    setStatus(`Editing a new layout for ${name}. Nothing is saved until you press Save layout.`);
+  } catch (e) { setStatus(e.message, true); }
+});
+
+$('dbAddField').addEventListener('click', () => {
+  const label = (prompt('What should this field be called on the BOL? (e.g. Gate code)') || '').trim();
+  if (!label) return;
+  // Keyed off the label, so the same field name added for two customers is
+  // the same key — and a value typed into "Gate code" on one BOL is not a
+  // different field from "Gate code" on the next.
+  const key = CATALOGUE.custom_prefix + label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (fields.some((f) => f.key === key)) { setStatus(`"${label}" is already on this layout.`, true); return; }
+  fields.push({ key, label, shown: true, custom: true });
+  markDirty();
+  renderFields();
+});
+
+$('dbSave').addEventListener('click', async () => {
+  $('dbSave').disabled = true;
+  try {
+    await api('/api/bol-layouts', { method: 'PUT', body: JSON.stringify({ customer, fields }) });
+    dirty = false;
+    await loadCustomerList(customer);
+    await loadLayout(customer);
+    setStatus(customer ? `Saved. ${customer}'s BOLs will use this.` : 'Saved. Every customer without their own layout will use this.');
+  } catch (e) { setStatus(e.message, true); }
+  $('dbSave').disabled = false;
+});
+
+$('dbResetCustomer').addEventListener('click', async () => {
+  if (!customer) return;
+  if (!confirm(`Remove ${customer}'s own layout and put them back on the default?\n\nBOLs already generated keep the fields they were printed with.`)) return;
+  try {
+    await api(`/api/bol-layouts?customer=${encodeURIComponent(customer)}`, { method: 'DELETE' });
+    dirty = false;
+    await loadCustomerList('');
+    await loadLayout('');
+    setStatus(`${customer} is back on the default layout.`);
+  } catch (e) { setStatus(e.message, true); }
+});
+
+(async () => {
+  try { await loadCustomerList(''); await loadLayout(''); }
+  catch (e) { setStatus(e.message, true); }
+})();
+</script>
+</body>
+</html>

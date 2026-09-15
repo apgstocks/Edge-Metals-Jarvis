@@ -137,19 +137,13 @@
       </div>
     </div>
 
-    <div class="facts">
-      <div class="fact"><div class="lbl">DATE</div><div class="v">{{bol_date}}</div></div>
-      <div class="fact"><div class="lbl">PO NUMBER</div><div class="v{{po_number_cls}}">{{po_number}}</div></div>
-      <div class="fact"><div class="lbl">APPOINTMENT ID</div><div class="v{{appointment_id_cls}}">{{appointment_id}}</div></div>
-      <div class="fact"><div class="lbl">PICKUP</div><div class="v{{pickup_cls}}">{{pickup}}</div></div>
-    </div>
-
-    <div class="facts">
-      <div class="fact"><div class="lbl">CARRIER</div><div class="v{{carrier_cls}}">{{carrier}}</div></div>
-      <div class="fact"><div class="lbl">DRIVER</div><div class="v{{driver_cls}}">{{driver}}</div></div>
-      <div class="fact"><div class="lbl">CONTAINER</div><div class="v{{container_no_cls}}">{{container_no}}</div></div>
-      <div class="fact"><div class="lbl">SEAL</div><div class="v{{seal_no_cls}}">{{seal_no}}</div></div>
-    </div>
+    <!-- The two rows that used to be here (DATE/PO/APPOINTMENT/PICKUP and
+         CARRIER/DRIVER/CONTAINER/SEAL) are now built from the customer's
+         layout — see helpers/bolLayouts.js. DATE is still always first and
+         still cannot be turned off; only the optional fields move.
+         Generated four to a row so the printed document keeps the grid it
+         has always had regardless of how many fields are switched on. -->
+    {{fact_rows}}
 
     <table class="goods">
       <tr>

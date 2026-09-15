@@ -902,6 +902,14 @@ const NAV_ITEMS = [
   { id: 'whatsapp',       label: 'WhatsApp',       group: 'Contacts & Outreach', adminOnly: true },
   { id: 'email-contacts', label: 'Email Contacts', group: 'Contacts & Outreach', adminOnly: true },
   { id: 'address-book',   label: 'Address Book',   group: 'Contacts & Outreach', adminOnly: true },
+  // ── DESIGN (2026-09-16) ──────────────────────────────────────────────
+  // Apsara: "make the fields drag and drop in website as Design menu then
+  // under it BOL". A group of its own, with room for the proforma and the
+  // invoice to join it later — those have the same per-customer problem.
+  // Standalone page (dashboard/design-bol.html, served via /design/bol),
+  // same pattern as Address Book above rather than an in-app tab: it is
+  // configuration she visits occasionally, not a screen she works in.
+  { id: 'design-bol',     label: 'BOL',            group: 'Design', adminOnly: true },
   // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
   // same"): this ONE tab now shows trucker lane quotes AND contact quotes
   // together (dashboard/quote-requests.html fetches both /api/quote-requests
@@ -1013,8 +1021,11 @@ function renderNav() {
   // that array carries a comment explaining why it is where it is, and moving
   // the entries would separate them from their reasons. Within a group the
   // original order is kept — sort() is stable — so nothing else moves.
+  // 'Design' sits after the two companies and before the bot: it is a
+  // settings-shaped group — how documents LOOK — and putting it above the
+  // screens she uses every hour would push Loads down for no reason.
   const GROUP_ORDER = ['Edge Yard', 'Both companies', 'Edge Metals',
-                       'Bot & Automation', 'Contacts & Outreach', 'System'];
+                       'Design', 'Bot & Automation', 'Contacts & Outreach', 'System'];
   const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? GROUP_ORDER.length : i; };
   visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));
   let lastGroup = null;
@@ -1035,6 +1046,7 @@ function renderNav() {
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
+    if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 }

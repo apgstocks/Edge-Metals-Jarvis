@@ -195,30 +195,44 @@ body[data-theme="light"] {
         </div>
       </div>
 
+      <!-- ALWAYS ON. Not part of any layout: a BOL with no number or no date
+           is not a document anyone can act on, and the unit is what the goods
+           table is denominated in rather than a field that prints on its own.
+           See helpers/bolLayouts.js — these are not in the optional list at
+           all, so no layout can switch them off. -->
       <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
         <div class="field"><label for="bol_no">BOL number</label><input id="bol_no" type="text" placeholder="EM-1047"></div>
         <div class="field"><label for="bol_date">Date</label><input id="bol_date" type="date"></div>
-        <div class="field"><label for="bol_po">PO number</label><input id="bol_po" type="text"></div>
-        <div class="field"><label for="bol_appointment">Appointment ID</label><input id="bol_appointment" type="text"></div>
-      </div>
-
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
-        <!-- PICKUP, NOT DELIVERY. The yard stores delivery_eta_date/time — when
-             a trucker promised to ARRIVE. This is when the truck was LOADED.
-             Nothing pre-fills it from the ETA: a plausible wrong time on a BOL
-             is only discovered when a buyer disputes a delivery window. -->
-        <div class="field"><label for="bol_pickup_date">Pickup date</label><input id="bol_pickup_date" type="date"></div>
-        <div class="field"><label for="bol_pickup_time">Pickup time</label><input id="bol_pickup_time" type="time"></div>
-        <div class="field"><label for="bol_carrier">Carrier</label><input id="bol_carrier" type="text" placeholder="Trucking company"></div>
-        <div class="field"><label for="bol_driver">Driver</label><input id="bol_driver" type="text" placeholder="Driver's name"></div>
-      </div>
-
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
-        <div class="field"><label for="bol_container">Container / trailer</label><input id="bol_container" type="text"></div>
-        <div class="field"><label for="bol_seal">Seal number</label><input id="bol_seal" type="text"></div>
         <div class="field"><label for="bol_unit">Weight unit</label>
           <select id="bol_unit"><option value="lb">lb</option><option value="mt">mt</option></select>
         </div>
+      </div>
+
+      <!-- ── THE FIELDS THIS CUSTOMER'S LAYOUT ASKS FOR ────────────────────
+           Apsara, 2026-09-16: "For different customer,i can have different
+           field in bol". One grid rather than the three fixed rows this used
+           to be, because reordering means moving a wrapper from one position
+           to another and wrappers cannot move between separate grids without
+           rebuilding both. bolApplyLayout() below reorders and hides these
+           in place — the inputs themselves are never rebuilt, so anything
+           already typed survives a consignee change. -->
+      <div id="bolOptionalFields" style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
+        <div class="field" data-bolfield="po_number"><label for="bol_po">PO number</label><input id="bol_po" type="text"></div>
+        <div class="field" data-bolfield="appointment_id"><label for="bol_appointment">Appointment ID</label><input id="bol_appointment" type="text"></div>
+        <!-- PICKUP, NOT DELIVERY. The yard stores delivery_eta_date/time — when
+             a trucker promised to ARRIVE. This is when the truck was LOADED.
+             Nothing pre-fills it from the ETA: a plausible wrong time on a BOL
+             is only discovered when a buyer disputes a delivery window.
+             Date and time share one wrapper because the layout treats them as
+             one field ("Pickup date and time") and prints them as one box. -->
+        <div class="field" data-bolfield="pickup" style="grid-column:span 2; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="field"><label for="bol_pickup_date">Pickup date</label><input id="bol_pickup_date" type="date"></div>
+          <div class="field"><label for="bol_pickup_time">Pickup time</label><input id="bol_pickup_time" type="time"></div>
+        </div>
+        <div class="field" data-bolfield="carrier"><label for="bol_carrier">Carrier</label><input id="bol_carrier" type="text" placeholder="Trucking company"></div>
+        <div class="field" data-bolfield="driver"><label for="bol_driver">Driver</label><input id="bol_driver" type="text" placeholder="Driver's name"></div>
+        <div class="field" data-bolfield="container_no"><label for="bol_container">Container / trailer</label><input id="bol_container" type="text"></div>
+        <div class="field" data-bolfield="seal_no"><label for="bol_seal">Seal number</label><input id="bol_seal" type="text"></div>
       </div>
 
       <div style="font-size:12px; font-weight:700; color:var(--text-strong); margin:4px 0 8px;">Goods
@@ -230,7 +244,11 @@ body[data-theme="light"] {
       <div id="bolTotals" style="margin-top:14px; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"></div>
       <div id="bolWarnings" style="margin-top:10px;"></div>
 
-      <div class="field" style="margin-top:14px;">
+      <!-- Fields she added herself on the Design screen, rendered from the
+           customer's layout. Empty for a customer with none. -->
+      <div id="bolCustomFields" style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:14px;"></div>
+
+      <div class="field" data-bolfield="notes" style="margin-top:14px;">
         <label for="bol_notes">Notes <span style="font-weight:400; color:var(--text-muted); font-size:11px;">— prints under the goods table</span></label>
         <textarea id="bol_notes" rows="2"></textarea>
       </div>
@@ -3969,6 +3987,10 @@ function bolInit() {
   if (!bolRows.length) bolRows = [bolBlankRow(), bolBlankRow()];
   if (!$('bol_date').value) $('bol_date').value = bolTodayStr();
   bolPaintItems();
+  // The default layout until a consignee is chosen. Without this the panel
+  // opens showing every field and then visibly rearranges itself the moment
+  // she picks a name, which reads as a glitch.
+  bolLoadLayout($('bol_consignee').value.trim());
   if (_bolWired) return;
   _bolWired = true;
 
@@ -3996,9 +4018,18 @@ function bolInit() {
       inp.value = consigneeNameForEntry(entry);
       $('bol_consignee_address').value = entry.raw || '';
       box.classList.add('hidden');
+      // The customer is now known, so show the fields THEIR BOL carries.
+      bolLoadLayout(inp.value);
     }));
   });
-  inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+  // Also on blur, because a consignee she types out in full and tabs past is
+  // just as much a chosen customer as one picked from the dropdown — and it
+  // is the name the server will resolve the layout from when generating.
+  inp.addEventListener('blur', () => {
+    setTimeout(() => box.classList.add('hidden'), 150);
+    const typed = inp.value.trim();
+    if (typed && (!bolLayout || (bolLayout.customer || '').toLowerCase() !== typed.toLowerCase())) bolLoadLayout(typed);
+  });
 
   $('btnBolAddRow').addEventListener('click', () => { bolRows.push(bolBlankRow()); bolPaintItems(); });
   $('btnBolPreview').addEventListener('click', () => bolSubmit(true));
@@ -4099,6 +4130,12 @@ function bolPayload() {
     seal_no: $('bol_seal').value.trim(),
     weight_unit: $('bol_unit').value || 'lb',
     notes: $('bol_notes').value,
+    // Fields she named herself, keyed by the layout key. Sent whether or not
+    // the layout currently shows them — helpers/bols.js keeps a value for a
+    // hidden field on purpose, so switching one back on does not find it
+    // emptied. The SERVER decides what prints; this only decides what is
+    // remembered.
+    custom_fields: bolCustomValues(),
     items: bolRows.map((r) => ({
       description: String(r.description || '').trim(),
       pieces: r.pieces, gross_weight: r.gross_weight,
@@ -4212,6 +4249,94 @@ async function bolDownload(filename, date) {
 // Apsara, 2026-09-16: "Edit Bol option also needed". Loads a stored BOL back
 // into the form. Generating again upserts by BOL number, so a correction
 // replaces the document rather than leaving two both claiming to be EM-1047.
+// ── THE CUSTOMER'S FIELD LAYOUT ────────────────────────────────────────────
+// Apsara, 2026-09-16: "For different customer,i can have different field in
+// bol". Designed at /design/bol, stored server-side (helpers/bolLayouts.js),
+// applied here when a consignee is chosen.
+//
+// Resolved by the SERVER, not worked out here. /api/bol/generate resolves the
+// same layout again from the same consignee name when it builds the PDF — so
+// what she sees on this form and what prints cannot disagree even if this page
+// is a version behind. This call is only so the form shows the right boxes.
+let bolLayout = null;
+
+// Every field wrapper, whether or not it is currently on screen. Captured once
+// on first use: after a hide, querySelectorAll on the container would not find
+// the ones that have been moved out, and after a reorder the DOM order is no
+// longer the catalogue order.
+let _bolFieldEls = null;
+function bolFieldEls() {
+  if (!_bolFieldEls) {
+    _bolFieldEls = new Map();
+    document.querySelectorAll('#panelBol [data-bolfield]').forEach((el) => _bolFieldEls.set(el.dataset.bolfield, el));
+  }
+  return _bolFieldEls;
+}
+
+function bolApplyLayout(layout) {
+  bolLayout = layout;
+  const grid = $('bolOptionalFields');
+  const els = bolFieldEls();
+  const fields = (layout && Array.isArray(layout.fields)) ? layout.fields : [];
+
+  // No layout at all means show everything — the form she has always had.
+  // A failed lookup must never present an EMPTY form: she would fill in the
+  // three boxes still visible and generate a BOL missing the carrier.
+  if (!fields.length) {
+    els.forEach((el) => el.classList.remove('hidden'));
+    $('bolCustomFields').innerHTML = '';
+    return;
+  }
+
+  const wanted = new Set(fields.filter((f) => f.shown !== false).map((f) => f.key));
+  els.forEach((el, key) => el.classList.toggle('hidden', !wanted.has(key)));
+
+  // Reorder by appending in the layout's order. appendChild MOVES an existing
+  // node rather than copying it, so the inputs keep their values and their
+  // listeners — rebuilding the markup here would wipe a half-filled form every
+  // time she corrected the consignee's spelling.
+  for (const f of fields) {
+    const el = els.get(f.key);
+    if (el && el.parentElement === grid) grid.appendChild(el);
+  }
+
+  // ── HER OWN FIELDS ───────────────────────────────────────────────────
+  // Values keyed by the layout key and read back out in bolPayload. Rebuilt
+  // rather than moved because which custom fields exist changes per customer;
+  // any value already typed is carried across by hand below so switching
+  // consignee does not silently empty a box she just filled.
+  const prior = {};
+  document.querySelectorAll('#bolCustomFields input[data-customkey]').forEach((i) => { prior[i.dataset.customkey] = i.value; });
+  const customs = fields.filter((f) => f.custom && f.shown !== false);
+  $('bolCustomFields').innerHTML = customs.map((f) => `
+    <div class="field">
+      <label>${esc(f.label)}</label>
+      <input type="text" data-customkey="${esc(f.key)}" value="${esc(prior[f.key] || '')}">
+    </div>`).join('');
+}
+
+function bolCustomValues() {
+  const out = {};
+  document.querySelectorAll('#bolCustomFields input[data-customkey]').forEach((i) => {
+    const v = String(i.value || '').trim();
+    if (v) out[i.dataset.customkey] = v;
+  });
+  return out;
+}
+
+async function bolLoadLayout(consignee) {
+  try {
+    const d = await api(`/api/bol-layouts/resolve?customer=${encodeURIComponent(consignee || '')}`);
+    bolApplyLayout(d);
+  } catch (e) {
+    // Fail OPEN. If the layout cannot be read, show every field rather than
+    // whichever ones happen to be visible — an unreachable layout service must
+    // not be able to produce a BOL with fields missing.
+    console.error('[bol] layout unavailable, showing every field:', e.message);
+    bolApplyLayout(null);
+  }
+}
+
 let bolEditingId = null;
 
 async function bolEdit(id) {
@@ -4241,6 +4366,14 @@ async function bolEdit(id) {
   }));
   if (!bolRows.length) bolRows = [bolBlankRow()];
   bolPaintItems();
+  // Layout first, THEN the custom values — bolApplyLayout rebuilds the custom
+  // inputs, so filling them before it runs would fill boxes it is about to
+  // replace. Awaited for the same reason.
+  await bolLoadLayout(bol.consignee_name || '');
+  const cf = bol.custom_fields || {};
+  document.querySelectorAll('#bolCustomFields input[data-customkey]').forEach((i) => {
+    i.value = cf[i.dataset.customkey] || '';
+  });
   $('bolStatus').textContent = `Editing ${bol.bol_no || 'this BOL'}${bol.generated_count > 1 ? ` — generated ${bol.generated_count} times` : ''}. Generate replaces it.`;
   $('panelBol').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }

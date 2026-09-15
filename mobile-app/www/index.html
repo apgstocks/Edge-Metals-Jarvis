@@ -7564,7 +7564,10 @@ async function renderDocumentsTab() {
     renderDocumentsTab();
   }));
   if (docsSubTab === 'proforma') renderPfWizard();
-  else if (docsSubTab === 'bol') renderBolForm();
+  // Paints from whatever layout is already loaded, then refreshes it for
+  // the consignee on the form. Drawn first rather than awaited so the tab
+  // is never blank while a layout request is in flight.
+  else if (docsSubTab === 'bol') { renderBolForm(); bolwLoadLayout(bolw && bolw.consignee); }
   else renderInvFlow();
 }
 
@@ -7626,6 +7629,7 @@ function resetBolForm() {
     carrier: '', driver: '',
     container: '', seal: '',
     unit: 'lb', notes: '',
+    customFields: {},
     items: [bolBlankItem(), bolBlankItem()],
     status: '',
   };
@@ -7683,6 +7687,79 @@ function bolWarnings() {
   return out;
 }
 
+// ── THE CUSTOMER'S FIELD LAYOUT, ON THE PHONE ─────────────────────────────
+// Apsara, 2026-09-16: "For different customer,i can have different field in
+// bol .. make the fields drag and drop in website as Design menu". She chose
+// one layout for both clients, so this reads the same /api/bol-layouts the
+// website's Design screen writes.
+//
+// THE SERVER RESOLVES IT AGAIN AT GENERATE TIME from the consignee name, so
+// what prints does not depend on this phone being up to date. This is only
+// about which boxes she is shown.
+let bolwLayout = null;
+
+// The seven catalogue fields in their original order — the document she has
+// always had. Used when no layout has loaded yet or the lookup failed.
+//
+// FAIL OPEN, deliberately: a layout service that cannot be reached must show
+// MORE fields, never fewer. A form that quietly drops Carrier because a
+// request timed out produces a BOL that is wrong in a way nobody notices
+// until a driver is turned away.
+const BOLW_FALLBACK = ['po_number', 'appointment_id', 'pickup', 'carrier', 'driver', 'container_no', 'seal_no'];
+
+function bolwLayoutFields() {
+  if (!bolwLayout || !Array.isArray(bolwLayout.fields) || !bolwLayout.fields.length) {
+    return BOLW_FALLBACK.map((key) => ({ key, shown: true }));
+  }
+  return bolwLayout.fields.filter((f) => f && f.shown !== false);
+}
+function bolwShows(key) {
+  return bolwLayoutFields().some((f) => f.key === key);
+}
+
+// One catalogue field -> its markup. Pickup is two inputs under one layout
+// entry, matching how it prints as one box.
+function BOLW_FIELD_HTML(f, w, fld) {
+  switch (f.key) {
+    case 'po_number':      return fld('bolw_po', 'PO number', w.po);
+    case 'appointment_id': return fld('bolw_appt', 'Appointment ID', w.appointment);
+    case 'pickup':         return fld('bolw_pdate', 'Pickup date', w.pickupDate, 'date')
+                                + fld('bolw_ptime', 'Pickup time', w.pickupTime, 'time');
+    case 'carrier':        return fld('bolw_carrier', 'Carrier', w.carrier, 'text', 'Trucking company');
+    case 'driver':         return fld('bolw_driver', 'Driver', w.driver, 'text', "Driver's name");
+    case 'container_no':   return fld('bolw_container', 'Container / trailer', w.container);
+    case 'seal_no':        return fld('bolw_seal', 'Seal number', w.seal);
+    // Notes has its own box further down, next to the goods it annotates.
+    case 'notes':          return '';
+    default: break;
+  }
+  // A field she named herself on the Design screen. Keyed by the layout key
+  // so its value travels with it; the id is derived from the key rather than
+  // an index, or reordering the layout would move values between boxes.
+  if (String(f.key || '').startsWith('custom:') && String(f.label || '').trim()) {
+    const id = 'bolwc_' + f.key.replace(/[^a-z0-9]+/gi, '_');
+    return `
+    <div class="field">
+      <label for="${id}">${esc(f.label)}</label>
+      <input id="${id}" data-customkey="${esc(f.key)}" type="text" value="${esc((w.customFields || {})[f.key] || '')}" autocomplete="off">
+    </div>`;
+  }
+  // An unknown key means this phone is older than the layout. Skipped rather
+  // than guessed at — and it cannot cost her the field on the document,
+  // because the server resolves the layout itself when it builds the PDF.
+  return '';
+}
+
+async function bolwLoadLayout(consignee) {
+  try {
+    bolwLayout = await api(`/api/bol-layouts/resolve?customer=${encodeURIComponent(consignee || '')}`);
+  } catch (e) {
+    console.error('[bol] layout unavailable, showing every field:', e.message);
+    bolwLayout = null;
+  }
+  renderBolForm();
+}
+
 function renderBolForm() {
   if (!bolw) resetBolForm();
   const w = bolw;
@@ -7708,17 +7785,24 @@ function renderBolForm() {
       <textarea id="bolw_address" rows="3" placeholder="Fills in when you pick a name">${esc(w.consigneeAddress)}</textarea>
     </div>
 
+    <!-- ── THE FIELDS THIS CUSTOMER'S LAYOUT ASKS FOR ───────────────────
+         Apsara, 2026-09-16: "For different customer,i can have different
+         field in bol". Designed on the website (Design → BOL), stored on
+         the server, and read here — she chose "one layout, both places",
+         so the phone must honour the same layout or the same customer gets
+         two different documents under one BOL number.
+
+         BOL number and Date are outside the loop and cannot be switched
+         off. They are not in the layout's optional list at all, so this is
+         not a rule the phone is choosing to enforce on its own.
+
+         The ORDER comes from the layout, which is why these are generated
+         rather than written out: a hand-written list in source order would
+         look correct and silently ignore every drag she made. -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
       ${fld('bolw_no', 'BOL number', w.bolNo, 'text', 'EM-1047')}
       ${fld('bolw_date', 'Date', w.date, 'date')}
-      ${fld('bolw_po', 'PO number', w.po)}
-      ${fld('bolw_appt', 'Appointment ID', w.appointment)}
-      ${fld('bolw_pdate', 'Pickup date', w.pickupDate, 'date')}
-      ${fld('bolw_ptime', 'Pickup time', w.pickupTime, 'time')}
-      ${fld('bolw_carrier', 'Carrier', w.carrier, 'text', 'Trucking company')}
-      ${fld('bolw_driver', 'Driver', w.driver, 'text', "Driver's name")}
-      ${fld('bolw_container', 'Container / trailer', w.container)}
-      ${fld('bolw_seal', 'Seal number', w.seal)}
+      ${bolwLayoutFields().map((f) => BOLW_FIELD_HTML(f, w, fld)).join('')}
     </div>
 
     <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px;">
@@ -7769,10 +7853,11 @@ function renderBolForm() {
         <div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">The PDF prints exactly what you typed — nothing here is changed for you.</div>
       </div>` : ''}
 
+    ${bolwShows('notes') ? `
     <div class="field" style="margin-top:14px;">
       <label for="bolw_notes">Notes</label>
       <textarea id="bolw_notes" rows="2" placeholder="Prints under the goods table">${esc(w.notes)}</textarea>
-    </div>
+    </div>` : ''}
 
     <div style="display:flex; gap:10px; margin-top:16px;">
       <button type="button" id="bolwPreview" class="btn" style="flex:1;">Preview</button>
@@ -7795,6 +7880,11 @@ function renderBolForm() {
     bolw.consigneeAddress = entry.raw || '';
     $('bolw_consignee').value = bolw.consignee;
     $('bolw_address').value = bolw.consigneeAddress;
+    // The customer is known, so show the fields THEIR BOL carries. This
+    // re-renders the form, which is why it goes last: the two assignments
+    // above have to have landed in the model first or the redraw would
+    // paint the name and address back as they were.
+    bolwLoadLayout(bolw.consignee);
   }, () => { bolw.consignee = $('bolw_consignee').value; });
 
   // Plain fields write straight to the model and do NOT re-render — a
@@ -7807,6 +7897,15 @@ function renderBolForm() {
   bind('bolw_carrier', 'carrier'); bind('bolw_driver', 'driver');
   bind('bolw_container', 'container'); bind('bolw_seal', 'seal');
   bind('bolw_notes', 'notes');
+
+  // Her own fields, keyed by the layout key rather than by a fixed name —
+  // this app cannot know what she will add on the Design screen.
+  $('docBody').querySelectorAll('input[data-customkey]').forEach((el) => {
+    el.addEventListener('input', () => {
+      if (!bolw.customFields) bolw.customFields = {};
+      bolw.customFields[el.dataset.customkey] = el.value;
+    });
+  });
 
   // The weight boxes DO re-render, because the running total and the
   // reconcile warning below them have to keep up. Only that part is redrawn.
@@ -7872,6 +7971,7 @@ async function bolEditApp(id) {
       carrier: bol.carrier || '', driver: bol.driver || '',
       container: bol.container_no || '', seal: bol.seal_no || '',
       unit: bol.weight_unit || 'lb', notes: bol.notes || '',
+      customFields: bol.custom_fields || {},
       // Weights come back as the STRINGS she typed — see helpers/bols.js.
       // Parsing them would make "46,300" reappear as 46300 after an edit
       // that never touched that box.
@@ -7888,7 +7988,10 @@ async function bolEditApp(id) {
     // type-ahead once against a form that is NOT rebuilt — same feature, two
     // shapes, and mixing up which is which leaves a dropdown that silently
     // stops matching after the first edit.)
-    renderBolForm();
+    // The layout for THIS BOL's customer, which also re-renders the form —
+    // so an edited BOL shows the boxes that customer's document carries,
+    // not whichever set was on screen a moment ago.
+    bolwLoadLayout(bolw.consignee);
     $('docBody').scrollTop = 0;
   } catch (e) {
     if ($('bolwStatus')) $('bolwStatus').textContent = e.message;
@@ -7964,6 +8067,10 @@ function bolPayload() {
     carrier: (w.carrier || '').trim(), driver: (w.driver || '').trim(),
     container_no: (w.container || '').trim(), seal_no: (w.seal || '').trim(),
     weight_unit: w.unit || 'lb', notes: w.notes,
+    // Fields she named herself on the Design screen, keyed by the layout key.
+    // Sent even when the current layout hides one: helpers/bols.js keeps the
+    // value on purpose, so switching a field back on does not find it empty.
+    custom_fields: w.customFields || {},
     items: (w.items || []).map((r) => ({
       description: String(r.description || '').trim(),
       pieces: r.pieces, gross_weight: r.gross_weight,

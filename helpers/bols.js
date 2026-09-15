@@ -72,6 +72,24 @@ function buildRecord(input, prev) {
         seal_no: String(i.seal_no || '').trim(),
         weight_unit: String(i.weight_unit || 'lb').trim() || 'lb',
         notes: i.notes || '',
+        // ── FIELDS SHE NAMED HERSELF ─────────────────────────────────────
+        // Apsara, 2026-09-16: "For different customer,i can have different
+        // field in bol". A customer's layout may add fields the catalogue
+        // has never heard of ("Gate code", "Broker ref"); their VALUES land
+        // here, keyed by the layout's 'custom:...' key.
+        //
+        // Stored as an open map rather than named columns precisely because
+        // this module cannot know what she will add. Values are kept as
+        // typed, the same rule the weights follow above — an edit must show
+        // back exactly what was entered.
+        //
+        // Not filtered against the current layout: a field she later hides
+        // keeps its value, so turning it back on does not lose what was in
+        // it. helpers/bolPdf.js decides what PRINTS; this decides what is
+        // remembered, and those are different questions.
+        custom_fields: (i.custom_fields && typeof i.custom_fields === 'object' && !Array.isArray(i.custom_fields))
+            ? { ...((prev && prev.custom_fields) || {}), ...i.custom_fields }
+            : ((prev && prev.custom_fields) || {}),
         // Weights are kept as the STRINGS she typed, not parsed to numbers.
         // The form has to show them back exactly as entered — "4,120" and a
         // trailing decimal point included — and helpers/bolPdf.js parses them

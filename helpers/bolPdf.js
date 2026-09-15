@@ -210,7 +210,14 @@ function buildBolHtml(data) {
     const pickupTime = formatTime(d.pickup_time);
     const pickup = [pickupDate, pickupTime].filter(Boolean).join(' · ');
 
-    const notes = String(d.notes || '').trim();
+    // Notes has its own block in the template rather than being a fact cell,
+    // so the layout's decision about it is applied here. A layout that hides
+    // Notes hides them even if the form carried some: the field being off for
+    // this customer is the point, and printing them anyway would make the
+    // switch a lie.
+    const notesHidden = Array.isArray(d.layout) && d.layout.length
+        && !d.layout.some((f) => f && f.key === 'notes' && f.shown !== false);
+    const notes = notesHidden ? '' : String(d.notes || '').trim();
     const notes_block = notes
         ? `<div class="notes"><div class="lbl">NOTES</div>${escapeHtml(notes).replace(/\n/g, '<br>')}</div>`
         : '';
@@ -224,18 +231,74 @@ function buildBolHtml(data) {
     const blank = (v) => (String(v || '').trim() ? '' : ' empty');
     const orDash = (v) => (String(v || '').trim() ? String(v).trim() : '—');
 
+    // ── THE FIELDS THIS CUSTOMER'S BOL CARRIES ───────────────────────────
+    // Apsara, 2026-09-16: "For different customer,i can have different field
+    // in bol". The two fixed rows the template used to hard-code are built
+    // here from helpers/bolLayouts.js.
+    //
+    // DATE IS FIRST AND CANNOT BE TURNED OFF. It is not in the layout's
+    // optional list at all — an undated bill of lading is not a document
+    // anyone can act on, and this is not a decision worth leaving to a
+    // screen where it could be switched off by accident.
+    //
+    // The layout is passed IN (d.layout) rather than read from disk here, so
+    // this stays a pure function of its argument: every test in tests/bol.js
+    // calls it directly, and a helper that quietly loaded a file would make
+    // those tests depend on whatever layouts happen to exist. The caller —
+    // api.js's /api/bol/generate — resolves it.
+    const factValue = {
+        po_number:      { label: 'PO NUMBER',      value: orDash(d.po_number),      raw: d.po_number },
+        appointment_id: { label: 'APPOINTMENT ID', value: orDash(d.appointment_id), raw: d.appointment_id },
+        pickup:         { label: 'PICKUP',         value: pickup || '—',            raw: pickup },
+        carrier:        { label: 'CARRIER',        value: orDash(d.carrier),        raw: d.carrier },
+        driver:         { label: 'DRIVER',         value: orDash(d.driver),         raw: d.driver },
+        container_no:   { label: 'CONTAINER',      value: orDash(d.container_no),   raw: d.container_no },
+        seal_no:        { label: 'SEAL',           value: orDash(d.seal_no),        raw: d.seal_no },
+    };
+
+    const layout = Array.isArray(d.layout) && d.layout.length
+        ? d.layout.filter((f) => f && f.shown !== false)
+        // No layout supplied means the document she has always had: the seven
+        // optional fields in their original order. A missing layout must never
+        // mean an EMPTY document — the same "blank never silently means a
+        // default" rule the rest of this project runs on, pointed the other way.
+        : ['po_number', 'appointment_id', 'pickup', 'carrier', 'driver', 'container_no', 'seal_no'].map((key) => ({ key }));
+
+    const cells = [{ label: 'DATE', value: d.bol_date ? formatDate(d.bol_date) : '', cls: '' }];
+    for (const f of layout) {
+        const known = factValue[f.key];
+        if (known) { cells.push({ label: known.label, value: known.value, cls: blank(known.raw) }); continue; }
+        // A field she named herself. 'notes' has its own block further down
+        // the template and is handled there, so it is not a fact cell.
+        if (f.key === 'notes') continue;
+        if (String(f.key || '').startsWith('custom:')) {
+            const label = String(f.label || '').trim();
+            if (!label) continue;
+            const v = (d.custom_fields || {})[f.key];
+            cells.push({ label: label.toUpperCase(), value: orDash(v), cls: blank(v) });
+        }
+    }
+
+    // Four to a row, which is the grid the template's .facts class is built
+    // for. A short final row simply has fewer boxes.
+    const fact_rows = [];
+    for (let i = 0; i < cells.length; i += 4) {
+        fact_rows.push('    <div class="facts">\n' + cells.slice(i, i + 4).map((c) =>
+            `      <div class="fact"><div class="lbl">${escapeHtml(c.label)}</div><div class="v${c.cls}">${escapeHtml(c.value)}</div></div>`
+        ).join('\n') + '\n    </div>');
+    }
+
     const subs = {
+        fact_rows: fact_rows.join('\n\n'),
         bol_no: escapeHtml(d.bol_no || ''),
         bol_date: escapeHtml(d.bol_date ? formatDate(d.bol_date) : ''),
         consignee_name: escapeHtml(consigneeName || '—'),
         consignee_address_lines: lines.map(escapeHtml).join('<br>'),
-        po_number: escapeHtml(orDash(d.po_number)),          po_number_cls: blank(d.po_number),
-        appointment_id: escapeHtml(orDash(d.appointment_id)), appointment_id_cls: blank(d.appointment_id),
-        pickup: escapeHtml(pickup || '—'),                    pickup_cls: blank(pickup),
-        carrier: escapeHtml(orDash(d.carrier)),               carrier_cls: blank(d.carrier),
-        driver: escapeHtml(orDash(d.driver)),                 driver_cls: blank(d.driver),
-        container_no: escapeHtml(orDash(d.container_no)),     container_no_cls: blank(d.container_no),
-        seal_no: escapeHtml(orDash(d.seal_no)),               seal_no_cls: blank(d.seal_no),
+        // The seven per-field substitutions that used to live here are gone:
+        // the template no longer names them, because fact_rows above decides
+        // which of them appear and in what order. Left-behind substitutions
+        // for placeholders that no longer exist read like live code and send
+        // the next person looking for a template that stopped using them.
         item_rows,
         weight_unit: escapeHtml(unit),
         total_pieces: escapeHtml(fmtCount(t.pieces)),

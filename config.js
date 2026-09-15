@@ -184,6 +184,14 @@ const FILES = {
     // filled in, so a BOL can be corrected and reissued. See helpers/bols.js.
     BOLS_FILE: path.join(DATA_DIR, 'bols.json'),
 
+    // ── WHICH FIELDS EACH CUSTOMER'S BOL CARRIES (2026-09-16) ────────────
+    // Apsara: "For different customer,i can have different field in bol".
+    // Per-customer field order and show/hide — see helpers/bolLayouts.js.
+    // Server-side rather than in the browser because she chose one layout
+    // for both the website and the app; a layout the phone cannot read
+    // means one BOL number and two different documents.
+    BOL_LAYOUTS_FILE: path.join(DATA_DIR, 'bol_layouts.json'),
+
     // ── WHICH ITEM NAMES MEAN THE SAME METAL (2026-09-16) ────────────────
     // Apsara: "Warn me if al combo and aluminium combo,remember my
     // selection-then next time let ai decide based on knowldge". Her
