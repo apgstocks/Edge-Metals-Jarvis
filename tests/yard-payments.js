@@ -8,6 +8,14 @@
 // rendering it. The PDF and API tests render/serve for real and read the
 // result back rather than trusting that the right values were passed along.
 
+// NOTE, 2026-09-16: the fixtures below record yard payments as 'Bank transfer'
+// where they used to say Zelle, Wire or Cheque. A YARD load takes Cash or Bank
+// transfer only now (helpers/payments.js's YARD_LOAD_MODES), per Apsara: "in
+// receive payment-i should have only cash and bank transfer". The old three are
+// still valid modes and still valid for EDGE METALS — that is asserted in
+// tests/yard-payment-modes.js, which is where the rule lives. Nothing about
+// what THIS file is testing changed; only which mode string the fixtures use.
+
 const { execSync } = require('child_process');
 const fs=require('fs'),os=require('os'),path=require('path'),http=require('http');
 const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'payments-'));
@@ -39,7 +47,7 @@ const section=(t)=>console.log('\n=== '+t+' ===');
   const S=(id,amt)=>P.paymentSummary(id,amt);
   ck('a load with no payments is unpaid', S('L1',1000).status==='unpaid' && S('L1',1000).pending===1000);
 
-  await P.addPayment({load_id:'L1',mode:'Zelle',amount:400});
+  await P.addPayment({load_id:'L1',mode:'Bank transfer',bank:'Chase Bank',amount:400});
   let s=S('L1',1000);
   ck('a part payment reads as partial', s.status==='partial');
   ck('paid is right', s.paid===400);
@@ -50,15 +58,15 @@ const section=(t)=>console.log('\n=== '+t+' ===');
   ck('settling the rest reads as paid', s.status==='paid');
   ck('pending drops to zero', s.pending===0);
   ck('both payments are kept as history', s.payments.length===2);
-  ck('the modes are both recorded', s.payments.map(p=>p.mode).join()==='Zelle,Cash');
+  ck('the modes are both recorded', s.payments.map(p=>p.mode).join()==='Bank transfer,Cash');
 
   // the floating-point case that would otherwise never settle
   const amt = 4010*2.2;   // 8822.000000000001
-  await P.addPayment({load_id:'L2',mode:'Wire',amount:8822});
+  await P.addPayment({load_id:'L2',mode:'Bank transfer',bank:'Chase Bank',amount:8822});
   ck('a load paid to the cent reads as PAID despite float error', S('L2',amt).status==='paid');
   ck('...and shows no phantom pending balance', S('L2',amt).pending===0);
 
-  await P.addPayment({load_id:'L3',mode:'Cheque',amount:1500});
+  await P.addPayment({load_id:'L3',mode:'Bank transfer',bank:'Chase Bank',amount:1500});
   s=S('L3',1000);
   ck('overpayment is flagged, not hidden', s.status==='overpaid');
   ck('overpayment never shows a negative pending', s.pending===0 && s.over===500);
@@ -67,7 +75,7 @@ const section=(t)=>console.log('\n=== '+t+' ===');
   await P.addPayment({load_id:'L4',mode:'Cash',amount:100});
   ck('...and says so rather than claiming paid in full', S('L4',null).status==='paid_amount_unknown' && S('L4',null).pending===null);
 
-  let threw=null; try{ await P.addPayment({load_id:'L5',mode:'Zelle'}); }catch(e){threw=e.message;}
+  let threw=null; try{ await P.addPayment({load_id:'L5',mode:'Bank transfer',bank:'Chase Bank'}); }catch(e){threw=e.message;}
   ck('a payment with no amount is rejected', /amount is required/.test(threw||''));
   threw=null; try{ await P.addPayment({load_id:'L5',mode:'Bitcoin',amount:10}); }catch(e){threw=e.message;}
   ck('an unknown payment mode is rejected', /must be one of/.test(threw||''));
@@ -77,10 +85,10 @@ const section=(t)=>console.log('\n=== '+t+' ===');
   ck('a payment with no load is rejected', /load_id is required/.test(threw||''));
 
   ck('mode matching is case-insensitive but stored canonically',
-     (await P.addPayment({load_id:'L6',mode:'zelle',amount:1})).mode==='Zelle');
+     (await P.addPayment({load_id:'L6',mode:'bank transfer',bank:'Chase Bank',amount:1})).mode==='Bank transfer');
 
   // purchases and sales can share an id without colliding
-  await P.addPayment({load_id:'X1',load_kind:'sale',amount:50,mode:'Wire'});
+  await P.addPayment({load_id:'X1',load_kind:'sale',amount:50,mode:'Bank transfer',bank:'Chase Bank'});
   ck('load_kind is recorded so a purchase and a sale cannot be confused',
      P.paymentsForLoad('X1')[0].load_kind==='sale');
 
@@ -100,7 +108,7 @@ const section=(t)=>console.log('\n=== '+t+' ===');
     const { addLoad } = require(R+'helpers/loads.js');
     const l = await addLoad({ date:'2026-08-20', seller:'Zeta Metals', weight_unit:'lb',
       items:[{ description:'Auto Casting', gross_weight:4210, tare_weight:200, price:2.2 }] });
-    await P.addPayment({ load_id:l.id, mode:'Zelle', amount:4000, paid_on:'2026-08-22' });
+    await P.addPayment({ load_id:l.id, mode:'Bank transfer', bank:'Chase Bank', amount:4000, paid_on:'2026-08-22' });
     await P.addPayment({ load_id:l.id, mode:'Cash',  amount:2000, paid_on:'2026-08-26' });
 
     const b = buildYardBrief({});

@@ -8395,9 +8395,9 @@ const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFr
 // that fetch has not landed yet.
 let bankOptions = ['BofA', 'Chase Bank'];
 // Only the fallback for the first paint; /api/banks replaces it with the
-// server's MODES_WITH_BANK. Kept in step anyway, or an Account transfer
-// chosen before that response lands shows no bank field.
-let bankModes = ['Zelle', 'Wire', 'Account transfer'];
+// server's MODES_WITH_BANK. Kept in step anyway, or a Bank transfer chosen
+// before that response lands shows no bank field.
+let bankModes = ['Zelle', 'Wire', 'Bank transfer'];
 let bankOther = 'Others';
 
 // ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────
@@ -8976,19 +8976,23 @@ function renderLoads(loads) {
           <div class="ld-grid-2">
             <div class="field">
               <label>Payment mode</label>
-              <!-- Apsara, 2026-09-16: "mode should be cash/account transfer".
-                   Cash and Account transfer FIRST because they are what she
-                   reaches for; Zelle, Wire and Cheque stay below because the
-                   bank matcher keys on Zelle/Wire and payments already on file
-                   carry all three. Kept in step with helpers/payments.js's
-                   PAYMENT_MODES — a mode here that the server does not know is
-                   a silent 400 she would read as "the button is broken". -->
+              <!-- TWO options, per Apsara 2026-09-16: "whn i talked about
+                   receive payment-i was talking only about edge yard .. in
+                   loads,there are two options na..create invoice and sale..in
+                   receive payment-i should have only cash and bank transfer".
+
+                   THIS MODAL IS THE YARD'S. Edge Metals keeps the full list
+                   (Zelle, Wire, Cheque) in its own screens — she said Edge
+                   Yard, twice, and narrowing the other company would be me
+                   deciding something she did not ask about.
+
+                   The server enforces the same two for yard load kinds, so
+                   this is not the only thing holding the rule — a dropdown is
+                   a suggestion, and the yard assistant records payments too.
+                   Kept in step with helpers/payments.js's YARD_LOAD_MODES. -->
               <select id="pay_mode">
                 <option value="Cash">Cash</option>
-                <option value="Account transfer">Account transfer</option>
-                <option value="Zelle">Zelle</option>
-                <option value="Wire">Wire</option>
-                <option value="Cheque">Cheque</option>
+                <option value="Bank transfer">Bank transfer</option>
               </select>
             </div>
             <div class="field"><label>Date</label><input id="pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>

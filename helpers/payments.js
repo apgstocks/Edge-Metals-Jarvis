@@ -27,18 +27,50 @@
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
-// Fixed set, per Apsara. Kept as a constant and exported so the API, both
-// clients and the PDF all read the same list rather than three drifting
-// copies of a dropdown.
-// 'Account transfer' added 2026-09-16, per Apsara: "in sales-receive payment,
-// mode should be cash/account transfer".
+// Kept as constants and exported so the API, both clients, the PDF and the
+// yard assistant read one list rather than five drifting copies of a dropdown.
 //
-// ADDED, not substituted. Zelle and Wire stay because helpers/banks.js's
-// resolveForMode keys on them and payments already on file carry them; folding
-// three modes into one would leave those rows naming a mode that no longer
-// exists and the bank matcher with nothing to match on. She gets the plain
-// word she asked for, and nothing recorded stops meaning what it meant.
-const PAYMENT_MODES = ['Cash', 'Account transfer', 'Zelle', 'Wire', 'Cheque'];
+// ── EVERY MODE THIS FILE WILL STORE ────────────────────────────────────────
+// Zelle, Wire and Cheque are still here because payments ALREADY ON FILE carry
+// them and helpers/banks.js's matcher keys on Zelle/Wire. Removing them from
+// this list would leave those rows naming a mode the server no longer knows.
+//
+// It is NOT the list the yard's pay modal offers — see modesForKind below.
+const PAYMENT_MODES = ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
+
+// ── WHAT THE YARD MAY RECORD, FROM TODAY ───────────────────────────────────
+// Apsara, 2026-09-16, clarifying an earlier message: "whn i talked about
+// receive payment-i was talking only about edge yard .. in loads,there are two
+// options na..create invoice and sale..in receive payment-i should have only
+// cash and bank transfer".
+//
+// So a YARD load — a purchase she is paying for, or a sale she is being paid
+// for — takes two modes and no others. Enforced here rather than only in the
+// dropdown, because "the screen offers two" and "the yard records two" are
+// different promises and she asked for the second one. The yard assistant
+// records payments too (helpers/tools.js) and would otherwise keep happily
+// filing a Zelle nobody can choose on screen.
+//
+// EDGE METALS IS UNTOUCHED. Her message says Edge Yard, twice. Bills,
+// settlements and metals trucking keep the full list — narrowing those would
+// be me deciding something she did not ask about, on the company whose books
+// this app works hardest to keep separate.
+//
+// SAFE FOR WHAT IS ALREADY STORED. This file has no update path — only
+// addPayment and deletePayment — so a yard payment recorded as Zelle last
+// month is never re-validated and keeps reading as Zelle everywhere it
+// appears. The narrowing applies to new entries only, which is the whole of
+// what she asked for.
+const YARD_LOAD_MODES = ['Cash', 'Bank transfer'];
+const YARD_LOAD_KINDS = new Set(['purchase', 'sale']);
+
+// The modes a given load kind accepts. One function, so the validator, the
+// bot tool and anything added later cannot disagree about the answer.
+function modesForKind(loadKind) {
+    return YARD_LOAD_KINDS.has(String(loadKind || 'purchase').trim() || 'purchase')
+        ? YARD_LOAD_MODES.slice()
+        : PAYMENT_MODES.slice();
+}
 
 // ── WHOSE BOOKS A ROW BELONGS TO ─────────────────────────────────────────
 // Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge Metals
@@ -106,8 +138,23 @@ async function addPayment(input = {}) {
     // contributing nothing to the balance — worse than not being there.
     if (amount == null) throw new Error('a payment amount is required');
     if (amount <= 0) throw new Error('a payment amount must be greater than zero');
-    const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
-    if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
+    // ── WHOSE BOOKS, DECIDED BEFORE THE MODE IS CHECKED ──────────────────
+    // load_kind used to be resolved further down, beside the petty-cash
+    // branch. It moved up here because the ALLOWED MODES now depend on it.
+    const loadKind = (() => {
+        const k = String(input.load_kind || '').trim();
+        if (!k || k === 'purchase') return 'purchase';
+        if (['sale', 'trucker', 'bill', 'sale_cost', 'metals_trucking'].includes(k)) return k;
+        throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
+    })();
+
+    const allowed = modesForKind(loadKind);
+    const mode = allowed.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
+    // Names the list THAT APPLIES, not every mode this file knows. Choosing
+    // Zelle on a yard load and being told "must be one of: Cash, Bank
+    // transfer, Zelle, Wire, Cheque" reads as a bug in the software rather
+    // than an answer.
+    if (!mode) throw new Error(`payment mode must be one of: ${allowed.join(', ')}`);
 
     // ── WHICH ACCOUNT IT LEFT ────────────────────────────────────────────
     // Apsara, 2026-09-09: "I want to create an option for zelle,wire -->
@@ -165,14 +212,13 @@ async function addPayment(input = {}) {
     // skip_petty_cash flag on purpose: a flag is one spread of req.body away
     // from letting a client silently pay a yard load in cash without the box
     // moving, and this rule is about which company's books a row belongs to,
-    // which load_kind already answers. It is resolved here rather than inside
-    // the record below so the cash branch and the stored row cannot disagree.
-    const loadKind = (() => {
-        const k = String(input.load_kind || '').trim();
-        if (!k || k === 'purchase') return 'purchase';
-        if (['sale', 'trucker', 'bill', 'sale_cost', 'metals_trucking'].includes(k)) return k;
-        throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
-    })();
+    // which load_kind already answers.
+    //
+    // It is resolved ABOVE, next to the mode check, because since 2026-09-16
+    // the allowed MODES depend on it too — a yard load takes Cash or Bank
+    // transfer, Edge Metals still takes the full list. One resolution feeding
+    // both, so the mode check and the cash branch cannot disagree about which
+    // company this row belongs to.
     // ── WHICH WAY THE CASH IS MOVING ─────────────────────────────────────
     // Apsara, 2026-09-16: "in sales-receive payment,mode should be cash/
     // account transfer.if its cash-it should get added to petty cash."
@@ -428,6 +474,6 @@ function paymentSummary(loadId, loadAmount) {
 }
 
 module.exports = {
-    PAYMENT_MODES, listPayments, paymentsForLoad, addPayment,
+    PAYMENT_MODES, YARD_LOAD_MODES, modesForKind, listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
 };

@@ -96,7 +96,10 @@ async function makePaidLoad(as) {
     // Two payments, so removing one leaves the load PARTLY paid — her case,
     // in her words: "one payment out of several".
     const pay = async (amount) => (await req('POST', '/api/payments', { sid: sid(as), body: {
-        load_id: id, load_kind: 'purchase', mode: 'Wire', bank: 'Chase', amount, paid_on: '2026-09-14',
+        // 'Bank transfer', not 'Wire' — a YARD purchase takes Cash or Bank
+        // transfer only since 2026-09-16 (YARD_LOAD_MODES). What this file
+        // tests is who may DELETE a payment, which is unchanged.
+        load_id: id, load_kind: 'purchase', mode: 'Bank transfer', bank: 'Chase Bank', amount, paid_on: '2026-09-14',
     } })).json;
     const p1 = await pay(400), p2 = await pay(300);
     return { loadId: id, p1: p1 && (p1.id || (p1.payment && p1.payment.id)), p2: p2 && (p2.id || (p2.payment && p2.payment.id)) };
@@ -181,7 +184,7 @@ section('D — every deletion is written down, not just Jarvis\'s');
     ck('  and it is not attributed to jarvis', e.actor !== 'jarvis',
        'actorOf() returns "jarvis" only for a super session — an admin deletion must not read as one');
     ck('  with the load, the amount and the mode on the row',
-       e.detail && e.detail.load_id && e.detail.amount === 400 && e.detail.mode === 'Wire',
+       e.detail && e.detail.load_id && e.detail.amount === 400 && e.detail.mode === 'Bank transfer',
        JSON.stringify(e.detail) + ' — "something was deleted" is not an audit trail');
     ck('  and the row is stamped as completed', e.outcome === 'done' && !!e.completed_at,
        JSON.stringify({ outcome: e.outcome, completed_at: e.completed_at }) +

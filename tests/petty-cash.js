@@ -100,9 +100,16 @@ section('B — a cash payment is adjusted against the box');
     ck('  and the payment points back at the entry', !!p.petty_cash_entry_id);
 
     // The whole point of the feature: only CASH touches the box.
-    for (const mode of ['Zelle', 'Wire', 'Cheque']) {
+    //
+    // Bank transfer, not Zelle/Wire/Cheque. Since 2026-09-16 a YARD load takes
+    // Cash or Bank transfer only (helpers/payments.js's YARD_LOAD_MODES, per
+    // Apsara: "in receive payment-i should have only cash and bank transfer"),
+    // and these fixtures are yard loads. The old three are still valid for
+    // Edge Metals, which is asserted where that rule lives —
+    // tests/yard-payment-modes.js section C.
+    for (const mode of ['Bank transfer']) {
         const before = petty.balance();
-        await payments.addPayment({ load_id: 'EDGE_02', amount: 50, mode });
+        await payments.addPayment({ load_id: 'EDGE_02', amount: 50, mode, bank: 'Chase Bank' });
         ck(`a ${mode} payment does not touch petty cash`, petty.balance() === before);
     }
 }
@@ -239,9 +246,9 @@ section('G — deleting a cash payment puts the money back');
     ck('  reversing an unknown id credits nothing', petty.balance() === bal);
 
     // A non-cash payment has nothing to refund.
-    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Zelle' });
+    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Bank transfer', bank: 'Chase Bank' });
     await payments.deletePayment(z.id);
-    ck('deleting a Zelle payment leaves the box alone', petty.balance() === 1000);
+    ck('deleting a non-cash payment leaves the box alone', petty.balance() === 1000);
 }
 
 // ── 8. the rollback when the payment write fails ──────────────────────────

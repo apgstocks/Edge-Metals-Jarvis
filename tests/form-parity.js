@@ -162,8 +162,20 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: has a Pay button on the load card`, /btn-pay-load/.test(src));
     ck(`${label}: has the payment modal`, /id="payModal"/.test(src));
-    ck(`${label}: offers all four modes`,
-       ['Zelle','Wire','Cash','Cheque'].every(m => new RegExp(`value="${m}"`).test(src)));
+    // TWO modes since 2026-09-16, per Apsara: "in receive payment-i should
+    // have only cash and bank transfer". This modal is the YARD's; Edge
+    // Metals keeps Zelle/Wire/Cheque in its own screens, which is why the
+    // absence below is asserted against THIS select and not the whole file.
+    // Scoped to the block, and comments stripped, or the note explaining the
+    // rule satisfies the check that the rule is obeyed — twice burned.
+    const payModeOpts = (() => {
+      const clean = src.replace(/<!--[\s\S]*?-->/g, '');
+      const i = clean.indexOf('<select id="pay_mode">');
+      if (i < 0) return null;
+      return [...clean.slice(i, clean.indexOf('</select>', i)).matchAll(/<option value="([^"]+)"/g)].map(m => m[1]);
+    })();
+    ck(`${label}: offers exactly Cash and Bank transfer`,
+       !!payModeOpts && payModeOpts.join('|') === 'Cash|Bank transfer', JSON.stringify(payModeOpts));
     ck(`${label}: shows a payment badge on the card`, /paymentBadgeHtml\(l\)/.test(src));
     ck(`${label}: previews the pending amount before saving`, /function updatePayPreview/.test(src));
     ck(`${label}: reloads after saving rather than recomputing the balance locally`,

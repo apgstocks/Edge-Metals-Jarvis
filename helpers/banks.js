@@ -46,13 +46,13 @@ const OTHER = 'Others';
 
 // Which payment modes actually have a bank behind them.
 //
-// 'Account transfer' added 2026-09-16 with the mode itself. It belongs here
+// 'Bank transfer' added 2026-09-16 with the mode itself. It belongs here
 // and not with Cash: a transfer lands in an account by definition, and that
 // account is exactly what the bank matcher needs. Leaving it off this list
 // would make every transfer she records unbankable and quietly unmatchable —
 // the failure would show up months later as a statement line with no payment
 // against it.
-const MODES_WITH_BANK = ['Zelle', 'Wire', 'Account transfer'];
+const MODES_WITH_BANK = ['Zelle', 'Wire', 'Bank transfer'];
 
 function needsBank(mode) {
     const m = String(mode || '').trim().toLowerCase();

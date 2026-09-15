@@ -158,25 +158,27 @@ section('D — Edge Metals cash never reaches this box');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('E — Account transfer');
+section('E — Bank transfer');
 // ══════════════════════════════════════════════════════════════════════════
 {
-    ck('the mode exists', pay.PAYMENT_MODES.includes('Account transfer'), pay.PAYMENT_MODES.join(','));
+    ck('the mode exists', pay.PAYMENT_MODES.includes('Bank transfer'), pay.PAYMENT_MODES.join(','));
 
-    // ADDED, not substituted. Payments already on file carry Zelle, Wire and
-    // Cheque; dropping them would leave those rows naming a mode the server no
-    // longer accepts, and the bank matcher with nothing to key on.
+    // STILL KNOWN, though the yard can no longer choose them (see
+    // tests/yard-payment-modes.js). Payments already on file carry Zelle, Wire
+    // and Cheque; dropping them from PAYMENT_MODES would leave those rows
+    // naming a mode the server no longer recognises, and the bank matcher with
+    // nothing to key on.
     for (const m of ['Zelle', 'Wire', 'Cheque', 'Cash']) {
-        ck(`  ${m} still accepted`, pay.PAYMENT_MODES.includes(m), pay.PAYMENT_MODES.join(','));
+        ck(`  ${m} still known`, pay.PAYMENT_MODES.includes(m), pay.PAYMENT_MODES.join(','));
     }
 
     // A transfer lands in an account by definition, and that account is what
     // the bank matcher needs. Off this list, every transfer she records would
     // be unbankable — surfacing months later as a statement line with no
     // payment against it.
-    ck('a transfer can carry a bank', banks.MODES_WITH_BANK.includes('Account transfer'),
+    ck('a transfer can carry a bank', banks.MODES_WITH_BANK.includes('Bank transfer'),
        banks.MODES_WITH_BANK.join(','));
-    const t = await pay.addPayment({ load_id: 'OUT_3', load_kind: 'sale', mode: 'Account transfer',
+    const t = await pay.addPayment({ load_id: 'OUT_3', load_kind: 'sale', mode: 'Bank transfer',
                                      amount: 900, paid_on: '2026-09-16', bank: 'Chase Bank' });
     ck('  and it is stored', t.bank === 'Chase Bank', JSON.stringify(t.bank));
 
@@ -184,7 +186,7 @@ section('E — Account transfer');
     // drawer, and crediting the cash box for one would overstate what is
     // physically there — the figure nobody can check against a statement.
     const before = petty.balance();
-    await pay.addPayment({ load_id: 'OUT_4', load_kind: 'sale', mode: 'Account transfer',
+    await pay.addPayment({ load_id: 'OUT_4', load_kind: 'sale', mode: 'Bank transfer',
                            amount: 700, paid_on: '2026-09-16', bank: 'BofA' });
     ck('a transfer does NOT touch petty cash', petty.balance() === before,
        `${before} -> ${petty.balance()}`);
@@ -196,9 +198,11 @@ section('E — Account transfer');
     ck('  while cash still refuses one', !!err, 'a cash payment with a bank on it is a broken form');
 
     // Both clients offer it, or the server accepting the mode changes nothing.
+    // That the modal offers ONLY these two is asserted in
+    // tests/yard-payment-modes.js, which is where that rule lives.
     for (const [who, src] of [['website', DASH], ['app', APP]]) {
-        ck(`${who}: the pay modal offers Account transfer`,
-           /<option value="Account transfer">/.test(src));
+        ck(`${who}: the pay modal offers Bank transfer`,
+           /<option value="Bank transfer">/.test(src));
         ck(`  ${who}: and still offers Cash`, /<option value="Cash">/.test(src));
     }
 }

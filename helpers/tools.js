@@ -330,19 +330,19 @@ const TOOLS = {
         params: {
             load_id: { type: 'string', required: true },
             amount: { type: 'number', required: true },
-            mode: { type: 'string', required: true, describe: 'Zelle, Wire, Cash or Cheque' },
+            mode: { type: 'string', required: true, describe: 'Cash or Bank transfer' },
             // Optional, and optional ON PURPOSE — she may simply not say which
             // account a Zelle left, and refusing the whole payment over it
             // would make a working feature stop working. Unsaid becomes
             // "Not recorded" on the spend report, where she can see and close
             // the gap. See helpers/banks.js.
-            bank: { type: 'string', describe: 'which bank a Zelle or Wire went out of, if she said' },
+            bank: { type: 'string', describe: 'which bank a transfer went out of, if she said' },
             paid_on: { type: 'date', describe: 'defaults to today' },
             note: { type: 'string' },
         },
         propose: async (p) => {
             const { getLoad } = require('./loads');
-            const { PAYMENT_MODES, paymentSummary } = require('./payments');
+            const { modesForKind, paymentSummary } = require('./payments');
             const loadId = str(p.load_id);
             const load = await getLoad(loadId);
             // The single most valuable check here. A hallucinated load id is
@@ -351,8 +351,16 @@ const TOOLS = {
 
             const amount = Math.round(num(p.amount) * 100) / 100;
             if (!Number.isFinite(amount) || amount <= 0) throw new Error('a payment needs an amount greater than zero');
-            const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === str(p.mode).toLowerCase());
-            if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
+            // The YARD's list, not every mode payments.js knows. This tool
+            // records against yard loads, and since 2026-09-16 those take Cash
+            // or Bank transfer only — per Apsara, "in receive payment-i should
+            // have only cash and bank transfer". Asked through modesForKind so
+            // the tool and addPayment's validator cannot disagree: proposing a
+            // Zelle here and having addPayment refuse it at run time would
+            // show up as a confirmed action that then failed.
+            const allowed = modesForKind('purchase');
+            const mode = allowed.find((m) => m.toLowerCase() === str(p.mode).toLowerCase());
+            if (!mode) throw new Error(`payment mode must be one of: ${allowed.join(', ')}`);
 
             // Recomputed from the ledger, NOT from anything the model said.
             const before = paymentSummary(loadId, load.amount);
