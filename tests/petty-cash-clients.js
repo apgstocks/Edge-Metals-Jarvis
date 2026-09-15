@@ -152,9 +152,17 @@ for (const [label, src] of CLIENTS) {
     ck(`${label}: the top-up button is admin-only`,
        /id="btnAddPetty"/.test(addBtn) && /isAdmin \?/.test(addBtn),
        addBtn || '(btnAddPetty is not emitted at all)');
+    // BOTH SENTENCES. The warning has two jobs: say what will happen, and say
+    // what to do about it. Matching only the first half let me drop the
+    // second on the website during the 2026-09-15 heading revamp and still
+    // pass — the site told her cash would be refused and not that adding cash
+    // is the fix. A warning without a remedy is just an error message.
     ck(`${label}: an empty box says cash payments will be refused`,
        /Cash payments are refused while this is empty/.test(tab),
        'she chose refusal over a negative balance — the screen has to say so before someone tries');
+    ck(`${label}:   and tells her what to do about it`,
+       /Add cash before paying a load in cash/.test(tab),
+       'the remedy is the half a heading revamp quietly deleted');
     ck(`${label}: only top-ups offer Delete`,
        /e\.kind === 'topup' \? `<button class="btn btn-danger btn-del-petty"/.test(tab),
        'a withdrawal is undone by deleting its payment, which reverses it properly');

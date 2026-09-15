@@ -129,6 +129,24 @@ for (const [tab, expect] of PAGES) {
     ck(`  and nothing SHOUTING in caps`,
        !!head && !/uppercase/.test(head.getAttribute('style') || ''),
        head ? (head.getAttribute('style') || '') : '(no heading rendered)');
+
+    // ── THE SENTENCE UNDER THE TITLE STAYS ───────────────────────────────
+    // Her correction, in as many words: "let the descripton of header be
+    // there..i am just telling you to group the side bar headings". My first
+    // pass deleted it along with the eyebrow, because I read "too much
+    // headers" as "less text" when she meant "fewer things competing to be
+    // THE heading". The description is not a heading — it is the one line
+    // saying what the page is for, and on Petty Cash it is the line telling
+    // staff they are read-only.
+    //
+    // A mutation blanking it survived this file until this assertion existed:
+    // seven pages each passed a note and nothing checked that any of them
+    // reached the screen.
+    const desc = head && head.nextElementSibling;
+    ck(`  and the description under it is still there`,
+       !!desc && /font-size:12.5px/.test(desc.getAttribute('style') || '')
+       && desc.textContent.trim().length > 10,
+       desc ? JSON.stringify(desc.textContent.trim().slice(0, 60)) : '(nothing follows the title)');
 }
 
 section('B — the figures got BIGGER, not smaller');

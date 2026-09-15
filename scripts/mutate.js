@@ -1753,15 +1753,15 @@ const MUTATIONS = [
     // things before one expense appeared.
     { name: 'headings: the ALL-CAPS page title comes back',
       file: 'dashboard/index.html', suites: ['page-headings'],
-      find: "  return `<div class=\"page-head\">",
-      to:   "  return `<div class=\"page-head\"><h2 class=\"eyebrow\" style=\"text-transform:uppercase\">${esc(title)}</h2>" },
+      find: "text-transform:none; letter-spacing:-.01em; margin:0;",
+      to:   "text-transform:uppercase; letter-spacing:-.01em; margin:0;" },
     { name: 'headings: the description under the title is dropped',
       file: 'dashboard/index.html', suites: ['page-headings'],
       // She had to correct me on this one: "let the descripton of header be
       // there..i am just telling you to group the side bar headings". The
       // sentence explaining what a page is for stays.
-      find: '{ note, stats, chips, actions }',
-      to:   '{ note: _dropped, stats, chips, actions }' },
+      find: '        ${note ? `<div style="font-size:12.5px;',
+      to:   '        ${false ? `<div style="font-size:12.5px;' },
     { name: 'petty: the top-up button loses its admin gate',
       file: 'dashboard/index.html', suites: ['petty-cash-clients'],
       // Moved into pageHead's `actions` during the revamp. The gate moving is
