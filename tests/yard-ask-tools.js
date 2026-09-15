@@ -176,6 +176,99 @@ section('E — a tool that legitimately finds nothing');
        'an empty search is a RESULT; dressing it as a failure would make it apologise instead of answering');
 }
 
+section('E2 — it can see an EXPENSE, not just the month\'s total');
+{
+    // ── THE REAL CAUSE OF "I cannot find any record" ─────────────────────
+    // Apsara, 2026-09-15, asked the assistant "How much did we pay
+    // Santiago?" and then "check in expenses", and was told twice there was
+    // no record. It was answering honestly: spend_report is the only expense
+    // tool it had, and spend_report deliberately DROPS its rows — "the
+    // totals answer the question and the rows would dominate the prompt".
+    //
+    // So it could say what August cost by method and month, and could not see
+    // one vendor name. Every question about WHO was paid or WHAT FOR was
+    // unanswerable, and "I cannot find any record" was indistinguishable from
+    // "there are none" — which is the worst pair of meanings to merge.
+    const tools = require(path.join(ROOT, 'helpers/tools'));
+
+    ck('there IS a tool that reads expense rows',
+       tools.readToolNames().includes('find_expenses'),
+       tools.readToolNames().join(', '));
+    // The whole bug, pinned: a tool that cannot name anyone cannot answer
+    // "how much did we pay X".
+    ck('  and spend_report still does not carry rows, so it cannot replace it',
+       /const \{ rows, received, \.\.\.totals \} = r;/
+         .test(require('fs').readFileSync(path.join(ROOT, 'helpers/tools.js'), 'utf8')),
+       'if spend_report starts returning rows, this tool and its reasoning need revisiting');
+    // The prompt is generated FROM the registry, so a tool the model is never
+    // told about is a tool it never calls.
+    ck('  and the assistant is told about it',
+       /find_expenses/.test(tools.describeTools()),
+       tools.describeTools().slice(0, 120));
+
+    const EXPENSES = [
+        { id: 'X1', date: '2026-09-02', vendor: 'Santiago', category: 'Repairs',
+          description: 'Forklift hydraulic hose', notes: null, payment_method: 'Cash', amount: 240 },
+        { id: 'X2', date: '2026-09-09', vendor: 'Santiago Welding', category: 'Repairs',
+          description: 'Loader belt', notes: 'second visit', payment_method: 'Zelle', amount: 510.5 },
+        { id: 'X3', date: '2026-08-20', vendor: 'Chevron', category: 'Fuel',
+          description: 'Diesel', notes: null, payment_method: 'Card', amount: 300 },
+        // AUGUST, and Santiago's. Deliberately outside the September window
+        // used below: without a row the date filter actually excludes, a
+        // mutation deleting that filter SURVIVED — both other Santiago rows
+        // were already inside the range, so the range was never doing work.
+        { id: 'X4', date: '2026-08-11', vendor: 'Santiago', category: 'Repairs',
+          description: 'Gate weld', notes: null, payment_method: 'Cash', amount: 95 },
+    ];
+    const expMod = require.resolve(path.join(ROOT, 'helpers/expenses'));
+    require(expMod);
+    require.cache[expMod].exports.loadExpenses = () => EXPENSES.slice();
+
+    const run = (params) => tools.runRead('find_expenses', params);
+
+    {
+        const r = await run({ vendor: 'Santiago' });
+        ck('her actual question: what did we pay Santiago',
+           r.matched_total === 845.5, String(r.matched_total));
+        ck('  matching loosely, so "Santiago Welding" counts too',
+           r.rows.length === 3, JSON.stringify(r.rows.map((x) => x.vendor)));
+        // The sum is computed in the tool, not left to the model. A total a
+        // language model adds up in its head is a total nobody checked.
+        ck('  and the TOTAL comes from the tool, not the model',
+           typeof r.matched_total === 'number');
+    }
+    {
+        const r = await run({ vendor: 'santiago', from: '2026-09-01', to: '2026-09-30' });
+        ck('a date range narrows it — August\'s Santiago row drops out',
+           r.total === 2, String(r.total));
+        ck('  leaving only what was spent in the window',
+           r.matched_total === 750.5, String(r.matched_total));
+        ck('  case does not matter', (await run({ vendor: 'SANTIAGO' })).total === 3);
+    }
+    {
+        const r = await run({ text: 'hose' });
+        ck('it searches descriptions', r.rows.length === 1 && r.rows[0].id === 'X1');
+    }
+    {
+        const r = await run({ text: 'second visit' });
+        ck('  and notes, because "what for" is often written there',
+           r.rows.length === 1 && r.rows[0].id === 'X2', JSON.stringify(r.rows));
+    }
+    {
+        const r = await run({ method: 'card' });
+        ck('it narrows by how it was paid', r.rows.length === 1 && r.rows[0].id === 'X3');
+    }
+    {
+        // A genuine zero must be a RESULT, not an absence of capability —
+        // exactly the distinction that was lost.
+        const r = await run({ vendor: 'Nobodyxyz' });
+        ck('a vendor with nothing against them returns an empty list',
+           r.total === 0 && Array.isArray(r.rows) && r.rows.length === 0);
+        ck('  and a zero total, not undefined', r.matched_total === 0);
+    }
+    delete require.cache[expMod];
+}
+
 section('F — no tool asked for means no extra round trip');
 {
     // Most questions are answerable from the digest. They must not pay for

@@ -209,6 +209,55 @@ const TOOLS = {
         },
     },
 
+    // ── EXPENSES, ROW BY ROW ─────────────────────────────────────────────
+    // Apsara, 2026-09-15, asking the assistant "How much did we pay
+    // Santiago?" and then "check in expenses", and being told twice that
+    // there is no record of it.
+    //
+    // It was answering honestly. The only expense tool it had was
+    // spend_report, which deliberately DROPS the rows — "the totals answer
+    // the question and the rows would dominate the prompt" — so the
+    // assistant could see what August cost by method and month and could not
+    // see a single expense, a vendor name, or a description. Every question
+    // about WHO was paid or WHAT FOR was unanswerable, and the honest "I
+    // cannot find any record" was indistinguishable from "there are none".
+    //
+    // spend_report keeps dropping its rows; that reasoning still holds for a
+    // whole-business report. This is the drill-down beside it, filtered
+    // before it is returned so only what was asked for reaches the prompt.
+    find_expenses: {
+        kind: 'read',
+        description: 'Search recorded expenses by vendor, category, description or date range. Use this for any question about who was paid, what was bought, or what an expense was for — spend_report gives totals only and cannot name anyone.',
+        params: {
+            vendor: { type: 'string', describe: 'part of a vendor or payee name, e.g. "Santiago"; matched loosely' },
+            category: { type: 'string', describe: 'part of a category, e.g. "fuel"' },
+            text: { type: 'string', describe: 'part of the description or notes' },
+            method: { type: 'string', describe: 'one of Cash, Zelle, Wire, Cheque, Card, Other' },
+            from: { type: 'date', describe: 'earliest expense date, YYYY-MM-DD' },
+            to: { type: 'date', describe: 'latest expense date, YYYY-MM-DD' },
+        },
+        run: async (p) => {
+            const { loadExpenses } = require('./expenses');
+            const like = (hay, needle) => String(hay || '').toLowerCase().includes(String(needle).trim().toLowerCase());
+            const rows = loadExpenses().filter((e) => {
+                if (p.vendor && !like(e.vendor, p.vendor)) return false;
+                if (p.category && !like(e.category, p.category)) return false;
+                // Description AND notes: "what did we pay for" is as likely
+                // to be in the note as in the one-line description.
+                if (p.text && !(like(e.description, p.text) || like(e.notes, p.text))) return false;
+                if (p.method && String(e.payment_method || '').toLowerCase() !== String(p.method).trim().toLowerCase()) return false;
+                if (p.from && String(e.date || '') < p.from) return false;
+                if (p.to && String(e.date || '') > p.to) return false;
+                return true;
+            });
+            // The TOTAL of what matched, computed here rather than left to the
+            // model to add up. "How much did we pay Santiago" is a sum, and a
+            // sum a language model does in its head is a sum nobody checked.
+            const total = Math.round(rows.reduce((t, e) => t + (Number(e.amount) || 0), 0) * 100) / 100;
+            return { matched_total: total, ...cap(rows) };
+        },
+    },
+
     trucker_bills: {
         kind: 'read',
         description: 'Haulage bills owed to trucking companies, with what has been paid against each.',
