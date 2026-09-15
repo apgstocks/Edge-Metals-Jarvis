@@ -4750,6 +4750,32 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // that allowlist plus requireAdmin here means two independent things
     // would both have to be wrong for a staff session to reach these.
     // Every mutation schedules a sheet sync, same as loads.
+    // ── WHO IS THIS EXPENSE FOR? ─────────────────────────────────────────
+    // Apsara, 2026-09-15: "if they say salay santiago-it means that salary
+    // for santiago..when they type in app-it should read the description and
+    // ask user whether they mean salary for santiago????" — and, asked how:
+    // "ai assistant should handle that".
+    //
+    // Returns a QUESTION, never a change. See helpers/vendorFromText.js for
+    // why the model finds the name and deterministic code decides whether it
+    // is anyone, and why every failure returns "no suggestion" rather than an
+    // error: an expense she cannot record because a suggestion service was
+    // down would be far worse than the gap this closes.
+    app.post('/api/expenses/suggest-vendor', requireAdmin, async (req, res) => {
+        try {
+            const { suggestVendor } = require('./helpers/vendorFromText');
+            const b2 = req.body || {};
+            const out = await suggestVendor(b2.description, { vendor: b2.vendor });
+            res.json({ ok: true, ...out });
+        } catch (e) {
+            // 200, not 500. The client treats this as "nothing to ask" and
+            // carries on; a failing suggestion must never look like a failing
+            // save.
+            console.error('[API] suggest-vendor failed:', e.message);
+            res.json({ ok: true, suggest: false, why: 'error' });
+        }
+    });
+
     app.get('/api/expenses', requireAdmin, (req, res) => {
         try {
             const { loadExpenses, getExpenseReport, EXPENSE_CATEGORIES, EXPENSE_METHODS,

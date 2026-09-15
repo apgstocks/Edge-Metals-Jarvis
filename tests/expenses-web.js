@@ -247,6 +247,123 @@ section('E — modals do not stack up across visits');
     dom.window.close();
 }
 
+section('F — "Is this for Santiago?"');
+{
+    // Apsara, 2026-09-15: "if they say salay santiago-it means that salary for
+    // santiago..when they type in app-it should read the description and ask
+    // user whether they mean salary for santiago????" — and, asked how: "ai
+    // assistant should handle that".
+    //
+    // The form asks ON BLUR, not on save: a suggestion service having a slow
+    // day must not feel like the Save button being slow. And it asks only
+    // when the vendor box is empty, because second-guessing a name she typed
+    // is worse than useless.
+    const mk = (suggestion) => {
+        const calls = [];
+        const dom = new JSDOM(HTML, {
+            runScripts: 'dangerously', url: 'http://localhost/',
+            beforeParse(w) {
+                w.fetch = (u, o) => {
+                    const k = String(u).split('?')[0];
+                    if (k === '/api/expenses/suggest-vendor') {
+                        calls.push(JSON.parse(o.body));
+                        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(suggestion) });
+                    }
+                    if (o && o.method && o.method !== 'GET') {
+                        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, expense: {} }) });
+                    }
+                    const body = k === '/api/expenses' ? EXPENSES
+                        : k === '/api/me' ? { ok: true, role: 'admin' } : { ok: true };
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+                };
+                w.alert = () => {}; w.confirm = () => true;
+            },
+        });
+        return { dom, calls };
+    };
+    const blur = (d, dom) => {
+        const el = d.getElementById('exp_description');
+        el.dispatchEvent(new dom.window.Event('blur'));
+    };
+
+    {
+        const { dom, calls } = mk({ ok: true, suggest: true, vendor: 'Santiago', known: true,
+                                    question: 'Is this for Santiago?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_description').value = 'Weekly salary Santiago';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+
+        ck('it asks about the description she typed', calls.length === 1
+           && calls[0].description === 'Weekly salary Santiago', JSON.stringify(calls));
+        const box = d.getElementById('expVendorAsk');
+        ck('  and puts the question on screen', /Is this for Santiago\?/.test(box.textContent), box.textContent);
+        ck('  without having filled anything in yet',
+           d.getElementById('exp_vendor').value === '',
+           'nothing is written until she says yes');
+
+        d.getElementById('expVendorYes').click();
+        ck('saying Yes fills the vendor', d.getElementById('exp_vendor').value === 'Santiago');
+        ck('  and the question goes away', box.style.display === 'none');
+        dom.window.close();
+    }
+    {
+        const { dom, calls } = mk({ ok: true, suggest: true, vendor: 'Santiago', known: true,
+                                    question: 'Is this for Santiago?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_description').value = 'Weekly salary Santiago';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        d.getElementById('expVendorNo').click();
+        ck('saying No leaves the vendor empty', d.getElementById('exp_vendor').value === '');
+        // Re-asking the same line is how a helpful prompt becomes a nag.
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        ck('  and the same line is not asked about twice', calls.length === 1,
+           `asked ${calls.length} times`);
+        dom.window.close();
+    }
+    {
+        const { dom, calls } = mk({ ok: true, suggest: true, vendor: 'Santiago', known: true,
+                                    question: 'Is this for Santiago?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_vendor').value = 'Chevron';
+        d.getElementById('exp_description').value = 'Weekly salary Santiago';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        ck('a vendor she already typed is never second-guessed', calls.length === 0,
+           JSON.stringify(calls));
+        ck('  and it is left exactly as she typed it',
+           d.getElementById('exp_vendor').value === 'Chevron');
+        dom.window.close();
+    }
+    {
+        // The service being down, slow or unconfigured must be invisible.
+        const { dom } = mk({ ok: true, suggest: false, why: 'no_answer' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_description').value = 'Weekly salary Santiago';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        ck('no suggestion means nothing on screen at all',
+           d.getElementById('expVendorAsk').style.display === 'none');
+        ck('  and the form is still perfectly usable',
+           d.getElementById('expSave').disabled === false);
+        dom.window.close();
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -321,6 +321,121 @@ section('E2 — it can see an EXPENSE, not just the month\'s total');
     delete require.cache[expMod];
 }
 
+section('E3 — reading the payee out of the description');
+{
+    // Apsara, 2026-09-15: "if they say salay santiago-it means that salary for
+    // santiago..when they type in app-it should read the description and ask
+    // user whether they mean salary for santiago????" then "ai assistant
+    // should handle that".
+    //
+    // The division of labour is the design: the MODEL decides whether a name
+    // is present (a meaning question a regex gets wrong — "Salary paid $200
+    // for tools" names nobody, and "tools" is the trap), DETERMINISTIC code
+    // decides whether that name is anyone on file, and NOTHING is written
+    // without her yes.
+    const v = require(path.join(ROOT, 'helpers/vendorFromText'));
+    const EXP = [{ vendor: 'Santiago' }, { vendor: 'Santiago' }, { vendor: 'Chevron' }];
+    // The model is stubbed everywhere below. A test that reached the real one
+    // would be slow, flaky and spending her quota.
+    const say = (reply) => async () => reply;
+    const ask = (text, reply, over = {}) =>
+        v.suggestVendor(text, { expenses: EXP, ask: say(reply), ...over });
+
+    {
+        const r = await ask('Weekly salary Santiago', { vendor: 'Santiago', confidence: 'high' });
+        ck('her example: "salary santiago" asks about Santiago',
+           r.suggest === true && /Is this for Santiago\?/.test(r.question), JSON.stringify(r));
+        ck('  recognising him as someone already on file', r.known === true);
+    }
+    {
+        const r = await ask('salary santiago', { vendor: 'santiago', confidence: 'high' });
+        ck('  typed in lower case, it offers HER spelling back',
+           r.vendor === 'Santiago',
+           'otherwise the vendor column grows "santiago" beside "Santiago"');
+    }
+    {
+        const r = await ask('Paid Ramesh for gate weld', { vendor: 'Ramesh', confidence: 'high' });
+        ck('a name not on file is still offered', r.suggest === true && r.known === false);
+        ck('  and said to be new, so she knows she is creating one',
+           /new vendor/.test(r.question), r.question);
+    }
+    {
+        // ── A NEAR MISS IS A DIFFERENT PERSON ─────────────────────────────
+        // helpers/nameMatch.js refuses fuzzy matching and says why: "in this
+        // business a near-miss resolves to the wrong company and a real quote
+        // request or email goes to them". Here it would file money against
+        // the wrong person.
+        //
+        // "Santos" shares its first three letters with "Santiago", who IS on
+        // file. Any prefix or substring rule offers Santiago back and she
+        // clicks yes on a name she never typed. A mutation doing exactly that
+        // SURVIVED until this case existed, because every earlier fixture
+        // asked about a name that matched itself either way.
+        const r = await ask('Paid Santos for scrap', { vendor: 'Santos', confidence: 'high' });
+        ck('a name that merely RESEMBLES one on file is not mistaken for it',
+           r.vendor === 'Santos' && r.known === false,
+           JSON.stringify(r) + ' — Santiago is on file; Santos is somebody else');
+        ck('  and is offered as a new vendor instead',
+           /new vendor/.test(r.question), r.question);
+    }
+
+    // ── THE ONES THAT MUST NOT ASK ────────────────────────────────────────
+    {
+        const r = await ask('Salary paid $200 for tools', { vendor: null, confidence: 'high' });
+        ck('a line naming nobody asks nothing', r.suggest === false, JSON.stringify(r));
+        ck('  "tools" is never mistaken for a person', !/tools/i.test(JSON.stringify(r)));
+    }
+    {
+        // THE GUARD THAT MATTERS MOST. A model asked for a name will sometimes
+        // produce a plausible one that was never typed. Inventing a payee is
+        // the one outcome worse than suggesting nothing, so the answer has to
+        // appear in what she actually wrote.
+        const r = await ask('Hose repair', { vendor: 'Acme Parts', confidence: 'high' });
+        ck('a name the model INVENTED is refused',
+           r.suggest === false && r.why === 'not_in_text', JSON.stringify(r));
+    }
+    {
+        const r = await ask('Salary Santiago', { vendor: 'Santiago', confidence: 'low' });
+        ck('an unsure answer is dropped rather than guessed at',
+           r.suggest === false && r.why === 'unsure', JSON.stringify(r));
+    }
+    {
+        const r = await ask('Weekly salary Santiago', { vendor: 'Santiago', confidence: 'high' },
+                            { vendor: 'Chevron' });
+        ck('a vendor she already typed is never second-guessed',
+           r.suggest === false && r.why === 'vendor_already_set');
+    }
+
+    // ── AND IT MUST NEVER BLOCK RECORDING AN EXPENSE ──────────────────────
+    // No key, a quota wall, a timeout, malformed JSON. An expense she cannot
+    // record because a suggestion service was down is a far worse bug than
+    // the one this fixes.
+    for (const [label, stub] of [
+        ['the model is unavailable', async () => null],
+        ['the model throws', async () => { throw new Error('quota exceeded'); }],
+        ['the model returns nonsense', async () => 'not json'],
+    ]) {
+        const r = await v.suggestVendor('Weekly salary Santiago', { expenses: EXP, ask: stub });
+        ck(`${label} — no suggestion, no error`, r && r.suggest === false, JSON.stringify(r));
+    }
+    {
+        // A hung request is the one failure that returns nothing at all.
+        const slow = () => new Promise((r) => setTimeout(() => r({ vendor: 'Santiago', confidence: 'high' }), v.TIMEOUT_MS + 500));
+        const started = Date.now();
+        const r = await v.suggestVendor('Weekly salary Santiago', { expenses: EXP, ask: slow });
+        ck('a hung model gives up rather than hanging the form',
+           r.suggest === false && Date.now() - started < v.TIMEOUT_MS + 400,
+           `${Date.now() - started}ms`);
+    }
+
+    // The known names are fed to the prompt: a name she has typed before is
+    // far likelier than one she has not.
+    ck('the prompt is told which vendors she already uses',
+       /Santiago/.test(v.buildPrompt('Weekly salary Santiago', v.knownVendors(EXP))));
+    ck('  most-used first', v.knownVendors(EXP)[0] === 'Santiago',
+       JSON.stringify(v.knownVendors(EXP)));
+}
+
 section('F — no tool asked for means no extra round trip');
 {
     // Most questions are answerable from the digest. They must not pay for

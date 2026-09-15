@@ -747,6 +747,7 @@ body { overflow-y:auto; }
              money. Choosing Cash also draws the amount out of petty cash. -->
         <div class="field"><label>Paid by</label><select id="exp_payment"></select></div>
       </div>
+      <div id="expVendorAsk" style="display:none; margin-top:10px; font-size:12px;"></div>
       <div id="expErr" style="margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
     </div>
     <div class="modal-foot">
@@ -6212,12 +6213,64 @@ function openExpenseModal(expense) {
   $('expenseModal').classList.remove('hidden');
   $('expenseModal').style.display = 'flex';
 }
+
+// ── "IS THIS FOR SANTIAGO?" ──────────────────────────────────────────────
+// Apsara, 2026-09-15: "it should read the description and ask user whether
+// they mean salary for santiago".
+//
+// ON BLUR, NOT ON SAVE. Asking at save time would put a network call in front
+// of the Save button, and a suggestion service having a slow day would then
+// feel like the form being slow. By the time she reaches Save the question is
+// already on screen, or it never arrived and nothing is different.
+//
+// Fires only when the vendor box is EMPTY — if she typed one, second-guessing
+// it is worse than useless — and the answer is hers. Nothing is filled in
+// until she says yes.
+let vendorAskedFor = '';
+function wireVendorSuggest() {
+  const desc = $('exp_description');
+  const box = $('expVendorAsk');
+  if (!desc || !box) return;
+  const hide = () => { box.style.display = 'none'; box.innerHTML = ''; };
+  hide();
+
+  desc.addEventListener('blur', async () => {
+    const text = desc.value.trim();
+    // Asked about this exact line already — including when she said no.
+    // Re-asking the same question is how a helpful prompt becomes a nag.
+    if (!text || text === vendorAskedFor) return;
+    if ($('exp_vendor').value.trim()) { hide(); return; }
+    vendorAskedFor = text;
+    let r = null;
+    try {
+      r = await api('/api/expenses/suggest-vendor', {
+        method: 'POST',
+        body: JSON.stringify({ description: text, vendor: $('exp_vendor').value }),
+      });
+    } catch (e) { hide(); return; }          // never let this surface as an error
+    if (!r || !r.suggest || $('exp_vendor').value.trim()) { hide(); return; }
+
+    box.innerHTML = `<span style="color:var(--text-muted);">${esc(r.question)}</span>
+      <button type="button" id="expVendorYes" class="btn" style="font-size:11px; padding:4px 10px; margin-left:8px;">Yes</button>
+      <button type="button" id="expVendorNo" class="btn" style="font-size:11px; padding:4px 10px;">No</button>`;
+    box.style.display = 'block';
+    $('expVendorYes').addEventListener('click', () => {
+      $('exp_vendor').value = r.vendor;
+      hide();
+    });
+    // No is remembered for this line by vendorAskedFor above, so it does not
+    // come straight back when she tabs away again.
+    $('expVendorNo').addEventListener('click', hide);
+  });
+}
+
 function closeExpenseModal() {
   $('expenseModal').classList.add('hidden');
   $('expenseModal').style.display = '';
   editingExpenseId = null;
 }
 function wireExpenseModal() {
+  wireVendorSuggest();
   $('expClose').addEventListener('click', closeExpenseModal);
   $('expSave').addEventListener('click', async () => {
     const payload = {
