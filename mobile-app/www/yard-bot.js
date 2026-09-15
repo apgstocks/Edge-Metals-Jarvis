@@ -375,7 +375,17 @@
         // 403 on every question while the Loads tab keeps working. That reads
         // as "the server is down" and is nothing of the kind.
         var msg = String((err && err.message) || '');
-        var status = err && err.status;
+        // ── RECOVER THE STATUS FROM THE TEXT WHEN IT IS NOT ON THE ERROR ──
+        // Only the fetch fallback in callApi sets err.status. Both hosts'
+        // own api() throws `new Error(err.error || 'request failed (N)')`
+        // with no status on it — and /api/yard/ask answers a 500 with
+        // { ok, answer } and NO `error` field, so the message is exactly
+        // 'request failed (500)'. Without this parse a server error still
+        // reported as unreachable IN THE APP, which is the half of the bug
+        // the first version of this fix missed.
+        var status = (err && err.status)
+            || Number((msg.match(/request failed \((\d{3})\)/) || [])[1])
+            || 0;
         // window.api (both clients) throws with the server's own `error`
         // string and no status, so the text is matched too.
         if (status === 403 || /staff access is limited/i.test(msg)) {

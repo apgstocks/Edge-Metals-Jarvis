@@ -94,6 +94,14 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
      /signed in as staff/i.test(a), 'the 403 branch is missing');
   ck('bot:   and told what to do about it',
      /admin password/i.test(a));
+  // The app's api() throws with NO status on the error, and /api/yard/ask
+  // answers a 500 with { ok, answer } and no `error` field — so the message
+  // is literally 'request failed (500)'. Without recovering the number from
+  // that text, a server error still reported as unreachable in the app, which
+  // is the half the first version of this fix missed.
+  ck('bot: the status is recovered from the message when it is not on the error',
+     a.indexOf('request failed \\((\\d{3})\\)') !== -1,
+     'the app never attaches err.status, so the text is the only source');
   ck('bot: an expired session says so',
      /session has expired/i.test(a));
   ck('bot: a server error is named as one, not as unreachable',
