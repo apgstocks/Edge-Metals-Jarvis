@@ -2435,7 +2435,17 @@ function renderItemRows() {
     currentLoadItems.splice(idx + 1, 0, Object.assign(blankLoadItem(), {
       description : src.description || '',
       gross_weight: src.gross_weight ?? '',
-      tare_weight : src.tare_weight ?? '0',
+      // ?? ONLY CATCHES null AND undefined, NOT ''. syncItemsFromDom stores
+      // these as raw input strings, so a tare the operator had cleared comes
+      // through as '' — and `'' ?? '0'` is '', not '0'. The duplicated row
+      // then had a blank tare, parseFloat('') is NaN, and recomputeRowTotals
+      // blanks the net box for ANY gross entered. The row looked normal and
+      // simply refused to compute.
+      //
+      // A fresh row from blankLoadItem() starts at '0', so a duplicate of a
+      // cleared row landing on '0' is the same rule, not a new one — which is
+      // plainly what `?? '0'` was reaching for.
+      tare_weight : (src.tare_weight === '' || src.tare_weight == null) ? '0' : src.tare_weight,
       price       : src.price ?? '',
       unit        : src.unit || '',
     }));
