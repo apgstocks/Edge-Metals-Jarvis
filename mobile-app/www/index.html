@@ -1560,10 +1560,39 @@ const BUYER_FIXED_NAME = 'Edge Trading';
 
 // ── Address Book integration on the Seller name field — mirrors
 // dashboard/index.html.
+// ── ONE cache, not two ─────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "when i add a address, post opening the app - i have to
+// logout for the change to be seen."
+//
+// Two separate bugs wearing one coat:
+//
+//   1. The Documents tab kept its OWN copy (docsAddressBook) behind an
+//      `if (!docsAddressBook.length)` guard — fetch once, never again. On a
+//      phone the page never reloads, so logging out was genuinely the only
+//      way to refill it. That is the bug she hit.
+//
+//   2. Two copies of the same list drift. Saving a load with a new seller
+//      auto-creates an address-book entry and pushed it into addressBookCache
+//      only, so the Documents consignee typeahead could not see a contact the
+//      Loads screen had just created.
+//
+// So there is now one list and one refresher. docsAddressBook is declared
+// here (not down in the Documents section) so this function can never touch
+// it before its `let` is initialised.
 let addressBookCache = [];
+let docsAddressBook = [];
 async function refreshAddressBookCache() {
-  try { addressBookCache = await api('/api/address-book'); }
-  catch (err) { addressBookCache = []; }
+  try {
+    const fresh = await api('/api/address-book');
+    // REPLACE ONLY ON SUCCESS. The old version assigned the fetch result
+    // straight into the cache and emptied it in the catch — so one request
+    // failing on bad signal in the yard threw away a perfectly good list and
+    // left every typeahead blank until the next refresh happened to work.
+    // A stale list is useful; an empty one is not.
+    if (Array.isArray(fresh)) { addressBookCache = fresh; docsAddressBook = fresh; }
+  } catch (err) {
+    console.error('[address-book] refresh failed, keeping last good list:', err.message);
+  }
 }
 function addressBookExactMatch(name) {
   const q = String(name || '').trim().toLowerCase();
@@ -4862,7 +4891,10 @@ function wireLoadsEvents() {
         const existingContact = addressBookExactMatch(payload.seller);
         if (!existingContact) {
           api('/api/address-book', { method: 'POST', body: JSON.stringify({ aliases: [payload.seller], raw: payload.seller_address || '', mobile: payload.seller_phone || null }) })
-            .then((entry) => { addressBookCache.push(entry); })
+            // Into BOTH lists. After a refresh these are the same array and
+            // one push would be enough, but relying on that is a trap for
+            // whoever next reassigns one of them.
+            .then((entry) => { addressBookCache.push(entry); if (docsAddressBook !== addressBookCache) docsAddressBook.push(entry); })
             .catch(() => {});
         } else {
           // Backfill BLANK fields only. Extended 2026-08-20 from phone-only
@@ -7393,7 +7425,7 @@ async function renderItemTypeManager(prefix) {
 // a real risk — flagged in DOC_ITEM_CODE_RULES' comment.
 
 let docsSubTab = 'proforma';
-let docsAddressBook = [];
+// docsAddressBook now lives up with addressBookCache — see the comment there.
 
 // ── Copied from dashboard/documents.html ──────────────────────────────────
 // DUPLICATED CODE, KNOWINGLY. These four functions are the item-code and
@@ -7509,12 +7541,14 @@ function docTodayISO() { return new Date().toISOString().slice(0, 10); }
 // ── Tab shell ─────────────────────────────────────────────────────────────
 async function renderDocumentsTab() {
   // Address book backs the consignee/buyer typeaheads on both sub-tabs.
-  // Fetched once per tab entry, not per keystroke; a failure leaves the
-  // typeahead empty but every field still typeable by hand, which is how
-  // the dashboard behaves too.
-  if (!docsAddressBook.length) {
-    try { docsAddressBook = await api('/api/address-book'); } catch (e) { docsAddressBook = []; }
-  }
+  // Fetched once per tab ENTRY, not per keystroke.
+  //
+  // This used to be guarded by `if (!docsAddressBook.length)` — fetch once
+  // and never again — which is exactly why an address added after the app
+  // was opened stayed invisible until she logged out. The guard is gone;
+  // refreshAddressBookCache() is fail-soft and keeps the last good list, so
+  // re-entering the tab on a bad signal cannot blank the typeahead.
+  await refreshAddressBookCache();
   $('viewRoot').innerHTML = `
     <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
       <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">Documents</div>
@@ -7815,9 +7849,11 @@ async function loadSavedBolsApp() {
                 ${esc(b.consignee_name || '—')}${b.container_no ? ' · ' + esc(b.container_no) : ''}${b.bol_date ? ' · ' + esc(b.bol_date) : ''}</div>
             </div>
             <button type="button" class="btn bolw-edit" data-id="${esc(b.id)}" style="font-size:12px; padding:6px 12px;">Edit</button>
+            <button type="button" class="btn bolw-del" data-id="${esc(b.id)}" data-no="${esc(b.bol_no || '')}" style="font-size:12px; padding:6px 12px; color:var(--danger, #c0392b);">Delete</button>
           </div>`).join('')
       : 'None yet.';
     box.querySelectorAll('.bolw-edit').forEach((el) => el.addEventListener('click', () => bolEditApp(el.dataset.id)));
+    box.querySelectorAll('.bolw-del').forEach((el) => el.addEventListener('click', () => bolDeleteApp(el.dataset.id, el.dataset.no)));
   } catch (e) {
     box.textContent = e.message;
   }
@@ -7854,6 +7890,38 @@ async function bolEditApp(id) {
     // stops matching after the first edit.)
     renderBolForm();
     $('docBody').scrollTop = 0;
+  } catch (e) {
+    if ($('bolwStatus')) $('bolwStatus').textContent = e.message;
+  }
+}
+
+// Apsara, 2026-09-16: "also add delete option in bol generated".
+//
+// Mirrors the website's bolDelete, and says the same two things in the
+// confirm for the same reasons: the BOL NUMBER (a column of near-identical
+// rows on a small screen is precisely where a generic "Delete this?" gets a
+// reflex Yes on the wrong one), and that the generated PDF is KEPT — which
+// is what the server actually does, and it changes what "delete" means here.
+// This removes the saved FORM, so the BOL leaves this list and can no longer
+// be edited or reissued; the copy that may already be with a driver stays in
+// documents_saved/bol.
+//
+// If the row being deleted is the one currently open in the form, the form
+// is reset — otherwise Generate would quietly re-create the record she just
+// removed, under the same number.
+async function bolDeleteApp(id, bolNo) {
+  const label = bolNo ? `BOL ${bolNo}` : 'this bill of lading';
+  if (!confirm(`Delete ${label}?\n\nIt will leave this list and cannot be edited or reissued.\n\nThe PDF already generated is KEPT.`)) return;
+  try {
+    await api(`/api/bols/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (bolw && bolw.editingId === id) {
+      resetBolForm();
+      bolw.status = `${label} deleted. The generated PDF is still saved.`;
+      renderBolForm();
+    } else if ($('bolwStatus')) {
+      $('bolwStatus').textContent = `${label} deleted. The generated PDF is still saved.`;
+    }
+    loadSavedBolsApp();
   } catch (e) {
     if ($('bolwStatus')) $('bolwStatus').textContent = e.message;
   }

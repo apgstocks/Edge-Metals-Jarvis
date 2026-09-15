@@ -5503,10 +5503,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // because the two are different things and a delete that silently took
     // the archived document with it would be a surprise: the copy that was
     // handed to a driver stays in documents_saved/bol/.
+    //
+    // AUDITED, added 2026-09-16 when Apsara asked for the delete button that
+    // exposes this route ("also add delete option in bol generated"). The
+    // route itself predates her "Log every deletion" decision and was the
+    // only delete in this file still writing no trace. A bill of lading is a
+    // document that was handed to a driver; which of them was removed, by
+    // whom, is worth more than the record itself.
+    //
+    // Recorded BEFORE the delete and stamped after — the order this project
+    // uses everywhere, so a crash mid-delete still leaves the intent on file.
     app.delete('/api/bols/:id', requireAdmin, async (req, res) => {
         try {
-            const removed = await require('./helpers/bols').deleteBol(req.params.id);
-            if (!removed) return res.status(404).json({ error: 'no such bill of lading' });
+            const bols = require('./helpers/bols');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+
+            // Read it first: after the delete there is nothing left to
+            // describe, and "deleted bol 7f3a" tells her nothing she can use.
+            const doomed = bols.getBol(id);
+            if (!doomed) return res.status(404).json({ error: 'no such bill of lading' });
+
+            const entry = await audit.record({
+                action: 'delete-bol', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: {
+                    bol_no: doomed.bol_no, bol_date: doomed.bol_date,
+                    consignee_name: doomed.consignee_name, container_no: doomed.container_no,
+                    generated_count: doomed.generated_count,
+                    last_filename: doomed.last_filename,
+                },
+            });
+
+            const removed = await bols.deleteBol(id);
+            if (!removed) {
+                await audit.complete(entry, 'failed', { reason: 'bill of lading not found' });
+                return res.status(404).json({ error: 'no such bill of lading' });
+            }
+            await audit.complete(entry, 'done', {});
             res.json({ ok: true, removed, note: 'the saved PDF is kept' });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

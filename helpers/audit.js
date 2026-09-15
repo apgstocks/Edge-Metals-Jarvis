@@ -65,6 +65,11 @@ const ACTIONS = [
     'delete-metals-trucking',     // an Edge Metals haulage payment removed
     'resign-paid-load',           // signature replaced after money moved
     'edit-locked-load',           // the edit-unlock prompt satisfied by this profile
+    // ── DOCUMENTS ────────────────────────────────────────────────────────
+    // Not a lock being walked past — any admin may do this — but a shipping
+    // document that was handed to a driver, removed from the system. Which
+    // one went, and who removed it, outlives the record itself.
+    'delete-bol',                 // a saved bill of lading form (the PDF is kept)
 ];
 
 function listEntries() {

@@ -944,6 +944,12 @@ function setSubtab(name) {
   $('panelProforma').classList.toggle('hidden', name !== 'proforma');
   $('panelBol').classList.toggle('hidden', name !== 'bol');
   $('panelVerification').classList.toggle('hidden', name !== 'verification');
+  // Both consignee typeaheads read `addressBook`, so it gets a refresh on
+  // entry to either — that is what stops a contact added in the Address Book
+  // page (a separate page, in another tab) from being invisible here until
+  // this one is reloaded. Deliberately not awaited: the panel should paint
+  // immediately, and the typeahead is only needed once she starts typing.
+  if (name === 'proforma' || name === 'bol') refreshAddressBook();
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
   if (name === 'bol') { bolInit(); loadSavedBols(); }
 }
@@ -1776,7 +1782,24 @@ $('btnAjVerify').addEventListener('click', async () => {
 
 // ── Address book typeahead (buyer/consignee) ─────────────────────────────
 let addressBook = [];
-api('/api/address-book').then((d) => { addressBook = d || []; }).catch(() => {});
+// Apsara, 2026-09-16: "when i add a address ... i have to logout for the
+// change to be seen." Worst on the phone, where the page never reloads — but
+// present here too: the Address Book is its own page (/address-book), so if
+// this tab stays open while she adds a contact in another one, this list is
+// a snapshot from whenever the tab was opened.
+//
+// Refreshed on every sub-tab entry now (see showDocTab), and REPLACED ONLY ON
+// SUCCESS — a failed refresh keeps the last good list rather than blanking
+// the typeahead, which is worse than being slightly out of date.
+async function refreshAddressBook() {
+  try {
+    const d = await api('/api/address-book');
+    if (Array.isArray(d)) addressBook = d;
+  } catch (e) {
+    console.error('[address-book] refresh failed, keeping last good list:', e.message);
+  }
+}
+refreshAddressBook();
 
 // Apsara: "when i type Joey/Taewon.only Joey coming" — matching used to
 // check ONLY the aliases array (nicknames/contact names), never the raw
@@ -4226,6 +4249,51 @@ async function bolEdit(id) {
 // filenames, which is an inventory; this shows documents — who it went to,
 // which container, when it was last touched — because that is what she is
 // looking for when she comes back to correct one.
+// Empties the form and drops out of edit mode. Only used after deleting the
+// record currently being edited — see bolDelete. Every field is cleared by
+// NAME rather than by resetting the <form>, because the panel is not a form
+// element and a stale value left in one box is how a deleted BOL comes back
+// half-filled under a new number.
+function bolClearForm() {
+  bolEditingId = null;
+  ['bol_consignee', 'bol_consignee_address', 'bol_no', 'bol_po', 'bol_appointment',
+   'bol_pickup_date', 'bol_pickup_time', 'bol_carrier', 'bol_driver',
+   'bol_container', 'bol_seal', 'bol_notes'].forEach((id) => { if ($(id)) $(id).value = ''; });
+  if ($('bol_unit')) $('bol_unit').value = 'lb';
+  // Back to today, the same default a fresh panel gets — not blank, which
+  // would make the next BOL silently generate with no date.
+  if ($('bol_date')) $('bol_date').value = bolTodayStr();
+  bolRows = [bolBlankRow(), bolBlankRow()];
+  bolPaintItems();
+}
+
+// Apsara, 2026-09-16: "also add delete option in bol generated".
+//
+// The confirm says the BOL NUMBER, not "this BOL" — a list of near-identical
+// rows is exactly where a generic prompt gets a reflex Yes on the wrong line.
+//
+// It also says the PDF is kept, because that is what the server actually
+// does and it changes the answer: this removes the saved FORM (so it stops
+// appearing here and can no longer be edited/reissued), while the copy in
+// documents_saved/bol — the one that may already be with a driver — stays.
+// Someone told "delete" without that sentence would reasonably assume the
+// document itself was gone.
+//
+// If she was mid-edit on the row she just deleted, the form is cleared:
+// leaving it open would let Save silently re-create the record she removed.
+async function bolDelete(id, bolNo) {
+  const label = bolNo ? `BOL ${bolNo}` : 'this bill of lading';
+  if (!confirm(`Delete ${label}?\n\nThis removes the saved form, so it will no longer appear in the list and cannot be edited or reissued.\n\nThe PDF that was already generated is KEPT.`)) return;
+  try {
+    await api(`/api/bols/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (bolEditingId === id) bolClearForm();
+    $('bolStatus').textContent = `${label} deleted. The generated PDF is still saved.`;
+    loadSavedBols();
+  } catch (e) {
+    $('bolStatus').textContent = e.message;
+  }
+}
+
 async function loadSavedBols() {
   try {
     const { bols } = await api('/api/bols');
@@ -4249,6 +4317,7 @@ async function loadSavedBols() {
               <td style="padding:7px 8px; text-align:right; white-space:nowrap;">
                 <button class="btn btn-secondary bol-edit" data-id="${esc(b.id)}" style="font-size:11px; padding:4px 10px;">Edit</button>
                 ${b.last_filename ? `<button class="btn btn-secondary bol-dl" data-file="${esc(b.last_filename)}" data-date="${esc(b.last_saved_date || '')}" style="font-size:11px; padding:4px 10px;">PDF</button>` : ''}
+                <button class="btn btn-secondary bol-del" data-id="${esc(b.id)}" data-no="${esc(b.bol_no || '')}" style="font-size:11px; padding:4px 10px; color:var(--danger, #c0392b);">Delete</button>
               </td>
             </tr>`).join('')}
         </table>`
@@ -4258,6 +4327,8 @@ async function loadSavedBols() {
     $('bolSavedList').querySelectorAll('.bol-dl').forEach((el) =>
       el.addEventListener('click', () => bolDownload(el.dataset.file, el.dataset.date)
         .catch((e) => { $('bolStatus').textContent = e.message; })));
+    $('bolSavedList').querySelectorAll('.bol-del').forEach((el) =>
+      el.addEventListener('click', () => bolDelete(el.dataset.id, el.dataset.no)));
   } catch (e) {
     $('bolSavedList').textContent = e.message;
   }
