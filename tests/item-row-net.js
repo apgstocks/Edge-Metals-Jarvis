@@ -155,12 +155,96 @@ for (const [label, file] of [['website', 'dashboard/index.html'], ['app', 'mobil
     ck(`${label}:   gross 0 with tare 0 is net 0, not blank`, read(rows[0]).net === '0',
        JSON.stringify(read(rows[0])) + ' — 0 is a number, not an absence');
 
+    // ── A BLANK NET SAYS WHY IT IS BLANK ─────────────────────────────────
+    // Her case does not reproduce here, so the cause is on the device. What
+    // is fixable without knowing the cause is the diagnosis: net is derived
+    // from two boxes, and a silent blank is indistinguishable from a broken
+    // app. Now it names the missing half.
+    typeInto(w, rows[0], '.ld-item-gross', '500');
+    typeInto(w, rows[0], '.ld-item-tare', '');
+    const netEl = rows[0].querySelector('.ld-item-net');
+    ck(`${label}: a blank net names what it is waiting for`,
+       /needs .*tare/.test(netEl.placeholder) && !/gross/.test(netEl.placeholder),
+       `placeholder was ${JSON.stringify(netEl.placeholder)} — gross is filled, so only tare is missing`);
+    typeInto(w, rows[0], '.ld-item-gross', '');
+    ck(`${label}:   and names BOTH when both are empty`,
+       /gross/.test(netEl.placeholder) && /tare/.test(netEl.placeholder),
+       JSON.stringify(netEl.placeholder));
+    typeInto(w, rows[0], '.ld-item-tare', '0');
+    typeInto(w, rows[0], '.ld-item-gross', '1');
+    ck(`${label}:   and the hint clears once it can compute`,
+       netEl.placeholder === '' && netEl.value === '1',
+       `placeholder ${JSON.stringify(netEl.placeholder)}, value ${JSON.stringify(netEl.value)}`);
+
     ck(`${label}: nothing threw`, errors.length === 0, errors.slice(0, 2).join(' | '));
     dom.window.close();
 }
 
+section('inventory — one material, one row, her spelling');
+{
+    // Apsara, 2026-09-16: "item description is case sensitive", and asked
+    // where: "Inventory shows it twice".
+    //
+    // The GROUPING was already case-insensitive and is asserted here so a
+    // future change cannot quietly make it sensitive again. What was wrong is
+    // the LABEL on one kind of row: an item that was SOLD but never recorded
+    // as bought is pushed into the list using the lower-cased grouping KEY as
+    // its name, so it rendered "al combo" among rows reading "Al combo" —
+    // one material looking like two conventions on one screen.
+    const { groupItemsByDescription } = require('../helpers/pdf');
+    const mixed = groupItemsByDescription([
+        { description: 'Al combo',   net_weight: 100, gross_weight: 100, tare_weight: 0, amount: 10 },
+        { description: 'al combo',   net_weight: 200, gross_weight: 200, tare_weight: 0, amount: 20 },
+        { description: 'AL COMBO',   net_weight: 300, gross_weight: 300, tare_weight: 0, amount: 30 },
+        { description: ' Al Combo ', net_weight: 400, gross_weight: 400, tare_weight: 0, amount: 40 },
+    ]);
+    ck('four spellings of one material group into ONE row', mixed.length === 1,
+       mixed.map((g) => g.description).join(' | '));
+    ck('  and their weights are added, not split', mixed[0] && mixed[0].net === 1000,
+       JSON.stringify(mixed[0]));
+    ck('  and the row is labelled with the spelling she typed first',
+       mixed[0] && mixed[0].description === 'Al combo',
+       `got ${JSON.stringify(mixed[0] && mixed[0].description)} — not the lower-cased key`);
+
+    // The sold-only row. Read from source rather than by standing up the
+    // whole store: the bug is one identifier, and which one it is IS the bug.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/loads.js'), 'utf8');
+    const block = src.slice(src.indexOf('Material shipped that was never recorded'),
+                            src.indexOf('Material shipped that was never recorded') + 900);
+    ck('a sold-only row is labelled with her spelling, not the grouping key',
+       /description: hit\.label,/.test(block) && !/description: k,/.test(block),
+       'pushing `description: k` prints an all-lowercase row beside properly-cased ones');
+}
+
 section('the source of the bug, stated once');
 {
+    // ── THE CASE THAT CANNOT BE STAGED HERE ──────────────────────────────
+    // Writing 'O' (letter, not zero) into a type="number" box was the first
+    // attempt, and it revealed the mechanism instead: the browser SANITISES
+    // it, so .value comes back '' and the field reads as merely empty. That
+    // is precisely the failure mode on a real device — a number input whose
+    // contents cannot be parsed reports an EMPTY value while still SHOWING
+    // what was typed. The operator sees 1; the code sees nothing. It is the
+    // best explanation found for "sometimes ... net is cnot cmng as 1", on a
+    // phone, with the tare box reading 0.
+    //
+    // validity.badInput is the browser's way of telling those two apart, and
+    // jsdom does not implement it, so this is asserted at the source rather
+    // than driven. Said plainly rather than dressed up as a behavioural test:
+    // a test that claims to cover a path it cannot reach is worse than one
+    // that admits it.
+    for (const f of ['dashboard/index.html', 'mobile-app/www/index.html']) {
+        const code = fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const at = code.indexOf('function recomputeRowTotals');
+        const fn = code.slice(at, at + 5200);
+        ck(`${f.split('/')[0]}: unparseable input is detected via validity.badInput`,
+           /validity\.badInput/.test(fn),
+           'a number input reports value "" for text it cannot parse — badInput is the only way to tell that apart from empty');
+        ck(`${f.split('/')[0]}:   and the offending box itself is marked, not just the net column`,
+           /grossEl\.style\.borderColor\s*=\s*badGross/.test(fn) && /tareEl\.style\.borderColor\s*=\s*badTare/.test(fn),
+           'otherwise the operator sees a weight that looks fine and an empty net, with nothing joining them');
+    }
+
     for (const [label, file] of [['website', 'dashboard/index.html'], ['app', 'mobile-app/www/index.html']]) {
         const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
         ck(`${label}: the duplicate no longer relies on ?? to catch a blank tare`,

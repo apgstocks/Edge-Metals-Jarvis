@@ -3517,10 +3517,70 @@ function itemDescSuggestions() {
 // (called right after, on the same input event) is what actually persists
 // the values into currentLoadItems.
 function recomputeRowTotals(row) {
-  const g = parseFloat(row.querySelector('.ld-item-gross').value);
-  const t = parseFloat(row.querySelector('.ld-item-tare').value);
+  // ── type="number" REPORTS AN EMPTY VALUE FOR ANYTHING IT CANNOT PARSE ──
+  // This is the whole reason a weight can vanish without a trace. On a
+  // number input, if what the field currently holds is not a valid number —
+  // "1," from a phone keypad that emits a decimal comma, a stray character,
+  // a half-typed "1." — the browser reports .value as the EMPTY STRING while
+  // the box on screen still shows what was typed. The code sees nothing, the
+  // operator sees "1", and net goes blank with no explanation.
+  //
+  // validity.badInput is how the browser says "there is text here and it is
+  // not a number", and it is the only way to tell that case apart from a
+  // genuinely empty box. jsdom does not set it (it sanitises programmatic
+  // assignments instead), so this branch is real-device-only — which is
+  // consistent with Apsara seeing this on the phone and it never once
+  // reproducing here.
+  const grossEl = row.querySelector('.ld-item-gross');
+  const tareEl  = row.querySelector('.ld-item-tare');
+  const badGross = !!(grossEl.validity && grossEl.validity.badInput);
+  const badTare  = !!(tareEl.validity  && tareEl.validity.badInput);
+  const grossRaw = grossEl.value;
+  const tareRaw  = tareEl.value;
+  const g = parseFloat(grossRaw);
+  const t = parseFloat(tareRaw);
   const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
-  row.querySelector('.ld-item-net').value = net != null ? net : '';
+  const netEl = row.querySelector('.ld-item-net');
+  netEl.value = net != null ? net : '';
+
+  // ── A BLANK NET NOW SAYS WHY IT IS BLANK ──────────────────────────────
+  // Apsara, 2026-09-16: "sometimes when i give gross lbs as 1.net is cnot
+  // cmng as 1 ... this is only for newly added item", on the phone, with the
+  // tare box reading 0.
+  //
+  // I could not reproduce it. Driven in jsdom on both clients — first row,
+  // newly added row, first keystroke, after a re-render, after a description
+  // blur — net computes every time. So the cause is something about the real
+  // device that this code cannot see from here, and guessing at a fix would
+  // mean shipping a change I cannot show fixes anything.
+  //
+  // What CAN be fixed without knowing the cause is the diagnosis. Net is
+  // derived from two boxes, and when either one is not a number this used to
+  // go silently blank — identical on screen to "the app is broken". The
+  // placeholder now names the missing half, so the next time it happens she
+  // can read what the form thinks is wrong instead of describing a symptom.
+  //
+  // Placeholder rather than a new element on purpose: it appears exactly
+  // where she is already looking, only when the box is empty, and it cannot
+  // shift the layout of a row on a narrow phone screen.
+  if (net != null) {
+    netEl.placeholder = '';
+    netEl.removeAttribute('title');
+  } else {
+    const missing = [];
+    if (!isFinite(g)) missing.push(badGross ? 'a valid gross' : 'gross');
+    if (!isFinite(t)) missing.push(badTare ? 'a valid tare' : 'tare');
+    netEl.placeholder = 'needs ' + missing.join(' + ');
+    netEl.title = (badGross || badTare)
+        ? `The ${badGross ? 'gross' : 'tare'} box contains something that is not a number — retype it.`
+        : `Net is gross minus tare. Waiting on: ${missing.join(', ')}.`;
+    // A box the browser cannot parse is flagged where the problem IS, not
+    // only in the net column. Without this the operator stares at a weight
+    // that looks perfectly fine and at an empty net, with nothing connecting
+    // the two.
+    grossEl.style.borderColor = badGross ? 'var(--status-danger)' : '';
+    tareEl.style.borderColor  = badTare  ? 'var(--status-danger)' : '';
+  }
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);

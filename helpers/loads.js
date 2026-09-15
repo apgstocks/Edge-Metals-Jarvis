@@ -386,8 +386,17 @@ function getInventoryReport(allLoads, { from, to } = {}) {
             const outbound = require('./outboundLoads').loadOutboundLoads();
             for (const o of outbound) {
                 for (const it of (o.items || [])) {
-                    const k = String(it.description || 'Other').trim().toLowerCase();
-                    shippedByType.set(k, (shippedByType.get(k) || 0) + (Number(it.net_weight) || 0));
+                    const raw = String(it.description || 'Other').trim();
+                    const k = raw.toLowerCase();
+                    // The KEY is lower-cased so "Al combo" and "al combo"
+                    // are one material; the SPELLING she typed is kept
+                    // beside it, because the row pushed below used to be
+                    // labelled with the key and printed an all-lowercase
+                    // "al combo" among properly-cased rows. Grouping is
+                    // case-insensitive; displaying is not the same job.
+                    const cur = shippedByType.get(k) || { label: raw, net: 0 };
+                    cur.net += (Number(it.net_weight) || 0);
+                    shippedByType.set(k, cur);
                 }
             }
         } catch (e) {
@@ -397,14 +406,19 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         }
         if (shippedByType) {
             byType = byType.map((g) => {
-                const shipped = shippedByType.get(String(g.description).trim().toLowerCase()) || 0;
+                const hit = shippedByType.get(String(g.description).trim().toLowerCase());
+                const shipped = hit ? hit.net : 0;
                 return { ...g, shipped: round2(shipped), onHand: round2((g.net || 0) - shipped) };
             });
             // Material shipped that was never recorded as bought still has to
             // appear, or the tab shows nothing while the yard shows a hole.
-            for (const [k, shipped] of shippedByType) {
+            for (const [k, hit] of shippedByType) {
                 if (byType.some((g) => String(g.description).trim().toLowerCase() === k)) continue;
-                byType.push({ description: k, count: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(shipped), onHand: round2(-shipped) });
+                // hit.label, not k: labelling this row with the lower-cased
+                // grouping key made a sold-only item render as "al combo"
+                // next to bought items reading "Al combo" — one material
+                // looking like two conventions on one screen.
+                byType.push({ description: hit.label, count: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(hit.net), onHand: round2(-hit.net) });
             }
         }
     }
