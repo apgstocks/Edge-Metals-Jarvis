@@ -56,7 +56,18 @@ const { buildBolHtml, assertNoUnfilledPlaceholders } = require(path.join(ROOT, '
 const DOCS = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 const DESIGN = fs.readFileSync(path.join(ROOT, 'dashboard/design-bol.html'), 'utf8');
-const stripComments = (s) => s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+// Strips LINE comments and HTML comments only, NOT /* */ blocks.
+//
+// It used to strip those too, and on 2026-09-16 that silently deleted most of
+// dashboard/documents.html: the packing-list upload carries
+// accept="image/*,application/pdf", whose /* opens a block comment that the
+// next unrelated */ closes, taking everything between them with it. Two
+// assertions failed on code that was correct, and they failed by claiming a
+// function had vanished.
+//
+// Safe to drop, because the documentation comments in this project are // and
+// <!-- -->; there is no /* */ prose for an assertion to match against.
+const stripComments = (s) => s.replace(/<!--[\s\S]*?-->/g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 
 const BOL = {
     bol_no: 'EM-1047', bol_date: '2026-09-16',

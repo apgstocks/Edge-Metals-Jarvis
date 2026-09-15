@@ -52,7 +52,18 @@ const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8')
 // Comments are STRIPPED before any source scan below. Twice already in this
 // project an assertion has been satisfied by the comment explaining the rule
 // rather than by the code obeying it — `delivery_eta` and `window.open` both.
-const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+// Strips LINE comments and HTML comments only, NOT /* */ blocks.
+//
+// It used to strip those too, and on 2026-09-16 that silently deleted most of
+// dashboard/documents.html: the packing-list upload carries
+// accept="image/*,application/pdf", whose /* opens a block comment that the
+// next unrelated */ closes, taking everything between them with it. Two
+// assertions failed on code that was correct, and they failed by claiming a
+// function had vanished.
+//
+// Safe to drop, because the documentation comments in this project are // and
+// <!-- -->; there is no /* */ prose for an assertion to match against.
+const stripComments = (s) => s.replace(/<!--[\s\S]*?-->/g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 const APP_CODE = stripComments(APP);
 const WEB_CODE = stripComments(WEB);
 
