@@ -186,6 +186,88 @@ const TOOLS = {
         },
     },
 
+    // ── THE HALF OF THE YARD IT COULD NOT SEE ────────────────────────────
+    // Apsara, 2026-09-16: "Yard assistant should have complete knowledge abou
+    // yard."
+    //
+    // It did not, and the gap was not a rough edge — it was structural. Every
+    // read above this point looks at PURCHASES. find_loads calls loadLoads()
+    // and says so in its own description; nothing in this file had ever opened
+    // helpers/outboundLoads.js. So "who did we sell to this month", "what did
+    // Eccomelt take", "are we making anything" all reached an assistant that
+    // had no way to look, and the honest answer it could give was that it did
+    // not know.
+    //
+    // Three reads, matching the three reports she named for the phone on the
+    // same day (Sales, Stock, Profit — Stock already had `inventory`):
+
+    find_sales: {
+        kind: 'read',
+        description: 'Search SALES — material shipped OUT of the yard — by buyer, date range or item description. Use this for anything about what was sold, to whom, or for how much. find_loads only covers purchases coming IN.',
+        params: {
+            buyer: { type: 'string', describe: 'match part of a buyer name, case-insensitive' },
+            from: { type: 'date' }, to: { type: 'date' },
+            item: { type: 'string', describe: 'match part of an item description' },
+            limit: { type: 'number', describe: 'defaults to 25' },
+        },
+        run: async (p) => {
+            const { loadOutboundLoads } = require('./outboundLoads');
+            const q = (v) => String(v || '').trim().toLowerCase();
+            const buyer = q(p.buyer), item = q(p.item);
+            const inRange = (d) => !!d && (!p.from || d >= p.from) && (!p.to || d <= p.to);
+            const rows = loadOutboundLoads().filter((l) => {
+                if (!l) return false;
+                if ((p.from || p.to) && !inRange(l.date)) return false;
+                if (buyer && !q(l.buyer).includes(buyer)) return false;
+                if (item && !(l.items || []).some((it) => q(it && it.description).includes(item))) return false;
+                return true;
+            }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+            const limit = Math.max(1, Math.min(100, Number(p.limit) || 25));
+            // The COUNT comes back alongside the page, so an answer built on
+            // the first 25 of 300 sales can say so instead of sounding
+            // complete. A truncated list presented as the whole is how a
+            // confident wrong total gets spoken aloud.
+            return { total: rows.length, showing: Math.min(limit, rows.length), sales: rows.slice(0, limit) };
+        },
+    },
+
+    sales_report: {
+        kind: 'read',
+        description: 'Who the yard sold to over a period — loads, weight, amount, and margin where the material is linked back to the loads it came from. Use for "how much did we sell", "who bought what".',
+        params: { from: { type: 'date' }, to: { type: 'date' } },
+        run: async (p) => {
+            const { loadOutboundLoads, getOutboundReport } = require('./outboundLoads');
+            return getOutboundReport(loadOutboundLoads(), { from: p.from, to: p.to });
+        },
+    },
+
+    yard_profit: {
+        kind: 'read',
+        description: 'Edge Yard profit: margin on what was actually sold, plus a separate cash in/out picture. EDGE YARD ONLY — never add this to Edge Metals figures.',
+        params: { from: { type: 'date' }, to: { type: 'date' } },
+        run: async (p) => {
+            const out = require('./yardProfit').yardProfit({ from: p.from, to: p.to });
+            // ── THE CAVEAT TRAVELS WITH THE NUMBER ───────────────────────
+            // helpers/yardProfit.js returns `coverage_pct` and a `caveat` in
+            // words precisely so a client cannot render the figure without it
+            // by simply forgetting to. An assistant is the client most likely
+            // to forget: it reads the JSON, finds `margin`, and says a
+            // number. So the instruction is hoisted to the top level of the
+            // reply where it cannot be missed, rather than left nested two
+            // keys deep beside the figure it qualifies.
+            //
+            // The cash block is already named NOT PROFIT in its own note. It
+            // is repeated here for the same reason.
+            return {
+                ...out,
+                _how_to_answer: out.margin && out.margin.caveat
+                    ? `Say the margin AND this, in the same breath: ${out.margin.caveat}`
+                    : 'Margin covers essentially all sales in this range.',
+                _never: 'The cash block is money in and out over the period. It is NOT profit — do not call it profit, and do not add it to the margin.',
+            };
+        },
+    },
+
     spend_report: {
         kind: 'read',
         description: 'What the business has paid out, split into loads, haulage and expenses, by month and by payment method. Also reports money received from sales separately.',
