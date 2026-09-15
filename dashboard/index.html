@@ -725,6 +725,16 @@ const NAV_ITEMS = [
   // holding debts, is a mistake waiting for a hurried afternoon. The mobile
   // app has no roster, so there the tab is just "Trucker" as she asked.
   { id: 'trucker-bills', label: 'Trucker Bills', group: 'Yard' },
+  // ── EXPENSES ─────────────────────────────────────────────────────────
+  // Apsara, 2026-09-15: "there is a expense tab in app but not website".
+  // Correct, and it had been that way since the tab was built on 2026-08-19
+  // — the website carried only a single "Expenses $X" figure inside the
+  // Spend Report, so what was spent could be totalled at the desk and never
+  // read. It is also why "check in expenses" had nowhere to go.
+  //
+  // adminOnly, matching the app's own gate and the server's: expenses are
+  // money out, and staff keep Loads and the cash balance.
+  { id: 'expenses', label: 'Expenses', group: 'Yard', adminOnly: true },
   // Spend report — every figure the business pays out, both sides of it,
   // so adminOnly. Staff keep Loads and the cash balance.
   { id: 'spend',     label: 'Spend Report', group: 'Yard', adminOnly: true },
@@ -982,6 +992,7 @@ async function loadTab(tab) {
     if (tab === 'sales') { metalsTab.sales = 'outgoing'; return renderLedgerTab('sales'); }
     if (tab === 'trucker-bills') return renderTruckerTab();
     if (tab === 'petty') return renderPettyCashTab();
+    if (tab === 'expenses') return renderExpensesTab();
     if (tab === 'spend') return renderSpendReportTab();
     if (tab === 'loads') {
       // Purchases and sales in one deck — a sale she can't see is a sale she
@@ -4439,6 +4450,257 @@ let spendMethod = '';
 // '' means every bank. Same reasoning as spendMethod: a filter that resets on
 // repaint is worse than no filter.
 let spendBank = '';
+
+// ── EXPENSES ────────────────────────────────────────────────────────────
+// Apsara, 2026-09-15: "there is a expense tab in app but not website", and
+// when asked how far to take it: the full tab, same as the app.
+//
+// A DELIBERATE SECOND COPY, and worth naming as such. This is the same screen
+// as mobile-app/www/index.html's, and two copies of one screen is how the
+// Load form has drifted twice already. tests/form-parity.js now guards this
+// pair the way it guards that one — the categories, the methods, the retired
+// -method rule and the petty-cash warning are asserted on BOTH files, so a
+// change to one that is not made to the other fails rather than ships.
+//
+// Everything here comes from the SERVER: categories, payment methods, the
+// default method and the retired list. Hardcoding any of them would let the
+// form offer something the server rejects, which is an option that silently
+// does not take.
+let expenseCategories = [];
+let expenseMethods = [];
+let expenseDefaultMethod = '';
+// Null, not [], so "the server did not tell us" stays distinguishable from
+// "there are none" — an older server sends neither and the old behaviour is
+// kept. See openExpenseModal.
+let expenseRetiredMethods = null;
+let editingExpenseId = null;
+
+async function renderExpensesTab() {
+  const data = await api('/api/expenses');
+  expenseCategories = data.categories || [];
+  expenseMethods = data.methods || [];
+  expenseDefaultMethod = data.default_method || '';
+  expenseRetiredMethods = Array.isArray(data.retired_methods) ? data.retired_methods : null;
+  const expenses = data.expenses || [];
+  const report = data.report || { total: 0, count: 0, byCategory: [], byDay: [] };
+  const today = todayYardDateStr();
+  const todayTotal = ((report.byDay || []).find((d) => d.date === today) || {}).amount || 0;
+
+  // Grouped by date, newest first — the Loads deck groups the same way, so
+  // both tabs read alike.
+  const byDate = new Map();
+  for (const e of expenses) {
+    const k = e.date || 'No date';
+    if (!byDate.has(k)) byDate.set(k, []);
+    byDate.get(k).push(e);
+  }
+  const dates = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : -1));
+  const m = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; gap:12px; flex-wrap:wrap;">
+        <div>
+          <div class="eyebrow">// Expenses</div>
+          <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:4px;">Expense tracker</h2>
+          <div style="font-size:13px; color:var(--text-muted);">Admin only. Syncs to the Expenses Google Sheet automatically.</div>
+        </div>
+        <button id="btnAddExpense" class="btn btn-primary">+ Add expense</button>
+      </div>
+      <div class="card" style="padding:16px 18px; margin-bottom:18px; display:flex; gap:24px; flex-wrap:wrap;">
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Today</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(m(todayTotal))}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">All-time</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(m(report.total))}</div></div>
+        <div><div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Entries</div><div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(report.count)}</div></div>
+      </div>
+      ${dates.length ? dates.map((date) => {
+        const rows = byDate.get(date);
+        const dayTotal = rows.reduce((t, e) => t + (e.amount || 0), 0);
+        return `
+        <div style="margin-bottom:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+            <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(date)}</div>
+            <div style="font-family:var(--font-mono); font-size:12px; color:var(--text-strong); font-weight:700;">${esc(m(dayTotal))}</div>
+          </div>
+          ${rows.map((e) => `
+            <div class="card" style="padding:12px 14px; margin-bottom:8px;">
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <div style="min-width:0;">
+                  <div style="font-size:13.5px; font-weight:700; color:var(--text-strong);">${esc(e.description || '')}</div>
+                  <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:3px;">${esc(e.id)} · ${esc(e.category || 'Other')}${e.vendor ? ' · ' + esc(e.vendor) : ''}${e.payment_method ? ' · ' + esc(e.payment_method) : ''}</div>
+                </div>
+                <div style="font-size:15px; font-weight:800; color:var(--text-strong); white-space:nowrap;">${esc(m(e.amount))}</div>
+              </div>
+              <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:9px;">
+                <button class="btn btn-edit-expense" data-id="${esc(e.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+                <button class="btn btn-danger btn-delete-expense" data-id="${esc(e.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>
+              </div>
+            </div>`).join('')}
+        </div>`;
+      }).join('') : '<div style="padding:50px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12.5px;">No expenses recorded yet.</div>'}
+    </section>`;
+
+  $('btnAddExpense').addEventListener('click', () => openExpenseModal(null));
+  document.querySelectorAll('.btn-edit-expense').forEach((b) => b.addEventListener('click', () => {
+    openExpenseModal(expenses.find((x) => x.id === b.dataset.id) || null);
+  }));
+  document.querySelectorAll('.btn-delete-expense').forEach((b) => b.addEventListener('click', async () => {
+    if (!await askYesNo(`Delete expense ${b.dataset.id}?`)) return;
+    b.disabled = true; b.textContent = 'Deleting…';
+    try { await api(`/api/expenses/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' }); await renderExpensesTab(); }
+    catch (err) { alert('Delete failed: ' + err.message); b.disabled = false; b.textContent = 'Delete'; }
+  }));
+}
+
+// ── BUILT ON DEMAND, APPENDED TO BODY ────────────────────────────────────
+// NOT static markup, and the first attempt at this was: the modal was placed
+// beside #payModal, which LOOKS like page markup and is not — it lives inside
+// renderLoads's `$('viewRoot').innerHTML = ...` template. So it exists only
+// while the Loads tab is on screen, and every id in it was null the moment
+// the Expenses tab rendered. jsdom caught it; "syntax ok" never would.
+//
+// This follows openLedgerForm and the receipt modal instead: build it, append
+// it, wire it, remove it on close. Nothing to keep in the page, and no
+// listeners stacking up across visits.
+function expenseModalHtml() {
+  return `
+    <div id="expenseModal" class="modal-overlay" style="align-items:center; display:flex;">
+      <div class="modal-shell" style="max-width:480px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-head">
+          <div id="expTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Add expense</div>
+          <button id="expClose" class="btn" style="padding:4px 10px;">&#10005;</button>
+        </div>
+        <div class="modal-body">
+          <div class="ld-grid-2">
+            <div class="field"><label>Date</label><input id="exp_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
+            <div class="field"><label>Amount ($)</label><input id="exp_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
+          </div>
+          <div class="field" style="margin-top:14px;"><label>Category</label><select id="exp_category"></select></div>
+          <div class="field" style="margin-top:14px;"><label>Description</label><input id="exp_description" placeholder="e.g. Diesel for the loader"></div>
+          <div class="ld-grid-2" style="margin-top:14px;">
+            <div class="field"><label>Vendor (optional)</label><input id="exp_vendor" placeholder="e.g. Shell"></div>
+            <!-- A fixed list since 2026-09-02, not free text. The spend report
+                 groups by this, and "cash", "Cash" and "cash app" are three
+                 different strings — any grouping of them would be a guess
+                 about money. Choosing Cash also draws the amount out of petty
+                 cash. -->
+            <div class="field"><label>Paid by</label><select id="exp_payment"></select></div>
+          </div>
+          <div id="expErr" style="margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);"></div>
+        </div>
+        <div class="modal-foot">
+          <button id="expSave" class="btn btn-primary">Save expense</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function openExpenseModal(expense) {
+  const old = $('expenseModal');
+  if (old) old.remove();
+  document.body.insertAdjacentHTML('beforeend', expenseModalHtml());
+  wireExpenseModal();
+  editingExpenseId = expense ? expense.id : null;
+  $('expTitle').textContent = expense ? `Edit ${expense.id}` : 'Add expense';
+  $('exp_date').value = toUsDate(expense ? (expense.date || '') : todayYardDateStr());
+  wireUsDateField('exp_date');
+  $('exp_category').innerHTML = expenseCategories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  if (expense && expense.category) {
+    // A category typed before this list existed, or edited on the sheet, must
+    // not silently switch to something else because it is not in the current
+    // picker — added as an option so the value round-trips.
+    if (!expenseCategories.includes(expense.category)) {
+      $('exp_category').insertAdjacentHTML('afterbegin', `<option value="${esc(expense.category)}">${esc(expense.category)}</option>`);
+    }
+    $('exp_category').value = expense.category;
+  }
+  $('exp_description').value = expense ? (expense.description || '') : '';
+  $('exp_vendor').value = expense ? (expense.vendor || '') : '';
+
+  // ── RETIRED METHODS ARE KEPT, NEVER OFFERED ──────────────────────────
+  // Cheque and Other were removed 2026-09-02, Zelle and Wire 2026-09-03.
+  // They are RETIRED, not forbidden: an expense already recorded with one
+  // keeps it as an option so editing the description cannot silently erase
+  // how it was paid. Only a value the server would still ACCEPT is offered
+  // back — legacy free text ("cash app") matches nothing and shows as blank,
+  // which is her rule: "leave old entries blank".
+  //
+  // expenseRetiredMethods === null means the server never sent the list (a
+  // client pointed at a VM that has not been updated). The old, wider
+  // behaviour is kept there on purpose: the narrower rule needs the server's
+  // list to be safe, and without it, treating every stored value as unknown
+  // would blank a real method and erase it on save.
+  const sel = $('exp_payment');
+  const acceptable = expenseRetiredMethods
+    ? (expenseMethods || []).concat(expenseRetiredMethods)
+    : null;
+  const retired = expense && expense.payment_method
+    && !(expenseMethods || []).includes(expense.payment_method)
+    && (!acceptable || acceptable.includes(expense.payment_method))
+    ? expense.payment_method : null;
+  sel.innerHTML = ['<option value="">— not recorded —</option>']
+    .concat((expenseMethods || []).map((mm) => `<option value="${esc(mm)}">${esc(mm)}</option>`))
+    .concat(retired ? [`<option value="${esc(retired)}">${esc(retired)} (no longer offered)</option>`] : [])
+    .join('');
+  // The default reaches a NEW expense only. On an EDIT it would make an old
+  // expense with no recorded method come up reading "Cash", and saving would
+  // both rewrite it and withdraw from petty cash for money that may never
+  // have left the box.
+  sel.value = expense
+    ? (((expenseMethods || []).includes(expense.payment_method) || retired === expense.payment_method)
+        ? expense.payment_method : '')
+    : (expenseDefaultMethod || '');
+  $('exp_amount').value = expense ? (expense.amount ?? '') : '';
+  $('expErr').textContent = '';
+}
+
+function closeExpenseModal() {
+  const el = $('expenseModal');
+  if (el) el.remove();
+  editingExpenseId = null;
+}
+
+function wireExpenseModal() {
+  if (!$('expClose')) return;
+  $('expClose').addEventListener('click', closeExpenseModal);
+  $('expSave').addEventListener('click', async () => {
+    const payload = {
+      date: toIsoDate($('exp_date').value),
+      category: $('exp_category').value,
+      description: $('exp_description').value.trim(),
+      vendor: $('exp_vendor').value.trim() || null,
+      payment_method: $('exp_payment').value || null,
+      amount: $('exp_amount').value,
+    };
+    const btn = $('expSave');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    $('expErr').textContent = '';
+    try {
+      const saved = editingExpenseId
+        ? await api(`/api/expenses/${encodeURIComponent(editingExpenseId)}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await api('/api/expenses', { method: 'POST', body: JSON.stringify(payload) });
+      closeExpenseModal();
+      await renderExpensesTab();
+      // ── THE BOX DID NOT COVER IT ────────────────────────────────────────
+      // A cash expense draws down petty cash. When the box did not have it,
+      // the balance goes negative — meaning cash left the drawer that was
+      // never entered. Said out loud, because a negative balance nobody
+      // mentions is one nobody reconciles.
+      if (saved && saved.expense && saved.expense.cash_shortfall) {
+        const sf = Number(saved.expense.cash_shortfall);
+        alert(`Recorded — but petty cash was $${sf.toFixed(2)} short of this.\n\n`
+            + 'The cash box now shows a negative balance, which means cash left the drawer that was never entered here. '
+            + 'Add that cash on the Petty cash tab to bring it back in line.');
+      }
+    } catch (err) {
+      // Server validation messages are prefixed "Validation:" — stripped,
+      // because that is our label and not something she needs to read.
+      $('expErr').textContent = String(err.message || '').replace(/^Validation:\s*/, '');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save expense';
+    }
+  });
+}
 
 async function renderSpendReportTab() {
   const qs = [];

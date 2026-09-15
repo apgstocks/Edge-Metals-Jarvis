@@ -568,5 +568,76 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
        /id="payModalTitle"/.test(src));
 }
 
+// ── EXPENSES EXIST ON BOTH CLIENTS ──────────────────────────────────────
+// Apsara, 2026-09-15: "there is a expense tab in app but not website".
+//
+// True since the tab was built on 2026-08-19. The website carried a single
+// "Expenses $X" figure inside the Spend Report, so what was spent could be
+// totalled at the desk and never read — which is also why "check in expenses"
+// had nowhere to go.
+//
+// THIS FILE EXISTS TO CATCH THAT AND DID NOT, because it only ever guarded
+// the Load form. The two clients have now drifted in BOTH directions: Edge
+// Metals is website-only, Expenses was app-only. So the rules the two expense
+// screens share are asserted on both files here, and every rule below is one
+// somebody could plausibly "simplify" on one side alone.
+{
+  const dash = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const mob  = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+
+  for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
+    ck(`expenses: ${label} has the tab`, /renderExpensesTab/.test(src));
+    ck(`expenses: ${label}   can add, edit and delete`,
+       /openExpenseModal/.test(src) && /btn-edit-expense/.test(src)
+       && /btn-delete-expense/.test(src) && /method: 'DELETE'/.test(src));
+    // Every list comes from the SERVER. Hardcoding any of them lets the form
+    // offer something the server rejects — an option that silently does not
+    // take, which is how "cash app" once saved as null.
+    ck(`expenses: ${label}   takes its categories from the server`,
+       /expenseCategories = data\.categories/.test(src));
+    ck(`expenses: ${label}   and its methods, default and retired list`,
+       /expenseMethods = data\.methods/.test(src)
+       && /expenseDefaultMethod = data\.default_method/.test(src)
+       && /expenseRetiredMethods = Array\.isArray\(data\.retired_methods\)/.test(src));
+    // A retired method on an existing expense is kept and marked; a legacy
+    // free-text one shows blank. Her rule: "leave old entries blank".
+    ck(`expenses: ${label}   keeps a retired method as a marked option`,
+       /no longer offered/.test(src));
+    ck(`expenses: ${label}   and offers back only what the server accepts`,
+       /acceptable \? \(expenseMethods/.test(src) || /acceptable \|\| acceptable\.includes/.test(src),
+       'otherwise legacy free text becomes a selectable option that saves as null');
+    // The default must not reach the EDIT path: an old expense with no method
+    // would come up reading "Cash", and saving would rewrite it AND withdraw
+    // from petty cash for money that may never have left the box.
+    ck(`expenses: ${label}   never defaults the method on an edit`,
+       /: \(expenseDefaultMethod \|\| ''\)/.test(src),
+       'the default belongs to a NEW expense only');
+    // A cash expense draws petty cash down. A negative balance nobody
+    // mentions is one nobody reconciles.
+    ck(`expenses: ${label}   warns when petty cash did not cover it`,
+       /cash_shortfall/.test(src));
+    ck(`expenses: ${label}   and strips our internal Validation: label`,
+       /replace\(\/\^Validation:/.test(src));
+  }
+
+  // The same field list on both, so the two screens can be diffed by eye.
+  for (const id of ['exp_date','exp_amount','exp_category','exp_description','exp_vendor','exp_payment']) {
+    ck(`expenses: both forms have ${id}`,
+       new RegExp('id="'+id+'"').test(dash) && new RegExp('id="'+id+'"').test(mob));
+  }
+
+  // ── AND THE MODAL HAS TO EXIST WHEN THE TAB DOES ──────────────────────
+  // The first version of the website tab put this markup beside #payModal,
+  // which LOOKS like page markup and is not: it lives inside renderLoads's
+  // `$('viewRoot').innerHTML = ...` template, so it existed only while the
+  // Loads tab was on screen and every id was null anywhere else. Built on
+  // demand and appended to body now, like openLedgerForm.
+  ck('expenses: the website builds its modal on demand, not inside another tab',
+     /document\.body\.insertAdjacentHTML\('beforeend', expenseModalHtml\(\)\)/.test(dash),
+     'markup inside renderLoads only exists while Loads is rendered');
+  ck('expenses:   and removes it on close, so none stack up',
+     /const el = \$\('expenseModal'\);\s*\n\s*if \(el\) el\.remove\(\);/.test(dash));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
