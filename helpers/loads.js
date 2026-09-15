@@ -202,14 +202,29 @@ async function addLoad(entry) {
         status        : 'open',
     };
 
+    // ── ONE SAVE, ONE RECORD ─────────────────────────────────────────────
+    // The same guard as addOutboundLoad's, added at the same time and for
+    // the same reason. Apsara hit this on a SALE ("I just added one.But two
+    // ones are created"), but nothing about the cause was specific to sales
+    // — a purchase is saved by the same button, in the same modal, through
+    // the same api() helper. Fixing only the screen where it was noticed
+    // would leave the identical hole open on the side of the business that
+    // records money going OUT, which is the worse one to double.
+    //
+    // See helpers/oncePerSave.js for what was ruled out. The lookup runs
+    // inside the mutator so it is under the file lock.
+    rec.client_request_id = require('./oncePerSave').normTicket(entry.client_request_id);
+    let already = null;
     await mutateJson(cfg.LOADS_FILE, [], (loads) => {
+        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
+        if (already) return loads;   // unchanged — nothing written
         rec.id = nextLoadId(loads);
         loads.unshift(rec);
         if (loads.length > 5000) loads.length = 5000;
         return loads;
     });
 
-    return rec;
+    return already || rec;
 }
 
 async function updateLoad(id, patch) {

@@ -65,18 +65,64 @@ function listSavedProformas() {
     return fs.readdirSync(root).filter((f) => f.toLowerCase().endsWith('.pdf')).sort().reverse();
 }
 
+// ── BILL OF LADING (2026-09-15) ─────────────────────────────────────────
+// Nested by date, NOT by container, which splits the difference between the
+// two layouts above and is a deliberate choice rather than a coin toss:
+//
+//   bol/<YYYY-MM-DD>/<filename>.pdf
+//
+// A BOL is one truck leaving on one day, so the day is the thing you look it
+// up by ("what went out on the 15th"). Nesting by container like the invoice
+// would scatter a single day's five BOLs into five folders, and several will
+// have no container number at all — she types everything fresh, so a blank
+// container would file them all under "UNKNOWN" together, which is the worst
+// of both. Flat like the proforma would work today and turn into a thousand-
+// file directory inside two years.
+function saveBolCopy(buffer, filename, dateStr) {
+    const date = dateStr || new Date().toISOString().slice(0, 10);
+    const destDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'bol', date);
+    fs.mkdirSync(destDir, { recursive: true });
+    const destPath = path.join(destDir, path.basename(filename));
+    fs.writeFileSync(destPath, buffer);
+    return destPath;
+}
+
+function listSavedBols() {
+    const root = path.join(cfg.DOCUMENTS_SAVED_DIR, 'bol');
+    if (!fs.existsSync(root)) return [];
+    const out = [];
+    for (const dateFolder of fs.readdirSync(root).sort().reverse()) {
+        const datePath = path.join(root, dateFolder);
+        if (!fs.statSync(datePath).isDirectory()) continue;
+        const files = fs.readdirSync(datePath).filter((f) => f.toLowerCase().endsWith('.pdf')).sort();
+        if (files.length) out.push({ date: dateFolder, files });
+    }
+    return out;
+}
+
 // Resolves a saved PDF's on-disk path from a (kind, filename[, date,
 // container]) request, checked to still be inside DOCUMENTS_SAVED_DIR
 // before returning — closes the obvious path-traversal hole (e.g.
 // "../../config.js") a raw querystring path would otherwise open.
 // Returns null if invalid or the file doesn't exist.
-function resolveSavedPath({ kind, filename, date, container }) {
-    if ((kind !== 'invoice' && kind !== 'proforma') || !filename) return null;
+// KINDS ARE AN ALLOWLIST, not a check for the one bad value. Written as a
+// Set so adding 'bol' (2026-09-15) could not accidentally become
+// `kind !== 'invoice' && kind !== 'proforma' && kind !== 'bol'` — a chain
+// where one `&&` typed as `||` silently lets every kind through, including
+// ones that resolve to directories that do not exist and paths nobody
+// intended. The traversal guard below is the real defence, but a guard is
+// cheaper to keep correct when the thing in front of it cannot go wrong.
+const SAVED_KINDS = new Set(['invoice', 'proforma', 'bol']);
 
+function resolveSavedPath({ kind, filename, date, container }) {
+    if (!SAVED_KINDS.has(kind) || !filename) return null;
+
+    const safeDate = () => String(date || '').trim().replace(/[^0-9\-]/g, '_');
     let targetDir;
     if (kind === 'invoice') {
-        const safeDate = String(date || '').trim().replace(/[^0-9\-]/g, '_');
-        targetDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'invoice', safeDate, safeName(container));
+        targetDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'invoice', safeDate(), safeName(container));
+    } else if (kind === 'bol') {
+        targetDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'bol', safeDate());
     } else {
         targetDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'proforma');
     }
@@ -90,4 +136,9 @@ function resolveSavedPath({ kind, filename, date, container }) {
     return targetPath;
 }
 
-module.exports = { safeName, saveInvoiceCopy, saveProformaCopy, listSavedInvoices, listSavedProformas, resolveSavedPath };
+module.exports = {
+    safeName, SAVED_KINDS,
+    saveInvoiceCopy, saveProformaCopy, saveBolCopy,
+    listSavedInvoices, listSavedProformas, listSavedBols,
+    resolveSavedPath,
+};

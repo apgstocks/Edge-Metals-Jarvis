@@ -1776,6 +1776,95 @@ const MUTATIONS = [
       // so BEFORE someone tries to pay a load in cash.
       find: 'Cash payments are refused while this is empty. Add cash before paying a load in cash.',
       to:   'Cash payments are refused while this is empty.' },
+
+    // ── ONE SAVE, ONE RECORD (2026-09-15) ────────────────────────────────
+    // "I just added one.But two ones are created" — two identical Darwin
+    // sales. The cause was never found, so the guarantee is the weaker,
+    // checkable one: a re-sent save cannot make a second row.
+    { name: 'once: the sale guard is gone, so a re-sent save writes twice',
+      file: 'helpers/outboundLoads.js', suites: ['once-per-save'],
+      find: "        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);\n        if (already) return loads;   // returned unchanged — nothing is written",
+      to:   '        already = null;' },
+    { name: 'once: the purchase guard is gone — only the noticed screen was fixed',
+      file: 'helpers/loads.js', suites: ['once-per-save'],
+      find: "        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);\n        if (already) return loads;   // unchanged — nothing written",
+      to:   '        already = null;' },
+    { name: 'once: the check moves OUTSIDE the lock, so simultaneous sends both write',
+      file: 'helpers/outboundLoads.js', suites: ['once-per-save'],
+      // The subtle version of the same bug. Both requests look at the file
+      // before either has written, both see nothing, both save. Section D
+      // fires them with Promise.all precisely to catch this.
+      find: '    let already = null;\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        already =',
+      to:   '    let already = null;\n    already = require(\'./oncePerSave\').findSpent(require(\'./json\').loadJson(cfg.OUTBOUND_LOADS_FILE, []), rec.client_request_id);\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        if (0) already =' },
+    { name: 'once: a BLANK ticket matches a blank ticket, so the second real save vanishes',
+      file: 'helpers/oncePerSave.js', suites: ['once-per-save'],
+      // The dangerous direction. Blocking a duplicate loses nothing; matching
+      // two untagged saves to each other silently throws away her work.
+      find: '    if (!t) return null;\n    for (const r of (rows || [])) {',
+      to:   '    for (const r of (rows || [])) {' },
+    { name: 'once: an ancient ticket still matches, swallowing a new save',
+      file: 'helpers/oncePerSave.js', suites: ['once-per-save'],
+      find: '        if (isFinite(at) && (now - at) > TICKET_TTL_MS) continue;',
+      to:   '        if (false) continue;' },
+    { name: 'once: the ticket is minted at click time instead of when the form opens',
+      file: 'dashboard/index.html', suites: ['once-per-save'],
+      // Where it is minted IS the mechanism: a ticket created inside the
+      // click handler is a different ticket on the second send, which is
+      // exactly the case it exists to catch.
+      find: '  saveTicket = (window.crypto && crypto.randomUUID)',
+      to:   '  saveTicket = null; const _unused = (window.crypto && crypto.randomUUID)' },
+    { name: 'once: the server stops reading the ticket off the sale request',
+      file: 'api.js', suites: ['once-per-save'],
+      // Anchored on the outbound route's preceding line, because
+      // `client_request_id: b.client_request_id` appears on BOTH the
+      // /api/loads and /api/outbound-loads routes and an ambiguous find
+      // string mutates whichever comes first — or nothing at all.
+      find: '                client_request_id: b.client_request_id,   // outbound',
+      to:   '' },
+
+    // ── BILL OF LADING (2026-09-15) ──────────────────────────────────────
+    { name: 'bol: a blank tare prints as 0, claiming the container weighed nothing',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      find: '    if (v === null) return \'—\';\n    return Math.round(v).toLocaleString(\'en-US\');',
+      to:   "    return Math.round(v || 0).toLocaleString('en-US');" },
+    { name: 'bol: an unfilled column totals to 0 instead of nothing',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      find: '        return any ? acc : null;',
+      to:   '        return acc;' },
+    { name: 'bol: the weight mismatch is silently CORRECTED instead of reported',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      // The worst thing this feature could do. A document that rewrites a
+      // weight she read off a scale ticket, on a page the buyer re-weighs
+      // against, and she never finds out.
+      find: '        if (g !== null && t !== null && n !== null && Math.abs((g - t) - n) > 1) {\n            out.push(',
+      to:   '        if (false) {\n            out.push(' },
+    { name: 'bol: dates go back to "15 Sep 2026", disagreeing with the invoice',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      find: "const { formatDate } = require('./proformaPdf');",
+      to:   "const formatDate = (s) => { const M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const m=/^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(String(s||'')); return m ? `${Number(m[3])} ${M[Number(m[2])-1]} ${m[1]}` : String(s||''); };" },
+    { name: 'bol: an unfilled {{placeholder}} ships to the driver instead of throwing',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      find: '    if (leftover) throw new Error(`bol template has unfilled placeholders',
+      to:   '    if (false) throw new Error(`bol template has unfilled placeholders' },
+    { name: 'bol: the consignee dropdown is wired on click, so it never fires',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      // The bug that cost two sessions on the proforma screen: a click blurs
+      // the input first and the 150ms blur-hide timer wins the race.
+      find: "    box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (ev) => {\n      ev.preventDefault();\n      const entry = shown[Number(el.dataset.idx)];\n      if (!entry) return;\n      inp.value = consigneeNameForEntry(entry);",
+      to:   "    box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('click', (ev) => {\n      const entry = shown[Number(el.dataset.idx)];\n      if (!entry) return;\n      inp.value = consigneeNameForEntry(entry);" },
+    { name: 'bol: picking a consignee stops filling the address',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: "      $('bol_consignee_address').value = entry.raw || '';",
+      to:   '' },
+    { name: "bol: the download guard forgets 'bol' is a real kind",
+      file: 'helpers/documentsSaved.js', suites: ['bol'],
+      // First written as "add '..' to the set", which SURVIVED — correctly,
+      // because it is not a bug: an unknown kind falls to the proforma
+      // branch and the traversal guard still refuses anything outside the
+      // archive. A mutation that describes no real failure teaches nothing.
+      // Dropping 'bol' is the real regression: every saved BOL 404s.
+      find: "const SAVED_KINDS = new Set(['invoice', 'proforma', 'bol']);",
+      to:   "const SAVED_KINDS = new Set(['invoice', 'proforma']);" },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

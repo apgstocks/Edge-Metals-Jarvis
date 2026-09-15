@@ -157,7 +157,95 @@ body[data-theme="light"] {
   <div style="display:flex; gap:4px; border-bottom:1px solid var(--border-subtle); margin-bottom:20px;">
     <button class="subtab-btn" data-subtab="invoice">Invoice</button>
     <button class="subtab-btn" data-subtab="proforma">Proforma</button>
+    <button class="subtab-btn" data-subtab="bol">BOL</button>
     <button class="subtab-btn" data-subtab="verification">Verification</button>
+  </div>
+
+  <!-- ── Bill of Lading ───────────────────────────────────────────────────
+       Apsara, 2026-09-15: "I want to create a BOL for edge metals with seller
+       as edge metals .you have the address already.Buyer i will just give the
+       name.It should be matched with address book as i type" — and, when I
+       started designing it against outbound loads: "No.its for edge metals."
+
+       EVERYTHING IS TYPED. Asked whether to start from a Sales row or from a
+       blank form, her answer was "Type everything fresh". So this reads no
+       record and pre-fills nothing except the shipper, which is fixed. The
+       cost of that choice is that the BOL can disagree with the Sales row for
+       the same container, so the one cross-check that matters — net against
+       gross minus tare — runs as you type and is shown, never auto-corrected.
+
+       Driver is a plain box ("Type it each time"): the truckers roster holds
+       companies, not people, and the driver changes load to load.
+  ──────────────────────────────────────────────────────────────────────── -->
+  <div id="panelBol" class="hidden">
+    <div class="card" style="padding:20px 22px; margin-bottom:16px;">
+
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Who is it going to?</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type a name — it matches your address book as you type. Pick one and the address fills in.</div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px;">
+        <div class="field" style="position:relative;">
+          <label for="bol_consignee">Consignee name</label>
+          <input id="bol_consignee" type="text" autocomplete="off" placeholder="Start typing…">
+          <div id="bolConsigneeList" class="autocomplete-list hidden"></div>
+        </div>
+        <div class="field">
+          <label for="bol_consignee_address">Consignee address</label>
+          <textarea id="bol_consignee_address" rows="4" placeholder="Fills in when you pick a name — or type it"></textarea>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
+        <div class="field"><label for="bol_no">BOL number</label><input id="bol_no" type="text" placeholder="EM-1047"></div>
+        <div class="field"><label for="bol_date">Date</label><input id="bol_date" type="date"></div>
+        <div class="field"><label for="bol_po">PO number</label><input id="bol_po" type="text"></div>
+        <div class="field"><label for="bol_appointment">Appointment ID</label><input id="bol_appointment" type="text"></div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
+        <!-- PICKUP, NOT DELIVERY. The yard stores delivery_eta_date/time — when
+             a trucker promised to ARRIVE. This is when the truck was LOADED.
+             Nothing pre-fills it from the ETA: a plausible wrong time on a BOL
+             is only discovered when a buyer disputes a delivery window. -->
+        <div class="field"><label for="bol_pickup_date">Pickup date</label><input id="bol_pickup_date" type="date"></div>
+        <div class="field"><label for="bol_pickup_time">Pickup time</label><input id="bol_pickup_time" type="time"></div>
+        <div class="field"><label for="bol_carrier">Carrier</label><input id="bol_carrier" type="text" placeholder="Trucking company"></div>
+        <div class="field"><label for="bol_driver">Driver</label><input id="bol_driver" type="text" placeholder="Driver's name"></div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
+        <div class="field"><label for="bol_container">Container / trailer</label><input id="bol_container" type="text"></div>
+        <div class="field"><label for="bol_seal">Seal number</label><input id="bol_seal" type="text"></div>
+        <div class="field"><label for="bol_unit">Weight unit</label>
+          <select id="bol_unit"><option value="lb">lb</option><option value="mt">mt</option></select>
+        </div>
+      </div>
+
+      <div style="font-size:12px; font-weight:700; color:var(--text-strong); margin:4px 0 8px;">Goods
+        <span style="font-weight:400; color:var(--text-muted); font-size:11px;">— net should equal gross minus tare; leave a box empty and it prints as a dash, not a zero</span>
+      </div>
+      <div id="bolItems"></div>
+      <button type="button" id="btnBolAddRow" class="btn btn-secondary" style="margin-top:8px; font-size:11px;">+ Add line</button>
+
+      <div id="bolTotals" style="margin-top:14px; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"></div>
+      <div id="bolWarnings" style="margin-top:10px;"></div>
+
+      <div class="field" style="margin-top:14px;">
+        <label for="bol_notes">Notes <span style="font-weight:400; color:var(--text-muted); font-size:11px;">— prints under the goods table</span></label>
+        <textarea id="bol_notes" rows="2"></textarea>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:16px; align-items:center;">
+        <button type="button" id="btnBolPreview" class="btn btn-secondary">Preview PDF</button>
+        <button type="button" id="btnBolGenerate" class="btn btn-primary">Generate &amp; save</button>
+        <span id="bolStatus" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:20px 22px;">
+      <div style="font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">Saved bills of lading</div>
+      <div id="bolSavedList" style="font-size:12.5px; color:var(--text-muted);">Loading…</div>
+    </div>
   </div>
 
   <!-- ── Invoice ──────────────────────────────────────────────────────────── -->
@@ -854,8 +942,10 @@ function setSubtab(name) {
   document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.toggle('active', b.dataset.subtab === name));
   $('panelInvoice').classList.toggle('hidden', name !== 'invoice');
   $('panelProforma').classList.toggle('hidden', name !== 'proforma');
+  $('panelBol').classList.toggle('hidden', name !== 'bol');
   $('panelVerification').classList.toggle('hidden', name !== 'verification');
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
+  if (name === 'bol') { bolInit(); loadSavedBols(); }
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
@@ -3814,6 +3904,204 @@ $('btnInvGenerate').addEventListener('click', async () => {
     setButtonLoading(btn, false);
   }
 });
+
+// ── BILL OF LADING ────────────────────────────────────────────────────────
+// Apsara, 2026-09-15. Everything is typed ("Type everything fresh") — nothing
+// here reads a Sales row, so the only safety net is the arithmetic check
+// below, which reports and never corrects.
+
+let bolRows = [];
+let _bolWired = false;
+
+function bolBlankRow() { return { description: '', pieces: '', gross_weight: '', tare_weight: '', net_weight: '' }; }
+
+function bolInit() {
+  if (!bolRows.length) bolRows = [bolBlankRow(), bolBlankRow()];
+  if (!$('bol_date').value) $('bol_date').value = new Date().toISOString().slice(0, 10);
+  bolPaintItems();
+  if (_bolWired) return;
+  _bolWired = true;
+
+  // ── Consignee type-ahead ────────────────────────────────────────────────
+  // Same three rules as the proforma's, and for the same hard-won reasons
+  // documented at renderConsigneeList above: 'mousedown' with
+  // preventDefault (a 'click' loses the race against the blur timer, which
+  // is what "consignee not clickable" was), selection by data-idx into the
+  // rendered array (27 of 98 real entries have no id, so id-matching failed
+  // silently for a quarter of her address book), and searchAddressBook's
+  // widened alias-plus-raw match so a company name that only appears in the
+  // address block is still findable.
+  const inp = $('bol_consignee'), box = $('bolConsigneeList');
+  inp.addEventListener('input', () => {
+    const q = inp.value.trim().toLowerCase();
+    if (!q) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const shown = searchAddressBook(q).slice(0, 8);
+    if (!shown.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
+    box.classList.remove('hidden');
+    box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (ev) => {
+      ev.preventDefault();
+      const entry = shown[Number(el.dataset.idx)];
+      if (!entry) return;
+      inp.value = consigneeNameForEntry(entry);
+      $('bol_consignee_address').value = entry.raw || '';
+      box.classList.add('hidden');
+    }));
+  });
+  inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+
+  $('btnBolAddRow').addEventListener('click', () => { bolRows.push(bolBlankRow()); bolPaintItems(); });
+  $('btnBolPreview').addEventListener('click', () => bolSubmit(true));
+  $('btnBolGenerate').addEventListener('click', () => bolSubmit(false));
+}
+
+const bolNum = (v) => {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isFinite(n) ? n : null;
+};
+
+function bolPaintItems() {
+  // Rebuilt wholesale on every change, and the inputs carry their value in
+  // the VALUE attribute rather than being left to the DOM — a half-rebuilt
+  // table where row 3 still holds row 2's typed text is the classic bug of
+  // this pattern, and it shows up as a weight filed against the wrong item.
+  $('bolItems').innerHTML = bolRows.map((r, i) => `
+    <div style="display:grid; grid-template-columns:1fr 70px 100px 100px 100px 30px; gap:8px; margin-bottom:6px; align-items:center;">
+      <input data-bi="${i}" data-bf="description"  type="text" value="${esc(r.description)}" placeholder="Description of goods">
+      <input data-bi="${i}" data-bf="pieces"       type="text" value="${esc(r.pieces)}" placeholder="Pcs">
+      <input data-bi="${i}" data-bf="gross_weight" type="text" value="${esc(r.gross_weight)}" placeholder="Gross">
+      <input data-bi="${i}" data-bf="tare_weight"  type="text" value="${esc(r.tare_weight)}" placeholder="Tare">
+      <input data-bi="${i}" data-bf="net_weight"   type="text" value="${esc(r.net_weight)}" placeholder="Net">
+      <button type="button" class="btn btn-secondary bol-del" data-bi="${i}" style="padding:4px 8px; font-size:11px;">&times;</button>
+    </div>`).join('');
+  $('bolItems').querySelectorAll('input[data-bi]').forEach((el) => {
+    el.addEventListener('input', () => {
+      bolRows[Number(el.dataset.bi)][el.dataset.bf] = el.value;
+      bolRecalc();   // NOT bolPaintItems() — repainting on every keystroke destroys the caret
+    });
+  });
+  $('bolItems').querySelectorAll('.bol-del').forEach((el) => {
+    el.addEventListener('click', () => {
+      bolRows.splice(Number(el.dataset.bi), 1);
+      if (!bolRows.length) bolRows = [bolBlankRow()];
+      bolPaintItems();
+    });
+  });
+  bolRecalc();
+}
+
+// A column nobody filled totals to a dash, not a zero — the same rule the PDF
+// follows. "0" under TARE claims the containers weighed nothing; a dash says
+// it was not recorded, and on a weight document those are different claims.
+function bolTotal(field) {
+  let any = false, acc = 0;
+  for (const r of bolRows) { const v = bolNum(r[field]); if (v !== null) { any = true; acc += v; } }
+  return any ? acc : null;
+}
+const bolFmt = (n) => (n === null ? '—' : Math.round(n).toLocaleString('en-US'));
+
+function bolRecalc() {
+  const unit = $('bol_unit').value || 'lb';
+  $('bolTotals').innerHTML =
+    `Total — pieces ${bolFmt(bolTotal('pieces'))} · gross ${bolFmt(bolTotal('gross_weight'))} · ` +
+    `tare ${bolFmt(bolTotal('tare_weight'))} · <strong style="color:var(--text-strong);">net ${bolFmt(bolTotal('net_weight'))} ${esc(unit)}</strong>`;
+
+  // ── SHOWN, NOT ENFORCED ─────────────────────────────────────────────────
+  // She types all three weights off a scale ticket. If they do not reconcile
+  // this says so and then gets out of the way: the PDF prints exactly what
+  // she typed. Auto-correcting a weight on a legal shipping document — a
+  // document the buyer weighs against — would be the single worst thing this
+  // screen could do, because she would never find out it had happened.
+  const warn = [];
+  bolRows.forEach((r, i) => {
+    const g = bolNum(r.gross_weight), t = bolNum(r.tare_weight), n = bolNum(r.net_weight);
+    const where = String(r.description || '').trim() ? `"${r.description.trim()}"` : `line ${i + 1}`;
+    if (g !== null && t !== null && n !== null && Math.abs((g - t) - n) > 1) {
+      warn.push(`${where}: net ${bolFmt(n)} but gross minus tare is ${bolFmt(g - t)}.`);
+    }
+    if (g !== null && t !== null && t > g) warn.push(`${where}: tare is heavier than gross.`);
+    if (n !== null && n <= 0) warn.push(`${where}: net weight is ${bolFmt(n)}.`);
+  });
+  $('bolWarnings').innerHTML = warn.length
+    ? `<div style="border:1px solid var(--status-warning, #d69e2e); border-radius:4px; padding:9px 12px; font-size:12px; color:var(--status-warning, #d69e2e);">
+         ${warn.map(esc).join('<br>')}
+         <div style="color:var(--text-muted); margin-top:5px; font-size:11.5px;">The PDF prints exactly what you typed — nothing here is changed for you.</div>
+       </div>`
+    : '';
+}
+
+$('bol_unit') && $('bol_unit').addEventListener('change', bolRecalc);
+
+function bolPayload() {
+  return {
+    bol_no: $('bol_no').value.trim(),
+    bol_date: $('bol_date').value,
+    consignee_name: $('bol_consignee').value.trim(),
+    consignee_address: $('bol_consignee_address').value,
+    po_number: $('bol_po').value.trim(),
+    appointment_id: $('bol_appointment').value.trim(),
+    pickup_date: $('bol_pickup_date').value,
+    pickup_time: $('bol_pickup_time').value,
+    carrier: $('bol_carrier').value.trim(),
+    driver: $('bol_driver').value.trim(),
+    container_no: $('bol_container').value.trim(),
+    seal_no: $('bol_seal').value.trim(),
+    weight_unit: $('bol_unit').value || 'lb',
+    notes: $('bol_notes').value,
+    items: bolRows.map((r) => ({
+      description: String(r.description || '').trim(),
+      pieces: r.pieces, gross_weight: r.gross_weight,
+      tare_weight: r.tare_weight, net_weight: r.net_weight,
+    })),
+  };
+}
+
+async function bolSubmit(preview) {
+  const body = bolPayload();
+  const status = $('bolStatus');
+  if (!body.consignee_name) { status.textContent = 'Who is it going to? Fill the consignee name.'; return; }
+  if (!body.items.some((it) => it.description || bolNum(it.net_weight) !== null || bolNum(it.gross_weight) !== null)) {
+    status.textContent = 'Add at least one line of goods.'; return;
+  }
+  status.textContent = preview ? 'Building preview…' : 'Generating…';
+  try {
+    if (preview) {
+      // Opened as a blob rather than posting into a new window: the route is
+      // a POST behind the session cookie, so there is no URL to hand to
+      // window.open that would carry the form with it.
+      const res = await fetch('/api/bol/generate?preview=1', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (res.status === 401) { location.href = '/login'; return; }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `preview failed (${res.status})`);
+      const url = URL.createObjectURL(await res.blob());
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      status.textContent = 'Preview opened. Nothing was saved.';
+      return;
+    }
+    const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
+    status.textContent = `Saved as ${out.saved_filename}`;
+    loadSavedBols();
+  } catch (e) {
+    status.textContent = e.message;
+  }
+}
+
+async function loadSavedBols() {
+  try {
+    const { bols } = await api('/api/documents/saved');
+    const groups = bols || [];
+    $('bolSavedList').innerHTML = groups.length
+      ? groups.map((g) => `<div style="margin-bottom:8px;"><div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(g.date)}</div>${
+          g.files.map((f) => `<div><a href="/api/documents/download?kind=bol&date=${encodeURIComponent(g.date)}&file=${encodeURIComponent(f)}" target="_blank">${esc(f)}</a></div>`).join('')
+        }</div>`).join('')
+      : 'None yet.';
+  } catch (e) {
+    $('bolSavedList').textContent = e.message;
+  }
+}
 
 setSubtab('proforma');
 </script>

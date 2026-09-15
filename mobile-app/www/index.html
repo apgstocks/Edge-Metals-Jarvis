@@ -3599,6 +3599,23 @@ function applyLoadModalMode(mode) {
 
 function resetLoadModal(mode) {
   editingLoadId = null;
+  // ── ONE-TIME SAVE TICKET ────────────────────────────────────────────────
+  // Apsara, 2026-09-15, with a screenshot of two identical Darwin sales:
+  // "I just added one.But two ones are created". Minted HERE, when the form
+  // opens, and NOT at click time — a ticket created inside the click handler
+  // would be a different ticket on a second send, which is exactly the case
+  // it has to catch. The server spends it once (helpers/oncePerSave.js); a
+  // second request carrying the same ticket gets the first record back and
+  // writes nothing.
+  //
+  // crypto.randomUUID needs a secure context. It is there on https and on
+  // localhost, and the app's WebView counts as one — but the fallback is
+  // kept rather than assumed, because a client that silently sends no ticket
+  // would look identical to one whose ticket works, right up until it
+  // doesn't.
+  saveTicket = (window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 'tk-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
   currentLoadItems = [blankLoadItem()];
   ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
   editingLoadDescription = '';
@@ -4646,6 +4663,9 @@ function wireLoadsEvents() {
         items,
         weight_unit: 'lb',
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
+        // Minted when the form opened — see resetLoadModal. Sent on CREATE
+        // only; it is meaningless on an edit, which targets a known id.
+        client_request_id: saveTicket,
       };
       if (loadModalMode === 'sale') {
         // Outbound: the party typed into the seller field IS the buyer here,
@@ -4659,6 +4679,7 @@ function wireLoadsEvents() {
           description: payload.description,
           weight_unit: payload.weight_unit,
           items: payload.items,
+          client_request_id: payload.client_request_id,
         };
         if (isEdit) {
           await api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(salePayload) });
@@ -5084,6 +5105,7 @@ let loadsCache = [];
 let pendingDrafts = [];
 let currentLoadItems = [];
 let editingLoadId = null;
+let saveTicket = null;   // one-time ticket per Save — see resetLoadModal
 // The load-level description input is gone from the form (2026-08-28), but the
 // FIELD still exists on records saved before that. Held here so editing an old
 // load preserves its description rather than silently blanking it on save —

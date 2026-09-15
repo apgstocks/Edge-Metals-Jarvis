@@ -163,13 +163,30 @@ async function addOutboundLoad(entry) {
     // edit and would reset a delivered load to in_transit each time.
     rec.delivery_status = 'in_transit';
     rec.delivered_at = null;
+    // Set outside buildRecord for the same reason as the three lines above:
+    // buildRecord also runs on every edit, and an edit must not mint a new
+    // ticket or wipe the one this record was created with.
+    rec.client_request_id = require('./oncePerSave').normTicket(entry.client_request_id);
+
+    // ── ONE SAVE, ONE RECORD ─────────────────────────────────────────────
+    // Apsara, 2026-09-15: "I just added one.But two ones are created" — two
+    // identical Darwin sales, OUT_02 and OUT_03. See helpers/oncePerSave.js
+    // for what was ruled out and why this is a ticket rather than a
+    // duplicate warning. The lookup is INSIDE the mutator so it runs under
+    // the file lock; checking before mutateJson would let two simultaneous
+    // requests both find nothing and both write.
+    let already = null;
     await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
+        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
+        if (already) return loads;   // returned unchanged — nothing is written
         rec.id = nextOutboundId(loads);
         loads.unshift(rec);
         if (loads.length > 5000) loads.length = 5000;
         return loads;
     });
-    return rec;
+    // The caller gets the record that exists, so a re-sent save looks to the
+    // client exactly like the save that succeeded — same id, same everything.
+    return already || rec;
 }
 
 async function editOutboundLoad(id, entry) {

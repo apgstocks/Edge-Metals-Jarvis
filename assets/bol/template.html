@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- ── assets/bol/template.html — Edge Metals Bill of Lading ─────────────────
+     Apsara, 2026-09-15: "I want to create a BOL for edge metals with seller as
+     edge metals .you have the address already.Buyer i will just give the name.
+     It should be matched with address book as i type" — then, shown three
+     designs: "C", plus the fields I had missed: "Driver name,Pickup date and
+     time,PO number,appointment id,Gross trare net weight missing?"
+
+     EDGE METALS, NOT EDGE YARD. The shipper block below is Edge Metals Inc and
+     is not a variable — there is exactly one company issuing this document.
+     A yard BOL, if one is ever wanted, is a different template with a
+     different shipper; it does not become a {{seller_name}} placeholder here.
+
+     LETTER, NOT A4. The invoice template is A4 because it travels with an
+     export shipment. A BOL is handed to a driver in Texas and gets printed on
+     whatever is in the office tray, which in the US is Letter. An A4 design
+     printed to Letter shrinks and the signature strip drifts up the page.
+
+     Substitution is a dumb string replace of {{key}}, exactly like the invoice
+     and proforma templates — no template engine, and every value is escaped in
+     JS before it arrives here. Repeating rows arrive pre-built as HTML.
+─────────────────────────────────────────────────────────────────────────── -->
+<style>
+  @font-face { font-family:'DMSans'; src:url('__FONT_DMSANS_REGULAR__') format('truetype'); font-weight:400; }
+  @font-face { font-family:'DMSans'; src:url('__FONT_DMSANS_SEMIBOLD__') format('truetype'); font-weight:600; }
+  @font-face { font-family:'DMSans'; src:url('__FONT_DMSANS_BOLD__') format('truetype'); font-weight:700; }
+  @font-face { font-family:'PlexMono'; src:url('__FONT_IBMPLEXMONO_REGULAR__') format('truetype'); font-weight:400; }
+  @font-face { font-family:'PlexMono'; src:url('__FONT_IBMPLEXMONO_BOLD__') format('truetype'); font-weight:700; }
+
+  @page { size: 8.5in 11in; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; }
+  body {
+    font-family:'DMSans', Arial, sans-serif;
+    font-size:9pt; color:#111; background:#fff;
+    width:8.5in; min-height:11in;
+    padding:0.45in 0.5in;
+  }
+
+  /* The dark band. Design C's whole identity is this strip, so it must print
+     even when the browser's "background graphics" default would drop it —
+     printBackground:true is set on the puppeteer side, and -webkit-print-
+     color-adjust:exact keeps Chromium from lightening it to save toner. */
+  .band {
+    background:#111; color:#fff;
+    -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    padding:13px 16px; display:flex; justify-content:space-between; align-items:center;
+    border-radius:5px 5px 0 0;
+  }
+  .band .co { font-size:14.5pt; font-weight:700; letter-spacing:.06em; line-height:1.15; }
+  .band .colines { font-size:7.5pt; opacity:.78; margin-top:3px; line-height:1.45; }
+  .band .right { text-align:right; }
+  .band .kicker { font-size:7.5pt; opacity:.78; letter-spacing:.14em; }
+  .band .docno { font-family:'PlexMono', monospace; font-size:12pt; font-weight:700; margin-top:2px; }
+
+  .body { border:0.7pt solid #c9c9c9; border-top:none; border-radius:0 0 5px 5px; padding:15px 16px 18px; }
+
+  .cards { display:flex; gap:11px; margin-bottom:11px; }
+  .card { flex:1; background:#f4f4f2; border-radius:4px; padding:10px 12px; }
+  .card.to { background:#eef3fa; }
+  .card .lbl { font-size:6.8pt; letter-spacing:.1em; color:#71716c; margin-bottom:4px; }
+  .card .nm { font-weight:700; font-size:10pt; }
+  .card .ad { color:#4a4a46; line-height:1.55; margin-top:1px; }
+
+  .facts { display:flex; gap:9px; margin-bottom:9px; }
+  .fact { flex:1; background:#f4f4f2; border-radius:4px; padding:8px 10px; min-width:0; }
+  .fact .lbl { font-size:6.8pt; letter-spacing:.08em; color:#71716c; }
+  .fact .v { font-family:'PlexMono', monospace; font-size:8.5pt; margin-top:2px; overflow-wrap:break-word; }
+  /* A blank fact still prints its box and label. An empty box reads as "not
+     recorded"; a missing box reads as "this document has no such field", and
+     a driver holding a BOL with no seal row will not think to ask for one. */
+  .fact .v.empty { color:#a3a39d; }
+
+  table.goods { width:100%; border-collapse:collapse; margin-top:4px; table-layout:fixed; }
+  table.goods th {
+    background:#f4f4f2; -webkit-print-color-adjust:exact; print-color-adjust:exact;
+    font-size:6.8pt; letter-spacing:.07em; color:#71716c; font-weight:600;
+    padding:6px 8px; text-align:right;
+  }
+  table.goods th.desc { text-align:left; }
+  table.goods td { padding:7px 8px; text-align:right; font-family:'PlexMono', monospace; font-size:8.5pt; border-top:0.5pt solid #e2e2de; }
+  table.goods td.desc { text-align:left; font-family:'DMSans', Arial, sans-serif; font-size:9pt; overflow-wrap:break-word; }
+  table.goods tr:first-child td { border-top:none; }
+  table.goods tr.total td { border-top:1pt solid #111; font-weight:700; }
+  table.goods tr.total td.desc { font-weight:700; }
+  .unit { font-weight:400; color:#71716c; }
+
+  .notes { margin-top:12px; font-size:8pt; color:#4a4a46; line-height:1.55; }
+  .notes .lbl { font-size:6.8pt; letter-spacing:.1em; color:#71716c; margin-bottom:3px; }
+
+  /* THE LEGAL SENTENCE. A BOL is a receipt AND a contract of carriage; the
+     acknowledgement above the signatures is what makes the driver's mark mean
+     "I received this, in this condition, in this count". Without it the page
+     is a packing list with a signature box. */
+  .terms { margin-top:14px; font-size:7pt; color:#5c5c57; line-height:1.5; border-top:0.5pt solid #e2e2de; padding-top:9px; }
+
+  .sigs { display:flex; gap:16px; margin-top:26px; }
+  .sig { flex:1; border-top:0.7pt solid #111; padding-top:4px; font-size:6.8pt; letter-spacing:.06em; color:#71716c; }
+  .sig .sub { display:block; margin-top:13px; font-size:6.5pt; color:#a3a39d; }
+</style>
+</head>
+<body>
+
+  <div class="band">
+    <div>
+      <div class="co">EDGE METALS INC</div>
+      <div class="colines">14750 Devonshire Ln, Frisco, TX 75035<br>Tel (310) 938-2525 &nbsp;·&nbsp; Fax (425) 940-9408 &nbsp;·&nbsp; Tax ID 26-3269514</div>
+    </div>
+    <div class="right">
+      <div class="kicker">BILL OF LADING</div>
+      <div class="docno">{{bol_no}}</div>
+    </div>
+  </div>
+
+  <div class="body">
+
+    <div class="cards">
+      <div class="card">
+        <div class="lbl">SHIPPER</div>
+        <div class="nm">Edge Metals Inc</div>
+        <div class="ad">14750 Devonshire Ln<br>Frisco, TX 75035<br>Tel (310) 938-2525</div>
+      </div>
+      <div class="card to">
+        <div class="lbl">CONSIGNEE</div>
+        <div class="nm">{{consignee_name}}</div>
+        <div class="ad">{{consignee_address_lines}}</div>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><div class="lbl">DATE</div><div class="v">{{bol_date}}</div></div>
+      <div class="fact"><div class="lbl">PO NUMBER</div><div class="v{{po_number_cls}}">{{po_number}}</div></div>
+      <div class="fact"><div class="lbl">APPOINTMENT ID</div><div class="v{{appointment_id_cls}}">{{appointment_id}}</div></div>
+      <div class="fact"><div class="lbl">PICKUP</div><div class="v{{pickup_cls}}">{{pickup}}</div></div>
+    </div>
+
+    <div class="facts">
+      <div class="fact"><div class="lbl">CARRIER</div><div class="v{{carrier_cls}}">{{carrier}}</div></div>
+      <div class="fact"><div class="lbl">DRIVER</div><div class="v{{driver_cls}}">{{driver}}</div></div>
+      <div class="fact"><div class="lbl">CONTAINER</div><div class="v{{container_no_cls}}">{{container_no}}</div></div>
+      <div class="fact"><div class="lbl">SEAL</div><div class="v{{seal_no_cls}}">{{seal_no}}</div></div>
+    </div>
+
+    <table class="goods">
+      <tr>
+        <th class="desc">DESCRIPTION OF GOODS</th>
+        <th style="width:52pt;">PIECES</th>
+        <th style="width:66pt;">GROSS</th>
+        <th style="width:60pt;">TARE</th>
+        <th style="width:66pt;">NET</th>
+      </tr>
+      {{item_rows}}
+      <tr class="total">
+        <td class="desc">Total <span class="unit">({{weight_unit}})</span></td>
+        <td>{{total_pieces}}</td>
+        <td>{{total_gross}}</td>
+        <td>{{total_tare}}</td>
+        <td>{{total_net}}</td>
+      </tr>
+    </table>
+
+    {{notes_block}}
+
+    <div class="terms">
+      Received, subject to the classifications and lawfully filed tariffs in effect on the date of issue, the property
+      described above in apparent good order except as noted, marked, consigned and destined as shown. The carrier
+      acknowledges receipt of the packages and the weights shown, and agrees to carry to the destination named and to
+      deliver to the consignee. Weights shown are the shipper's; the carrier may re-weigh.
+    </div>
+
+    <div class="sigs">
+      <div class="sig">SHIPPER<span class="sub">Signature · Date</span></div>
+      <div class="sig">DRIVER<span class="sub">Signature · Date</span></div>
+      <div class="sig">RECEIVED BY<span class="sub">Signature · Date</span></div>
+    </div>
+
+  </div>
+
+</body>
+</html>
