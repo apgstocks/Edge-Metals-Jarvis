@@ -227,19 +227,34 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     // loadDeckSectionsHtml calls loadCardHtml and esc; both are stubbed so
     // this tests the GROUPING decision, which is what changed, rather than
     // re-testing card markup that section C already covers.
+    // splitLoadsByRecency and loadFoldedMonthsHtml joined the dependency list
+    // on 2026-09-16, when older months started folding into month > week >
+    // day. Injected the same way as the rest: this section is about the
+    // GROUPING DECISION, and pulling the whole file in would make it a
+    // different test.
     const fn = new Function(
-        'loadCardHtml', 'esc', 'groupLoadsByDate',
+        'loadCardHtml', 'esc', 'groupLoadsByDate', 'splitLoadsByRecency', 'loadFoldedMonthsHtml',
         grab(src, 'loadDeckSectionsHtml', label) + '; return loadDeckSectionsHtml;'
     )(
         (l) => `<card id="${l.id}">`,
         (s) => String(s),
-        new Function(grab(src, 'groupLoadsByDate', label) + grab(src, 'formatLoadDateHeading', label) + '; return groupLoadsByDate;')()
+        new Function(grab(src, 'groupLoadsByDate', label) + grab(src, 'formatLoadDateHeading', label) + '; return groupLoadsByDate;')(),
+        new Function(grab(src, 'splitLoadsByRecency', label) + grab(src, 'loadMonthKey', label) + '; return splitLoadsByRecency;')(),
+        // Folding is covered in full by tests/load-deck-grouping.js. Stubbed
+        // to a marker here so this section can prove the flat view has no
+        // folds without also re-testing how they are built.
+        (older) => `<folded n="${(older || []).length}">`
     );
 
+    // DATED IN THE CURRENT MONTH, deliberately. Older months now fold, so a
+    // fixture dated last August would exercise the folding path and the day
+    // sections this section is about would not appear at all — the assertions
+    // would fail for a reason with nothing to do with filtering.
+    const thisMonth = new Date().toISOString().slice(0, 7);
     const rows = [
-        { id: 'A', date: '2026-08-30', seller: 'Acme' },
-        { id: 'B', date: '2026-08-28', seller: 'Acme' },
-        { id: 'C', date: '2026-08-30', seller: 'Acme' },
+        { id: 'A', date: `${thisMonth}-12`, seller: 'Acme' },
+        { id: 'B', date: `${thisMonth}-10`, seller: 'Acme' },
+        { id: 'C', date: `${thisMonth}-12`, seller: 'Acme' },
     ];
 
     const grouped = fn(rows, 'none', undefined);
@@ -259,7 +274,7 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     // Newest first, undated last — the same ordering the groups produced,
     // just without the headings, so the flat view is not a random shuffle.
     const ordered = fn(
-        [{ id: 'old', date: '2026-01-01' }, { id: 'none' }, { id: 'new', date: '2026-08-30' }],
+        [{ id: 'old', date: '2026-01-01' }, { id: 'none' }, { id: 'new', date: `${thisMonth}-12` }],
         'none', { flat: true });
     ck(`${label}: flat results are newest first, undated last`,
        ordered.indexOf('id="new"') < ordered.indexOf('id="old"')
