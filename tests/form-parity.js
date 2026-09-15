@@ -76,6 +76,43 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   const a = fs.readFileSync(R+'dashboard/yard-bot.js','utf8');
   const b = fs.readFileSync(R+'mobile-app/www/yard-bot.js','utf8');
   ck('the yard-bot widget is byte-identical in both hosts', a === b);
+
+  // ── THE BOT SAYS WHICH FAILURE IT WAS ─────────────────────────────────
+  // Apsara, 2026-09-15: "why am i getting message as i cant reach the server
+  // right now from chat bot in edge yard app?"
+  //
+  // Because the catch was blanket — one sentence for a 403, a 500 and a real
+  // outage, three problems needing three different reactions. The likeliest
+  // is the one it hid best: /api/yard/ask is NOT in api.js's
+  // STAFF_ALLOWED_PATH_PREFIXES, so a staff session gets 403 on every
+  // question while the Loads tab keeps working, which reads as an outage and
+  // is a permission.
+  ck('bot: a refusal carries its status out of callApi',
+     /err\.status = r\.status;/.test(a),
+     'without the status the catch cannot tell a refusal from an outage');
+  ck('bot: a staff session is told it is a PERMISSION, not an outage',
+     /signed in as staff/i.test(a), 'the 403 branch is missing');
+  ck('bot:   and told what to do about it',
+     /admin password/i.test(a));
+  ck('bot: an expired session says so',
+     /session has expired/i.test(a));
+  ck('bot: a server error is named as one, not as unreachable',
+     /reached an error answering that/i.test(a));
+  ck('bot: only a request that never completed says "cannot reach"',
+     /can't reach the server right now\. "\s*\n?\s*\+ 'Check the connection/.test(a)
+     || /can't reach the server right now/.test(a.split('} else {')[1] || ''),
+     'that sentence must live in the no-status branch only');
+  // The staff gate is a DELIBERATE money boundary, not an oversight: the bot
+  // can read spend_report and petty_cash, and /api/payments is kept off the
+  // staff list for the same reason. So the fix is to SAY so, never to widen
+  // the allowlist — pinned here so nobody "fixes" it the easy way.
+  {
+    const apiSrc = fs.readFileSync(R+'api.js','utf8');
+    const line = (apiSrc.match(/const STAFF_ALLOWED_PATH_PREFIXES = \[[^\]]*\]/) || [''])[0];
+    ck('bot: /api/yard/ask stays OFF the staff allowlist',
+       !/yard/.test(line),
+       'the assistant can read spend_report; letting staff reach it undoes the payments boundary');
+  }
   ck('both hosts include it', /yard-bot\.js/.test(fs.readFileSync(R+'dashboard/index.html','utf8'))
      && /yard-bot\.js/.test(fs.readFileSync(R+'mobile-app/www/index.html','utf8')));
   // This used to assert the widget was read-only. That WAS the boundary, and

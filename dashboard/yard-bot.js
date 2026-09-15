@@ -42,7 +42,19 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
+    }).then(function (r) {
+      // The STATUS has to survive, or the catch below cannot tell a refusal
+      // from an outage. Previously this returned r.json() for every response,
+      // so a 403 arrived looking like an answer with no answer in it.
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (!r.ok) {
+          var err = new Error((data && data.error) || ('request failed (' + r.status + ')'));
+          err.status = r.status;
+          throw err;
+        }
+        return data;
+      });
+    });
   }
 
   var CSS = [
@@ -347,10 +359,44 @@
         history.push({ role: 'bot', text: answer });
         if (r && r.proposal) renderProposal(r.proposal);
       })
-      .catch(function () {
-        // Distinguishes "can't reach the server" from "don't know", because
-        // they need completely different reactions from the person asking.
-        thinking.textContent = "I can't reach the server right now.";
+      .catch(function (err) {
+        // ── SAY WHICH FAILURE IT WAS ──────────────────────────────────────
+        // Apsara, 2026-09-15: "why am i getting message as i cant reach the
+        // server right now from chat bot in edge yard app?"
+        //
+        // Because this catch was blanket. It printed the same sentence for a
+        // 403, a 500 and a genuine outage — and its own comment claimed to
+        // distinguish them. Three problems needing three different reactions,
+        // reported as one, so neither she nor anyone reading the log could
+        // tell which it was.
+        //
+        // The likeliest of the three is the one it hid best: /api/yard/ask is
+        // NOT in api.js's STAFF_ALLOWED_PATH_PREFIXES, so a staff session gets
+        // 403 on every question while the Loads tab keeps working. That reads
+        // as "the server is down" and is nothing of the kind.
+        var msg = String((err && err.message) || '');
+        var status = err && err.status;
+        // window.api (both clients) throws with the server's own `error`
+        // string and no status, so the text is matched too.
+        if (status === 403 || /staff access is limited/i.test(msg)) {
+          thinking.textContent = "You're signed in as staff, and the assistant is limited to admin. "
+            + "Sign in with the admin password to ask it anything.";
+        } else if (status === 401 || /unauthor/i.test(msg)) {
+          thinking.textContent = 'Your session has expired — sign in again.';
+        } else if (status >= 500) {
+          // Reached the server; the server broke. Worth separating, because
+          // this one is a bug to go and look at rather than a setting.
+          thinking.textContent = 'The server reached an error answering that'
+            + (msg ? ' (' + msg + ').' : '.') + ' It is worth reporting.';
+        } else if (status) {
+          thinking.textContent = 'The server refused that (' + status + ')'
+            + (msg ? ': ' + msg : '') + '.';
+        } else {
+          // No status at all means the request never completed — DNS, no
+          // signal, wrong server URL. The only case the old sentence fitted.
+          thinking.textContent = "I can't reach the server right now. "
+            + 'Check the connection, or the server URL in Settings.';
+        }
       })
       .finally(function () {
         busy = false;
